@@ -814,6 +814,8 @@ impl Radio {
             self.tx.keyed = true;
             self.tx.source = 1;
             self.hw.tx_levels = true;
+            self.hw.chain_a_bit7_ever = true;
+            self.hw.bias_nonzero_ever = true;
             self.session.as_mut().unwrap().keyed_at = Some(self.now);
         }
         let w = self.tx_state_word();
@@ -1145,7 +1147,7 @@ impl Radio {
         self.keyed_timeout_ms = 500;
         self.session_limits = [0; 4];
         self.update_in_progress = false;
-        self.hw.tx_levels = false;
+        self.hw = Hw::default(); // the trace flags count from boot
         self.booted_at = self.now;
         self.resets += 1;
         self.mgmt.on_reset(self.now);

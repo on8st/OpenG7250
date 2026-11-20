@@ -113,14 +113,23 @@ fn main() {
     let mut next_tick = now();
     loop {
         let mut busy = false;
-        for (p, s) in &socks {
-            while let Ok((n, from)) = s.recv_from(&mut buf) {
-                busy = true;
-                let SocketAddr::V4(src) = from else { continue };
-                let rx = Rx { src, local_port: *p, to_ip: None, data: &buf[..n] };
-                let out = radio.on_datagram(now(), &rx);
-                send(&socks, out);
+        // Round robin, one datagram per socket per pass: closer to arrival order than draining
+        // each socket in port order (the sockets give no order between ports).
+        loop {
+            let mut any = false;
+            for (p, s) in &socks {
+                if let Ok((n, from)) = s.recv_from(&mut buf) {
+                    any = true;
+                    let SocketAddr::V4(src) = from else { continue };
+                    let rx = Rx { src, local_port: *p, to_ip: None, data: &buf[..n] };
+                    let out = radio.on_datagram(now(), &rx);
+                    send(&socks, out);
+                }
             }
+            if !any {
+                break;
+            }
+            busy = true;
         }
         while let Ok(c) = rxc.try_recv() {
             let reply = control_op(&mut radio, &c.line, now());
