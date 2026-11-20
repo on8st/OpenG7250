@@ -1,0 +1,15 @@
+[package]
+name = "g7250-refmodel"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Host-side reference model of the G7250 network interface (G7250-P2 and the management channel), built from product/spec only"
+publish = false
+
+# No dependencies on purpose: the model builds offline, and SHA-256, HMAC-SHA256 and CRC-32
+# are small enough to carry and check against their published test vectors.
+[dependencies]
+
+[[bin]]
+name = "g7250-refmodel"
+path = "src/main.rs"
