@@ -4,8 +4,10 @@ Black-box conformance tests for the G7250 network interface. The tests take the 
 and run over the network against an endpoint: the reference model, the radio with the new
 firmware, or any other implementation of G7250-P2.
 
-- Status: **planned. No code yet.** The project is in the spec phase; code starts in the build
-  phase (decision 0028, Decision 4).
+- Status: **T1 (no radio).** Catalogue of all 504 tests (`catalogue/`, generated from Annex X3
+  and C9 by `catalogue/build.py`), the runner (`python3 -m testbench list|run`, formats in
+  `docs/testlist-format.md`), 89 implemented tests, run against the reference model with
+  `tools/run_refmodel.sh`. Spec findings from this work: `docs/spec-findings.md`.
 - Location: `testbench/` in the umbrella repository, an ordinary folder, not a submodule
   (decision 0027).
 
