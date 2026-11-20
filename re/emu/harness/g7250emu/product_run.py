@@ -58,6 +58,9 @@ GENERIC = [
     ("cs", P("models", "csharp", "G7250Usart.cs")),
     ("cmd", "sysbus Unregister sysbus.usart2"),
     ("repl", P("platforms", "g7250_main_usart2.repl")),
+    ("cs", P("models", "csharp", "G7250Adc.cs")),
+    ("cmd", "sysbus Unregister sysbus.adcM1S2"),
+    ("repl", P("platforms", "g7250_main_adc.repl")),
 ]
 BENCH = [
     ("cs", P("models", "csharp", "G7250BenchReq.cs")),
@@ -66,6 +69,10 @@ BENCH = [
     ("cmd", 'emulation CreateUARTHub "benchhub"'),
     ("cmd", "connector Connect sysbus.usart2 benchhub"),
     ("cmd", "connector Connect sysbus.usart3 benchhub"),
+    # fixed ADC inputs for the ADC self-test
+    ("cmd", "sysbus.adc12 SetChannelVoltage 1 0.5"),
+    ("cmd", "sysbus.adc12 SetChannelVoltage 4 1.65"),
+    ("cmd", "sysbus.adc12 SetChannelVoltage 5 3.3"),
 ]
 
 # RM0468 memory map (public), base -> name, for naming not-modelled accesses.

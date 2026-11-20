@@ -1,0 +1,12 @@
+// g7250_main_adc.repl — generic ADC1/ADC2 block (models/csharp/G7250Adc.cs,
+// docs/ADC-model.md) in place of Renode 1.17's STM32H7_ADC (adcM1S2).
+// ADC1_2 interrupt 18 and DMAMUX1 request adc1_dma = 9 (ST RM0468).
+//
+// Load procedure (the runners do this), after g7250_main_dma.repl:
+//   i @models/csharp/G7250Adc.cs
+//   sysbus Unregister sysbus.adcM1S2
+//   machine LoadPlatformDescription @platforms/g7250_main_adc.repl
+adc12: Analog.G7250Adc @ sysbus <0x40022000, +0x400>
+    referenceVoltage: 3.3
+    IRQ -> nvic@18
+    DmaRequest -> dmamux1@9

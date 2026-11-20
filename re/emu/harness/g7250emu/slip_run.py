@@ -103,10 +103,13 @@ def main():
         if m: main_rx = max(main_rx, int(m.group(1)))
     print("USART2 (both MCUs, register-visible): TX bytes=%d  SLIP 0xC0 delimiters=%d" % (tx, frames))
     print("Main USART2 received (generic USART2 + DMA ring): >= %d bytes" % main_rx)
-    ok = tx > 0 and main_rx > 0
+    # the model logs the count at powers of two; 256 bytes is what a 45 s run
+    # delivers to the Main (several Control frames), so less means a broken RX path
+    MIN_MAIN_RX = 256
+    ok = tx > 0 and main_rx >= MIN_MAIN_RX
     print("\n%s" % ("D1 OK: both MCUs boot together, USART2<->USART2 is wired through the"
                     " SLIP UART hub, SLIP bytes are transmitted, and the Main receives them."
-                    if ok else "D1: no USART2 traffic, or the Main received nothing."))
+                    if ok else "D1: no USART2 traffic, or the Main received fewer than %d bytes." % MIN_MAIN_RX))
     sys.exit(0 if ok else 1)
 
 

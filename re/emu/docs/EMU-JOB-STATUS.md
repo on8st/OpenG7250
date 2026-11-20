@@ -82,8 +82,11 @@ inserted is a valid real state); it does not block the GUI loop. CLOSED.
 - Step 1e: generic USART2 with DMA requests (docs/USART-model.md); the RX ring
   shim is removed. The HIS-02 probe applies its settings through the real path
   (same word roles as run 5); D1 now shows the Main receiving.
+- Step 1c: generic ADC1 (docs/ADC-model.md) for bench and product runs; the
+  stock runs keep the metering feed until the PA plant drives the ADC inputs
+  (step 2).
 - Runner skeleton harness/g7250emu/product_run.py and own self-test programs in
-  firmware-tests/bench (smoke, dma_test, usart_test), run in m1_smoke [6].
+  firmware-tests/bench (smoke, dma_test, usart_test, adc_test), run in m1_smoke [6].
 
 ## Open items (PR #3, before leaving draft)
 - **D2b FPGA runtime health — KNOWN-FAIL.** In the superloop the firmware's

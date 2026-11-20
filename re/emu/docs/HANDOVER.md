@@ -38,6 +38,7 @@ being D2b. One targeted check per item:
 | PA bias plant and ADC1 metering feed | `models/csharp/G7250PaPlant.cs`, `platforms/g7250_main_pa_plant.repl` | `docs/PA-plant-model.md` | The boot-time bias trim needs a drain current that responds to the bias DAC; Renode's ADC/circular DMA path returns no usable values |
 | DMA1/DMA2 (generic, circular) | `models/csharp/G7250Dma.cs`, `platforms/g7250_main_dma.repl` | `docs/DMA-model.md` | Renode 1.17's DMA has no circular mode |
 | USART2 (generic, DMA requests) | `models/csharp/G7250Usart.cs`, `platforms/g7250_main_usart2.repl` | `docs/USART-model.md` | Renode's USART raises no DMA requests, so the Main received no SLIP bytes; replaces the earlier RX ring shim (removed) |
+| ADC1 (generic) | `models/csharp/G7250Adc.cs`, `platforms/g7250_main_adc.repl` | `docs/ADC-model.md` | Renode's ADC returned wrong raw values; bench and product runs now, stock runs from step 2 |
 
 `m1_run.py` loads the MDMA, PA, DMA and USART2 models for every Main boot.
 The product test bench (`docs/PRODUCT-TESTBENCH-PLAN.md`, branch `emu/bench`)
@@ -110,7 +111,7 @@ goes to `.private/`.
   fpga_nco_probe, control_run, slip_run, r0_confirm, observe (strict / hang /
   heatmap), imagemap, platform_extras.
 - `models/csharp`: G7250Slaves (EEPROM, CH394), G7250Gpioe (fused GPIOE+FPGA),
-  G7250Mdma, G7250PaPlant, G7250Dma, G7250Usart; bench only: G7250BenchReq.
+  G7250Mdma, G7250PaPlant, G7250Dma, G7250Usart, G7250Adc; bench only: G7250BenchReq.
 - `models/devices`, `models/system`: host-tested device, plant and power logic.
 - `platforms/*.repl`: g7250_main, g7250_control, the I2C/CH394/FPGA/PA
   overlays, SLIP.
