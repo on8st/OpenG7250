@@ -37,6 +37,8 @@ namespace Antmicro.Renode.Peripherals.DMA
         private readonly object sync = new object();
         private readonly Stream[] s = new Stream[Streams];
         private readonly Dictionary<int, IGPIO> irq = new Dictionary<int, IGPIO>();
+        private readonly bool[] level = new bool[Streams], busy = new bool[Streams];
+        private readonly int[] pending = new int[Streams];
 
         private class Stream
         {
@@ -68,6 +70,7 @@ namespace Antmicro.Renode.Peripherals.DMA
                     x.Fcr = 0x21; x.Initial = x.CurNdtr = 0; x.CurP = x.CurM = 0; x.Beats = 0;
                 }
                 foreach(var g in irq.Values) g.Unset();
+                for(int i = 0; i < Streams; i++) { level[i] = busy[i] = false; pending[i] = 0; }
             }
         }
 
@@ -164,18 +167,46 @@ namespace Antmicro.Renode.Peripherals.DMA
                 // memory-to-memory: the whole transfer at once (source PAR, destination M0AR)
                 while((x.Cr & EN) != 0 && x.CurNdtr > 0) Beat(st);
             }
+            else if(level[st])
+            {
+                // the request line is already high (e.g. a transmitter with TXE
+                // set): serve it now, as the hardware would
+                pending[st]++;
+                Pump(st);
+            }
         }
 
-        // one request edge from DMAMUX on input "number" = stream number
+        // a request edge from DMAMUX on input "number" = stream number. Edges that
+        // arrive while this stream is already serving one (a peripheral that
+        // raises its next request from inside the transfer, such as a USART
+        // transmitter) are queued, not served recursively.
         public void OnGPIO(int number, bool value)
         {
-            if(!value || number < 0 || number >= Streams) return;
+            if(number < 0 || number >= Streams) return;
             lock(sync)
             {
-                var x = s[number];
-                if((x.Cr & EN) == 0 || Dir(x.Cr) == 2 || x.CurNdtr == 0) return;
-                Beat(number);
+                level[number] = value;
+                if(!value) return;
+                pending[number]++;
+                Pump(number);
             }
+        }
+
+        private void Pump(int st)
+        {
+            if(busy[st]) return;
+            busy[st] = true;
+            try
+            {
+                while(pending[st] > 0)
+                {
+                    pending[st]--;
+                    var x = s[st];
+                    if((x.Cr & EN) == 0 || Dir(x.Cr) == 2 || x.CurNdtr == 0) { pending[st] = 0; break; }
+                    Beat(st);
+                }
+            }
+            finally { busy[st] = false; }
         }
 
         private void Beat(int st)

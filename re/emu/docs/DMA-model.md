@@ -59,6 +59,5 @@ transfer error on an unmapped address.
 ## Effect on the stock image
 
 The stock Main runs on this model from step 1a on (test A, acceptance).
-The USART2 RX ring shim of the HIS-02 probe writes NDTR directly, which this
-model ignores while the stream runs, so the probe needs step 1e (USART2 RX
-through the DMA) before it applies settings again.
+Since step 1e the USART2 RX ring of the stock Main fills through the generic
+USART2 model and this DMA (`docs/USART-model.md`); the RX ring shim is gone.

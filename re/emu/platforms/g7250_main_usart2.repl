@@ -1,0 +1,16 @@
+// g7250_main_usart2.repl — generic USART2 (models/csharp/G7250Usart.cs,
+// docs/USART-model.md) in place of Renode 1.17's STM32F7_USART, so USART2 RX
+// and TX run through the DMA (DMAMUX1 requests usart2_rx_dma 43 and
+// usart2_tx_dma 44, ST RM0468 DMAMUX1 request table).
+//
+// Load procedure (the runners do this), after g7250_main_dma.repl:
+//   i @models/csharp/G7250Usart.cs
+//   sysbus Unregister sysbus.usart2
+//   machine LoadPlatformDescription @platforms/g7250_main_usart2.repl
+// The interrupt goes the same way as in the base platform (EXTI line 27).
+usart2: UART.G7250Usart @ sysbus <0x40004400, +0x400>
+    usartName: "USART2"
+    frequency: 125000000
+    IRQ -> exti@27
+    RxDma -> dmamux1@43
+    TxDma -> dmamux1@44

@@ -33,7 +33,7 @@ echo "[3/5] PW-1 confirmation (E2: Main matches the R0 prediction)"
 python3 harness/g7250emu/r0_confirm.py --reuse >/dev/null 2>&1 && pass "E2 PW-1 emulator confirmation" || fail "E2 PW-1"
 
 echo "[4/5] SLIP two-machine (D1: both boot, USART2<->USART2 carries SLIP)"
-python3 harness/g7250emu/slip_run.py --timeout 45 >/dev/null 2>&1 && pass "D1 SLIP link (frames transmitted)" || fail "D1 SLIP"
+python3 harness/g7250emu/slip_run.py --timeout 45 >/dev/null 2>&1 && pass "D1 SLIP link (frames transmitted, Main receives)" || fail "D1 SLIP"
 
 echo "[5/5] Control GUI loop (C/C2) + FPGA fused model (D2, --fpga, slow)"
 python3 harness/g7250emu/control_run.py --timeout 50 >/dev/null 2>&1

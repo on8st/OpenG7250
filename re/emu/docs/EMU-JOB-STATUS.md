@@ -76,6 +76,15 @@ inserted is a valid real state); it does not block the GUI loop. CLOSED.
 - Historical repository names marked; see docs/REPO_LAYOUT.md, "Historical
   names".
 
+## Update 2026-11-21 (product test bench, branch emu/bench)
+- Step 1a: generic DMA1/DMA2 with circular mode (docs/DMA-model.md) for every
+  Main run. Step 1b: Renode's DMAMUX1 kept, routing verified by own self-test.
+- Step 1e: generic USART2 with DMA requests (docs/USART-model.md); the RX ring
+  shim is removed. The HIS-02 probe applies its settings through the real path
+  (same word roles as run 5); D1 now shows the Main receiving.
+- Runner skeleton harness/g7250emu/product_run.py and own self-test programs in
+  firmware-tests/bench (smoke, dma_test, usart_test), run in m1_smoke [6].
+
 ## Open items (PR #3, before leaving draft)
 - **D2b FPGA runtime health — KNOWN-FAIL.** In the superloop the firmware's
   runtime health check logs "[ERR] FPGA bus error" (first RX sample unchanged)
@@ -84,12 +93,8 @@ inserted is a valid real state); it does not block the GUI loop. CLOSED.
   acceptance_ae.sh reports it as KFAIL with the counts, without failing the run,
   and as XPASS if it passes. It becomes a normal check once the model delivers
   realistic RX data.
-- **USART2 RX on the Main.** Renode 1.17's DMA keeps no circular mode: DMA1
-  Stream 2 stays at NDTR 0x400, so the Main receives no SLIP bytes. Worked around
-  for the HIS-02 probe by models/csharp/G7250Usart2RxShim.cs
-  (docs/USART2-RX-shim.md); with it the Main applies every settings image. Still
-  open: the two-machine SLIP run (D1) does not use the shim yet, so D1 shows
-  transmission only.
+- ~~USART2 RX on the Main~~: closed by step 1e (generic USART2 + DMA); D1 now
+  shows the Main receiving.
 - **Hardware-only questions.** Real bias codes and plant values, the ADC scan
   rate, what the FPGA does with the tuning words, TX/XIT behaviour, and the items
   in his/90-needs-hardware.md cannot be answered in the emulator.

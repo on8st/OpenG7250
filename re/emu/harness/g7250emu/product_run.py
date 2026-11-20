@@ -55,10 +55,17 @@ GENERIC = [
     ("cmd", "sysbus Unregister sysbus.dma1"),
     ("cmd", "sysbus Unregister sysbus.dma2"),
     ("repl", P("platforms", "g7250_main_dma.repl")),
+    ("cs", P("models", "csharp", "G7250Usart.cs")),
+    ("cmd", "sysbus Unregister sysbus.usart2"),
+    ("repl", P("platforms", "g7250_main_usart2.repl")),
 ]
 BENCH = [
     ("cs", P("models", "csharp", "G7250BenchReq.cs")),
     ("repl", P("platforms", "g7250_bench.repl")),
+    # USART2 <-> USART3 through a hub, the peer for the USART self-test
+    ("cmd", 'emulation CreateUARTHub "benchhub"'),
+    ("cmd", "connector Connect sysbus.usart2 benchhub"),
+    ("cmd", "connector Connect sysbus.usart3 benchhub"),
 ]
 
 # RM0468 memory map (public), base -> name, for naming not-modelled accesses.

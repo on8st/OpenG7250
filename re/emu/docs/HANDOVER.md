@@ -21,7 +21,8 @@ being D2b. One targeted check per item:
   chip-side SIPR = 192.168.3.199 (A1.12).
 - **C/C2** the Control boots to its GUI service loop (GT911 touch, codec,
   DMA2D) via the LTDC CDSR stub.
-- **D1** two-machine SLIP (USART2↔USART2) transmits 0xC0 frames.
+- **D1** two-machine SLIP (USART2↔USART2) transmits 0xC0 frames and the Main
+  receives them through its DMA ring.
 - **D2a** FPGA boot bus check: "Check complete!", version 1.0.0, no bus errors
   before it (`tests/baseline/fpga_boot.sh`).
 - **D2b** FPGA runtime health in the superloop: **known failure** (KFAIL, with
@@ -35,10 +36,13 @@ being D2b. One targeted check per item:
 | --- | --- | --- | --- |
 | MDMA (software request, polled) | `models/csharp/G7250Mdma.cs` | `docs/MDMA-model.md` | Renode has no MDMA; the DSP's buffer copies timed out and the boot crawled |
 | PA bias plant and ADC1 metering feed | `models/csharp/G7250PaPlant.cs`, `platforms/g7250_main_pa_plant.repl` | `docs/PA-plant-model.md` | The boot-time bias trim needs a drain current that responds to the bias DAC; Renode's ADC/circular DMA path returns no usable values |
-| USART2 RX shim | `models/csharp/G7250Usart2RxShim.cs` | `docs/USART2-RX-shim.md` | Renode 1.17's DMA has no circular mode, so the Main received no SLIP bytes |
+| DMA1/DMA2 (generic, circular) | `models/csharp/G7250Dma.cs`, `platforms/g7250_main_dma.repl` | `docs/DMA-model.md` | Renode 1.17's DMA has no circular mode |
+| USART2 (generic, DMA requests) | `models/csharp/G7250Usart.cs`, `platforms/g7250_main_usart2.repl` | `docs/USART-model.md` | Renode's USART raises no DMA requests, so the Main received no SLIP bytes; replaces the earlier RX ring shim (removed) |
 
-`m1_run.py` loads the MDMA and PA models for every Main boot. The RX shim is
-used by the HIS-02 probe.
+`m1_run.py` loads the MDMA, PA, DMA and USART2 models for every Main boot.
+The product test bench (`docs/PRODUCT-TESTBENCH-PLAN.md`, branch `emu/bench`)
+uses the generic ones only: `harness/g7250emu/product_run.py`, own self-test
+programs in `firmware-tests/bench/`.
 
 ## HIS work done with the emulator
 
@@ -80,8 +84,6 @@ goes to `.private/`.
   logs "[ERR] FPGA bus error" and "FPGA buffer underrun", because the fused FPGA
   model delivers counter data, not realistic RX I/Q at the real block rate. It
   becomes a normal check once the model delivers realistic RX data.
-- **D1 does not use the RX shim yet.** The two-machine SLIP run shows
-  transmission only; the Main still receives nothing there.
 - **Hardware-only questions.** Everything the emulator cannot answer (real bias
   codes and plant values, ADC scan rate, the FPGA's use of the tuning words, TX
   and XIT behaviour, and the items in `his/90-needs-hardware.md`) needs
@@ -108,11 +110,12 @@ goes to `.private/`.
   fpga_nco_probe, control_run, slip_run, r0_confirm, observe (strict / hang /
   heatmap), imagemap, platform_extras.
 - `models/csharp`: G7250Slaves (EEPROM, CH394), G7250Gpioe (fused GPIOE+FPGA),
-  G7250Mdma, G7250PaPlant, G7250Usart2RxShim.
+  G7250Mdma, G7250PaPlant, G7250Dma, G7250Usart; bench only: G7250BenchReq.
 - `models/devices`, `models/system`: host-tested device, plant and power logic.
 - `platforms/*.repl`: g7250_main, g7250_control, the I2C/CH394/FPGA/PA
   overlays, SLIP.
-- `tests/baseline`: m1_smoke, boot_milestone, fpga_boot (D2a), acceptance_ae.
+- `tests/baseline`: m1_smoke (incl. the bench self-tests), boot_milestone,
+  fpga_boot (D2a), acceptance_ae.
 - `docs`: EMU-JOB-STATUS, M1-status, M2-control-status, M8c-R0-report,
   D2-action-plan, FPGA-model-notes, the three model docs above.
 

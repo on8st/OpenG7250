@@ -18,16 +18,23 @@ import imagemap  # noqa: E402
 
 OUT = os.path.join(REPO, ".private", "slip")
 CS = os.path.join(REPO, "models", "csharp", "G7250Slaves.cs")
+CS_DMA = os.path.join(REPO, "models", "csharp", "G7250Dma.cs")
+CS_USART = os.path.join(REPO, "models", "csharp", "G7250Usart.cs")
 PLAT = os.path.join(REPO, "platforms")
 
 
 def build_resc(main_img, ctrl_img, log_path):
     L = []
-    L += ['i @%s' % CS]
+    L += ['i @%s' % CS, 'i @%s' % CS_DMA, 'i @%s' % CS_USART]
     # Main
     L += ['mach create "main"',
           'machine LoadPlatformDescription @%s/g7250_main.repl' % PLAT,
           'machine LoadPlatformDescription @%s/g7250_main_i2c1_func.repl' % PLAT,
+          # generic DMA + USART2: the Main receives the link through its DMA ring
+          'sysbus Unregister sysbus.dma1', 'sysbus Unregister sysbus.dma2',
+          'machine LoadPlatformDescription @%s/g7250_main_dma.repl' % PLAT,
+          'sysbus Unregister sysbus.usart2',
+          'machine LoadPlatformDescription @%s/g7250_main_usart2.repl' % PLAT,
           'nvic Frequency 275000000']
     L += platform_extras.all_tag_commands()
     # Control
@@ -44,7 +51,8 @@ def build_resc(main_img, ctrl_img, log_path):
     # observe both; one shared log file
     L += ['mach set "main"', 'logLevel -1 sysbus', 'sysbus LogAllPeripheralsAccess true',
           'mach set "control"', 'logLevel -1 sysbus', 'sysbus LogAllPeripheralsAccess true',
-          'logFile @%s true' % log_path, 'logLevel 3 console']
+          'logFile @%s true' % log_path, 'logLevel 3 console',
+          'mach set "main"', 'logLevel 1 sysbus.usart2']
     # load images + reset vectors
     L += ['mach set "main"',
           'sysbus LoadBinary @%s 0x08020000' % main_img,
@@ -89,13 +97,16 @@ def main():
             if m.group(4) and (int(m.group(4), 16) & 0xFF) == 0xC0: frames += 1
         elif m.group(1) == "Read" and off == 0x24:
             rx += 1
+    main_rx = 0
+    for ln in open(log_path, errors="replace"):
+        m = re.search(r"USART2: (\d+) bytes received", ln)
+        if m: main_rx = max(main_rx, int(m.group(1)))
     print("USART2 (both MCUs, register-visible): TX bytes=%d  SLIP 0xC0 delimiters=%d" % (tx, frames))
-    print("(RX is via circular DMA1 S3, not RXDR register reads, so it is not"
-          " register-visible here; TX frames are the link evidence.)")
-    ok = tx > 0
+    print("Main USART2 received (generic USART2 + DMA ring): >= %d bytes" % main_rx)
+    ok = tx > 0 and main_rx > 0
     print("\n%s" % ("D1 OK: both MCUs boot together, USART2<->USART2 is wired through the"
-                    " SLIP UART hub, and SLIP bytes (0xC0-delimited) are transmitted over it."
-                    if ok else "D1: harness wired but no USART2 traffic seen."))
+                    " SLIP UART hub, SLIP bytes are transmitted, and the Main receives them."
+                    if ok else "D1: no USART2 traffic, or the Main received nothing."))
     sys.exit(0 if ok else 1)
 
 

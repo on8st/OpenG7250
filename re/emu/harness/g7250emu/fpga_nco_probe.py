@@ -30,7 +30,6 @@ import m1_run    # noqa: E402
 REPO = m1_run.REPO
 OUT = os.path.join(REPO, ".private", "nco")
 PORT = 3461
-CS_U2RX = os.path.join(REPO, "models", "csharp", "G7250Usart2RxShim.cs")
 F_CLK = 122.88e6
 
 # 0x01 settings image (424 B) offsets, g7250-base cmd01_fields.csv (VERIFIED)
@@ -95,14 +94,9 @@ def build_resc(image, log_path, console_path):
         "logLevel 3",
         "logLevel 1 sysbus.gpioPortE",
         "sysbus.usart1 CreateFileBackend @%s true" % console_path,
-        # USART2 RX through the circular-DMA shim (docs/USART2-RX-shim.md):
-        # Renode's DMA delivers no USART2 RX bytes to DMA1 Stream 2.
-        "i @%s" % CS_U2RX,
-        'machine LoadPlatformDescriptionFromString "u2rx: '
-        'Antmicro.Renode.Peripherals.UART.G7250Usart2RxShim @ sysbus <0xA0000000, +0x10>"',
-        "logLevel 1 sysbus.u2rx",
+        # USART2 RX through the generic USART2 + DMA models (m1_run; docs/USART-model.md)
         'emulation CreateServerSocketTerminal %d "ctrl" false' % PORT,
-        "connector Connect sysbus.u2rx ctrl",
+        "connector Connect sysbus.usart2 ctrl",
         "start",
     ]
     return "\n".join(lines) + "\n"

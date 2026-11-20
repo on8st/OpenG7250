@@ -62,7 +62,7 @@ suites) are created when the work that needs them begins (see spec §14).
   `platform_extras`.
 - `models/csharp/`: `G7250Slaves` (EEPROM, CH394), `G7250Gpioe` (fused
   GPIOE+FPGA), `G7250Mdma` (MDMA), `G7250PaPlant` (PA bias plant and metering
-  feed), `G7250Usart2RxShim` (USART2 RX into the DMA ring).
+  feed), `G7250Dma` (DMA1/DMA2), `G7250Usart` (USART2 with DMA requests).
 - `models/devices/`, `models/system/`: host-tested device, plant and power
   logic.
 - `platforms/*.repl`: `g7250_main`, `g7250_control`, the I2C/CH394/FPGA

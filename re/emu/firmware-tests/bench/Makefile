@@ -7,7 +7,7 @@ ARCH     = -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
 CFLAGS   = $(ARCH) -O1 -g3 -ffreestanding -fno-common -Wall -Wextra -Wno-override-init \
            -ffunction-sections -fdata-sections
 LDFLAGS  = $(ARCH) -T bench.ld -nostdlib -Wl,--gc-sections
-PROGS    = smoke dma_test
+PROGS    = smoke dma_test usart_test
 
 .PHONY: all clean
 all: $(PROGS:%=$(OUT)/%.elf)
