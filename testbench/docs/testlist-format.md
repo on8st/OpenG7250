@@ -1,6 +1,6 @@
 # Test list and result format (proposal, v1)
 
-- Status: **proposal** from openg7250-tb, 2026-11-20. Agree it with the emulator side
+- Status: **proposal** from openg7250-tb, 2026-11-20 (id scheme of bench tests corrected 2026-11-21: `T-<group>-L<nn>`). Agree it with the emulator side
   through the coordinator (openg7250) before anyone builds on it.
 - Purpose: the file that `product_run.py <elf> <tests> -o <result>` reads (`<tests>`), and the file
   it writes (`<result>`). The same two formats are used by the test bench runner against the
@@ -53,7 +53,7 @@ target. The runner can also take a hand-written subset.
       "params": {}
     },
     {
-      "id": "T-B10-01L",
+      "id": "T-B10-L04",
       "title": "TX locked: every TX request rejected, safe state held",
       "reqs": ["B10", "B10.2 item 3", "A3.6", "HIS 85"],
       "target": "emulator",
@@ -68,7 +68,7 @@ target. The runner can also take a hand-written subset.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | yes | spec test id (Annex X3, part C C9) or a test bench id of the form `T-<group>-<nn><suffix>` for a test the bench adds (suffix letter, e.g. `L` for the TX-locked variants); stable |
+| `id` | yes | spec test id (Annex X3, part C C9) or a test bench id of the form `T-<group>-L<nn>` for a test the bench adds (`L`: the TX-locked tests, `T-B10-L01` …); stable |
 | `title` | yes | one line, for logs |
 | `reqs` | yes | spec requirement ids the test proves (section numbers such as `B3.2`, `A1.4`; decision ids such as `0032`; HIS sections such as `HIS 85`) |
 | `target` | yes | the minimum environment: `host`, `emulator` or `needs-radio` (section 6) |
