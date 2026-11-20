@@ -58,3 +58,20 @@ role of offset 19, need a capture on the radio including transmit".
 
 **CHANGES** (not cleared): K1–K3, all of them tag and wording only. A check of
 that diff alone is enough to clear.
+
+---
+
+## Final check (diff f4538be..9d10e72, his/)
+
+| Item | Result |
+| --- | --- |
+| K1 (80, 90) | applied: the roles of offsets 1 and 5 are MEDIUM in both files; offsets and word format stay HIGH. |
+| K2 (80 evidence) | applied: the offsets are "observed"; the roles are "inferred from the values written; the FPGA's use of the words is not observed". |
+| K3 (80 Open) | applied, using the wording proposed. |
+
+The diff adds no stock behaviour and no untagged fact.
+
+### Verdict (final)
+
+**CLEARED** at 9d10e72 (his/next). Follow-up for the emu session: update the
+status in `his/README.md` to the new cleared commit and review 5.
