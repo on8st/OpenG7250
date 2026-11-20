@@ -27,6 +27,8 @@ CS_GPIOE = os.path.join(REPO, "models", "csharp", "G7250Gpioe.cs")
 CS_SLAVES = os.path.join(REPO, "models", "csharp", "G7250Slaves.cs")
 CS_MDMA = os.path.join(REPO, "models", "csharp", "G7250Mdma.cs")
 CS_PA = os.path.join(REPO, "models", "csharp", "G7250PaPlant.cs")
+CS_DMA = os.path.join(REPO, "models", "csharp", "G7250Dma.cs")
+REPL_DMA = os.path.join(REPO, "platforms", "g7250_main_dma.repl")
 REPL_PA = os.path.join(REPO, "platforms", "g7250_main_pa_plant.repl")
 OUT = os.path.join(REPO, ".private", "m1")
 
@@ -62,6 +64,12 @@ def build_resc(image_path, log_path, fpga=False):
         'i @%s' % CS_MDMA,
         'machine LoadPlatformDescriptionFromString "mdma: '
         'Antmicro.Renode.Peripherals.DMA.G7250Mdma @ sysbus <0x52000000, +0x1000>"',
+        # generic DMA1/DMA2 with circular mode (docs/DMA-model.md) in place of
+        # Renode's STM32DMA; dmamux1 is re-wired to the new streams.
+        'i @%s' % CS_DMA,
+        'sysbus Unregister sysbus.dma1',
+        'sysbus Unregister sysbus.dma2',
+        'machine LoadPlatformDescription @%s' % REPL_DMA,
         # PA bias plant on SPI2 feeding ADC1 Idd/Vext/NTC (docs/PA-plant-model.md),
         # so the boot-time bias trim converges and the boot reaches the superloop.
         'i @%s' % CS_PA,

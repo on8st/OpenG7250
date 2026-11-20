@@ -155,5 +155,20 @@ echo "[5] m1_run.py refuses an absent image-map (exit 2)"
 ( G7250_IMAGE_MAP="$OUT/no_such_image_map_dir" python3 harness/g7250emu/m1_run.py >/dev/null 2>&1 )
 [ $? -eq 2 ] && ok "clean refusal" || bad "expected exit 2"
 
+echo "[6] bench self-tests on the generic models (firmware-tests/bench, product_run --selftest)"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
+  make -s -C firmware-tests/bench >/dev/null 2>&1 || bad "bench build"
+  for prog in smoke dma_test; do
+    if python3 harness/g7250emu/product_run.py ".private/bench/$prog.elf" firmware-tests/bench/tests-bench.json \
+         --selftest --run-id "smoke-$prog" --host-timeout 180 >/dev/null 2>&1; then
+      ok "bench $prog: all self-tests pass"
+    else
+      bad "bench $prog (see .private/product-runs/smoke-$prog/result.json)"
+    fi
+  done
+else
+  echo "  skip (no arm-none-eabi-gcc or Renode)"
+fi
+
 echo
 [ $fail -eq 0 ] && { echo "M1 smoke: ALL PASS"; exit 0; } || { echo "M1 smoke: FAILURES"; exit 1; }

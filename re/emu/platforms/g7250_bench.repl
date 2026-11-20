@@ -1,0 +1,5 @@
+// g7250_bench.repl — bench-only additions for the own self-test programs
+// (firmware-tests/bench/). Never loaded for stock or product images.
+// A request source on DMAMUX1 input 113 (models/csharp/G7250BenchReq.cs).
+benchreq: Miscellaneous.G7250BenchReq @ sysbus <0xA0001000, +0x10>
+    IRQ -> dmamux1@113

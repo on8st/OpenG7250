@@ -1,0 +1,8 @@
+{
+  "run_s": 2,
+  "tests": [
+    {"name": "banner", "expect": "^bench "},
+    {"name": "no_fault", "forbid": "FAULT"},
+    {"name": "self", "bench": true}
+  ]
+}
