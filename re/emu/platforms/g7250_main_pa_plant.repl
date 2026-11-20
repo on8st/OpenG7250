@@ -1,13 +1,12 @@
-// g7250_main_pa_plant.repl — PA bias plant on SPI2 (docs/PA-plant-model.md).
+// g7250_main_pa_plant.repl — PA bias DAC and PA plant on SPI2
+// (docs/PA-plant-model.md).
 //
-// models/csharp/G7250PaPlant.cs decodes the bias DAC words (BU2506FV-type on
-// SPI2, LD = PB12, RESET = PB14; g7250-base main_unit/docs/peripherals.md) and
-// feeds the ADC1 metering (Idd, Vext, PA NTC) directly into the DMA1 Stream 7
-// buffer and pulses IRQ 47, because Renode 1.17's DMA model drops the circular
-// mode the firmware uses.
-// Load after `i @models/csharp/G7250PaPlant.cs`.
+// models/csharp/G7250PaPlant.cs decodes the bias DAC words (BU2506FV type on
+// SPI2, LD = PB12, RESET = PB14; his/85-rf-control.md) and drives the ADC1
+// input voltages (Idd, supply, PA NTC) on the generic ADC model.
+// Load after `i @models/csharp/G7250PaPlant.cs` and after g7250_main_adc.repl;
+// then `sysbus.spi2.pa Publish` sets the initial analog values.
 pa: Antmicro.Renode.Peripherals.SPI.G7250PaPlant @ spi2
-    -> nvic@47
 
 gpioPortB:
     12 -> pa@0

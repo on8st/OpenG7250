@@ -1,62 +1,50 @@
-// PA bias plant and ADC1 metering feed for the Main (clean-room; see
-// docs/PA-plant-model.md).
+// PA bias DAC and PA plant for the Main, at bus and pin level (clean-room; see
+// docs/PA-plant-model.md). Step 2 (PA) of docs/PRODUCT-TESTBENCH-PLAN.md.
 //
-// Two parts:
-// 1. An SPI2 slave that decodes the bias DAC words (BU2505FV/BU2506FV format) and
-//    computes the PA drain current Idd from the bias codes (monotonic, safe at
-//    zero; shape as in models/devices/bias_trim_plant.py).
-// 2. A metering feed that stands in for ADC1 + circular DMA1 Stream 7: Renode
-//    1.17's DMA model does not keep the CIRC bit (one transfer, then NDTR = 0)
-//    and its ADC returns wrong raw values, so the firmware's meters stay 0. The
-//    feed writes the seven 16-bit scan results into the DMA buffer at
-//    0x30003740 in rank order and pulses IRQ 47 (DMA1_Stream7), as a circular
-//    DMA does after each scan. The firmware's Stream 7 vector filters the buffer
-//    itself before the HAL handler (g7250-base docs/dma.md).
-//
-// From the analysis (g7250-base, used as data, VERIFIED unless noted): DAC word =
-// 4-bit address (bit-reversed channel) << 2 | value bits 9..8, then bits 7..0;
-// LD high on PB12 latches; RESET low on PB14 forces all outputs to 0; bias
-// channels 2 (driver), 8 (final 1), 7 (final 2); ADC1 rank order INP1 Vext,
-// INP2 forward, INP3 reflected, INP4 Idd, INP5 PA NTC, INP8 EALC, INP14 ALC;
-// 12-bit; Idd 0.008059 A/LSB; Vext 0.004835 V/LSB (steady state); NTC raw 2047 =
-// 25 degC; buffer 0x30003740, 16-bit, IRQ 47.
-// Assumed (HYPOTHESIS, placeholders, not measured): static Idd, dead zones and
-// gains per stage, Vext 13.8 V, 25 degC, no RF (forward/reflected/ALC 0), and the
-// feed rate (1 kHz virtual time).
+// 1. Bias DAC on SPI2 (8-channel 10-bit serial DAC of the BU2506FV type, word
+//    format per the Rohm datasheet and his/85-rf-control.md): 4-bit address
+//    (bit-reversed channel) << 2 | value bits 9..8, then bits 7..0; LD rising
+//    edge (PB12) latches; RESET low (PB14) forces all outputs to 0.
+// 2. PA plant: drain current Idd from the bias codes (static current plus, per
+//    bias stage, gain x (code - dead zone) above the dead zone; monotonic, zero
+//    extra current at code 0).
+// 3. Analog outputs: the plant sets the input voltages of the ADC1 channels
+//    whose pins his/85 names (PA1_C INP1 supply, PF11 INP2 forward, PA6 INP3
+//    reflected, PC4 INP4 Idd, PB1 INP5 PA NTC, PC5 INP8 EALC, PA2 INP14 ALC) on
+//    the generic ADC model (sysbus.adc12). Nothing is written into RAM; the
+//    firmware reads the values through its own ADC and DMA set-up.
+// Board scaling (volts at the pin per ampere or volt) and all plant values are
+// HYPOTHESIS placeholders until measured on the radio.
+using System;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Logging;
+using Antmicro.Renode.Peripherals;
 
 namespace Antmicro.Renode.Peripherals.SPI
 {
     public class G7250PaPlant : ISPIPeripheral, Antmicro.Renode.Core.IGPIOReceiver
     {
         // HYPOTHESIS: placeholder plant parameters
-        private const double StaticIdd = 0.05;                      // A, must stay <= 0.1 A
+        private const double StaticIdd = 0.05;                      // A
         private static readonly int[] BiasCh = { 2, 8, 7 };          // driver, final 1, final 2
-        private static readonly int[] DeadZone = { 450, 800, 800 };  // DAC codes; targets must lie below the 10-bit clamp (1023)
+        private static readonly int[] DeadZone = { 450, 800, 800 };  // DAC codes, below the 10-bit clamp
         private static readonly double[] Gain = { 0.5 / 150, 0.9 / 150, 0.9 / 150 }; // A per code
-        private const double VextVolts = 13.8;
-        private const uint FeedHz = 1000;
-        // from the analysis
-        private const double IddPerLsb = 0.008059, VextPerLsb = 0.004835;
-        private const int NtcRaw25 = 2047;
-        private const ulong Buffer = 0x30003740;
+        private const double SupplyVolts = 13.8;
+        // HYPOTHESIS: board scaling to the ADC pin (3.3 V full scale)
+        private const double PinVoltsPerAmpIdd = 3.3 / 4095 / 0.008059;
+        private const double PinVoltsPerVoltSupply = 3.3 / 4095 / 0.004835;
+        private const double NtcPinVolts25C = 3.3 * 2047 / 4095;
 
         private readonly IMachine machine;
         private readonly int[] dac = new int[9];
         private readonly byte[] word = new byte[2];
         private int nbytes;
-        private bool ldPrev, rstPrev = true;
-        private ulong scans;
-
-        public GPIO IRQ { get; private set; }
+        private bool ldPrev, rstPrev = true, warned;
+        private double forward, reflected, ealc, alc, supply = SupplyVolts, ntc = NtcPinVolts25C;
 
         public G7250PaPlant(IMachine machine)
         {
             this.machine = machine;
-            IRQ = new GPIO();
-            var feed = machine.ObtainManagedThread(Scan, FeedHz);
-            feed.Start();
             Reset();
         }
 
@@ -64,7 +52,15 @@ namespace Antmicro.Renode.Peripherals.SPI
         {
             for(int i = 0; i < dac.Length; i++) dac[i] = 0;
             nbytes = 0;
+            Publish();
         }
+
+        // test-bench fixture hooks (sensor.set), in plant units
+        public void SetSupplyVolts(double v) { supply = v; Publish(); }
+        public void SetNtcPinVolts(double v) { ntc = v; Publish(); }
+        public void SetRfPinVolts(double fwd, double rev) { forward = fwd; reflected = rev; Publish(); }
+        public int GetDacCode(int channel) { return channel >= 1 && channel <= 8 ? dac[channel] : -1; }
+        public double Idd { get { return ComputeIdd(); } }
 
         public byte Transmit(byte data)
         {
@@ -91,19 +87,20 @@ namespace Antmicro.Renode.Peripherals.SPI
                     int ch = Reverse4((hi >> 2) & 0xF);
                     int val = ((hi & 3) << 8) | lo;
                     if(ch >= 1 && ch <= 8) dac[ch] = val;
-                    this.Log(LogLevel.Debug, "DAC ch {0} = {1}, Idd {2:F3} A", ch, val, Idd());
+                    this.Log(LogLevel.Debug, "DAC ch {0} = {1}, Idd {2:F3} A", ch, val, ComputeIdd());
                     nbytes = 0;
+                    Publish();
                 }
                 ldPrev = value;
             }
             else if(number == 1)
             {
-                if(!value && rstPrev) for(int i = 0; i < dac.Length; i++) dac[i] = 0;
+                if(!value && rstPrev) { for(int i = 0; i < dac.Length; i++) dac[i] = 0; Publish(); }
                 rstPrev = value;
             }
         }
 
-        private double Idd()
+        private double ComputeIdd()
         {
             double i = StaticIdd;
             for(int k = 0; k < BiasCh.Length; k++)
@@ -114,30 +111,26 @@ namespace Antmicro.Renode.Peripherals.SPI
             return i;
         }
 
-        private static ushort Raw(double raw)
+        // push the analog values to the ADC inputs (the ADC model may be loaded
+        // after this plant; then the first publish is retried by the runner)
+        public void Publish()
         {
-            if(raw < 0) raw = 0;
-            if(raw > 4095) raw = 4095;
-            return (ushort)(raw + 0.5);
-        }
-
-        private void Scan()
-        {
-            var bus = machine.SystemBus;
-            ushort[] rank = {
-                Raw(VextVolts / VextPerLsb), // 1 INP1  PA1_C  Vext
-                0,                           // 2 INP2  PF11   forward (no RF)
-                0,                           // 3 INP3  PA6    reflected
-                Raw(Idd() / IddPerLsb),      // 4 INP4  PC4    Idd
-                (ushort)NtcRaw25,            // 5 INP5  PB1    PA NTC, 25 degC
-                0,                           // 6 INP8  PC5    EALC
-                0,                           // 7 INP14 PA2    ALC
-            };
-            for(int r = 0; r < rank.Length; r++) bus.WriteWord(Buffer + (ulong)(2 * r), rank[r]);
-            IRQ.Set(true);
-            IRQ.Set(false);
-            if((++scans & (scans - 1)) == 0)
-                this.Log(LogLevel.Debug, "metering scan #{0}: Idd raw {1}", scans, rank[3]);
+            IPeripheral adc;
+            if(machine == null || !machine.TryGetByName("sysbus.adc12", out adc))
+            {
+                if(!warned && machine != null) { warned = true; this.Log(LogLevel.Debug, "no sysbus.adc12 yet"); }
+                return;
+            }
+            var set = adc.GetType().GetMethod("SetChannelVoltage");
+            if(set == null) return;
+            Action<int, double> v = (ch, volts) => set.Invoke(adc, new object[] { ch, volts });
+            v(1, supply * PinVoltsPerVoltSupply);
+            v(2, forward);
+            v(3, reflected);
+            v(4, ComputeIdd() * PinVoltsPerAmpIdd);
+            v(5, ntc);
+            v(8, ealc);
+            v(14, alc);
         }
     }
 }

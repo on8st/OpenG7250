@@ -29,6 +29,8 @@ CS_MDMA = os.path.join(REPO, "models", "csharp", "G7250Mdma.cs")
 CS_PA = os.path.join(REPO, "models", "csharp", "G7250PaPlant.cs")
 CS_DMA = os.path.join(REPO, "models", "csharp", "G7250Dma.cs")
 REPL_DMA = os.path.join(REPO, "platforms", "g7250_main_dma.repl")
+CS_ADC = os.path.join(REPO, "models", "csharp", "G7250Adc.cs")
+REPL_ADC = os.path.join(REPO, "platforms", "g7250_main_adc.repl")
 CS_USART = os.path.join(REPO, "models", "csharp", "G7250Usart.cs")
 REPL_USART2 = os.path.join(REPO, "platforms", "g7250_main_usart2.repl")
 REPL_PA = os.path.join(REPO, "platforms", "g7250_main_pa_plant.repl")
@@ -76,10 +78,15 @@ def build_resc(image_path, log_path, fpga=False):
         'i @%s' % CS_USART,
         'sysbus Unregister sysbus.usart2',
         'machine LoadPlatformDescription @%s' % REPL_USART2,
+        # generic ADC1 (docs/ADC-model.md); the PA plant drives its inputs
+        'i @%s' % CS_ADC,
+        'sysbus Unregister sysbus.adcM1S2',
+        'machine LoadPlatformDescription @%s' % REPL_ADC,
         # PA bias plant on SPI2 feeding ADC1 Idd/Vext/NTC (docs/PA-plant-model.md),
         # so the boot-time bias trim converges and the boot reaches the superloop.
         'i @%s' % CS_PA,
         'machine LoadPlatformDescription @%s' % REPL_PA,
+        'sysbus.spi2.pa Publish',
     ]
     if fpga:
         # fused GPIOE+FPGA port (M3/D2): compile it, drop the base gpioPortE,

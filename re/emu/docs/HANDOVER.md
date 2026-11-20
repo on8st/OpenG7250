@@ -35,10 +35,10 @@ being D2b. One targeted check per item:
 | Model | File | Doc | Why |
 | --- | --- | --- | --- |
 | MDMA (software request, polled) | `models/csharp/G7250Mdma.cs` | `docs/MDMA-model.md` | Renode has no MDMA; the DSP's buffer copies timed out and the boot crawled |
-| PA bias plant and ADC1 metering feed | `models/csharp/G7250PaPlant.cs`, `platforms/g7250_main_pa_plant.repl` | `docs/PA-plant-model.md` | The boot-time bias trim needs a drain current that responds to the bias DAC; Renode's ADC/circular DMA path returns no usable values |
+| PA bias DAC and plant (drives the ADC1 inputs since step 2) | `models/csharp/G7250PaPlant.cs`, `platforms/g7250_main_pa_plant.repl` | `docs/PA-plant-model.md` | The boot-time bias trim needs a drain current that responds to the bias DAC; Renode's ADC/circular DMA path returns no usable values |
 | DMA1/DMA2 (generic, circular) | `models/csharp/G7250Dma.cs`, `platforms/g7250_main_dma.repl` | `docs/DMA-model.md` | Renode 1.17's DMA has no circular mode |
 | USART2 (generic, DMA requests) | `models/csharp/G7250Usart.cs`, `platforms/g7250_main_usart2.repl` | `docs/USART-model.md` | Renode's USART raises no DMA requests, so the Main received no SLIP bytes; replaces the earlier RX ring shim (removed) |
-| ADC1 (generic) | `models/csharp/G7250Adc.cs`, `platforms/g7250_main_adc.repl` | `docs/ADC-model.md` | Renode's ADC returned wrong raw values; bench and product runs now, stock runs from step 2 |
+| ADC1 (generic) | `models/csharp/G7250Adc.cs`, `platforms/g7250_main_adc.repl` | `docs/ADC-model.md` | Renode's ADC returned wrong raw values; all Main runs since step 2 |
 
 `m1_run.py` loads the MDMA, PA, DMA and USART2 models for every Main boot.
 The product test bench (`docs/PRODUCT-TESTBENCH-PLAN.md`, branch `emu/bench`)

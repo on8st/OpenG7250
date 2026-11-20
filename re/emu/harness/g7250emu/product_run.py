@@ -61,6 +61,10 @@ GENERIC = [
     ("cs", P("models", "csharp", "G7250Adc.cs")),
     ("cmd", "sysbus Unregister sysbus.adcM1S2"),
     ("repl", P("platforms", "g7250_main_adc.repl")),
+    # PA bias DAC + plant at bus/pin level (his/85), driving the ADC inputs
+    ("cs", P("models", "csharp", "G7250PaPlant.cs")),
+    ("repl", P("platforms", "g7250_main_pa_plant.repl")),
+    ("cmd", "sysbus.spi2.pa Publish"),
 ]
 BENCH = [
     ("cs", P("models", "csharp", "G7250BenchReq.cs")),

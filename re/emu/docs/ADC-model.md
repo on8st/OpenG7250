@@ -4,10 +4,9 @@
 Renode 1.17's `STM32H7_ADC` (`adcM1S2`), whose raw values were wrong (DR read 2
 for a set input voltage). Step 1c of `docs/PRODUCT-TESTBENCH-PLAN.md`.
 
-Loaded by `product_run.py` (bench and product runs). The stock runs switch to
-it in step 2 (PA plant at pin level), when the PA plant drives the analog
-inputs instead of writing the metering results into RAM; until then the stock
-runs keep the earlier feed.
+Loaded by `product_run.py` (bench and product runs) and, since step 2, by
+`m1_run.py` for every stock Main run: the PA plant drives its analog inputs
+(`docs/PA-plant-model.md`).
 
 Sources: ST RM0468 (public), ADC chapter, DMAMUX1 request table (adc1_dma = 9)
 and interrupt table (ADC1_2 = 18). Channel numbers are the datasheet's INPx

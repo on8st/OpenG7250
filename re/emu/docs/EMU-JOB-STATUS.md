@@ -82,9 +82,10 @@ inserted is a valid real state); it does not block the GUI loop. CLOSED.
 - Step 1e: generic USART2 with DMA requests (docs/USART-model.md); the RX ring
   shim is removed. The HIS-02 probe applies its settings through the real path
   (same word roles as run 5); D1 now shows the Main receiving.
-- Step 1c: generic ADC1 (docs/ADC-model.md) for bench and product runs; the
-  stock runs keep the metering feed until the PA plant drives the ADC inputs
-  (step 2).
+- Step 1c: generic ADC1 (docs/ADC-model.md) for bench and product runs.
+- Step 2 (PA): the PA plant works at bus and pin level and drives the ADC1
+  inputs; the stock metering feed into a fixed RAM buffer is removed. The stock
+  Main still trims all three bias stages and reaches its superloop.
 - Runner skeleton harness/g7250emu/product_run.py and own self-test programs in
   firmware-tests/bench (smoke, dma_test, usart_test, adc_test), run in m1_smoke [6].
 
