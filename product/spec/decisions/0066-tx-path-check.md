@@ -16,22 +16,23 @@ pin as the hardware sees it, nor how fast. The test bench and the firmware need 
 
 1. New A3.6b. While TX is not armed and not keyed, the firmware checks the TX-side outputs of
    A3.6 (TX path disable, SEND, TUNER trigger, PA bias channels; [HIS] HIS 85) at least every
-   10 ms, from the end of the boot stage's safe-state set-up.
+   5 ms, from the end of the boot stage's safe-state set-up.
 2. **Both are checked.**
    1. The MCU's configuration: output mode, output register at the safe level, and DAC value 0
       for a bias channel. This catches a firmware fault.
    2. The level at the pin, from its input register. This catches a line held from outside,
       a board fault. Bias channels have no pin read and are checked by item 1 only.
-3. A mismatch on two checks in a row, so within 20 ms, is drop event 13, `TX_PATH_NOT_BLOCKED`,
-   class 2.
+3. A mismatch seen by every check over at least 10 ms is drop event 13, `TX_PATH_NOT_BLOCKED`,
+   class 2. So a mismatch of 10 ms or less never counts, and one of 20 ms or more always does,
+   within 20 ms of its start. The rule is in time rather than in a number of checks, so that a
+   firmware that checks more often than every 5 ms does not latch on a shorter glitch.
    - The log names the pin and which comparison failed.
    - The firmware sets the safe state again and stays in the fault; RX goes on.
-   - One check alone is not enough, so that a single glitch causes no fault.
 4. No check while armed or keyed, because the path is then meant to be open.
 5. Tests:
    - T-A3-61 (new) covers both stimuli: the pin level forced from outside with the output
      register unchanged, and the register or mode changed; it also checks the 20 ms bound,
-     that a pulse shorter than 10 ms gives no fault, and the behaviour after a reset;
+     that a pulse of 10 ms or less gives no fault, and the behaviour after a reset;
    - T-A1-68 uses the first stimulus.
 
 ## Alternatives considered
@@ -39,7 +40,8 @@ pin as the hardware sees it, nor how fast. The test bench and the firmware need 
 - Configuration only: misses a board fault that holds a line, which is the case that matters
   most for a transmitter.
 - Pin level only: misses a pin turned into an input that floats near the safe level.
-- A single check: a glitch on a long line would latch a class 2 fault.
+- A single check, or a count of checks: a glitch would latch a class 2 fault, or the bound
+  would depend on how often the firmware checks.
 
 ## Consequences
 
