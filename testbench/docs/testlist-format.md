@@ -1,6 +1,6 @@
-# Test list and result format (v1.6)
+# Test list and result format (v1.7)
 
-- Status: **v1.6**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
+- Status: **v1.7**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
   the first answers of the emulator side (openg7250-emu, relayed by openg7250): the address
   mapping of section 3, the fixture plan of section 4, and its four proposals (emulated-time
   timeouts, boot per test, artifacts, "not modelled" errors), all accepted. v1.2 folded in its
@@ -14,8 +14,9 @@
   B10.5a (0046), in the shape the emulator side answered (paging, a cap, exact write times of
   the keying pins). v1.6 takes over the emulator's proposal of `net.log` (the image's sends and
   arrivals in emulated time), `eth.log` (MACRAW frames), `arp.peer` and `ip.conflict`, for the
-  takeover timing of A2.4 and the address rules of A1.11 (0049). Changes are marked **(v1.1)**
-  to **(v1.6)**. Each version only adds fields, apart
+  takeover timing of A2.4 and the address rules of A1.11 (0049). v1.7 adds `net.inject` and
+  `time.wait`, so that judged bursts are placed and waits counted in emulated time. Changes
+  are marked **(v1.1)** to **(v1.7)**. Each version only adds fields, apart
   from that one rename of a count nobody reads. A v1.3 reader keeps working if it treats an
   unknown level as "not driven".
 - Purpose: the file that `product_run.py <elf> <tests> -o <result>` reads (`<tests>`), and the file
@@ -57,7 +58,7 @@ hand-written subset.
 ```json
 {
   "format": "g7250-testlist",
-  "version": 1, "minor": 6,
+  "version": 1, "minor": 7,
   "spec":  { "branch": "spec/draft", "commit": "0e075f2" },
   "his":   { "commit": "d07627e" },
   "catalogue": { "commit": "<tb/main commit>", "sha256": "<of catalogue.json>" },
@@ -101,7 +102,7 @@ hand-written subset.
 
 ```json
 {
-  "format": "g7250-endpoint", "version": 1, "minor": 6,
+  "format": "g7250-endpoint", "version": 1, "minor": 7,
   "kind": "emulator",
   "radio": { "ip": "192.168.73.10", "netmask": "255.255.255.0", "mac": "02:00:00:00:72:50",
              "connect": { "1024": "127.0.0.1:41024", "1025": "127.0.0.1:41025",
@@ -200,6 +201,8 @@ delivery is given in the last column; the reference model offers the ones marked
 | `key.log` | **(v1.5)** `key.log {action: "start"\|"read"\|"stop", from_key?, from_hp?}`; below | B10.5a keyer timing (0046): T-B10-33, T-B10-43 to T-B10-46 | emulator after its CH394 socket log and DHCP checks; model |
 | `atu.sim` | **(v1.5, reference model only)** `atu.sim {result: "tuned"\|"failed"\|"none", after_ms?, tune_time_ms?}`: how the next ATU tune cycle ends by itself and the ATU tune time, which is pending hardware (P-ATU-1); without it the bench runs only the abort part | T-B10-47 (0047) | model |
 | `net.log` | **(v1.6)** `net.log {action: "start"\|"read"\|"stop", from?}`; below | A2.4 timing (T-A2-10 to T-A2-17: the 10 ms copies, the 5 s notice window) | emulator; the reference model's host clock is its own clock |
+| `net.inject` | **(v1.7)** `net.inject {host, from_port, to_port, at_us: [...], payloads: [hex]}` → `{"t_us": [...]}`; section 7 point 5 | T-B5-20 (bursts in emulated time); later the CW paddle schedules | emulator (emu/bench 4d22eaf); model |
+| `time.wait` | **(v1.7)** `time.wait {us}` → `{"t_us"}` when emulated time has advanced by `us` | T-B5-20 | emulator; model |
 | `eth.log` | **(v1.6)** `eth.log {action, from?}`; below | A1.11 link-local probe and announce, conflicts (T-A1-70 to T-A1-73, 0049) | emulator |
 | `arp.peer` | **(v1.6)** `arp.peer {action: "set", ip, mac?, answer_probe, defend}` \| `{action: "announce", ip, mac?, count?}` \| `{action: "clear", ip?}`: a simulated other host on the link | T-A1-70 to T-A1-73 | emulator |
 | `ip.conflict` | **(v1.6)** `ip.conflict {action: "raise"}` sets the CH394's IP conflict interrupt (GINT bit 7) now; `{action: "auto", on}` raises it when an `arp.peer` frame carries the radio's own non-zero source address (an emulator assumption) | T-A1-72, T-A1-73 | emulator |
@@ -396,7 +399,7 @@ a real input.
 
 ```json
 {
-  "format": "g7250-testresult", "version": 1, "minor": 6,
+  "format": "g7250-testresult", "version": 1, "minor": 7,
   "testlist": { "sha256": "…" },
   "subject":  { "kind": "emulator", "elf_sha256": "…", "fw_version": "0.1.0+12" },
   "runner":   { "name": "product_run.py", "version": "…", "emulator_commit": "…" },
@@ -461,8 +464,8 @@ A test with target `emulator` is also run against the reference model. A test wi
 4. Proposed (v1.6): `macraw.fail {on: true|false}` makes socket 0 fail to open in MACRAW, for
    T-A1-76 (0057) once the emulator has MACRAW; until then a runner without MACRAW takes the
    same path, and the bench judges by `IDENTIFY` tag 24.
-5. Proposed by the emulator side (v1.7), accepted by the bench: judged bursts scheduled in
-   emulated time, exactly at any emulation speed.
+5. Settled (v1.7, offered by the emulator from emu/bench 4d22eaf; the reference model offers it
+   on its own clock): judged bursts scheduled in emulated time, exactly at any emulation speed.
    - `net.inject {host: i, from_port, to_port, at_us: [...], payloads: [hex, ...]}` →
      `{"t_us": [...]}`: each datagram placed in the CH394 receive buffer of `to_port` at its
      emulated offset from now, as if sent by `hosts[i]` from `from_port` (a port the bench has

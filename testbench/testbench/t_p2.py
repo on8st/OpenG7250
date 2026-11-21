@@ -667,8 +667,14 @@ class Burst:
         self.t0 = now if self.t0 is None else self.t0
         self.t1 = now
 
+    emu = None  # emulated placing times (net.inject)
+
     def tag(self) -> str:
-        return f"[burst {self.name}, host wall {self.t0:.6f}-{self.t1:.6f}]"
+        e = f", emulated {self.emu[0]}-{self.emu[-1]} us" if self.emu else ""
+        return f"[burst {self.name}, host wall {self.t0:.6f}-{self.t1:.6f}{e}]"
+
+
+WIRE_US = 121  # a 1444-byte High Priority packet on 100 Mbit/s with its Ethernet framing
 
 
 @test("T-B5-20")
@@ -676,22 +682,43 @@ def t_b5_20(ctx):
     """B2.3 "High Priority bursts" (0053, 0054): two packets back to back at wire speed with no
     third within 2 ms, and a sequence of 20 packets 1 ms apart, are all processed. Precondition
     (0055): no management write, store compaction or update in progress; the test sends none.
-    Waits and host spacing are in the radio's time: stretched by 1 / time_scale.
-    What it can see from outside: the stop and the last packet of each burst. "No loss in the
-    burst" for every packet is judged from the net.log "dropped" entries (v1.6) where offered,
-    else noted as not judged (a received-packet counter is asked of the spec session)."""
-    ts = time_scale(ctx)
+    Where the runner offers net.inject and time.wait (v1.7) the bursts are placed and the waits
+    counted in emulated time, exactly; else the host paces them, stretched by 1 / time_scale.
+    Loss: GET_STATS hp_rx (0058) rises by the number sent, and no net.log "dropped" entry."""
+    fx = ctx.endpoint.get("fixtures", [])
+    inject = "net.inject" in fx and "time.wait" in fx
+    ts = 1.0 if inject else time_scale(ctx)
+    netlog = "net.log" in fx
 
     def W(sec: float) -> float:
         return sec / ts
 
+    def wait(sec: float):
+        """Radio time passes: time.wait where offered, else a host wait."""
+        if inject:
+            ctx.fixture("time.wait", us=int(sec * 1e6))
+        else:
+            time.sleep(W(sec))
+
+    def collect(h: Host, sec: float):
+        """Status packets of the next `sec` seconds of radio time."""
+        if inject:
+            wait(sec)
+            return status_seqs(h, 0.05)
+        return status_seqs(h, W(sec))
+
+    def seen(obs: Host) -> int | None:
+        obs.send(PORT_DISC, discovery())
+        r = obs.recv(5.0 if inject else W(0.3), PORT_DISC, until=lambda g: bool(g))
+        return r[0][1][4] if r else None
+
     def eq(name: str, got, want, b: Burst):
         return ctx.check(f"{name} [burst {b.name}]", got == want, f"got {got!r}, want {want!r} {b.tag()}")
 
-    netlog = "net.log" in ctx.endpoint.get("fixtures", [])
+    ctx.notes.append("bursts placed in emulated time (net.inject, time.wait)" if inject else
+                     "bursts paced by the host" + (f", stretched by {1 / ts:.1f} (time_scale {ts})" if ts < 1.0 else ""))
     if not netlog:
-        ctx.notes.append("'no loss in the burst' not judged: no net.log (v1.6) to show drops")
-
+        ctx.notes.append("'no loss in the burst' from net.log not judged: no net.log (v1.6)")
     from .mgmt import Mgmt, stats
     mg = Mgmt(ctx.net)
     hp_before = {}
@@ -700,15 +727,31 @@ def t_b5_20(ctx):
         st = stats(mg)
         return None if st is None else st.get("hp_rx")
 
-    def log_start():
+    def burst(b: Burst, h: Host, pkts: list[bytes], offsets_us: list[int]):
+        """Send a judged burst: GET_STATS before, net.log restarted, then the packets at their
+        offsets (emulated where injected; host-paced otherwise)."""
         hp_before["n"] = hp_rx()  # GET_STATS on port 7251: not a High Priority packet
         if netlog:
             ctx.fixture("net.log", action="start")
+        if inject:
+            r = ctx.fixture("net.inject", host=0, from_port=h.port, to_port=PORT_HP, at_us=offsets_us,
+                            payloads=[x.hex() for x in pkts]) or {}
+            b.emu = r.get("t_us")
+            b.sent()
+            wait(max(offsets_us) / 1e6 + 0.001)
+            b.sent()
+            return
+        last = None
+        for pkt, off in zip(pkts, offsets_us):
+            if last is not None and off > 0:
+                while time.monotonic() - last < W(off / 1e6 * 1.1):
+                    pass  # busy wait: the planned spacing (plus 10 %) in the radio's time
+            h.s.sendto(pkt, ctx.net.dest(PORT_HP))
+            b.sent()
+            if last is None or off > 0:
+                last = time.monotonic()
 
     def no_loss(b: Burst, n_sent: int):
-        """0054: no datagram to radio port 1027 lost in the burst: GET_STATS hp_rx rose by exactly
-        the number sent (0058; no other High Priority packet was sent since log_start), and no
-        net.log "dropped" entry where offered."""
         a, z = hp_before.get("n"), hp_rx()
         if a is None or z is None:
             ctx.notes.append(f"hp_rx not judged for burst {b.name}: GET_STATS has no hp_rx")
@@ -717,101 +760,80 @@ def t_b5_20(ctx):
                       f"hp_rx {a} -> {z} (+{z - a}), sent {n_sent} {b.tag()}")
         if not netlog:
             return
-        entries, n = [], 0
+        entries = []
         for _ in range(1000):
             r = ctx.fixture("net.log", action="read", **{"from": len(entries)}) or {}
             entries += r.get("entries", [])
-            n = r.get("count", 0)
-            if len(entries) >= n:
+            if len(entries) >= r.get("count", 0):
                 break
         drops = [e for e in entries if e.get("dir") == "dropped" and e.get("radio_port") == PORT_HP]
         ctx.check(f"no loss in the burst: no High Priority datagram dropped (0054) [burst {b.name}]", not drops,
                   (f"{len(drops)} dropped, first {drops[0]}" if drops else "none dropped") + f" {b.tag()}")
 
-    def send(b: Burst, pkt: bytes):
-        h.s.sendto(pkt, ctx.net.dest(PORT_HP))
-        b.sent()
-
-    if ts < 1.0:
-        ctx.notes.append(f"time_scale {ts}: waits and spacing stretched by {1 / ts:.1f}")
+    pair = [0, WIRE_US]
     with Host(ctx.net) as h, Host(ctx.net) as obs:
-        # running, then run = 1 and run = 0 back to back: the session ends
         h.start()
         keep_until = time.monotonic() + W(0.3)
         while time.monotonic() < keep_until:
             h.keepalive()
             h.recv(W(0.05))
-        time.sleep(W(0.005))  # no packet within 2 ms before the pair either
-        log_start()
+        wait(0.005)  # no packet within 2 ms before the pair either
+        # running, run = 1 then run = 0 back to back: the session ends
         b1 = Burst("pair-1 run1-run0")
-        send(b1, high_priority(run=True))
-        send(b1, high_priority(run=False))
+        burst(b1, h, [high_priority(run=True), high_priority(run=False)], pair)
         h.running = False
-        h.recv(W(0.2))  # nothing sent for 200 ms: no third packet within 2 ms
-        eq("run = 1 then run = 0 back to back: the session ends (discovery byte 4 for another host)", running_seen_by(obs, W(0.3)), 2, b1)
-        eq("and no High Priority status packet follows", len(status_seqs(h, W(0.3))), 0, b1)
+        wait(0.2)  # nothing sent for 200 ms: no third packet within 2 ms
+        h.drain(0.02)  # status packets sent before the stop took effect, still in the socket
+        eq("run = 1 then run = 0 back to back: the session ends (discovery byte 4 for another host)", seen(obs), 2, b1)
+        eq("and no High Priority status packet follows", len(collect(h, 0.3)), 0, b1)
         no_loss(b1, 2)
-        # idle, then run = 0 and run = 1 back to back: a session starts
-        log_start()
+        # idle, run = 0 then run = 1 back to back: a session starts
         b2 = Burst("pair-2 run0-run1 idle")
-        send(b2, high_priority(run=False))
-        send(b2, high_priority(run=True))
+        burst(b2, h, [high_priority(run=False), high_priority(run=True)], pair)
         h.running = True
-        h.recv(W(0.1))
-        eq("run = 0 then run = 1 back to back: a session runs", running_seen_by(obs, W(0.3)), 3, b2)
+        wait(0.1)
+        eq("run = 0 then run = 1 back to back: a session runs", seen(obs), 3, b2)
         no_loss(b2, 2)
-        before = status_seqs(h, W(0.3))
+        before = collect(h, 0.3)
         h.keepalive()
-        before += status_seqs(h, W(0.2))
-        # running, run = 0 then run = 1 back to back (the pair of 0054 item 1): the stop resets the
-        # counters (B2.7), so the status sequence restarts; this separates a lost stop in the 20
-        # below from counters that a stop with a run right after does not reset
-        time.sleep(W(0.005))
-        log_start()
+        before += collect(h, 0.2)
+        # running, run = 0 then run = 1 back to back (0054 item 1): the stop resets the counters
+        # (B2.7), so the status sequence restarts; this separates a lost stop in the 20 below
+        # from counters that a stop with a run right after does not reset
+        wait(0.005)
         b3 = Burst("pair-3 run0-run1 running")
-        send(b3, high_priority(run=False))
-        send(b3, high_priority(run=True))
-        pair_after = status_seqs(h, W(0.2))
+        burst(b3, h, [high_priority(run=False), high_priority(run=True)], pair)
+        pair_after = collect(h, 0.2)
         no_loss(b3, 2)
         ctx.check(f"running, run = 0 then run = 1 back to back: the status sequence restarts (B2.7) [burst {b3.name}]",
                   bool(before) and bool(pair_after) and restarted(before[-1], pair_after),
                   f"before {before[-3:]}, after {pair_after[:3]} {b3.tag()}")
         h.keepalive()
-        before = status_seqs(h, W(0.3))
+        before = collect(h, 0.3)
         h.keepalive()
-        before += status_seqs(h, W(0.2))
-        # 20 packets at least 1 ms apart: nine run, a stop, ten run. The stop resets the outgoing
-        # counters (B2.7), so the status sequence restarts near 0 only if no packet was lost
+        before += collect(h, 0.2)
+        # 20 packets 1 ms apart: nine run, a stop, ten run
         seq_ = [high_priority(run=True)] * 9 + [high_priority(run=False)] + [high_priority(run=True)] * 10
-        log_start()
         b4 = Burst("seq20 1ms")
-        gaps, last = [], None
-        for pkt in seq_:
-            while last is not None and time.monotonic() - last < W(0.0011):
-                pass  # busy wait: at least 1 ms (in the radio's time) between packets (0054)
-            now = time.monotonic()
-            if last is not None:
-                gaps.append(now - last)
-            send(b4, pkt)
-            last = now
-        ctx.check(f"20 packets sent at least 1 ms apart (host side, radio time) [burst {b4.name}]", min(gaps) >= W(0.001),
-                  f"gaps {min(gaps) * 1000:.2f}-{max(gaps) * 1000:.2f} ms wall {b4.tag()}")
-        after = status_seqs(h, W(0.25))
+        burst(b4, h, seq_, [k * 1000 for k in range(20)])
+        if inject and b4.emu:
+            gaps = [b4.emu[i + 1] - b4.emu[i] for i in range(len(b4.emu) - 1)]
+            ctx.check(f"20 packets placed 1 ms apart (emulated, net.inject) [burst {b4.name}]", min(gaps) >= 1000,
+                      f"gaps {min(gaps)}-{max(gaps)} us {b4.tag()}")
+        after = collect(h, 0.25)
         no_loss(b4, 20)
         h.keepalive()
-        eq("20 packets 1 ms apart: the session runs at the end (the last packet processed)", running_seen_by(obs, W(0.3)), 3, b4)
+        eq("20 packets 1 ms apart: the session runs at the end (the last packet processed)", seen(obs), 3, b4)
         ctx.check(f"20 packets 1 ms apart: the stop inside them was processed (status sequence restarted, B2.7) [burst {b4.name}]",
                   bool(after) and bool(before) and restarted(before[-1], after),
                   f"status sequence before {before[-3:]}, after {after[:3]} {b4.tag()}")
         h.stop()
-    # information, not judged (the spec sets no figure): the firmware's longest busy-loop pass
+    # information, not judged (the spec sets no figure)
     with mg as c:
         st = stats(c)
     v = (st or {}).get("net_busy_pass_max_us")
     ctx.check("information (not judged): GET_STATS net_busy_pass_max_us after the bursts", True,
               f"{v} us" if v is not None else ("GET_STATS has no net_busy_pass_max_us" if st is not None else "no GET_STATS answer"))
-    # information, not judged: the whole GET_STATS answer after the last burst (every counter,
-    # the firmware's step_*_us pass timers included), name=value sorted by name
     ctx.check("information (not judged): GET_STATS after the last burst, all counters", True,
               ", ".join(f"{k}={st[k]}" for k in sorted(st)) if st else "no GET_STATS answer")
 

@@ -32,6 +32,12 @@ impl J {
             _ => None,
         }
     }
+    pub fn as_arr(&self) -> Option<&Vec<J>> {
+        match self {
+            J::Arr(a) => Some(a),
+            _ => None,
+        }
+    }
     pub fn obj(pairs: Vec<(&str, J)>) -> J {
         J::Obj(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
     }

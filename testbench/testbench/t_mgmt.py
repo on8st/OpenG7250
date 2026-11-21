@@ -383,6 +383,9 @@ def t_a1_66(ctx):
     ctx.fixture("dhcp.stop")
     ctx.fixture("power.cycle")
     wait_reachable(ctx, "power-on with no DHCP server")
+    # radio time when the bench first saw the P2 and management sockets open (they opened at or
+    # before it; the discovery poll lags by up to 0.5 s)
+    t_open = (ctx.fixture("hw.observe") or {}).get("t_us") if "hw.observe" in ctx.endpoint.get("fixtures", []) else None
     reread_endpoint(ctx)
     ip = ctx.endpoint["radio"]["ip"]
     ctx.check("link-local address while no lease is held (169.254.0.0/16)", ip.startswith("169.254."), ip)
@@ -392,9 +395,11 @@ def t_a1_66(ctx):
     # The retries while no lease is held (A1.11; 0041). The power-on exchange is not a retry: its
     # DISCOVERs come from 0.0.0.0, the retries from the link-local address (0052). Each retry is
     # one exchange inside a borrow of at most 2 s; the 4, 8, 16, 32, 64 s are the free gaps
-    # between borrows, so exchange start to exchange start is gap + borrow (<= 2 s), each gap
-    # randomised by -1 to +1 s (RFC 2131 4.1).
-    deadline = time.monotonic() + 200
+    # between borrows. The first link-local exchange is borrow 1, 4 s after the sockets open;
+    # from it on, exchange start to exchange start is gap 8, 16, 32, 64, 64 s + the borrow before
+    # (<= 2 s), each gap randomised by -1 to +1 s (RFC 2131 4.1). The sixth exchange comes about
+    # 198 s after the sockets open: 240 s leaves a margin.
+    deadline = time.monotonic() + 240
     starts = []
     while time.monotonic() < deadline:
         starts = retry_exchanges(dhcp_messages(ctx), ip)
@@ -403,11 +408,17 @@ def t_a1_66(ctx):
         time.sleep(2.0)
     times = starts
     gaps = [(b - a) / 1e6 for a, b in zip(starts, starts[1:])]
-    want = [min(4 * 2 ** n, 64) for n in range(len(gaps))]
-    ctx.check("at least six DHCP retry exchanges while link-local within 200 s", len(starts) >= 6, f"{len(starts)} exchanges")
-    ctx.all_of("retry spacing: free gap 4 s doubling to 64 s plus a borrow of at most 2 s (each gap +-1 s), "
-               "exchange start to exchange start", list(zip([round(g, 2) for g in gaps], want)),
-               lambda x: x[1] - 1.0 <= x[0] <= x[1] + 2.0 + 1.0)
+    want = [min(8 * 2 ** n, 64) for n in range(len(gaps))]
+    ctx.check("at least six DHCP retry exchanges while link-local within 240 s", len(starts) >= 6, f"{len(starts)} exchanges")
+    if starts and t_open is not None:
+        first = (starts[0] - t_open) / 1e6
+        ctx.check("the first link-local exchange (borrow 1) 4 s +-1 s after the sockets open (radio clock; the bench "
+                  "saw them open up to 0.5 s late)", 4.0 - 1.0 - 0.5 <= first <= 4.0 + 1.0, f"{first:.2f} s after the bench saw them open")
+    elif starts:
+        ctx.notes.append("first exchange against the socket opening not judged: no radio clock (hw.observe t_us)")
+    ctx.all_of("retry spacing from the first link-local exchange on: free gap 8 s doubling to 64 s plus the borrow "
+               "before it (at most 2 s), each gap +-1 s, exchange start to exchange start",
+               list(zip([round(g, 2) for g in gaps], want)), lambda x: x[1] - 1.0 <= x[0] <= x[1] + 2.0 + 1.0)
     if len(times) < 2:
         return
     # the borrow: send IDENTIFY every 500 ms from 1.5 s before the next expected retry for 6 s

@@ -110,7 +110,7 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim"];
+    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait"];
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -152,6 +152,9 @@ fn main() {
     let mut radio = Radio::new(cfg, now());
     let mut buf = vec![0u8; 2048];
     let mut next_tick = now();
+    let host_ip = radio.cfg.ip;
+    let mut inject: Vec<(u64, SocketAddrV4, u16, Vec<u8>)> = Vec::new();
+    let mut waits: Vec<(u64, mpsc::Sender<String>)> = Vec::new();
     loop {
         let mut busy = false;
         // Round robin, one datagram per socket per pass: closer to arrival order than draining
@@ -173,9 +176,53 @@ fn main() {
             busy = true;
         }
         while let Ok(c) = rxc.try_recv() {
-            let reply = control_op(&mut radio, &c.line, now());
-            let _ = c.reply.send(reply);
+            // v1.7: net.inject and time.wait need the loop (the model's time is the wall clock)
+            let req = json::parse(&c.line).ok();
+            let op = req.as_ref().and_then(|r| r.get("op")).and_then(|o| o.as_str()).unwrap_or("").to_string();
+            let args = req.as_ref().and_then(|r| r.get("args")).cloned().unwrap_or(J::Null);
+            let okv = |v: J| J::obj(vec![("ok", J::Bool(true)), ("value", v)]).dump();
+            if op == "net.inject" {
+                let t0 = now();
+                let port = args.get("to_port").and_then(|v| v.as_f64()).unwrap_or(0.0) as u16;
+                let from = args.get("from_port").and_then(|v| v.as_f64()).unwrap_or(0.0) as u16;
+                let src = SocketAddrV4::new(host_ip, from);
+                let at: Vec<u64> = args.get("at_us").and_then(|v| v.as_arr()).map_or(vec![], |a| {
+                    a.iter().map(|x| x.as_f64().unwrap_or(0.0) as u64).collect()
+                });
+                let pl: Vec<Vec<u8>> = args.get("payloads").and_then(|v| v.as_arr()).map_or(vec![], |a| {
+                    a.iter().map(|x| unhex(x.as_str().unwrap_or(""))).collect()
+                });
+                let mut times = Vec::new();
+                for (off, data) in at.iter().zip(pl) {
+                    inject.push((t0 + off, src, port, data));
+                    times.push(J::Num((t0 + off) as f64));
+                }
+                inject.sort_by_key(|x| x.0);
+                let _ = c.reply.send(okv(J::obj(vec![("t_us", J::Arr(times))])));
+            } else if op == "time.wait" {
+                let us = args.get("us").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64;
+                waits.push((now() + us, c.reply));
+            } else {
+                let reply = control_op(&mut radio, &c.line, now());
+                let _ = c.reply.send(reply);
+            }
         }
+        // injected datagrams that are due, in their order (v1.7)
+        while inject.first().map_or(false, |x| x.0 <= now()) {
+            let (_, src, port, data) = inject.remove(0);
+            let rx = Rx { src, local_port: port, to_ip: None, data: &data };
+            let out = radio.on_datagram(now(), &rx);
+            send(&socks, out);
+        }
+        let tnow = now();
+        waits.retain(|(at, tx)| {
+            if *at <= tnow {
+                let _ = tx.send(J::obj(vec![("ok", J::Bool(true)), ("value", J::obj(vec![("t_us", J::Num(tnow as f64))]))]).dump());
+                false
+            } else {
+                true
+            }
+        });
         let t = now();
         if t >= next_tick {
             let out = radio.tick(t);
@@ -186,6 +233,10 @@ fn main() {
             std::thread::sleep(Duration::from_micros(200));
         }
     }
+}
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len() / 2).filter_map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()).collect()
 }
 
 fn send(socks: &[(u16, UdpSocket)], out: Vec<g7250_refmodel::radio::Tx>) {
