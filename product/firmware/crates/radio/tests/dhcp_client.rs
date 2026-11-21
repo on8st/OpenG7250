@@ -110,8 +110,9 @@ fn silent_server_short_lease_renewing_rebinding_then_lease_end_dh_03() {
     assert_eq!(used, Some((120_000, ll())));
     let d: Vec<u64> = sends.iter().filter(|s| s.0 >= 120_000).map(|s| s.0).collect();
     assert!(d[0] <= 120_010, "DISCOVER at the next poll after the lease end");
-    // The immediate DISCOVER takes the place of the first 4 s wait; then the back-off goes on.
-    assert_eq!(d[1], d[0] + WAIT_MS + 8_000);
+    // The DISCOVER at once is borrow 0, as the power-on exchange: free gaps 4, 8, 16 s (DH-01).
+    let gaps: Vec<u64> = d.windows(2).map(|w| w[1] - w[0] - WAIT_MS).take(3).collect();
+    assert_eq!(gaps, [4_000, 8_000, 16_000]);
     assert!(matches!(c.state, State::Init { .. } | State::Selecting { .. }));
     // A rebinding ACK before the end keeps or moves the address (A1.11a).
     let mut c = bound(120);

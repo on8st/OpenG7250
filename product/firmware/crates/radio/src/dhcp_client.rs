@@ -20,7 +20,10 @@ const BACKOFF_MS: [u64; 5] = [4_000, 8_000, 16_000, 32_000, 64_000];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
-    /// No lease: link-local address in use; next DISCOVER at `next_ms`.
+    /// No lease: link-local address in use; next DISCOVER at `next_ms`. `attempt` is the index of
+    /// the back-off gap that follows this DISCOVER if it fails: the free gap after borrow *n* is
+    /// min(4 * 2^n, 64) s, borrow 0 being the power-on exchange or the DISCOVER at once after a
+    /// lease end or a DHCPNAK (A1.11; emulator rule DH-01).
     Init { attempt: u8, next_ms: u64 },
     /// DISCOVER sent, waiting for an OFFER until `until_ms`.
     Selecting { attempt: u8, until_ms: u64 },
@@ -80,7 +83,8 @@ impl Client {
     pub fn new(mac: [u8; 6], xid: u32, link_local: NetConfig, lease: Option<(NetConfig, Ip, u32)>, now: u64) -> Self {
         let (state, lease) = match lease {
             Some((c, s, l)) => (State::Bound, Some((c, s, now, l))),
-            None => (State::Init { attempt: 0, next_ms: now + BACKOFF_MS[0] }, None),
+            // The power-on exchange was borrow 0: gap 0 now, and gap 1 after the next DISCOVER.
+            None => (State::Init { attempt: 1, next_ms: now + BACKOFF_MS[0] }, None),
         };
         Client { state, xid, mac, link_local, lease, retry_at: None }
     }
@@ -119,8 +123,7 @@ impl Client {
                 Action::Send { to: [255; 4], msg: Msg::Discover }
             }
             State::Selecting { attempt, until_ms } | State::Requesting { attempt, until_ms, .. } if now >= until_ms => {
-                let a = attempt.saturating_add(1);
-                self.state = State::Init { attempt: a, next_ms: now + Self::backoff(a) };
+                self.state = State::Init { attempt: attempt.saturating_add(1), next_ms: now + Self::backoff(attempt) };
                 Action::None
             }
             State::Bound | State::Renewing { .. } | State::Rebinding { .. } => {
@@ -196,8 +199,7 @@ impl Client {
                 Action::Use(cfg)
             }
             State::Requesting { attempt, .. } if r.msg_type == dhcp::NAK => {
-                let a = attempt.saturating_add(1);
-                self.state = State::Init { attempt: a, next_ms: now + Self::backoff(a) };
+                self.state = State::Init { attempt: attempt.saturating_add(1), next_ms: now + Self::backoff(attempt) };
                 Action::None
             }
             State::Renewing { .. } | State::Rebinding { .. } if r.msg_type == dhcp::NAK => {
