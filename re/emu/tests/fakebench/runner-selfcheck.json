@@ -1,20 +1,172 @@
 {
-  "format": "g7250-testlist",
-  "version": 1, "minor": 2,
-  "defaults": { "timeout_s": 20 },
-  "boot": "per-list",
-  "tests": [
-    { "id": "T-EMU-01", "title": "UDP echo from host 0", "reqs": ["runner"], "target": "emulator", "scope": "v1.0" },
-    { "id": "T-EMU-02", "title": "UDP echo from the host outside the subnet", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["net.hosts"] },
-    { "id": "T-EMU-03", "title": "limited broadcast reaches the radio", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["net.broadcast"] },
-    { "id": "T-EMU-04", "title": "hw.observe snapshot", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["hw.observe"] },
-    { "id": "T-EMU-05", "title": "hw.trace with a hw.input edge", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["hw.trace", "hw.input"] },
-    { "id": "T-EMU-06", "title": "hw.input refuses pins not offered", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["hw.input"] },
-    { "id": "T-EMU-09", "title": "power.cycle", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["power.cycle", "hw.trace"], "timeout_s": 60 },
-    { "id": "T-EMU-10", "title": "reset.wdt", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["reset.wdt", "hw.trace"], "timeout_s": 60 },
-    { "id": "T-EMU-11", "title": "link.set", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["link.set"], "timeout_s": 60 },
-    { "id": "T-EMU-12", "title": "power.cut", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["power.cut", "hw.trace", "hw.observe"], "timeout_s": 60 },
-    { "id": "T-EMU-07", "title": "a host-only test is not sent", "reqs": ["runner"], "target": "host", "scope": "v1.0" },
-    { "id": "T-EMU-08", "title": "a missing fixture skips", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["sensor.set"] }
-  ]
+ "format": "g7250-testlist",
+ "version": 1,
+ "minor": 2,
+ "defaults": {
+  "timeout_s": 20
+ },
+ "boot": "per-list",
+ "tests": [
+  {
+   "id": "T-EMU-01",
+   "title": "UDP echo from host 0",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0"
+  },
+  {
+   "id": "T-EMU-02",
+   "title": "UDP echo from the host outside the subnet",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "net.hosts"
+   ]
+  },
+  {
+   "id": "T-EMU-03",
+   "title": "limited broadcast reaches the radio",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "net.broadcast"
+   ]
+  },
+  {
+   "id": "T-EMU-04",
+   "title": "hw.observe snapshot",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "hw.observe"
+   ]
+  },
+  {
+   "id": "T-EMU-05",
+   "title": "hw.trace with a hw.input edge",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "hw.trace",
+    "hw.input"
+   ]
+  },
+  {
+   "id": "T-EMU-06",
+   "title": "hw.input refuses pins not offered",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "hw.input"
+   ]
+  },
+  {
+   "id": "T-EMU-09",
+   "title": "power.cycle",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "power.cycle",
+    "hw.trace"
+   ],
+   "timeout_s": 60
+  },
+  {
+   "id": "T-EMU-10",
+   "title": "reset.wdt",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "reset.wdt",
+    "hw.trace"
+   ],
+   "timeout_s": 60
+  },
+  {
+   "id": "T-EMU-11",
+   "title": "link.set",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "link.set"
+   ],
+   "timeout_s": 60
+  },
+  {
+   "id": "T-EMU-12",
+   "title": "power.cut",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "power.cut",
+    "hw.trace",
+    "hw.observe"
+   ],
+   "timeout_s": 60
+  },
+  {
+   "id": "T-EMU-07",
+   "title": "a host-only test is not sent",
+   "reqs": [
+    "runner"
+   ],
+   "target": "host",
+   "scope": "v1.0"
+  },
+  {
+   "id": "T-EMU-08",
+   "title": "a missing fixture skips",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "sensor.set"
+   ]
+  },
+  {
+   "id": "T-EMU-17",
+   "title": "net.log, key.log and the link event (format v1.6)",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "hw.trace",
+    "net.log",
+    "key.log"
+   ]
+  }
+ ]
 }

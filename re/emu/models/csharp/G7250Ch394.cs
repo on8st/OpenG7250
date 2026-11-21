@@ -56,6 +56,60 @@ namespace Antmicro.Renode.Peripherals.SPI
         private readonly IMachine machine;
         private readonly string sockLog = Environment.GetEnvironmentVariable("G7250_SOCKLOG");
 
+        // net.log (format v1.6): every datagram at the radio in emulated time. to_radio:
+        // the moment it is placed in the socket's receive buffer; from_radio: the moment
+        // the image's SEND executes. Cap 100000 entries ("dropped" beyond it).
+        private const int LogCap = 100000;
+        private readonly List<string> netLog = new List<string>();
+        private bool netLogOn;
+        private int netLogDropped;
+        // key.log "hp": High Priority packets received on radio port 1027
+        private readonly List<string> hpLog = new List<string>();
+        private bool hpLogOn;
+        private int hpLogDropped;
+
+        private ulong NowUs() { return machine == null ? 0 : (ulong)machine.LocalTimeSource.ElapsedVirtualTime.TotalMicroseconds; }
+
+        private static string Ip(byte[] b, int o) { return b[o] + "." + b[o + 1] + "." + b[o + 2] + "." + b[o + 3]; }
+
+        private void NetRecord(string dir, int n, int radioPort, string peer, byte[] data, int off, int len)
+        {
+            if(!netLogOn) return;
+            if(netLog.Count >= LogCap) { netLogDropped++; return; }
+            var hx = new System.Text.StringBuilder();
+            for(int i = 0; i < Math.Min(16, len); i++) hx.Append(data[off + i].ToString("x2"));
+            netLog.Add("{\"t_us\": " + NowUs() + ", \"dir\": \"" + dir + "\", \"socket\": " + n + ", \"radio_port\": " + radioPort
+                + ", \"peer\": \"" + peer + "\", \"len\": " + len + ", \"head\": \"" + hx + "\"}");
+        }
+
+        private static string Page(List<string> log, int from, int dropped, ulong now, string key)
+        {
+            const int PageMax = 5000;
+            from = Math.Max(0, Math.Min(from, log.Count));
+            int to = Math.Min(log.Count, from + PageMax);
+            return "{\"t_us\": " + now + ", \"count\": " + log.Count + ", \"dropped\": " + dropped + ", \"from\": " + from
+                + ", \"next\": " + to + ", \"" + key + "\": [" + string.Join(", ", log.GetRange(from, to - from)) + "]}";
+        }
+
+        public string NetLogStart() { lock(sync) { netLog.Clear(); netLogDropped = 0; netLogOn = true; return "{\"t_us\": " + NowUs() + "}"; } }
+        public string NetLogRead(int from) { lock(sync) return Page(netLog, from, netLogDropped, NowUs(), "entries"); }
+        public string NetLogStop(int from) { lock(sync) { netLogOn = false; return Page(netLog, from, netLogDropped, NowUs(), "entries"); } }
+
+        public void HpLogStart() { lock(sync) { hpLog.Clear(); hpLogDropped = 0; hpLogOn = true; } }
+        public void HpLogStop() { lock(sync) hpLogOn = false; }
+        public string HpLogRead(int from) { lock(sync) return Page(hpLog, from, hpLogDropped, NowUs(), "hp"); }
+
+        // link changes as trace events (hw.trace kind "link"), through the bench agent
+        private void LinkEvent()
+        {
+            IPeripheral ag;
+            if(machine == null || !machine.TryGetByName("sysbus.spi1.agent", out ag)) return;
+            var m = ag.GetType().GetMethod("ExternalEvent");
+            if(m == null) return;
+            try { m.Invoke(ag, new object[] { "\"kind\": \"link\", \"up\": " + (linkUp ? 1 : 0) + ", \"speed\": " + (linkUp ? (speed100 ? 100 : 10) : 0), true }); }
+            catch(Exception) { }
+        }
+
         private void LogSocket(string op, int n, byte[] r)
         {
             if(string.IsNullOrEmpty(sockLog)) return;
@@ -114,10 +168,11 @@ namespace Antmicro.Renode.Peripherals.SPI
         }
 
         // test-bench fixture link.set: 0 = link down, 10 or 100 Mbit/s full duplex
-        public void SetLink(bool up) { lock(sync) { linkUp = up; SetPhy(); } }
+        public void SetLink(bool up) { lock(sync) { linkUp = up; SetPhy(); } LinkEvent(); }
         public void SetLinkSpeed(int mbps)
         {
             lock(sync) { linkUp = mbps > 0; speed100 = mbps != 10; SetPhy(); }
+            LinkEvent();
             this.Log(LogLevel.Info, "CH394: link {0}", mbps > 0 ? mbps + " Mbit/s" : "down");
         }
         public int LinkSpeed { get { return linkUp ? (speed100 ? 100 : 10) : 0; } }
@@ -271,6 +326,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             Array.Copy(r, 0x0C, frame, 2, 4);                              // destination IP
             frame[6] = r[0x10]; frame[7] = r[0x11];                        // destination port
             Array.Copy(data, 0, frame, 8, len);
+            NetRecord("from_radio", n, U16(r, 0x04), Ip(r, 0x0C) + ":" + U16(r, 0x10), data, 0, len);
             sent++;
             ToBridge(1, frame);
         }
@@ -299,6 +355,13 @@ namespace Antmicro.Renode.Peripherals.SPI
                     for(int i = 0; i < 8; i++) rxbuf[n][(wr + i) % size] = hdr[i];
                     for(int i = 0; i < len; i++) rxbuf[n][(wr + 8 + i) % size] = p[9 + i];
                     P16(r, 0x2A, (wr + 8 + len) & 0xFFFF);
+                    NetRecord("to_radio", n, dport, Ip(p, 0) + ":" + ((p[4] << 8) | p[5]), p, 9, len);
+                    if(hpLogOn && dport == 1027)
+                    {
+                        if(hpLog.Count >= LogCap) hpLogDropped++;
+                        else hpLog.Add("{\"t_us\": " + NowUs() + ", \"seq\": " + (len >= 4 ? (((uint)p[9] << 24) | ((uint)p[10] << 16) | ((uint)p[11] << 8) | p[12]).ToString() : "null")
+                            + ", \"b4\": " + (len > 4 ? p[13].ToString() : "null") + ", \"b5\": " + (len > 5 ? p[14].ToString() : "null") + "}");
+                    }
                     r[0x02] |= 0x04;                                         // RECV
                     received++;
                     ok = true;

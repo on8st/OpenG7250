@@ -215,6 +215,35 @@ def run_test(tid, ep):
         return [check("trace starts with the boot event", bool(evs) and evs[0].get("kind") == "boot",
                       str(boots[:1])),
                 check("boot phase per watched pin", True, "; ".join(lines))]
+    if tid == "T-EMU-17":
+        # format v1.6: net.log (datagrams in emulated time), key.log (empty without a keyer),
+        # the link event in the trace (replayed at the start)
+        r1 = ctl.op("hw.trace", action="start")
+        f = (r1.get("value") or {}).get("file")
+        n0 = ctl.op("net.log", action="start")
+        k0 = ctl.op("key.log", action="start")
+        d, _ = echo(ep, 0, c, b"netlog-1", wait=20.0)
+        n1 = ctl.op("net.log", action="read", **{"from": 0})
+        k1 = ctl.op("key.log", action="stop")
+        n2 = ctl.op("net.log", action="stop")
+        ctl.op("hw.trace", action="stop")
+        evs = [json.loads(l) for l in open(f)] if f and os.path.isfile(f) else []
+        ents = (n1.get("value") or {}).get("entries", [])
+        mine = [e for e in ents if e.get("head", "").startswith(b"netlog-1".hex())]
+        to_r = [e for e in mine if e["dir"] == "to_radio"]
+        fr_r = [e for e in mine if e["dir"] == "from_radio"]
+        link = [e for e in evs if e.get("kind") == "link"]
+        return [check("echo", d == b"netlog-1", repr(d)),
+                check("net.log start t_us", n0.get("ok") and isinstance((n0.get("value") or {}).get("t_us"), int), str(n0)),
+                check("datagram to and from the radio", bool(to_r) and bool(fr_r), json.dumps(mine[:2])),
+                check("answer after arrival, emulated", bool(to_r) and bool(fr_r) and fr_r[0]["t_us"] >= to_r[0]["t_us"],
+                      "%s -> %s" % (to_r[0]["t_us"] if to_r else None, fr_r[0]["t_us"] if fr_r else None)),
+                check("radio port 1024", bool(to_r) and to_r[0]["radio_port"] == 1024, json.dumps(to_r[:1])),
+                check("paging fields", all(k in (n1.get("value") or {}) for k in ("count", "dropped", "next")), str(list((n1.get("value") or {}).keys()))),
+                check("net.log stop", n2.get("ok"), str(n2)[:200]),
+                check("key.log start/stop, no key changes", k0.get("ok") and k1.get("ok") and (k1.get("value") or {}).get("count_key") == 0,
+                      str(k1)[:200]),
+                check("link event in the trace", bool(link) and link[-1].get("up") == 1, json.dumps(link[-1:]))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

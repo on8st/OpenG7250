@@ -134,6 +134,133 @@ namespace Antmicro.Renode.Peripherals.SPI
                 }
                 if(ev != null) Send("ev " + ev);
             }
+            if(number == 0 && keyLogOn) KeyCheck();
+        }
+
+        // ---- key.log (format v1.6): key = chain A's latched frame has bit 7 set and its
+        // output enable PA10 is low; every change with the T/R levels and the bias state ----
+        private const int KeyCap = 100000;
+        private readonly List<string> keyLog = new List<string>();
+        private volatile bool keyLogOn;
+        private int keyLogDropped;
+        private int lastKey = -1;
+
+        private int KeyNow()
+        {
+            string m, pl;
+            string pa10 = shadow.ContainsKey(0) ? ShadowLevel(0, 10, out m, out pl) : Level("PA10");
+            return (chainA >= 0 && (chainA & 0x80) != 0 && pa10 == "0") ? 1 : 0;
+        }
+
+        private bool BiasNonzero()
+        {
+            IPeripheral pa;
+            if(!machine.TryGetByName("sysbus.spi2.pa", out pa)) return false;
+            var mi = pa.GetType().GetMethod("GetDacWord");
+            if(mi == null) return false;
+            foreach(int ch in new[] { 2, 7, 8 })
+                if((int)mi.Invoke(pa, new object[] { ch }) > 0) return true;
+            return false;
+        }
+
+        // CPU thread: after a chain A latch edge or a port A write
+        private void KeyCheck()
+        {
+            int k;
+            lock(sync) k = KeyNow();
+            if(k == lastKey) return;
+            string tr = "{\"PF4\": " + Level("PF4") + ", \"PF6\": " + Level("PF6") + ", \"PC7\": " + Level("PC7") + ", \"PH11\": " + Level("PH11") + "}";
+            bool bias = BiasNonzero();
+            lock(sync)
+            {
+                lastKey = k;
+                if(!keyLogOn) return;
+                if(keyLog.Count >= KeyCap) { keyLogDropped++; return; }
+                keyLog.Add("{\"t_us\": " + NowUs() + ", \"on\": " + k + ", \"tr\": " + tr + ", \"bias_nonzero\": " + (bias ? "true" : "false") + "}");
+            }
+        }
+
+        private object Ch394() { IPeripheral c; return machine.TryGetByName("sysbus.spi6.ch394", out c) ? c : null; }
+
+        private string Call(object o, string method, params object[] args)
+        {
+            if(o == null) return null;
+            var mi = o.GetType().GetMethod(method);
+            return mi == null ? null : mi.Invoke(o, args) as string;
+        }
+
+        private string KeyLogCommand(string[] w)
+        {
+            var ch = Ch394();
+            string act = w.Length > 1 ? w[1] : "";
+            int fk = w.Length > 2 ? int.Parse(w[2], CultureInfo.InvariantCulture) : 0;
+            int fh = w.Length > 3 ? int.Parse(w[3], CultureInfo.InvariantCulture) : 0;
+            if(act == "start")
+            {
+                // port A shadow from the bus first (outside the lock), then exact hooks on port A
+                ulong b = 0x58020000UL;
+                var v = new uint[] { machine.SystemBus.ReadDoubleWord(b), machine.SystemBus.ReadDoubleWord(b + 4),
+                                     machine.SystemBus.ReadDoubleWord(b + 0x0C), machine.SystemBus.ReadDoubleWord(b + 0x14) };
+                Call(ch, "HpLogStart");
+                lock(sync)
+                {
+                    shadow[0] = v;
+                    keyLog.Clear(); keyLogDropped = 0;
+                    lastKey = KeyNow();
+                    keyLogOn = true;
+                    return "ok {\"t_us\": " + NowUs() + "}";
+                }
+            }
+            if(act != "read" && act != "stop") return "err key.log action";
+            if(act == "stop") { keyLogOn = false; Call(ch, "HpLogStop"); }
+            string hp = Call(ch, "HpLogRead", fh) ?? "{\"count\": 0, \"dropped\": 0, \"hp\": []}";
+            lock(sync)
+            {
+                fk = Math.Max(0, Math.Min(fk, keyLog.Count));
+                int to = Math.Min(keyLog.Count, fk + 5000);
+                // hp page: take its fields from the CH394 answer
+                string hpList = hp.Substring(hp.IndexOf("\"hp\": [") + 6);
+                hpList = hpList.Substring(0, hpList.Length - 1);
+                string hpCount = Field(hp, "count"), hpDropped = Field(hp, "dropped"), hpNext = Field(hp, "next");
+                return "ok {\"t_us\": " + NowUs() + ", \"count_key\": " + keyLog.Count + ", \"count_hp\": " + hpCount
+                    + ", \"dropped\": " + (keyLogDropped + int.Parse(hpDropped, CultureInfo.InvariantCulture))
+                    + ", \"next_key\": " + to + ", \"next_hp\": " + hpNext
+                    + ", \"key\": [" + string.Join(", ", keyLog.GetRange(fk, to - fk)) + "], \"hp\": " + hpList + "}";
+            }
+        }
+
+        private static string Field(string json, string name)
+        {
+            int i = json.IndexOf("\"" + name + "\": ");
+            if(i < 0) return "0";
+            i += name.Length + 4;
+            int j = i;
+            while(j < json.Length && (char.IsDigit(json[j]) || json[j] == '-')) j++;
+            return j > i ? json.Substring(i, j - i) : "0";
+        }
+
+        private string NetLogCommand(string[] w)
+        {
+            var ch = Ch394();
+            if(ch == null) return "err no CH394";
+            string act = w.Length > 1 ? w[1] : "";
+            int from = w.Length > 2 ? int.Parse(w[2], CultureInfo.InvariantCulture) : 0;
+            string r = act == "start" ? Call(ch, "NetLogStart") : act == "read" ? Call(ch, "NetLogRead", from)
+                     : act == "stop" ? Call(ch, "NetLogStop", from) : null;
+            return r == null ? "err net.log action" : "ok " + r;
+        }
+
+        // ---- events from other models (CH394 link) ----
+        private string lastLink;           // replayed at every trace start, after the boot phase
+
+        public void ExternalEvent(string body, bool remember)
+        {
+            lock(sync)
+            {
+                string b = "\"t_us\": " + NowUs() + ", " + body;
+                if(remember) lastLink = b;
+                if(tracing) Send("ev {\"seq\": " + (seq++) + ", " + b + "}");
+            }
         }
 
         // ---- pins ----
@@ -345,7 +472,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 shadow[pn] = new uint[] { machine.SystemBus.ReadDoubleWord(b), machine.SystemBus.ReadDoubleWord(b + 4),
                                           machine.SystemBus.ReadDoubleWord(b + 0x0C), machine.SystemBus.ReadDoubleWord(b + 0x14) };
                 machine.SystemBus.SetHookBeforePeripheralWrite<uint>((Antmicro.Renode.Peripherals.Bus.IBusPeripheral)gp,
-                    (value, offset) => { if(portHooksActive) PortWrite(pn, offset, value); return value; });
+                    (value, offset) => { if(portHooksActive || (keyLogOn && pn == 0)) PortWrite(pn, offset, value); return value; });
             }
             portsHooked = true;
         }
@@ -385,6 +512,12 @@ namespace Antmicro.Renode.Peripherals.SPI
         }
 
         private void PortWrite(int port, long offset, uint value)
+        {
+            PortWriteInner(port, offset, value);
+            if(port == 0 && keyLogOn) KeyCheck();
+        }
+
+        private void PortWriteInner(int port, long offset, uint value)
         {
             var s = shadow[port];
             string[] watchedNow = tracePins;
@@ -485,6 +618,18 @@ namespace Antmicro.Renode.Peripherals.SPI
             {
                 bootInstr = Instructions();
                 bootUs = NowUs();
+                if(lastLink == null)
+                {
+                    // the link as the CH394 reports it from power-on (later changes come
+                    // from the model: link.set, a reset of the chip)
+                    var ch = Ch394();
+                    var pr = ch == null ? null : ch.GetType().GetProperty("LinkSpeed");
+                    if(pr != null)
+                    {
+                        int sp = (int)pr.GetValue(ch);
+                        lastLink = "\"t_us\": " + bootUs + ", \"kind\": \"link\", \"up\": " + (sp > 0 ? 1 : 0) + ", \"speed\": " + sp;
+                    }
+                }
                 StartBootPhase();
                 bootPhase.Clear();
                 lastBoot = string.Format(CultureInfo.InvariantCulture,
@@ -678,6 +823,8 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case "ft": return FlashTiming(w);
                     case "wdt": return WatchdogReset();
                     case "resets": return "resets " + resetCount;
+                    case "keylog": return KeyLogCommand(w);
+                    case "netlog": return NetLogCommand(w);
                     case "blk":
                     {
                         // diagnostics: the core's translation block size and the boot-phase timer
@@ -726,6 +873,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                                 lastState.Clear(); seq = first; tracing = true;
                                 if(lastBoot != null) Send("ev {\"seq\": " + (seq++) + ", " + lastBoot + "}");
                                 foreach(var b in bootPhase) Send("ev {\"seq\": " + (seq++) + ", " + b + "}");
+                                if(lastLink != null) Send("ev {\"seq\": " + (seq++) + ", " + lastLink + "}");
                                 Array.Clear(atuWrites, 0, 3);
                             }
                             sampler.Enabled = true;

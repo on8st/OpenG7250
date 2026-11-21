@@ -375,6 +375,8 @@ class DhcpServer:
         except Exception:  # noqa: BLE001
             e["t_us"] = None
         e.update(kw)
+        if "broadcast_flag" in e:
+            e["broadcast"] = e["broadcast_flag"]        # the key format v1.4 reads (dhcp.log, T-A1-74)
         self.log.append(e)
 
     def handle(self, src_ip, dst_ip, data):
@@ -443,7 +445,8 @@ class DhcpServer:
         bcast = broadcast or mtype == 6 or ciaddr == "0.0.0.0"
         dst = "255.255.255.255" if bcast else ciaddr
         name = {2: "OFFER", 5: "ACK", 6: "NAK"}[mtype]
-        self._record("to_radio", name, src=self.server, dst=dst, yiaddr=yiaddr, lease_s=self.lease_s if mtype != 6 else None)
+        self._record("to_radio", name, src=self.server, dst=dst, yiaddr=yiaddr, lease_s=self.lease_s if mtype != 6 else None,
+                     broadcast_flag=(req[10] & 0x80) != 0)          # the flags field the reply carries (copied from the request)
         self.send(self.server, dst, 68, bytes(pkt), bcast)
 
 
@@ -563,7 +566,9 @@ class FixtureServer:
                "dhcp.server",
                # the operations of dhcp.server and net.endpoint by name too: the bench's
                # fixture() looks up the operation name (cdfe899, T-A1-66 dhcp.stop)
-               "dhcp.start", "dhcp.stop", "dhcp.offer", "dhcp.nak", "dhcp.expire", "dhcp.log", "net.endpoint"]
+               "dhcp.start", "dhcp.stop", "dhcp.offer", "dhcp.nak", "dhcp.expire", "dhcp.log", "net.endpoint",
+               # format v1.6: datagram times and the keyer log, emulated time
+               "net.log", "key.log"]
 
     def __init__(self, agent_getter, on_power_cycle, bridge_getter=None):
         self.bridge_getter = bridge_getter
@@ -677,6 +682,20 @@ class FixtureServer:
                 return {"ok": False, "error": "speed must be 0, 10 or 100"}
             r = agent.ask("link %d" % sp) if agent else None
             return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+        if op in ("net.log", "key.log"):
+            if not agent:
+                return {"ok": False, "error": "emulator not ready"}
+            action = args.get("action")
+            if action not in ("start", "read", "stop"):
+                return {"ok": False, "error": "action must be start|read|stop"}
+            if op == "net.log":
+                cmd = "netlog %s %d" % (action, int(args.get("from", 0)))
+            else:
+                cmd = "keylog %s %d %d" % (action, int(args.get("from_key", 0)), int(args.get("from_hp", 0)))
+            r = agent.ask(cmd, timeout=30)
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": json.loads(r[3:])}
         if op == "reset.wdt":
             if not agent:
                 return {"ok": False, "error": "emulator not ready"}

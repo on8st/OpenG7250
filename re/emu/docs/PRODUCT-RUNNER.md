@@ -129,6 +129,29 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   gpio events, with their original `t_us` (before the start time).
 - Self-test: `tests/fakebench/boot.json` (T-EMU-16, trace starts with the boot event).
 
+## Format v1.6: net.log, key.log, link events
+
+- `net.log {action: start|read|stop, from?}`: every UDP datagram at the radio in
+  emulated time, kept by the CH394 model: `to_radio` when the datagram is placed
+  in the socket's receive buffer (the image can first see it), `from_radio` when
+  the image's SEND executes. Entry: `t_us`, `dir`, `socket`, `radio_port`,
+  `peer` (ip:port as the radio sees it, the endpoint's host addresses), `len`,
+  `head` (first 16 payload bytes, hex). Pages of at most 5000 entries
+  (`from`, `next`, `count`); a cap of 100000 entries, beyond it `dropped`.
+- `key.log {action: start|read|stop, from_key?, from_hp?}`: `key` = chain A's
+  latched frame has bit 7 set and its output enable PA10 is low (the bench's
+  choice from HIS 85); every change with `tr` (the four T/R levels) and
+  `bias_nonzero` (PA DAC channel 2, 7 or 8 written non-zero). While the log runs
+  the port A write hook stays active, so PA10 changes are exact. `hp`: every
+  datagram received on radio port 1027 with `seq` (payload bytes 0-3, big
+  endian), `b4`, `b5`. Pages and caps as net.log (`count_key`, `count_hp`,
+  `next_key`, `next_hp`, `dropped`).
+- Trace event `{"kind": "link", "up", "speed", "t_us"}`: the CH394's link at
+  power-on (at the boot event) and every change (link.set, a reset of the chip by
+  RST#). A trace start replays the last one after the boot phase. The model does
+  not model PHY renegotiation time: after a chip reset the link is up at once.
+- Self-test T-EMU-17 (runner-selfcheck.json).
+
 ## Fixtures (format section 4)
 
 Offered now: `hw.observe`, `hw.trace`, `hw.input`, `power.cycle`, `power.cut`,
