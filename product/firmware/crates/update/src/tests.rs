@@ -400,22 +400,30 @@ fn abort_and_abandonment() {
 fn after_the_blocks_the_staging_slot_holds_the_image_t_a1_83_84() {
     // The coordinator's T-A1-84 finding (fw-6ca08d1): every block answered 0, then the verify 55.
     // Here the staging slot is read back after each block: the bytes received so far are there
-    // (the erase and the programs happened), and the rest of the slot is erased.
+    // (the erase and the programs happened; the last block's partial flash word padded with 0xFF
+    // and programmed), and the rest of the slot is erased. Lengths: 2148 (the run: 67 whole flash
+    // words and 4 bytes), a multiple of 32 (2144), a multiple of 512 (2048), and 1 byte over.
+    for len in [2148usize, 2144, 2048, 2049] {
+        staging_slot_holds(len);
+    }
+}
+
+fn staging_slot_holds(len: usize) {
     let (mut s, _) = installed(false);
     let run = running(Slot::A, V1);
-    let b = image(Slot::B, V2, 2148, 9);
+    let b = image(Slot::B, V2, len, 9);
     let mut g = Stager::new();
     let n = g.begin(&offer(&b, V2), &run, 0).unwrap();
-    assert_eq!(n, 5, "2148 bytes in 512-byte blocks");
+    assert_eq!(n as usize, len.div_ceil(512));
     let base = (Slot::B.range().start - g7250_layout::APPLICATION_AREA.start) as usize;
     for k in 0..n {
         let d = &b[(k * stage::BLOCK) as usize..((k + 1) * stage::BLOCK).min(b.len() as u32) as usize];
         assert_eq!(g.block(&mut s, &run, k, true, d, 1), Ok(k + 1));
         let upto = ((k + 1) * stage::BLOCK).min(b.len() as u32) as usize;
-        assert_eq!(&s.mem[base..base + upto], &b[..upto], "after block {k}");
+        assert_eq!(&s.mem[base..base + upto], &b[..upto], "len {len}: after block {k}");
     }
-    assert!(s.mem[base + b.len()..base + Slot::B.range().len() as usize].iter().all(|&x| x == 0xFF), "the rest erased");
-    assert!(g.verify(&mut s, &run, 2).is_ok());
+    assert!(s.mem[base + b.len()..base + Slot::B.range().len() as usize].iter().all(|&x| x == 0xFF), "len {len}: the rest erased");
+    assert!(g.verify(&mut s, &run, 2).is_ok(), "len {len}");
 }
 
 #[test]

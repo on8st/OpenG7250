@@ -39,7 +39,13 @@ const SOCK_DISCOVERY: u8 = 0;
 fn flash_failures(server: &mut Server) {
     let now = Instant::now().as_millis();
     if let Some(sr) = g7250_board::flash::take_failure() {
-        let how = if sr == g7250_board::flash::TIMEOUT { "did not end within 2 x t_erase_max" } else { "ended with an error flag" };
+        let how = if sr == g7250_board::flash::TIMEOUT {
+            "did not end within 2 x t_erase_max"
+        } else if sr == g7250_board::flash::READBACK {
+            "a programmed word read back different"
+        } else {
+            "ended with an error flag"
+        };
         server.log.push(now, format_args!("flash operation failed: {how} (FLASH_SR1 {sr:#010x})"));
         crate::fault::raise(g7250_safety::fault::code::INTERNAL_ERROR);
     }

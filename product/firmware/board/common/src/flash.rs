@@ -48,6 +48,8 @@ const SR_BUSY: u32 = (1 << 0) | (1 << 1) | (1 << 2);
 const SR_ERRORS: u32 = 0x07EE_0000;
 /// Returned instead of SR when the operation did not end within [`LIMIT_MS`].
 pub const TIMEOUT: u32 = 1 << 31;
+/// Returned when a programmed flash word reads back different from what was written.
+pub const READBACK: u32 = 1 << 30;
 const FAILED: u32 = SR_ERRORS | TIMEOUT;
 /// `t_erase_max`: the maximum 128 KiB sector erase time of the MCU fitted (B2.3; 0065 point 1):
 /// [STM32H72x] ST DS13311 Rev 5 (November 2023), section 6.3.13, Table 48 "Flash memory
@@ -374,6 +376,14 @@ impl FlashIo for RawFlash {
             if sr & FAILED != 0 {
                 note_failure(sr);
                 return Err(FlashError::Hw(sr));
+            }
+            // Read the word back: a program that ended without an error flag but did not land
+            // (a word not taken by the flash) is a failure too, so that its block gets 55, not 0
+            // (B2.3 "flash work that fails"; A1.8).
+            let mut back = [0u8; FLASH_WORD as usize];
+            if read_tolerant(a, &mut back).is_err() || back[..] != chunk[..] {
+                note_failure(READBACK);
+                return Err(FlashError::Hw(READBACK));
             }
         }
         Ok(())
