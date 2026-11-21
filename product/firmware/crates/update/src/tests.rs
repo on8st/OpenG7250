@@ -276,6 +276,18 @@ fn begin_checks_in_order_and_writes_nothing() {
     assert_eq!(g.begin(&Offer { target_slot: 3, ..o }, &run, 0), Err(Refusal::Malformed));
     assert!(!g.in_progress());
     assert_eq!(s.mem, before);
+    // T-A1-78 (0061 addendum, 0062): slot size + 1 gets 61 and nothing is written; the order is
+    // 51, 63, then 61, whatever the length; the slot size is IDENTIFY tag 25's count x 128 KiB.
+    let slot = g7250_layout::IDENTIFY_LAYOUT[3] as u32 * g7250_layout::SECTOR_SIZE;
+    let big = Offer { length: slot + 1, target_slot: 2, ..o };
+    assert_eq!(g.begin(&big, &run, 0), Err(Refusal::TooLarge));
+    assert_eq!(g.begin(&Offer { hardware_id: 0x00C9, ..big }, &run, 0), Err(Refusal::WrongHardware));
+    assert_eq!(g.begin(&Offer { target_slot: 1, ..big }, &run, 0), Err(Refusal::RunningSlot));
+    assert_eq!(g.begin(&Offer { length: u32::MAX, target_slot: 1, ..o }, &run, 0), Err(Refusal::RunningSlot));
+    assert!(!g.in_progress());
+    assert_eq!(s.mem, before);
+    assert!(g.begin(&Offer { length: slot, target_slot: 2, ..o }, &run, 0).is_ok(), "exactly the slot size");
+    let mut g = Stager::new();
     // A downgrade with the flag is accepted (U-8); the same version is not a downgrade.
     assert!(g.begin(&Offer { version: header::version(1, 0, 0), downgrade: true, ..o }, &run, 0).is_ok());
     assert!(g.begin(&Offer { version: V1, ..o }, &run, 0).is_ok());

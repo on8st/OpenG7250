@@ -2,7 +2,7 @@
 /* Application, slot A: sectors 2-3 (g7250-layout SLOT_A). */
 MEMORY
 {
-  FLASH : ORIGIN = 0x08040000, LENGTH = 256K
+  @FLASH@
   /* AXI SRAM; 128 KiB is present whatever the TCM/AXI sharing option ([HIS] HIS 15). */
   RAM   : ORIGIN = 0x24000000, LENGTH = 128K - 32
   /* The top 32 bytes of that AXI SRAM: values kept over a reset without power loss

@@ -160,16 +160,19 @@ impl Stager {
             // The stock image path (A1.8a item 3) stays closed until P-SYS-5 is set.
             return Err(Refusal::NotSupported);
         }
+        // An image for the running slot cannot be staged (0043; T-A1-67). 0 ("either slot")
+        // passes here; UPDATE_VERIFY still checks the image's load address.
+        if o.target_slot == slot_code(run.slot) {
+            return Err(Refusal::RunningSlot);
+        }
+        // Longer than the slot it is linked to (the staging slot): 61, after 51 and 63 (A1.8
+        // "Slot size and the store", 0061 addendum). The slot size is its sector count x 128 KiB
+        // (IDENTIFY tag 25, 0062): the slots end where the store begins, so no image reaches it.
         if o.length > run.slot.other().range().len() {
             return Err(Refusal::TooLarge);
         }
         if o.version < run.version && !o.downgrade {
             return Err(Refusal::Older);
-        }
-        // An image for the running slot cannot be staged (0043; T-A1-67). 0 ("either slot")
-        // passes here; UPDATE_VERIFY still checks the image's load address.
-        if o.target_slot == slot_code(run.slot) {
-            return Err(Refusal::RunningSlot);
         }
         self.last_ms = now;
         let count = o.length.div_ceil(BLOCK);

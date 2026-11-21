@@ -126,6 +126,7 @@ impl MgmtInit {
             calibration_date: cal_date,
             sectors_written: 0,
             running_slot: 0, // set below
+            layout: g7250_layout::IDENTIFY_LAYOUT, // tag 25 (0062): the layout the link uses
             ll_unprobed: false, // set by the net loop (0057)
         };
         let update = crate::update::BoardUpdate::new(store.as_mut(), slot);

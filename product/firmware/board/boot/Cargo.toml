@@ -20,3 +20,7 @@ g7250-update = { workspace = true }
 g7250-safety = { workspace = true }
 cortex-m = { workspace = true }
 cortex-m-rt = { workspace = true }
+
+[build-dependencies]
+# The FLASH region of the linker script (build.rs; 0062).
+g7250-layout = { workspace = true }

@@ -77,6 +77,9 @@ pub struct Identify<'a> {
     /// The link-local address in use was taken without a complete RFC 3927 probe (tag 24, u8,
     /// 1 = unprobed; A1.11, 0057).
     pub ll_unprobed: bool,
+    /// The flash layout in 128 KiB sectors: slot A first sector and count, slot B, the store
+    /// (tag 25, length 6; A1.5, Table M-2; 0062).
+    pub layout: [u8; 6],
 }
 
 impl<'a> Identify<'a> {
@@ -104,7 +107,7 @@ impl<'a> Identify<'a> {
         let mut c = [0u8; 36];
         c[..32].copy_from_slice(&self.calibration_id);
         c[32..].copy_from_slice(&self.calibration_date.to_be_bytes());
-        w.put(21, &c).u8(22, self.sectors_written).u8(23, self.running_slot).u8(24, self.ll_unprobed as u8);
+        w.put(21, &c).u8(22, self.sectors_written).u8(23, self.running_slot).u8(24, self.ll_unprobed as u8).put(25, &self.layout);
         w.finish()
     }
 
@@ -148,6 +151,7 @@ impl<'a> Identify<'a> {
                 22 => r.sectors_written = arr::<1>(v)?[0],
                 23 => r.running_slot = arr::<1>(v)?[0],
                 24 => r.ll_unprobed = arr::<1>(v)?[0] != 0,
+                25 => r.layout = arr::<6>(v)?,
                 _ => {}
             }
         }
@@ -611,6 +615,21 @@ mod tests {
 
     #[test]
     fn t_a1_76_identify_tag_24_reports_an_unprobed_link_local_address() {
+        // 0062 (T-A1-79): tag 25, length 6, the layout; a reader skips a tag it does not know.
+        {
+            let id = Identify { model: b"G7250", layout: [2, 2, 4, 2, 6, 2], ..Default::default() };
+            let mut b = [0u8; 400];
+            let n = id.encode(&mut b).unwrap();
+            let at = b[..n].windows(8).position(|w| w == [25, 6, 2, 2, 4, 2, 6, 2]).expect("tag 25, length 6");
+            assert_eq!(Identify::decode(&b[..n]).unwrap().layout, [2, 2, 4, 2, 6, 2]);
+            let mut x = b[..n].to_vec();
+            x.splice(at..at, [200u8, 2, 0xAA, 0xBB]); // an unknown tag before it
+            assert_eq!(Identify::decode(&x).unwrap().layout, [2, 2, 4, 2, 6, 2]);
+            let mut short = b[..n].to_vec();
+            short[at + 1] = 5;
+            short.remove(at + 7);
+            assert!(Identify::decode(&short).is_err(), "tag 25 of another length");
+        }
         // 0057: tag 24, u8, 1 = the link-local address in use is unprobed.
         let mut b = [0u8; 400];
         for un in [false, true] {

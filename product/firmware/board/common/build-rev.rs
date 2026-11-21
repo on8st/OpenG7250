@@ -26,10 +26,15 @@ fn g7250_rev() -> String {
     if dirty { format!("{id}-dirty") } else { id }
 }
 
-fn link_memory_x(script: &str) {
+/// Copy the linker script, with its FLASH region from the layout crate (`@FLASH@`): one source
+/// for the link, the update checks and IDENTIFY tag 25 (0062).
+fn link_memory_x(script: &str, flash: g7250_layout::Range) {
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    std::fs::copy(std::path::Path::new(&dir).join(script), out.join("memory.x")).unwrap();
+    let text = std::fs::read_to_string(std::path::Path::new(&dir).join(script)).unwrap();
+    assert!(text.matches("@FLASH@").count() == 1, "{script}: one @FLASH@ line");
+    let region = format!("FLASH : ORIGIN = {:#010X}, LENGTH = {}K", flash.start, flash.len() / 1024);
+    std::fs::write(out.join("memory.x"), text.replace("@FLASH@", &region)).unwrap();
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rerun-if-changed={script}");
     println!("cargo:rerun-if-env-changed=G7250_REV");

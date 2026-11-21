@@ -89,6 +89,21 @@ pub const STORE_SECTORS: [Range; 2] = [Range::new(0x080C_0000, 0x080E_0000), Ran
 /// sits at offset 0 ([HIS] HIS 10); the H72x vector table is shorter than 0x400 bytes.
 pub const HEADER_OFFSET: u32 = 0x400;
 
+/// First sector and sector count of a sector-aligned range (128 KiB sectors).
+pub const fn sectors(r: Range) -> (u8, u8) {
+    (((r.start - FLASH_BASE) / SECTOR_SIZE) as u8, (r.len() / SECTOR_SIZE) as u8)
+}
+
+/// `IDENTIFY` tag 25 (A1.5, Table M-2; 0062): slot A, slot B and the store, each as first
+/// sector and sector count. The linker scripts take the slots from the same constants
+/// (board build.rs), so the tag, the 61 check and the link agree.
+pub const IDENTIFY_LAYOUT: [u8; 6] = {
+    let (a0, an) = sectors(SLOT_A);
+    let (b0, bn) = sectors(SLOT_B);
+    let (s0, sn) = sectors(STORE);
+    [a0, an, b0, bn, s0, sn]
+};
+
 /// One of the two image slots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {

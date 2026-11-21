@@ -62,24 +62,31 @@ fn no_option_byte_or_backup_domain_access() {
 
 #[test]
 fn every_linker_script_places_flash_at_or_above_0x08020000() {
+    // The FLASH region of every linker script is generated from the layout crate (build.rs,
+    // `@FLASH@`; 0062): no script holds its own FLASH address, and the ranges the build scripts
+    // pass lie in the application area, never in the vendor bootloader's sectors 0-1.
     let mut v = Vec::new();
     files(&firmware_root().join("board"), &mut v);
     let mut seen = 0;
     for f in v.iter().filter(|f| f.extension().is_some_and(|e| e == "x")) {
         let text = std::fs::read_to_string(f).unwrap();
-        for line in text.lines() {
-            let l = line.trim();
-            if l.starts_with("FLASH") && l.contains("ORIGIN") {
-                let o = l.split("ORIGIN").nth(1).unwrap();
-                let hex = o.split("0x").nth(1).unwrap();
-                let hex: String = hex.chars().take_while(|c| c.is_ascii_hexdigit() || *c == '_').filter(|c| *c != '_').collect();
-                let origin = u32::from_str_radix(&hex, 16).unwrap();
-                assert!(origin >= 0x0802_0000, "{}: FLASH ORIGIN {origin:#x} below 0x08020000", f.display());
-                seen += 1;
-            }
+        if !text.contains("MEMORY") {
+            continue;
+        }
+        assert_eq!(text.matches("@FLASH@").count(), 1, "{}: one generated FLASH line", f.display());
+        assert!(!text.lines().any(|l| l.trim().starts_with("FLASH") && l.contains("ORIGIN")), "{}: a FLASH address of its own", f.display());
+        seen += 1;
+    }
+    assert!(seen >= 3, "expected linker scripts for the boot stage and the two slots");
+    for (build, ranges) in [("board/app/build.rs", &["SLOT_A", "SLOT_B"][..]), ("board/boot/build.rs", &["BOOT_STAGE"][..])] {
+        let text = std::fs::read_to_string(firmware_root().join(build)).unwrap();
+        for r in ranges {
+            assert!(text.contains(&format!("g7250_layout::{r}")), "{build}: {r}");
         }
     }
-    assert!(seen >= 2, "expected linker scripts for the boot stage and the application");
+    for r in [g7250_layout::SLOT_A, g7250_layout::SLOT_B, g7250_layout::BOOT_STAGE] {
+        assert!(r.start >= 0x0802_0000 && g7250_layout::APPLICATION_AREA.contains_span(r.start, r.len()), "{r:?}");
+    }
 }
 
 #[test]

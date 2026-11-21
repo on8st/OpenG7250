@@ -2,7 +2,7 @@
 /* Boot stage: sector 1, where the vendor bootloader starts an application ([HIS] HIS 10). */
 MEMORY
 {
-  FLASH : ORIGIN = 0x08020000, LENGTH = 128K
+  @FLASH@
   /* AXI SRAM; 128 KiB is present whatever the TCM/AXI sharing option ([HIS] HIS 15). The top
      32 bytes (0x2401FFE0) are the application's persist block (board/common persist.rs),
      kept over a reset: the boot stage's data, bss and stack stay below it. */
