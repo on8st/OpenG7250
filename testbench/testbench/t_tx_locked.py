@@ -258,6 +258,14 @@ def t_l13(ctx):
         a.drain(0.1)
         tx_state(a, "PTT held")
         a.keepalive(ptt=False)
+        # same-host restart by a High Priority packet only: the General is carried over
+        # without byte 38 bit 0 and byte 58 bit 0 (B5.4 restart item 1), so PA disabled again
+        a.stop()
+        a.keepalive()
+        a.drain(0.1)
+        ts = tx_state(a, "same-host restart")
+        if ts is not None:
+            ctx.eq("same-host restart: bit 4 = 1 (byte 58 bit 0 not carried over, B5.4)", (ts >> 4) & 1, 1)
         try:
             ctx.need("net.hosts")
         except Skip:

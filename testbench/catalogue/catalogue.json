@@ -9912,9 +9912,10 @@
    "id": "T-B10-L13",
    "origin": "testbench",
    "part": "A-B",
-   "title": "TX frozen: `TX_STATE` bit 4 (PA disabled by the host) reads 1 while General byte 58 bit [0] is 0 and 0 once the owner sets it; a takeover clears it again (A3.6a, Table A3-4); bit 0 and the source [11:8] stay 0, also under a PTT edge (B10, B10.10; Table B8-2).",
+   "title": "TX frozen: `TX_STATE` bit 4 (PA disabled by the host) reads 1 while General byte 58 bit [0] is 0 and 0 once the owner sets it; a same-host restart by a High Priority packet only (byte 58 bit [0] not carried over, B5.4) and a takeover clear it again (A3.6a, Table A3-4); bit 0 and the source [11:8] stay 0, also under a PTT edge (B10, B10.10; Table B8-2).",
    "reqs": [
     "A3.6a",
+    "B5.4",
     "B10",
     "B10.10",
     "Table B8-2"
