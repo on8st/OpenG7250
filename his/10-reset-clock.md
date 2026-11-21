@@ -71,7 +71,7 @@ facts can only come from the radio (`90-needs-hardware.md`).
   64-bit words; a partial word can be lost (MEDIUM; ST AN5342, citation not
   checked; to be confirmed by the measurement in `90-needs-hardware.md`).
   Whether the stage that runs before 0x08020000 writes AXI SRAM at
-  0x2401FFE0–0x2401FFFF is **not known**. Measurement in
+  0x2401FF80–0x2401FFFF is **not known**. Measurement in
   `90-needs-hardware.md`.
 
 ## Image placement (platform constraint)
