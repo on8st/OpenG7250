@@ -49,5 +49,20 @@ class NetLogTest(unittest.TestCase):
         self.assertFalse(sp["ok"], sp)
 
 
+class StatusAfterCcTest(unittest.TestCase):
+    """T-B5-10 in radio time: status packets within 200 ms after the last C&C."""
+    def test_counts_radio_time(self):
+        from testbench.t_p2 import status_after_last_cc
+        e = [entry(1_000_000, 38000, d="to_radio", radio_port=1024), entry(1_900_000, 38000, d="to_radio", radio_port=1024)]
+        e += [entry(1_900_000 + k * 50_000, 38000, radio_port=1025) for k in range(1, 6)]  # every 50 ms after it
+        e += [entry(1_950_000, 38001, radio_port=1025)]  # another host
+        self.assertEqual(status_after_last_cc(e, 38000), 4)  # 50, 100, 150, 200 ms
+
+    def test_session_dropped(self):
+        from testbench.t_p2 import status_after_last_cc
+        e = [entry(1_000_000, 38000, d="to_radio", radio_port=1024), entry(1_050_000, 38000, radio_port=1025)]
+        self.assertEqual(status_after_last_cc(e + [entry(1_900_000, 38000, d="to_radio", radio_port=1024)], 38000), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

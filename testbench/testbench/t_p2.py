@@ -288,15 +288,33 @@ def netlog_on(ctx) -> bool:
     return False
 
 
-def standby_gap_ms(ctx, h: Host) -> float | None:
-    """From net.log (emulated time): the last C&C packet the radio received from h to the last
-    stream packet (status 1025, DDC0 1035) it sent to h."""
-    entries = []
+def netlog_entries(ctx) -> list:
+    """Every net.log entry since net.log start (v1.6)."""
+    entries: list = []
     for _ in range(1000):
         r = ctx.fixture("net.log", action="read", **{"from": len(entries)}) or {}
         entries += r.get("entries", [])
         if len(entries) >= r.get("count", 0):
             break
+    return entries
+
+
+def status_after_last_cc(entries: list, port: int, window_us: int = 200_000) -> int:
+    """From net.log: the status packets (1025) the radio sent to the host port within window_us
+    of radio time after the last C&C packet it received from that port."""
+    mine = lambda x: str(x.get("peer", "")).endswith(f":{port}")
+    cc = [x["t_us"] for x in entries if x.get("dir") == "to_radio" and x.get("radio_port") in CC_PORTS and mine(x)]
+    if not cc:
+        return 0
+    t = max(cc)
+    return len([x for x in entries if x.get("dir") == "from_radio" and x.get("radio_port") == 1025 and mine(x)
+                and t < x["t_us"] <= t + window_us])
+
+
+def standby_gap_ms(ctx, h: Host) -> float | None:
+    """From net.log (emulated time): the last C&C packet the radio received from h to the last
+    stream packet (status 1025, DDC0 1035) it sent to h."""
+    entries = netlog_entries(ctx)
     mine = lambda e: str(e.get("peer", "")).endswith(f":{h.port}")
     cc = [e["t_us"] for e in entries if e.get("dir") == "to_radio" and e.get("radio_port") in CC_PORTS and mine(e)]
     st = [e["t_us"] for e in entries if e.get("dir") == "from_radio" and e.get("radio_port") in (1025, 1035) and mine(e)]
@@ -362,14 +380,23 @@ def t_b5_05(ctx):
 
 @test("T-B5-10")
 def t_b5_10(ctx):
+    from .t_a3 import wait_radio
     with host(ctx) as h:
         netlog = netlog_on(ctx)
         h.start()
         for _ in range(3):
-            time.sleep(0.9)
+            wait_radio(ctx, 900)  # 900 ms of radio time (time.wait), else of host time
             h.keepalive()
-        h.drain(0.01)
-        ctx.at_least("session kept with C&C every 900 ms", len(h.recv(0.2, PORT_DDC)), what="status packets in 0.2 s")
+        if netlog:
+            # in radio time: status packets (1025) the radio sent to h within 200 ms after the
+            # last C&C it received from h (net.log); host time only as the fallback
+            wait_radio(ctx, 250)
+            n = status_after_last_cc(netlog_entries(ctx), h.port)
+            ctx.at_least("session kept with C&C every 900 ms (net.log, radio time)", n,
+                         what="status packets within 200 ms of radio time after the last C&C")
+        else:
+            h.drain(0.01)
+            ctx.at_least("session kept with C&C every 900 ms", len(h.recv(0.2, PORT_DDC)), what="status packets in 0.2 s")
         t0 = time.monotonic()
         got = h.recv(1.5 if not netlog else 3.0, PORT_DDC)
         last = max((t for _, _, t in got), default=t0)
