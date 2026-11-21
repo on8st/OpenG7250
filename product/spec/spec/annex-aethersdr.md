@@ -405,7 +405,8 @@ These parts of the ANAN P2 code already match the G7250 and need no change, only
   packet is not needed when AetherSDR restarts from the same IP address and port after a stop,
   a watchdog standby or a link loss; after a takeover, a reset, a firmware update, a level
   change or an address change it is (part C C7.2.1, C8.5a item 3; 0022 §78 item 4). The capability record arrives once, unasked, at the session start
-  (B4.4 item 2).
+  (B4.4 item 2), possibly in up to three packets: collect the registers by address until the
+  record is complete, or read it in one packet with `CAP_REQUEST` (0059).
 - **High Priority sequence numbers** (B11.6a; 0022 §35, §55, §56). Number the High Priority
   packets from 1 upwards and restart at 1 only with a new session, so that the radio
   discards a reordered or duplicated packet; at the wrap skip 0 (0xFFFFFFFF → 1), because 0

@@ -60,4 +60,5 @@
 | 0056 | 0056 — A malformed command payload is status 17, in the framing group | 0 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0057 | 0057 — Link-local without MACRAW, and the start-up bound corrected to 17 s | 0 | 3 | network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0058 | 0058 — Counter of High Priority packets received | 0 | 2 | network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
+| 0059 | 0059 — The unasked capability record may come in up to three parts | 0 | 3 | annex-aethersdr: G-08 Transmit (0004, 0007, 0012, 0015) — L in total; network-interface: B4 Capability block; network-interface: Capability record (B4) |  |
 
