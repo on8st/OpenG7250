@@ -42,12 +42,16 @@ const SOCK_DISCOVERY: u8 = 0;
 ///   (20 packets, P-TIM-2); the chip only holds packets until the next read.
 /// - 1024 receives 1 KiB (discovery and General packets are 60 bytes); 7251 receives 2 KiB
 ///   (requests up to 1000 bytes) and sends 2 KiB (replies up to 1400 bytes).
+/// - 1027 sends 2 KiB: wideband data from M2 (1028-byte packets, 0036); 1026 sends nothing
+///   (no microphone stream in v1.0, 0031); 7250 sends 2 KiB (one register packet of up to
+///   1444 bytes at a time: a send waits for the previous one on the same socket).
+/// The spec's draft for Table B2-2 (0053).
 ///
 /// Every size is a power of two: the socket pointers are 16 bit and wrap at 65536, and the
 /// datasheet does not say how a wrap maps onto a buffer whose size does not divide 65536
 /// ([CH394] 7.2.12-13 only bound the sizes). Checked at compile time below.
 const BUF_RX_KIB: [u8; 8] = [1, 2, 1, 4, 4, 0, 2, 2];
-const BUF_TX_KIB: [u8; 8] = [1, 1, 1, 0, 0, 8, 2, 2];
+const BUF_TX_KIB: [u8; 8] = [1, 1, 0, 2, 0, 8, 2, 2];
 const _: () = {
     let mut i = 0;
     let (mut rx, mut tx) = (0u32, 0u32);
