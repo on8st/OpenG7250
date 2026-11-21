@@ -1089,7 +1089,7 @@ blocks):
 | TX audio 48 kHz, 1 channel, float32 | 1.5 |
 
 For comparison, DDC0 at 384 ksps on level 1 is 18.6 Mbit/s payload and 32.9 % SPI busy at
-62 MHz, and DUC0 is 9.2 Mbit/s (0004, "Per stream"). Level 2 has no DUC IQ, but FLOAT32 IQ is
+62 MHz, the datasheet maximum [CH394] (more at the clock that works on the board, part B P-NET-1), and DUC0 is 9.2 Mbit/s (0004, "Per stream"). Level 2 has no DUC IQ, but FLOAT32 IQ is
 a third larger than 24-bit IQ.
 
 - C6.4.1 **(L2)** The server MUST keep the aggregate of all streams to all clients within the
@@ -1100,7 +1100,7 @@ a third larger than 24-bit IQ.
 - C6.4.2 **(L2)** Proposed provisional limit, until G6 gives numbers: at most one IQ stream at
   a time, and RX audio to all clients. On these numbers a 384 kHz IQ stream (24.6) plus five
   stereo float32 RX audio streams (15.4) plus TX audio (1.5) is 41.5 Mbit/s of payload, about
-  72 % of the 57.5 Mbit/s effective SPI rate at 62 MHz (`analysis/ch394-network-budget.md`;
+  72 % of the 57.5 Mbit/s effective SPI rate at 62 MHz, the datasheet maximum (part B P-NET-1; `analysis/ch394-network-budget.md`;
   0004, "Assumptions") before register accesses: over the target. So at 384 kHz the server
   needs either fewer audio clients, mono or int16 audio, or a lower IQ rate. The IQ format
   stays FLOAT32; if the budget is short, the IQ rate offered is reduced (0021 §11). Numbers to

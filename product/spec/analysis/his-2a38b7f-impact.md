@@ -173,3 +173,25 @@ with the streaming installer and no rollback. Recommendation: A/B, which keeps U
   decision (one more socket, 0004 "Against").
 - Pending hardware: mapping of offsets 1/5 to physical receive paths; offset 19 as the transmit
   word. TX stays disabled until measured (unchanged).
+
+## 9. Addendum: `d199d33` (gate review 6)
+
+- HIS 40: about 17 MHz SPI is the value seen in use, not a datasheet limit (MEDIUM): spec B6
+  and P-NET-1 reworded. Whether the CH394 reports a datagram's destination address is not
+  known: new P-NET-3, cited in B3.9 and T-B3-32.
+- HIS 85: ATU strobes inactive high (MEDIUM), driven inactive and never pulsed: A3.9b and the
+  P-ATU-1 placeholder say so. The latches stay unwritten.
+- HIS 10 (part, supply, AXI SRAM, HSE, state at start) and the CH394 reset window: firmware
+  detail; no spec change.
+
+## 10. Addendum: `6e2208a` (gate review 7)
+
+- HIS 40 confirms the datasheet SPI maximum, 62 MHz in mode 0 or 3 (VERIFIED), which the spec
+  already cited as [CH394]; 17 MHz seen in use stays the safe bound (P-NET-1). P-NET-1 now cites
+  both. No other spec change.
+
+## 11. Addendum: `5292ba8` (gate review 8)
+
+- HIS 80: DDC0 cannot run until byte 0 and bytes 9–18 of the 0x01 frame are understood; DDC0
+  tuning word, I/Q order and bus timing unknown. New P-RX-2; DDC0 not offered until it is set
+  (B6.1, record `streams` bit 0); P-RX-2 joins the TX gate (byte 0 may hold a TX enable); 0042.

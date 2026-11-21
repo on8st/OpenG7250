@@ -25,7 +25,7 @@ for Linux, macOS and Windows.
 | `discover` | find G7250s on the local network | A1.5 |
 | `info <addr>` | model, MAC, firmware versions (running slot, other slot, boot stage), update state | A1.5 |
 | `set-secret <addr>` | set the first management secret, in the window after a factory reset | A1.10 |
-| `install <addr> <image>` | install a new image of this firmware into the other slot, verify, activate; trial boot follows | A1.8 |
+| `install <addr> <package-A> <package-B>` | read the running slot (`IDENTIFY` tag 23), send the package linked for the other slot, verify, activate; trial boot follows | A1.8 (0043) |
 | `status <addr>` | progress of an update or installation | A1.8 |
 | `abort <addr>` | abandon an update (not possible once a stock installation has started) | A1.8, A1.8a item 3 |
 | `rollback <addr>` | return to the image in the other slot | A1.8 |

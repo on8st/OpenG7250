@@ -1,7 +1,7 @@
 # G7250 network firmware — design note
 
 - Version: draft 5 (spec v1.0 candidate), 2026-11-21; illustrated version at
-  https://claude.ai/artifact/PpqRcsDA5pxW23TTwh5qig (version 6)
+  https://claude.ai/artifact/PpqRcsDA5pxW23TTwh5qig (version 8)
 - Status: for review by ON8ST with the v1.0 package
 - Structure: as agreed in 0001, amended by decisions 0002–0038 (status of each in
   `product-handover.md`).
@@ -98,7 +98,7 @@ PTT paths, what the CTRL cable carries.
   never looser (0011).
 - **Network budget.** The CH394Q has 8 sockets. G7250-P2 with one receiver uses 7: ports 1024,
   1025, 1026, 1027, 1029, 1035 and the G7250 register map. DDC audio (1028) is not offered
-  (0017). One socket is left, for the management channel (0008). SPI at most 62 MHz limits
+  (0017). One socket is left, for the management channel (0008). SPI at most 62 MHz by the datasheet (about 17 MHz seen in use on the board, Annex P P-NET-1) limits
   receive IQ to about 384 ksps in practice (`analysis/ch394-network-budget.md`; 0004).
 
 ### 4.1 Capabilities, telemetry, management
@@ -108,7 +108,7 @@ PTT paths, what the CTRL cable carries.
   sample rates, antennas, ATU, TX power per band and mode, wideband parameters, link speed,
   and this unit's own conversion constants. Reading it is not a takeover. (0003)
 - **Streams.** One DDC at 48/96/192/384 ksps (384 only once an SPI clock of about 50 MHz or
-  more is shown on the radio; about 17 MHz is known to work, so 192 ksps until then; Annex P
+  more is shown on the radio; about 17 MHz is seen in use, not a datasheet limit, so 192 ksps until then; Annex P
   P-NET-1), TX IQ 24-bit at 192 ksps, no microphone stream in v1.0 (0031),
   wideband from M2 at 4096 samples × 20 frames/s. Unsupported requests are refused, not
   rounded. A 10 Mbit/s link refuses the session. Design target: at most 60 % SPI load. (0004)
@@ -259,7 +259,8 @@ upstream through the RFC (0038, proposed).
 - **HIS.** Cleared and read at `2a38b7f`, `d0a39b0`, `b95f519` and `9d10e72` (gate reviews
   2–5). Each question in `open-questions-his.md` (HIS-01 to HIS-20) carries its answer status;
   the impact is in `analysis/his-2a38b7f-impact.md`. Everything that needs the radio is in
-  Annex P of the spec (34 parameters, each with a safe placeholder) and in HIS 90.
+  Annex P of the spec (36 parameters, each with a safe placeholder; until the FPGA
+  configuration frame is understood, P-RX-2, DDC0 is not offered, 0042) and in HIS 90.
 - **Reversibility.** Installing the new firmware is reversible. The vendor bootloader and its
   update path through the controller are never touched and are the recovery path. From the new
   firmware the owner installs a stock image over the network, without the controller, through

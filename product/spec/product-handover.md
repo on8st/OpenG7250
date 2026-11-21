@@ -69,8 +69,14 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0037 | `g7250ctl` in Rust, sharing the protocol crate with the firmware; reference model independent; test bench Python | proposed |
 | 0038 | AetherSDR G7250 backend in C++/Qt after firmware F2, offered through the RFC | proposed |
 | 0039 | Testbench findings SF-01..18: calibration set and commands (A1.12), transmit ranges Table A3-0, management payloads Annex M | proposed |
+| 0040 | Faults before the network (supply check) reported on the debug console only | proposed |
+| 0041 | DHCP exchanges borrow the management socket, at most 2 s at a time | proposed |
+| 0042 | DDC0 not offered until the FPGA configuration frame is understood (P-RX-2) | proposed |
+| 0043 | Update packages linked for one slot (header byte 52, status 63); no update during a trial boot | proposed |
+| 0044 | Self-confirmation of a trial boot: 10 s with network up and main loop running; 60 s limit; reset before confirmation rolls back | proposed |
+| 0045 | Safe state holds from 20 µs after the boot stage starts; before that outside the spec (P-SYS-1) | proposed |
 
-All numbers 0001–0039 are now in use.
+All numbers 0001–0045 are now in use.
 
 ## Open questions for ON8ST
 

@@ -40,6 +40,21 @@ ranges not tabulated), SF-12 (built-in S2 and T3 unknown).
    "telemetry = 0, group 3 absent" is not taken: the sensors exist ([HIS] HIS 85), and their
    validity is reported per value in `SENSOR_VALID`.
 
+## Addendum: firmware questions and the tx bit 1 conflict (2026-11-21)
+
+- **tx bit 1 in r1.0.** The firmware read bit 1 = 0 and reason 11; the reference model read
+  bit 1 = 1 and reason 12. Settled: TX is part of r1.0 (0036), so every r1.0 firmware reports
+  bit 1 = 1 and an uncalibrated r1.0 radio rejects the arm with 12 `NOT_CALIBRATED`; bit 1 = 0
+  and reason 11 belong only to a build before M4 without a key path, and then bit 4 is 0 too.
+  Record definition, B10 introduction and new test T-B4-18.
+- **SQ-F2-2.** Where the Ethernet controller does not report the destination of a datagram,
+  every Set IP is treated as unicast or directed broadcast: own subnet only, any source while
+  on a link-local address. T-B3-32 rewritten.
+- **SQ-F2-3.** After Set IP the netmask in use is kept if the new address is in its subnet,
+  else 255.255.255.0; a gateway outside the new subnet is cleared. T-B3-34.
+- **SQ-F3-3.** The boot counter shares the non-volatile store of configuration and calibration;
+  without it record `tx` bit 4 stays 0.
+
 ## Consequences
 
 - Spec: A1.5, A1.6 C-6, A1.9 step 3, A1.12 (new), A2.5a, Tables A1-2, A1-3, A3-0 (new),

@@ -79,10 +79,10 @@ the vendor path on the controller (A1.8a item 9; 0028).
 A1.2 **Transport.** The management channel MUST use its own UDP port, served by the eighth
 socket of the CH394Q (0008, Decision, Transport 1; 0017). That socket is reserved at both
 levels, MUST be open whenever the network is up, and MUST NOT be closed to make room for
-another level (0008, Transport 1; Socket budget). The one exception is the provisional DHCP
-rule of A1.11: while a lease renewal borrows the socket, for the few seconds of the exchange,
-management requests are lost and the host's retransmission (A1.4) covers the gap (0008,
-Socket budget; 0022 §73 item 17).
+another level (0008, Transport 1; Socket budget). The one exception is the DHCP rule of
+A1.11: while an exchange borrows the socket, at most 2 s at a time, management requests are
+lost and the host's retransmission (A1.4) covers the gap (0008, Socket budget; 0022 §73
+item 17; 0041).
 
 A1.3 **Port number.** The management channel uses local UDP port **7251** (0020 §2). This
 lies outside 1024–1029, outside the wideband default ports 1027–1034 and outside the DDC
@@ -184,10 +184,11 @@ Table A1-3 — Management status codes (0020 §27)
 | | | 60 | not possible: one-way installation in progress (A1.8a item 3; 0028) |
 | | | 61 | image too large for the application area (A1.8a item 3; 0028) |
 | | | 62 | refused: the value needs the calibration set (A1.12; 0039) |
+| | | 63 | image linked for the running slot (A1.8; 0043) |
 
 Where several codes apply, the reply carries the first of: framing and version (19 for a
 declared length above 1000 bytes, then 17, 18, 16, and 19 for any other datagram size limit), authentication and rate (32, 33, 34, 36), 35, 58, 57, 50, then the command-specific codes
-(48, 49, 51–56, 59, 60, 61, 62) (0022 §51, §59; 0028, 0039). A region change while a P2 session runs and TX is armed therefore
+(48, 49, 51–56, 59, 60, 61, 62, 63) (0022 §51, §59; 0028, 0039, 0043). A region change while a P2 session runs and TX is armed therefore
 gets 57: ending the session also ends the arm on level 1 (A2.3, Table A3-1).
 
 A1.5 **Identification** (read; no authentication) (0008, Functions):
@@ -329,6 +330,20 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   list, versions, length, SHA-256 [FIPS180-4] per component, and a signature field that is
   reserved and empty in this version. An image for other hardware MUST be refused before
   anything is written (U-2; 0008 option I1).
+- **Slot-linked images** (0043). An image of this firmware is linked for one slot; the
+  package header names that slot (Table M-4 byte 52: 1 slot A, 2 slot B; 0 for an image that
+  runs in either slot). Because an update is staged in the other slot, `UPDATE_BEGIN` with an
+  image for the running slot MUST be refused with status 63 before anything is written. A host
+  reads the running slot from identification (Annex M, Table M-2 tag 23) and sends the
+  package for the other one; a release therefore ships one package per slot. A package carries
+  one image; a package with both is not defined in this version.
+- **No update during a trial boot** (0043). From the start of a trial boot until the image has
+  confirmed itself or has been rolled back, the update is still in progress: `UPDATE_BEGIN`
+  MUST be refused with status 58, because staging would erase the image a rollback returns to.
+- **Write failure** (0043). If writing the staging slot fails, the G7250 MUST discard the
+  transfer, answer the request that hit the failure with status 55, log the failure (A1.7) and
+  leave the running image and the boot record unchanged; the host starts again with
+  `UPDATE_BEGIN`.
 - Transfer in numbered blocks with a CRC-32 each, into the other image slot, which is the
   staging area; resumable; abandonable without effect on the running image (U-3). The foreign
   image of A1.8a item 3 is the exception: it has no staging area.
@@ -345,6 +360,14 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
 - Activation MUST be atomic; power loss before the switch leaves the old image running (U-5).
 - The first boot of a new image is a trial; without self-confirmation within 60 s of start,
   the boot stage MUST return to the previous image and log the rollback (U-6; 0020 §24; 0028).
+  **Self-confirmation** (0044): the image confirms itself, by writing the boot record, once it
+  has run for at least 10 s with the network up (CH394 initialised and the management socket
+  open), its main loop running and the watchdog serviced, and with no class 2 fault (A3.5). It
+  needs no host. If it has not confirmed itself 60 s after start, it MUST carry out a commanded
+  reset (A1.9) after which the boot stage starts the previous image. If the trial image resets
+  for any other reason before it has confirmed itself (a crash, the watchdog, a power loss),
+  the boot stage MUST also start the previous image at the next start, because the boot record
+  still marks the trial as unconfirmed. Either rollback is logged.
   Until the image has confirmed itself, RX works but an arm MUST be rejected with
   `MAINTENANCE` (0022 §10).
   Two slots and an atomic boot choice are feasible with the boot stage above (U-10; 0028).
@@ -624,10 +647,19 @@ A1.10 **Security on a LAN** (0008, Security):
 
 A1.11 **DHCP** (0008, Socket budget; 0035). The CH394 has no DHCP client (0008; [CH394]); network
 behaviour is defined by this spec ([HIS] HIS 40; HIS-14). The DHCP exchange at power-on runs before the
-P2 sockets are opened; lease renewals borrow the management socket for the few seconds the
-exchange takes. While no lease is held (no server, or the lease ended), the G7250 MUST use an
-IPv4 link-local address chosen as in [RFC3927] and keep trying DHCP; a lease, when it comes,
-is an address change under A1.11a (0035).
+P2 sockets are opened. Later exchanges (renewal and rebinding, and the retries while no lease
+is held) borrow the management socket, which then listens on UDP port 68 (0041). While no lease
+is held (no server, or the lease ended), the G7250 MUST use an IPv4 link-local address chosen
+as in [RFC3927] and keep trying DHCP, with retries spaced from 4 s doubling up to at most every
+64 s (RFC 2131 section 4.1 retransmission back-off); a lease, when it comes, is an address
+change under A1.11a (0035).
+
+- **Bound on a borrow** (0041). One borrow MUST last at most 2 s, so that a host's
+  retransmission of A1.4 (every 500 ms, up to 5 times) still reaches the management channel
+  after it; an exchange not finished in 2 s is abandoned and retried at the next interval, so
+  between two borrows the channel is always free for at least the retry interval (4 s or
+  more). A request that arrives during a borrow gets no answer and is not
+  counted as an error; the host's retransmission covers it.
 
 A1.11a **Address change by DHCP** (0022 §54). Each of these events during a level-1 session or
 while level 2 is active is a change of the radio's own address, handled as a C-1 change (A1.6):
@@ -1223,14 +1255,34 @@ A3.5 **Fault state** (0007, Decision 5):
   escalated code therefore stays class 2 after a `RESTART`; only a power cycle at the radio
   clears the count.
 
+A3.5a **Faults before the network** (0040). Some faults are found by the boot stage before the
+network is brought up, so no host can be told over the network. In this version this is the
+core supply check: the supply configuration of the MCU can be written only once per power-on,
+and one that does not match the board wiring can harm the part ([HIS] HIS 10, `6e2208a`).
+
+1. If the boot stage finds a supply configuration that does not match the one this firmware
+   selects ([HIS] HIS 10), or cannot confirm it within its time-out, it MUST hold the safe
+   state of A3.6 ([HIS] HIS 85), MUST NOT bring up the CH394 (RST# held low, [HIS] HIS 40) or
+   any other peripheral beyond the debug console, and MUST NOT write flash.
+2. It reports the fault only on the debug console, USART1 TX on PB6 ([HIS] HIS 90), 115200
+   bit/s, 8 data bits, no parity, 1 stop bit, once per second, as one ASCII line:
+   `G7250 FAULT SUPPLY <PWR_CR3 as 8 hex digits> <MISMATCH|TIMEOUT>` followed by CR LF, the
+   hex digits in upper case and zero-padded, for example `G7250 FAULT SUPPLY 0100002E MISMATCH`.
+3. The radio stays in that state until power is removed. A host sees no discovery reply and no
+   management answer; `g7250ctl discover` finds nothing. The owner's way out is the vendor path
+   (A1.8a item 9), which does not depend on this firmware.
+4. The fault is not stored and not reported in identification: writing flash on a supply the
+   firmware believes wrong is not safe, and a network bring-up on it is not either (0040).
+
 A3.6 **State after power-on, any reset, and every session end** (0007, Decision 5): PA and
-its bias off (bias channels at 0; the transmit bias per unit is P-PWR-5), TX path disabled, SEND and TUNER trigger released (HIS-09, HIS-10, HIS-13; [HIS] HIS 85); the firmware sets this state first in its start-up, because pin states before its GPIO init are pending hardware (P-SYS-1); DUC
+its bias off (bias channels at 0; the transmit bias per unit is P-PWR-5), TX path disabled, SEND and TUNER trigger released (HIS-09, HIS-10, HIS-13; [HIS] HIS 85); the firmware sets this state first in its start-up, because pin states before its GPIO init are pending hardware (P-SYS-1). **From when** (0045): the RF control pins of [HIS] HIS 85 MUST be at their safe-state levels no later than 20 µs after the boot stage's first instruction at 0x08020000, and before any other initialisation (clocks beyond the reset clock, other peripherals, network); from then on the safe state holds as this section says. Before that point the pin levels are set by the hardware (board pulls) and by the vendor bootloader in sector 0, which runs first, and are outside this specification; whether the board pulls hold safe levels in that window is pending hardware (P-SYS-1); DUC
 FIFO emptied (0022 §32); not armed, new token, session limits back to the persistent values (A3.4; after a reset the
 persistent values are read from the stored configuration), `TX_MODE_CLASS` = 0,
 `KEYED_TIMEOUT` = 500 ms, watchdog counted as enabled, the TX settings of A3.6a at their
 session-start values (0022 §64); ATU not tuning, its latches unwritten and its state
 unknown (`ATU_STATE` 5) until P-ATU-1 is set, then as stored per band (0032; HIS-08); antenna latch unwritten and
-`ANT_STATE` 0 until P-ANT-1 is set (HIS-06); filters for the default RX frequency, preamplifier
+`ANT_STATE` 0 until P-ANT-1 is set (HIS-06); the strobes of these latches (PD13, PG2, PG5) are
+held at their inactive level (high) and never pulsed ([HIS] HIS 85, `d199d33`, MEDIUM); filters for the default RX frequency, preamplifier
 off and attenuation as pending hardware (P-RF-5; HIS-07).
 At a takeover only the TX-side part applies; RX-side settings are kept for the new owner
 (A2.4; 0022 §3). At a session end by a stop, a watchdog standby or a link loss (Table A3-1
@@ -1449,7 +1501,9 @@ relay of A3.9.
 
 A3.9b **ATU tune cycle** (level-independent; 0022 §22). The firmware controls the internal
 ATU itself; there is no ATU controller ([HIS] HIS 85; 0032). Until the ATU parameters of the
-pending-hardware list are set, the ATU latches stay unwritten, so its state is not known:
+pending-hardware list are set, the ATU latches stay unwritten, their strobes held at the
+inactive level (high) and never pulsed ([HIS] HIS 85, `d199d33`, MEDIUM), so its state is not
+known:
 `ATU_STATE` reads 5 (unknown), and a start is rejected with write reject reason `NOT_CALIBRATED` (on TCI as part C
 C5.7) and is not latched (0032). Once they are set, `ATU_TUNE` (B10.9) and
 `G7250_ATU_TUNE` (part C C5.7) start a tune cycle:
@@ -1556,8 +1610,10 @@ Host Protocol"). Diagrams in this document show the UDP payload only, starting a
 B2.2 **Link.** The Ethernet interface is 10/100 Mbit/s; Gigabit is not available. Source:
 WCH CH394Q, 10/100 MAC and PHY [CH394] (ON8ST hardware inspection, 2026-11-19; to be
 confirmed, HIS-14). A host MUST NOT assume Gigabit throughput. The throughput towards the
-host is further limited by the SPI link between processor and CH394Q, at most 62 MHz [CH394]
-(`analysis/ch394-network-budget.md` §2; 0004, "Throughput arithmetic"; HIS-14). On a link
+host is further limited by the SPI link between processor and CH394Q: at most 62 MHz by the
+datasheet [CH394], and on this board about 17 MHz seen in use (MEDIUM), the highest working
+clock being pending hardware (P-NET-1; [HIS] HIS 40, `d199d33`; `analysis/ch394-network-budget.md`
+§2; 0004, "Throughput arithmetic"; HIS-14). On a link
 below 100 Mbit/s the G7250 refuses the session (B5.8; 0004 point 9).
 
 B2.3 **Local ports.** The G7250 MUST open exactly the local UDP ports in Table B2-1, and no
@@ -1797,7 +1853,19 @@ B3.9 **Other port-1024 commands.**
   255.255.255.255 is accepted from any source address, because a router does not forward it,
   so it comes from the radio's own link; a host with a wrong address set-up can therefore still
   correct the radio ([P2] Set IP Address packet, "Broadcast to Port 1024"; RFC 1812 section
-  5.3.5.1: a router does not forward a limited broadcast). Risk stated in 0008 S7, as
+  5.3.5.1: a router does not forward a limited broadcast). If the Ethernet controller does not
+  report the destination address of a received datagram (whether the CH394 does is not known,
+  pending hardware P-NET-3; [HIS] HIS 40, HIS 90), the G7250 MUST treat every Set IP as one to the unicast or
+  directed broadcast address: accepted only from a source inside the radio's own subnet, and
+  from any source while the radio uses an IPv4 link-local address [RFC3927], since a
+  link-local radio is reachable only on its own link (0039). A host with a wrong address
+  set-up then gives itself an address in the radio's subnet, which the discovery reply shows,
+  before it sends Set IP.
+- **Netmask and gateway after Set IP** (0039). [P2] Set IP carries no netmask. The G7250
+  MUST keep the netmask in use if the new address is a host address of that subnet, and
+  otherwise use 255.255.255.0; it MUST keep the gateway if it lies inside the resulting subnet,
+  and otherwise clear it. 0.0.0.0 selects DHCP (A1.11), which brings its own netmask and
+  gateway. The values applied are logged (A1.7). Risk stated in 0008 S7, as
   narrowed by 0022 §70: any host on the same link (limited broadcast) or in the same subnet
   that knows the MAC can change the address and so cut a running session; a host behind a
   router cannot; none can key the radio.
@@ -1891,7 +1959,7 @@ Table B4-1 — Capability record, version 1.1 (0003 §3; 0020 §26)
 | 0x09 | `p2_version` | as discovery byte 12 | 44 ([P2]; B3.5) |
 | 0x0A | `hw_revision` | main-unit hardware revision, 0 = not identified | HIS-18 |
 | 0x0B | `level` | bit 0 level 1 present (always 1); bit 1 level 2 present in this firmware; bit 2 level 2 active; bits [7:4] active level (0 none, 1, 2) | 0011; 0003, Resolved; level 2 only after G6 |
-| 0x0C | `streams` | bit 0 RX IQ; bit 1 TX IQ (DUC); bit 2 DDC audio (always 0); bit 3 microphone data; bit 4 wideband data; bit 5 IQ time stamping | bit 0 = 1; bit 1 per `tx` bit 1; bit 2 = 0 (0017); bit 3 = 0 in this version (no audio, 0031; HIS-17); bit 4 = 0 before M2, 1 from M2 (0004 point 4; HIS-01, HIS-18); bit 5 = 0 (0004 point 1) |
+| 0x0C | `streams` | bit 0 RX IQ; bit 1 TX IQ (DUC); bit 2 DDC audio (always 0); bit 3 microphone data; bit 4 wideband data; bit 5 IQ time stamping | bit 0 = 1 once the FPGA receive parameters are set (P-RX-2), 0 until then (DDC0 not offered, B6.1; 0042); bit 1 per `tx` bit 1; bit 2 = 0 (0017); bit 3 = 0 in this version (no audio, 0031; HIS-17); bit 4 = 0 before M2, 1 from M2 (0004 point 4; HIS-01, HIS-18); bit 5 = 0 (0004 point 1) |
 | 0x0D | `num_adc` | number of RF ADCs | HIS-01, HIS-03 (assumed 1) |
 | 0x0E | `num_ddc` | number of DDCs; equals discovery byte 20; 1 in this version | 0004; HIS-02 |
 | 0x0F | `num_duc` | number of DUCs | assumed 1 [G7250-MAN]; HIS-18 |
@@ -1904,7 +1972,7 @@ Table B4-1 — Capability record, version 1.1 (0003 §3; 0020 §26)
 | 0x1D | `atu` | bit 0 internal ATU present; bit 1 host can control it; bit 2 per-band memory; bit 3 external tuner interface present; bit 4 host can control the external tuner interface | bits 0, 2, 3 = 1 [G7250-MAN]; bit 1 = 1 (this firmware drives the ATU, [HIS] HIS 85; 0032); bit 4 = 0 in this version (SEND and TUNER interface pending hardware, P-SYS-8; HIS-09) |
 | 0x1E | `atu_range` | [31:16] minimum, [15:0] maximum load in Ω | 20, 150 [G7250-MAN] |
 | 0x1F | `telemetry` | bit 0 forward power; bit 1 reverse power; bit 2 PA temperature; bit 3 supply voltage; bit 4 supply current; bit 5 PA current; bit 6 ADC overload | bits 0, 1, 2, 3, 5 = 1 for the ADC1 inputs of [HIS] HIS 85 (forward, reflected, PA temperature, supply voltage, PA supply current Idd); bit 4 = 0 (no separate supply-current input); a value stays invalid in `SENSOR_VALID` until its calibration is set (P-SEN-1, P-SEN-2); bit 6 = 1 (ADC peak, [HIS] HIS 80); meaning in B9 (0006; HIS-11) |
-| 0x20 | `tx` | bit 0 TX hardware present; bit 1 TX implemented in this firmware (0 before M4); bit 2 TX arm required (always 1); bit 3 declared TX mode class required for arm (always 1); bit 4 transmit parameters of Annex P set (0 until calibrated, Annex P) | bit 0 = 1 [G7250-MAN]; bit 1 per milestone; bit 2 = 1 (0015); bit 3 = 1 (0007) |
+| 0x20 | `tx` | bit 0 TX hardware present; bit 1 TX implemented in this firmware; bit 2 TX arm required (always 1); bit 3 declared TX mode class required for arm (always 1); bit 4 TX calibrated: the calibration set holds every parameter of the Annex P freeze rule (A1.12) | bit 0 = 1 [G7250-MAN]; bit 1 = 1 in every r1.0 firmware (TX is part of r1.0, 0036), 0 only in a build before M4 that has no key path; bit 2 = 1 (0015); bit 3 = 1 (0007); bit 4 from the calibration set, 0 until it is complete, and always 0 while bit 1 is 0 (0039) |
 | 0x21 | `tx_band_count` | number of valid entries below (max 16) | 10 [G7250-MAN] |
 | 0x22–0x51 | `tx_band[0..15]` | 3 registers per band: start Hz; stop Hz; [31:16] maximum power SSB/CW/FM, [15:0] maximum power AM, both in 0.1 W | ranges per region [G7250-MAN]; 1000 (100 W) and 250 (25 W) [G7250-MAN]; 50 MHz pending hardware (P-PWR-2; HIS-12; 90 W in [G7250-PUDX], [G7250-RIGPIX]) |
 | 0x52 | `mgmt` | bit 0 management channel present; [31:16] its port | 0x1C530001: bit 0 = 1 (0008), port 7251 (A1.3; 0020 §2) |
@@ -2143,6 +2211,16 @@ B6.1 **Port and endpoint.** DDC0 I&Q MUST be sent from local port 1035 ([P2] Gen
 bytes 17–18; DDC packet, "Source Port") to the owner's source IP address and UDP port (B2.4;
 0022 §12). One DDC is
 implemented, and DDC0 takes its data from ADC0 only (0004 point 1; HIS-02, HIS-01, HIS-03).
+DDC0 needs a complete FPGA configuration frame (command 0x01), whose status byte and bytes
+9–18 have no known meaning or safe values yet, and the I/Q order and the tuning word of DDC0
+are not known ([HIS] HIS 80, `5292ba8`). Until these are set (pending hardware, P-RX-2) DDC0
+is not offered: record `streams` bit 0 = 0, a DDC0 enable gets `STREAM_STATUS` reason 2 (not
+offered by this firmware), which takes precedence over the rate and sample-size reasons 3 and
+4 but not over the General-packet refusals (Table B8-3, stream reason order), and no DDC0
+packet is sent; discovery, the register map, the
+management channel and sessions work as usual. The firmware MUST NOT write a configuration
+frame unless the RF section is in the safe state of A3.6, because its status byte may hold a
+transmit enable ([HIS] HIS 80, HIS 85) (0042).
 
 B6.2 **Packet format.** Each DDC0 packet MUST have the layout of Table B6-1 ([P2] DDC packet,
 "DDC I&Q Data (DDC0 default port 1035)"; 0004 point 1), 1444 bytes in total.
@@ -2211,7 +2289,7 @@ B6.7 **Sample rates.**
 
 - The offered DDC0 rates are 48, 96, 192 and 384 ksps ([P2] DDC-specific bytes 18–19; 0004
   point 1, option 1B). 384 ksps is offered only if the SPI clock is about 50 MHz or more;
-  below that the maximum is 192 ksps (0004 point 6; Resolved). SPI clock: about 17 MHz is known to work ([HIS] HIS 40); the highest working clock is pending
+  below that the maximum is 192 ksps (0004 point 6; Resolved). SPI clock: about 17 MHz is seen in use on the board, which is not a datasheet limit ([HIS] HIS 40, `d199d33`, MEDIUM); the highest working clock is pending
   hardware (P-NET-1; HIS-14), and until it is shown to be 50 MHz or more the offered maximum is
   192 ksps. The
   set also depends on what the ADC chain can produce (HIS-01). The offered set MUST be stated
@@ -2255,7 +2333,7 @@ B6.10 **Wideband data (milestone M2).** (0004 point 4; option 5C; Resolved.)
   will be used"); byte 27 has the range "0 to 255mS" ([P2] General packet bytes 24–28). The
   G7250 reads zero in bytes 24–25, 27 and 28 as its fixed values; zero in byte 26 is the [P2]
   default 16 (Annex X1, D14; 0022 §21).
-- Informative: 160 packets/s, 1.32 Mbit/s payload, about 2.3 % SPI at 62 MHz (0004 point 4).
+- Informative: 160 packets/s, 1.32 Mbit/s payload, about 2.3 % SPI at 62 MHz, the datasheet maximum [CH394]; at the clock that works on this board the share is higher (P-NET-1) (0004 point 4).
   The frequency resolution is the ADC rate / 4096 (HIS-01). Depends on HIS-01 and HIS-18; if
   raw ADC blocks cannot be delivered, this is revisited (0004 point 4).
 
@@ -2505,7 +2583,7 @@ Table B8-3 — Reason and fault codes (0020 §8; 0022 §5, §19)
 | Drop reason (`TX_ARM_STATE` [23:16]; Table A3-1) | 0 none; 1 `HOST_DISARM`; 2 `RUN_CLEARED`; 3 `WATCHDOG`; 4 `TAKEOVER`; 5 `RESET`; 6 `FAULT` (events 6 and 13); 8 `LINK_DOWN`; 9 `SESSION_CHANGED`; 10 `LEVEL_CHANGE`; 11 `MAINTENANCE`; 12 `REDISCOVERY`; 13 `STOP` (TCI only: `STOP` command, part C C5.5.5 row 2); 14 `HOLDER_LOST` (TCI only: arm holder's connection closed, part C C5.5.5 row 3); 7 unused; 13 and 14 are never set over P2; 0x40 + limit id `LIMIT_<name>` (event 7: action `DISARM` only; a trip with action `FAULT` gives 6 `FAULT`, the cause in `FAULT_CODE`; 0022 §41) (0022 §30) |
 | Limit id (`TX_STATE` [31:24]; `LIMIT_STATUS` bit *n*; drop reason 0x40 + id) | 1 `LIMIT_TX_FREQ` (TX frequency); 2 `LIMIT_SWR` (SWR; host-tunable); 3 `LIMIT_PA_TEMP` (PA temperature; host-tunable); 4 `LIMIT_FWD_POWER` (forward power; host-tunable); 5 `LIMIT_SUPPLY_VOLTAGE` (supply voltage); 6 `LIMIT_CURRENT` (supply or PA current); 7 `LIMIT_TX_TIME` (maximum continuous TX time; host-tunable); 8 `LIMIT_ATU_TIME` (ATU tune time); 9 `LIMIT_SENSOR` (sensor plausibility); 10 `LIMIT_RF_NOT_KEYED` (RF while not keyed) |
 | Fault code (`FAULT_CODE`, `FAULT_FLAGS` bit) and class | 0 none; 2 `SWR_REPEATED` (3 SWR trips in 10 s), class 1; 3 `PA_OVERTEMP` (PA temperature above T4), class 1; 9 `SENSOR_IMPLAUSIBLE` (sensor missing, stuck or out of range), class 2; 10 `RF_NOT_KEYED` (RF while not keyed), class 2; 16 `TX_PATH_NOT_BLOCKED` (drop event 13), class 2; 17 `WDT_RESET_AT_START` (processor watchdog reset seen at start-up, HIS-13), class 1; 18 `SELFTEST_FAILED` (start-up self-test failed), class 2; 19 `INTERNAL_ERROR` (internal consistency error), class 2; codes 1 and 4–8 reserved (those limits have no `FAULT` action) |
-| Stream reason (`STREAM_STATUS` [6:0] per byte) | 0 none or running; 1 not enabled by the host; 2 not offered by this firmware; 3 sample rate not offered; 4 sample size not offered; 5 data format not offered (General byte 39); 6 time stamp or VITA-49 requested; 7 wideband parameters not offered; 8 link below 100 Mbit/s; 9 run bit clear; 10 update in progress; 11 VNA mode requested; 12 EER requested; 13 frequency encoding mismatch (General byte 37 bit [3] differs from discovery byte 21, B3.8; 0022 §73 item 12); 14 TX not calibrated (record `tx` bit 4 = 0, A1.12; 0039) |
+| Stream reason (`STREAM_STATUS` [6:0] per byte) | 0 none or running; 1 not enabled by the host; 2 not offered by this firmware; 3 sample rate not offered; 4 sample size not offered; 5 data format not offered (General byte 39); 6 time stamp or VITA-49 requested; 7 wideband parameters not offered; 8 link below 100 Mbit/s; 9 run bit clear; 10 update in progress; 11 VNA mode requested; 12 EER requested; 13 frequency encoding mismatch (General byte 37 bit [3] differs from discovery byte 21, B3.8; 0022 §73 item 12); 14 TX not calibrated (record `tx` bit 4 = 0, A1.12; 0039). Where several apply to one stream, the byte carries the first in this order: 10, 9, 8 (radio-wide), 1 (not enabled by the host), 13, 6, 11, 12, 5 (General-packet refusals), 2, 14 (not offered or not calibrated in this firmware), 3, 4, 7 (stream parameters) (0042) |
 | Write reject reason (`WRITE_STATUS` [7:0]) | 1 `UNKNOWN_ADDRESS`; 2 `READ_ONLY`; 3 `NOT_OWNER`; 4 `BAD_VALUE`; 5 `LOOSER_LIMIT`; 6 `BUSY`; 7 `NOT_CLEARABLE`; 8 `KEYED` (RF-path change or ATU tune while keyed); 9 `NOT_ARMED`; 10 `NOT_KEYABLE` (ATU tune while another key condition of A3.1a fails, A3.9b); 11 `NOT_CALIBRATED` (ATU tune before the ATU parameters are set, A3.9b; 0032) (B8.4; 0022 §22, §51) |
 
 Names introduced in this part and not in the decisions 0003–0008 (`STREAM_STATUS`,
@@ -2596,7 +2674,9 @@ through the management channel, not the register map (0006, Consequences; A1).
 ### B10 Transmit (milestone M4)
 
 Transmit MUST NOT be enabled in a firmware before M3 is closed: record `tx` bit 1 = 0 (B4.8;
-design note §6; 0007, header). Release r1.0 implements transmit (`tx` bit 1 = 1, 0036), and
+design note §6; 0007, header). Release r1.0 implements transmit: an r1.0 firmware MUST report
+`tx` bit 1 = 1 (0036), so an uncalibrated r1.0 radio rejects an arm with `NOT_CALIBRATED`, not
+`TX_NOT_IMPLEMENTED`; `TX_NOT_IMPLEMENTED` is reserved for a build before M4 without a key path.
 TX stays locked until the calibration set is complete (`tx` bit 4, A1.12): every arm is
 rejected with `NOT_CALIBRATED`, so no TX request (PTT, CWX, `ATU_TUNE`) keys, none is latched,
 `TX_STATE` bit 0 stays 0, and the safe state of A3.6 holds ([HIS] HIS 85; Annex P; 0035).
@@ -2644,7 +2724,9 @@ B10.2 **Arm handshake** (0007, Decision 1, option 1C):
    a boot counter in non-volatile memory, incremented once at every start, and takes part of
    every token from it, so that no token of one boot repeats the last token of the boot before;
    a random part from the source of A1.10 MAY be added where HIS-20 gives one (0022 §73 item
-   4). A correct arm write
+   4). The boot counter lives in the same non-volatile store as the configuration and the
+   calibration set (A1.6 C-4, A1.12); a firmware without that store MUST keep record `tx`
+   bit 4 = 0, so that no arm can be accepted (0039). A correct arm write
    while already armed with the same token is a no-op: it is answered and does not raise the
    generation (0020 §7).
 6. The arm is dropped by the events of Table A3-1.
@@ -3181,6 +3263,7 @@ Table M-2 — `IDENTIFY` TLVs (A1.5 items I-1 to I-6)
 | 20 | 1 | TX calibrated: record `tx` bit 4 (I-7; A1.12) |
 | 21 | 36 | calibration set id (32 bytes, zeros if none) and date (u32) (I-7; A1.12) |
 | 22 | 1 | sectors written by the streaming installer (I-3; A1.8a item 3) |
+| 23 | 1 | running slot: 1 slot A, 2 slot B (I-2; A1.8; 0043) |
 
 Table M-3 — Configuration items (A1.6)
 
@@ -3214,6 +3297,7 @@ Table M-4 — Package header (A1.8), the payload of `UPDATE_BEGIN` after the fla
 | 14–17 | image length in bytes |
 | 18–49 | SHA-256 of the image (for a foreign image: the value the owner supplies) |
 | 50–51 | signature length, 0 in this version (A1.8, U-4) |
+| 52 | target slot: 0 either slot (or a foreign image), 1 slot A, 2 slot B (A1.8, slot-linked images; 0043) |
 
 Table M-5 — Calibration entries (A1.12)
 
@@ -3232,7 +3316,8 @@ unit are written as its calibration set (A1.12); fixing the encoding or a defaul
 is a spec change, made in this table.
 
 **Freeze rule** (0035). Transmit stays disabled until every parameter of groups P-RF, P-PWR,
-P-SEN and P-TIM, and P-TX-1, P-ATU-1 and P-ANT-1, is set: the RF path in transmit is only known
+P-SEN and P-TIM, and P-RX-2, P-TX-1, P-ATU-1 and P-ANT-1, is set (the configuration frame of P-RX-2
+may hold a transmit enable, [HIS] HIS 80): the RF path in transmit is only known
 once the ATU and antenna latches have known safe values ([HIS] HIS 85). Until then record `tx`
 bit 4 is 0, and every arm is rejected with `NOT_CALIBRATED` (Table B8-3; B10.2 item 3; part C
 C5.5.6 item 7). The ATU latches stay unwritten and `ATU_STATE` reads 5 (unknown) until P-ATU-1
@@ -3240,10 +3325,10 @@ is set (A3.9b; 0032); the antenna is not selectable until P-ANT-1 is set. The wa
 over the network is closed until P-SYS-5 is set (A1.8a item 3, "Gate").
 
 Discovery, the register map, the management channel and level-1 sessions are fully specified
-without these values. Reception is specified too, but on the radio the receive front end
-depends on P-RF-1 and P-RF-5: until they are set, reception may be degraded or, if no chain B
-frame is known, unavailable; a host sees this as a weak or silent DDC0 stream, not as an error
-(B6).
+without these values. Reception is specified too, but DDC0 is not offered until P-RX-2 (the
+FPGA configuration frame) is set (B6.1; 0042), and once it is, the receive front end depends on
+P-RF-1 and P-RF-5: until those are set, reception may be degraded or, if no chain B frame is
+known, unavailable; a host sees this as a weak or silent DDC0 stream, not as an error (B6).
 
 Table P-1 — Pending hardware parameters
 
@@ -3254,8 +3339,8 @@ Table P-1 — Pending hardware parameters
 | P-RF-3 | RF-gone guard: forward-power threshold `P_rf_off` or guard time `t_rf_off`, with `t_rf_off` + `t_settle` ≤ 98.75 ms | A1.9, A3.9a items 1, 1a, 3; B10.5 | HIS-07, HIS-12 | not applicable while TX is disabled; a commanded reset waits the full `t_reset_wait` = 2 s if RF could be present |
 | P-RF-4 | RX step attenuator and preamplifier steps (chain B bits), attenuation during TX | A3.6, B7, part C C5.9 | HIS-07 | preamplifier off, attenuator at its first known position or unwritten; `G7250_ATT` absent |
 | P-RF-5 | RX default state: filters for the default receive frequency, preamplifier, attenuation | A3.6, B5.5 | HIS-07 | chain B output disabled (OE high, [HIS] HIS 85) until a known frame exists; then the P-RF-4 placeholder |
-| P-ANT-1 | Antenna selection (most likely PD13 latch bits 4–5, [HIS] HIS 85) and the default antenna after reset | A3.6, B8 `ANT_STATE`, part C C5.8 | HIS-06 | latch unwritten; `ANT_STATE` = 0 (unknown); `G7250_ANT` reports 0 and a set is answered with `READ_ONLY` |
-| P-ATU-1 | ATU latch meanings and safe values; tune power of the ATU profile; tune-time margin; where tuned states are stored | A3.4 rule 5, A3.9b, Table A3-2, B10.9, part C C5.7 | HIS-08, HIS-12 | latches unwritten, state unknown (`ATU_STATE` 5); `ATU_TUNE` rejected with `NOT_CALIBRATED` (0032) |
+| P-ANT-1 | Antenna selection (most likely PD13 latch bits 4–5, [HIS] HIS 85) and the default antenna after reset | A3.6, B8 `ANT_STATE`, part C C5.8 | HIS-06 | latch unwritten, its strobe PD13 held inactive (high) and never pulsed ([HIS] HIS 85); `ANT_STATE` = 0 (unknown); `G7250_ANT` reports 0 and a set is answered with `READ_ONLY` |
+| P-ATU-1 | ATU latch meanings and safe values; tune power of the ATU profile; tune-time margin; where tuned states are stored | A3.4 rule 5, A3.9b, Table A3-2, B10.9, part C C5.7 | HIS-08, HIS-12 | latches unwritten, strobes PD13, PG2, PG5 held inactive (high) and never pulsed ([HIS] HIS 85); state unknown (`ATU_STATE` 5); `ATU_TUNE` rejected with `NOT_CALIBRATED` (0032) |
 | P-PWR-1 | Mapping of P2 drive level 0–255 and TCI `DRIVE` 0–100 to forward power (DAC channel 1, [HIS] HIS 85) | A3.4 rule 4, B10.8, part C C4 | HIS-12 | not applicable while TX is disabled |
 | P-PWR-2 | Limit values: SWR S1, S2, `P_min`; temperatures T1–T4 and their hysteresis; under-voltage `REDUCE` and `UNKEY` values; fold-back caps `P_swr`, `P_temp`; `P_ssb_mean`; maximum power at 50 MHz | Table A3-2, A3.4a, A3.4c, A3.5, B4.8 `tx_band` | HIS-11, HIS-12 | not applicable while TX is disabled |
 | P-PWR-3 | Margin on the forward-power bound for the digital crest-factor PEP estimate | Table A3-2, A3.4c | HIS-11, HIS-12 | not applicable while TX is disabled |
@@ -3268,9 +3353,10 @@ Table P-1 — Pending hardware parameters
 | P-SEN-5 | Calibration of the receive signal level in dBm | part C C4 `RX_SENSORS` | HIS-11 | level reported uncalibrated, relative to full scale |
 | P-TIM-1 | Delay from the DUC input to the coupler | A3.4c, A3.9a item 6 | HIS-18 | not applicable while TX is disabled |
 | P-TIM-2 | DUC FIFO capacity while keyed; exact TX underrun time | B10.5, B10.7, Annex X1 D8, annex AetherSDR | HIS-18 | not applicable while TX is disabled |
-| P-NET-1 | Highest SPI clock to the CH394 that works on the radio (about 17 MHz known, [HIS] HIS 40) | B6, 0004 | HIS-14 | DDC0 rates 48, 96 and 192 ksps; 384 ksps offered only once ≥ 50 MHz is shown |
+| P-NET-1 | Highest SPI clock to the CH394 that works on the radio (datasheet maximum 62 MHz in SPI mode 0 or 3 [CH394], manual V1.2, features list, VERIFIED in [HIS] HIS 40, `6e2208a`; about 17 MHz seen in use on the board, MEDIUM, the safe bound until the board link is measured) | B6, 0004 | HIS-14 | DDC0 rates 48, 96 and 192 ksps; 384 ksps offered only once ≥ 50 MHz is shown |
 | P-NET-2 | Whether the CH394 MAC address is unique per unit ([HIS] HIS 40) | A1.5, B3 | HIS-15 | the CH394 value is used as it is |
-| P-SYS-1 | Pin states between reset and the firmware's GPIO init (board pull-ups) | A3.6, A3.5 | HIS-13 | firmware sets the safe state first in its start-up ([HIS] HIS 85) |
+| P-NET-3 | Whether the CH394 reports the destination address (unicast, directed or limited broadcast) of a received UDP datagram ([HIS] HIS 40, HIS 90) | B3.9 (Set IP) | HIS-14 | treat every Set IP as unicast or directed broadcast: own subnet only, any source while link-local (B3.9) |
+| P-SYS-1 | Pin states between reset and the boot stage's GPIO init (board pull resistors on the RF control pins of [HIS] HIS 85, and what the vendor bootloader leaves); whether they hold the safe levels in that window | A3.6, A3.5 | HIS-13 | outside this spec before the boot stage runs; the boot stage sets the safe state within 20 µs of its first instruction (A3.6; 0045) |
 | P-SYS-2 | Reset cause and RAM retained across a warm reset (fault counters, log) | A1.7, A3.5, Table B8-3 `WDT_RESET_AT_START` | HIS-13, HIS-18 | counters and log are lost at every reset |
 | P-SYS-3 | Power-up path without the controller (HIS 20 H1/H2) | part A scope (0029) | HIS-17 | none; observation T0-P2 |
 | P-SYS-4 | Behaviour of the stock controller's panel with a silent main unit | part A scope (0023) | HIS-17 | CTRL idle ([HIS] HIS 70) |
@@ -3279,6 +3365,7 @@ Table P-1 — Pending hardware parameters
 | P-SYS-7 | Start mode of the independent watchdog (IWDG1_SW option byte, [HIS] HIS 10, HIS 90) | A1.8a item 3 (installer), firmware | HIS-13 | the firmware and the installer service the watchdog whenever it may run |
 | P-SYS-8 | SEND and TUNER interfaces on the main unit: whether and how the firmware drives or reads them | A3.6, A3.7, B4.8 `atu` bit 4, `regmap_groups` bit 7 | HIS-09 | released (inactive) and not offered |
 | P-RX-1 | Physical receive paths behind the two receive tuning words ([HIS] HIS 80) | B2, B3, 0004 | HIS-02 | one DDC |
+| P-RX-2 | FPGA configuration frame (command 0x01, [HIS] HIS 80): meaning and safe values of the status byte 0 and of bytes 9–18 (per-rate calibration among them), position of the spectral-inversion flag; which tuning word (offset 1 or 5) is DDC0; I/Q order of the 0x04 samples; bus set-up, strobe width and turnaround | B6.1, B6.7, B4.8 `streams` | HIS-01, HIS-02 | DDC0 not offered (`streams` bit 0 = 0, `STREAM_STATUS` reason 2); no configuration frame written outside the A3.6 safe state |
 | P-TX-1 | The third tuning word as the transmit word ([HIS] HIS 80, HYPOTHESIS) | B10 (firmware) | HIS-02 | not applicable while TX is disabled |
 | P-L2-1 | Level 2: receiver bandwidth for `IF_LIMITS`, TCI `KEYER` jitter budget | part C C3, C4 | HIS-01, G6 | level 2 not offered before G6 |
 | P-L2-2 | Level 2: stream budget and socket buffer split | part C C6 | HIS-14, HIS-18, G6 | level 2 not offered before G6 |
@@ -3444,6 +3531,9 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-63 | `SET_CALIBRATION` while a P2 session runs gets 57, while armed 50, during an update 58; with an unknown parameter id 48 and nothing changes; a complete set sets record `tx` bit 4 from the next session on and `IDENTIFY` tags 20 and 21 report it; `FACTORY_RESET` keeps the set; `CLEAR_CALIBRATION` clears bit 4 from the next session on (reference model; A1.12; 0039). |
 | T-A1-64 | A `SET_CONFIG` with the SWR limit (tag 9) or the PA temperature limit (tag 10) before the calibration set holds P-PWR-2 gets status 62; a P2 write of `LIMIT_SWR` or `LIMIT_PA_TEMP` gets write reject reason `NOT_CALIBRATED` (A1.12 item 4; 0039). |
 | T-A1-65 | A region other than 0 in `SET_CONFIG` (tag 6) gets status 48; with region 0 a DUC0 frequency at each edge of every range of Table A3-0 is inside, 1 Hz outside each edge is outside (reference model with a complete calibration set; A1.6 C-6; Table A3-0; 0039). |
+| T-A1-66 | With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041). |
+| T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
+| T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
@@ -3466,7 +3556,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-03 | A `LIMIT_<name>` write looser than the persistent value (C-3) is rejected with `LOOSER_LIMIT`, a stricter one accepted; writing 0 and the session end return to the persistent value; the answer carries the limit in force. |
 | T-A3-04 | A class 1 fault clears only with the current code and only when the condition is gone; a clear does not re-arm. |
 | T-A3-05 | A class 2 fault clears only by reset and is detected again at start-up if the cause persists. |
-| T-A3-06 | After power-on and after every session end the state of A3.6 holds. |
+| T-A3-06 | After power-on and after every session end the state of A3.6 holds. After power-on the check starts 20 µs after the boot stage's first instruction at 0x08020000; from then on every RF control pin of HIS 85 is at its safe-state level and stays there (emulator or reference model; A3.6, "From when"; 0045). |
 | T-A3-07 | Not in v1.0 (0030). Controller PTT and KEY inputs are reported and never key the radio without arm, with and without a P2 session while level 1 is active. |
 | T-A3-08 | While keyed, a DUC0 retune inside the same transmit range and RF-path state is followed without unkey. |
 | T-A3-09 | While keyed, a DUC0 change to another `tx_band` entry, or out of all ranges, unkeys before the frequency applies (`TX_STATE` reason 6, or 4 with `LIMIT_TX_FREQ`), keeps the arm, and switches relays only after the unkey; keying again needs a new 0→1 edge. |
@@ -3519,6 +3609,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-56 | With a DUC0 change that needs another RF-path state sent with a PTT 0→1 edge (reference model, `t_settle` 20 ms), a CWX paddle edge and an `ATU_TUNE` write 5 ms after the PTT edge are refused (the write with `KEYED`) and not latched; the PTT request keys after the settle; with the PTT request refused at the bound instead, the CWX bit still held does not key until a new edge (A3.9a item 3; 0022 §87 item 4). |
 | T-A3-57 | Level 1, a P2 host sending CW as DUC I&Q with PTT, zero samples (I = Q = 0) between elements and a gap of 300 ms, `t_blank` below the gap (reference model): RF above the "RF while not keyed" threshold injected in a gap is detected, the fault state with `RF_NOT_KEYED` entered, no later than `t_blank` + 10 ms after the last non-zero sample (or after the injection, if later), while PTT stays set; RF that decays within `t_blank` after each element gives no fault; the same with the zero samples fed during an underflow shorter than the underrun time; with non-zero noise samples in the gaps the check does not run there (known limit) (Table A3-2, A3.9a item 6; 0022 §88 item 1). |
 | T-A3-58 | v1.0 (0030): with level 1 active, armed and unarmed, with and without hardware CW selected, toggling the local PTT input (PH6) and the KEY contacts (PH3, PH4) keys nothing, and High Priority status byte 4 bits [0]–[2] stay 0 (reference model with simulated inputs; [HIS] HIS 85). |
+| T-A3-59 | With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040). |
 
 ### Discovery (B3)
 
@@ -3555,8 +3646,9 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B3-29 | Set IP with the unit's MAC sent to the unicast or directed broadcast address is accepted with the same effects as a broadcast Set IP. |
 | T-B3-30 | Byte 13 equals major × 10 + minor of `fw_version`, capped at 255; byte 23 is non-zero only on a beta build. |
 | T-B3-31 | 100 discoveries per second from one source get at most 10 replies per second; the excess is counted in `GET_STATS`. |
-| T-B3-32 | Set IP with the unit's MAC to the unicast or directed broadcast address from a source outside the radio's subnet is ignored and counted; to 255.255.255.255 from the same source it is accepted (B3.9, B11.15). |
+| T-B3-32 | Set IP with the unit's MAC to the unicast or directed broadcast address from a source outside the radio's subnet is ignored and counted. To 255.255.255.255 from the same source it is accepted where the controller reports the destination; where it does not (P-NET-3), it is ignored and counted too, except while the radio uses a link-local address, when it is accepted (B3.9, B11.15; 0039). |
 | T-B3-33 | A discovery request from source port 1024 gets no reply and is counted; two G7250s on one LAN with a discovery reply injected toward one of them exchange no further datagrams (B3.2). |
+| T-B3-34 | After a Set IP to an address inside the current subnet the netmask is unchanged; to an address outside it the netmask becomes 255.255.255.0 and a gateway outside the new subnet is cleared; 0.0.0.0 starts DHCP (B3.9; 0039). |
 
 ### Capability record (B4)
 
@@ -3579,6 +3671,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B4-15 | General packets from a source without a session get no record; under a takeover ping-pong between two hosts the unasked record reaches each destination at most once per second. |
 | T-B4-16 | On a 10 Mbit/s link a `CAP_REQUEST` is answered with the record and with `LINK_STATUS` and `STREAM_STATUS`; the status answers are at most one per 100 ms per source and 10 per second in total (B5.8). |
 | T-B4-17 | A `CAP_REQUEST` from a non-owner repeated 1 s after an answered one is answered again; one repeated after 200 ms is dropped by the rate limit and counted (B4.4 items 3, 4). |
+| T-B4-18 | An r1.0 firmware reports record `tx` bits 0–3 = 1 and bit 4 = 0 without a complete calibration set; an arm that meets every other condition gets `NOT_CALIBRATED` (12), not `TX_NOT_IMPLEMENTED` (11). A build with bit 1 = 0 reports bit 4 = 0 and rejects the arm with 11, which precedes 12 (B4.8, B10, B10.2 item 3; 0036, 0039). |
 
 ### Session, ownership, watchdog (B5)
 
@@ -3617,7 +3710,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B6-07 | Sequence number rolls over from 0xFFFFFFFF to 0 (reference model; forced counter). |
 | T-B6-08 | Packet rate matches the selected sample rate (rate / 238 per second) within tolerance, per offered rate. |
 | T-B6-09 | Each offered rate (48, 96, 192, and 384 if offered) streams without loss for a set duration, with and without TX IQ. |
-| T-B6-10 | A DDC0 rate outside `ddc_rates` (including 768 and 1536) stops DDC0, is not clamped, and is reported in `STREAM_STATUS`; a valid rate resumes it. |
+| T-B6-10 | A DDC0 rate outside `ddc_rates` (including 768 and 1536) stops DDC0, is not clamped, and is reported in `STREAM_STATUS`; a valid rate resumes it. With P-RX-2 set (reference model); before it, reason 2 (Table B8-3 order; 0042). |
 | T-B6-11 | A known test tone at a set offset from the DDC0 frequency appears at the right frequency and sign (I before Q). |
 | T-B6-12 | Samples are signed two's complement, MSB first (full-scale positive and negative test signals). |
 | T-B6-13 | Clearing DDC-specific byte 7 bit [0] stops DDC0 data; setting it resumes. |
@@ -3625,15 +3718,16 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B6-15 | Changing between offered rates while running takes effect without a stop. |
 | T-B6-16 | Fields listed as ignored in Table B6-2 have no effect on the stream. |
 | T-B6-17 | A host that does not know board type 200 and never writes the register map still receives DDC0 data (0015), tuned to the frequency it set as a phase word for a 122.88 MHz clock (B3.8, B4.11). |
-| T-B6-18 | A sample size other than 0 or 24 stops DDC0 with a reason. |
-| T-B6-19 | General byte 39 asking for little-endian, float or double stops DDC0 with a reason. |
-| T-B6-20 | General byte 37 bit [0] or [1] set stops DDC0 with a reason; time stamp bytes 4–11 are otherwise zero. |
+| T-B6-18 | A sample size other than 0 or 24 stops DDC0 with a reason. With P-RX-2 set (reference model); before it, reason 2 (Table B8-3 order; 0042). |
+| T-B6-19 | General byte 39 asking for little-endian, float or double stops DDC0 with a reason. The reason is 5, also before P-RX-2 (Table B8-3 order; 0042). |
+| T-B6-20 | General byte 37 bit [0] or [1] set stops DDC0 with a reason; time stamp bytes 4–11 are otherwise zero. The reason is 6, also before P-RX-2 (Table B8-3 order; 0042). |
 | T-B6-21 | Before M2, a wideband enable sends nothing; from M2, ADC0 wideband gives 8 packets of 1028 bytes every 50 ms, with sequence numbers 0–7 in every frame. |
 | T-B6-22 | From M2, wideband parameters other than 0 or the fixed values stop wideband with a reason. |
 | T-B6-23 | No microphone packets are sent unless `streams` bit 3 is set. |
 | T-B6-24 | The DDC0 sequence counter does not restart on a rate change, nor on a resume after a refusal or after DDC-specific byte 7 bit [0] was cleared. |
 | T-B6-25 | Each stream comes from its local port of B2.4a. |
 | T-B6-26 | A run bit with no DDC-specific packet from that host sends High Priority status but no DDC0 I&Q, `STREAM_STATUS` DDC0 reason 1; a DDC-specific packet with byte 7 bit [0] set then starts DDC0 (B5.2). |
+| T-B6-27 | Before P-RX-2 is set: record `streams` bit 0 = 0; a session that enables DDC0 gets `STREAM_STATUS` DDC0 not running with reason 2 and no DDC0 packets; discovery, `CAP_REQUEST` and the management channel answer as usual; with P-RX-2 set (reference model) DDC0 runs (B6.1; 0042). |
 
 ### Field table and register map (B7, B8)
 
@@ -3642,7 +3736,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B7-01 | Every field marked "ignored" in Tables B7-1, B7-2 and B10-1 has no effect. |
 | T-B7-02 | High Priority byte 4 bits [2]–[7], the TUNE bit and byte 1401 never key or switch anything. |
 | T-B7-03 | A non-default radio-side port in General bytes 5–22 or 29–30 is not honoured: the default stays, `LINK_STATUS` bit 17 is set and the request is logged; non-zero bytes 31–32 redirect register packets. |
-| T-B7-04 | General byte 37 bit [2] set stops DDC0 with reason 11. |
+| T-B7-04 | General byte 37 bit [2] set stops DDC0 with reason 11. Also before P-RX-2 (Table B8-3 order; 0042). |
 | T-B7-05 | General byte 58 bit [0] = 0 keeps a TX request from keying and sets `TX_STATE` bit 4. |
 | T-B7-06 | A General packet whose byte 37 bit [3] differs from discovery byte 21 stops DDC0 with `STREAM_STATUS` reason 13, keeps PTT from keying and is logged; a General packet with the matching bit ends it (B3.8). |
 | T-B8-01 | All registers of Table B8-2 marked "on change" or "event" are pushed within 5 ms of a change. |

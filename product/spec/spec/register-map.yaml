@@ -364,7 +364,7 @@ code_sets:
       - value: 13
         text: "frequency encoding mismatch (General byte 37 bit [3] differs from discovery byte 21, B3.8; 0022 §73 item 12)"
       - value: 14
-        text: "TX not calibrated (record `tx` bit 4 = 0, A1.12; 0039)"
+        text: "TX not calibrated (record `tx` bit 4 = 0, A1.12; 0039). Where several apply to one stream, the byte carries the first in this order: 10, 9, 8 (radio-wide), 1 (not enabled by the host), 13, 6, 11, 12, 5 (General-packet refusals), 2, 14 (not offered or not calibrated in this firmware), 3, 4, 7 (stream parameters) (0042)"
   - set: "Write reject reason (`WRITE_STATUS` [7:0])"
     values:
       - value: 1
