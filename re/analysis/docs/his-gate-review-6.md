@@ -227,3 +227,16 @@ fact, and every new 90 step is a photo, a read or a datasheet look-up.
 
 **CHANGES**: Q1 only, a one-row fix in 90. With Q1 applied, b7df142 is
 cleared on a diff check of that row.
+
+## Q1 check (diff b7df142..d199d33, his)
+
+| Item | Result |
+| --- | --- |
+| Q1 (90, row F2-Q4) | Applied, using the wording proposed. No other change. |
+
+### Verdict (review 6, final)
+
+**CLEARED** at d199d33 (his/next).
+
+Follow-up for the emu session: update the status in `his/README.md` to
+d199d33 and review 6.
