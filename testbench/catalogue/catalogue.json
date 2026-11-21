@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "df8b414",
-  "sha256_of_inputs": "f76c80659fcf46875f4c7113f9eef1d8c96c3ffdb102ca0a739cd66d5ca0a261"
+  "commit": "ed328d4",
+  "sha256_of_inputs": "bc523609842b44796b9de4e2da98eae736353ac018d3a58e0adc15988b5b164e"
  },
  "his": {
   "commit": "72591aa"
@@ -3501,7 +3501,7 @@
    "id": "T-A3-61",
    "origin": "spec",
    "part": "A-B",
-   "title": "Not armed: forcing the level at each pin of Table A3-6b (PF4, PF6, PC7, PH11, PA10, PB14) to the other level from outside (output register unchanged), and, separately, changing a pin's output register or making it an input, and writing a non-zero value to DAC channel 2, 7 or 8 (emulator memory write or simulated firmware fault): each held for 20 ms or more gives `FAULT_CODE` 16 `TX_PATH_NOT_BLOCKED`, class 2, within 20 ms of its start; a pulse of 5 ms gives no fault; RX goes on; the log names the pin and the comparison; after a `RESTART` with the force removed the fault is gone, with it kept it comes back at start-up; armed with the TX path open, no fault (emulator; A3.6b; 0066).",
+   "title": "Not armed: forcing the level at each pin of Table A3-6b (PF4, PF6, PC7, PH11, PA10, PB14) to the other level from outside (output register unchanged), and, separately, changing a pin's output register or making it an input: each held for 20 ms or more gives `FAULT_CODE` 16 `TX_PATH_NOT_BLOCKED`, class 2, within 20 ms of its start; a pulse of 5 ms gives no fault; RX goes on; the log names the pin and the comparison; after a `RESTART` with the force removed the fault is gone, with it kept it comes back at start-up; armed with the TX path open, no fault with a pin of Table A3-6b forced from power-on, the fault is raised within 120 ms of the boot stage's first instruction (emulator; A3.6b; 0066). The DAC rows: a value other than 0 recorded as written to channel 2, 7 or 8 gives the fault (host test of the check, until the firmware has a DAC driver; then also on the emulator).",
    "reqs": [
     "A3",
     "A3.6b",

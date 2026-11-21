@@ -99,6 +99,25 @@ def t_a3_61(ctx: Ctx):
     finally:
         ctx.fixture("gpio.force", pin="PF4", level=None, target="idr")
     clean("final")
+    # a pin forced from power-on: the fault within 120 ms of the boot stage's first instruction
+    # (0066 addendum). The fault's log entry names the pin and carries the uptime in ms since
+    # that boot (A1.7), which the bench takes as the time of the fault.
+    if "power.cycle" in ctx.endpoint.get("fixtures", []):
+        ctx.fixture("gpio.force", pin="PF4", level=0, target="idr", from_power_on=True)
+        try:
+            ctx.fixture("power.cycle")
+            wait_reachable(ctx, "power-on with PF4 forced")
+            code, flags = faults(ctx)
+            ctx.check("PF4 forced from power-on: FAULT_CODE 16 at start-up", fault16(code, flags),
+                      f"FAULT_CODE {code}, FAULT_FLAGS {flags}")
+            with updating(ctx, s, restart_at_end=False) as u:
+                ent = [e for e in read_log(u.c) if "PF4" in e[2]]
+            up = min((e[1] for e in ent), default=None) if ent else None
+            ctx.check("the fault within 120 ms of the boot stage's first instruction (log entry uptime)",
+                      up is not None and up <= 120, f"uptime {up} ms" if up is not None else "no log entry naming PF4")
+        finally:
+            ctx.fixture("gpio.force", pin="PF4", level=None, target="idr")
+        clean("after the power-on case")
     ctx.notes.append("'armed with the TX path open, no fault' not run: needs TX unlocked (an arm)")
     # the bias channels 2, 7, 8: a non-zero value written by a simulated firmware fault
     # (dac.force, v1.8), checked by the value last written (A3.6b; Table A3-6)
@@ -120,4 +139,4 @@ def t_a3_61(ctx: Ctx):
     else:
         ctx.notes.append("DAC part (a non-zero value on channel 2, 7 or 8) not judged on the emulator: the channels are "
                          "checked by the value the firmware last wrote, which a write from outside does not change "
-                         "(Table A3-6); spec ruling pending")
+                         "(Table A3-6); a host test of the check judges it until the firmware has a DAC driver (0066 addendum)")
