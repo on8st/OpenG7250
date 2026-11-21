@@ -9,6 +9,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
 
 [[package]]
+name = "g7250-ch394"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal",
+]
+
+[[package]]
 name = "g7250-imgtool"
 version = "0.1.0"
 dependencies = [
@@ -21,6 +28,10 @@ version = "0.1.0"
 dependencies = [
  "embedded-hal",
 ]
+
+[[package]]
+name = "g7250-proto"
+version = "0.1.0"
 
 [[package]]
 name = "g7250-safety"

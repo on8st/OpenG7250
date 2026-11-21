@@ -29,3 +29,6 @@ embassy-time = { workspace = true }
 embassy-sync = { workspace = true }
 embassy-futures = { workspace = true }
 heapless = { workspace = true }
+g7250-proto = { workspace = true }
+g7250-ch394 = { workspace = true }
+embedded-hal = { workspace = true }
