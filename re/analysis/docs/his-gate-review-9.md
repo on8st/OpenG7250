@@ -52,3 +52,55 @@ UNKNOWN", with a measurement.
 
 Follow-up for the emu session: update the status in `his/README.md` to
 0677c2d and review 9.
+
+## Short check (diff 0677c2d..7647425: his, README, ROADMAP)
+
+| Item | Result |
+| --- | --- |
+| C1 (10, 90) | Applied in structure: the hardware part comes first, and "not known" is kept for the stage before 0x08020000. The citation and tag are the open point; see S1. |
+| C2 (10, 90) | Applied: whole, aligned 64-bit words, cited as ST AN5342. Untagged; see S1. |
+| C3 (90) | Applied: after F1, under the step rule, with the IWDG as the option bytes leave it, and with 64-bit words. |
+| N1 (10, 90) | Applied: "not known". |
+| README, his/README | Status updated to 0677c2d and review 9. OK. |
+
+No stock detail is added.
+
+### The RM0468 section for C1
+
+I cannot supply or confirm it. No copy of RM0468 or AN5342 is in the
+allowed sources (re/analysis, re/emu and g7250-base cite RM0468 only for the
+D2/D3 SRAM sizes). A fetch of ST's public PDF timed out twice. I will not
+give a section number from memory: review 9 C1 said to leave the statement
+out rather than state it unchecked, and the gate holds to that.
+
+### S1 (required, 10 and 90)
+
+The two new hardware statements carry no confidence tag, and neither
+citation has been checked against the text:
+- "a system reset does not clear SRAM … (ST RM0468, embedded SRAM)";
+- "64-bit ECC word … a partial word can be lost (ST AN5342)".
+
+The HIS convention is that every fact carries a tag. Do one of the
+following:
+- **(a)** Check both against the documents (RM0468: the embedded SRAM
+  section and the reset or RDP erase conditions; AN5342: the AXI SRAM ECC
+  and partial-write section). Cite section numbers and a short quote, and
+  tag them VERIFIED (datasheet).
+- **(b)** Until then, tag both MEDIUM and mark the citations as
+  unchecked, for example "(MEDIUM: ST RM0468, embedded SRAM, section not
+  checked; the measurement in `90-needs-hardware.md` confirms it)" and the
+  same for AN5342.
+
+Either way, the 90 row should not state the RM0468 part more strongly than
+section 10 does.
+
+### Nit
+
+ROADMAP.md: the line "cleared at 0677c2d by gate review 9" still points to
+`his-gate-review-5.md` and "reviews 1–4". It should point to review 9 and
+reviews 1–8, as README.md does.
+
+### Verdict (short check)
+
+**CHANGES**: S1 only. Applying (b) is enough to clear on a diff check of
+the two sentences and the 90 row; (a) is better.
