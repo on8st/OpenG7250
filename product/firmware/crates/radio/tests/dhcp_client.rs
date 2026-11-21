@@ -2,7 +2,7 @@
 //! DHCP client (A1.11, A1.11a; RFC 2131).
 use g7250_proto::dhcp;
 use g7250_proto::netcfg::{self, Mode, NetConfig};
-use g7250_radio::dhcp_client::{Action, Client, Msg, State, WAIT_MS};
+use g7250_radio::dhcp_client::{Action, BORROW_MS, Client, Msg, RETURN_MS, State, WAIT_MS};
 
 const MAC: [u8; 6] = [2, 0, 0, 0, 0x72, 0x50];
 const SERVER: [u8; 4] = [192, 168, 1, 1];
@@ -36,9 +36,9 @@ fn no_server_at_power_on_keeps_trying_with_backoff() {
             assert_eq!(to, [255; 4]);
             sends.push(t);
         }
-        t += 100;
+        t += 20;
     }
-    // 4, then +3 wait +8, +3 +16, +3 +32, +3 +64, +3 +64 ...
+    // 4, then the wait +8, the wait +16, the wait +32, the wait +64, the wait +64 ...
     assert_eq!(sends[0], 4_000);
     assert_eq!(sends[1], 4_000 + WAIT_MS + 8_000);
     assert_eq!(sends[2], sends[1] + WAIT_MS + 16_000);
@@ -174,7 +174,29 @@ fn one_borrow_lasts_at_most_2_s_decision_0041() {
     assert_eq!(c.poll(6_000), Action::None);
     assert!(!c.listening(), "abandoned 2 s after the first send");
     assert!(matches!(c.state, State::Init { .. }), "retried at the next interval");
-    assert_eq!(WAIT_MS, 2_000);
+    assert_eq!(WAIT_MS + RETURN_MS, BORROW_MS);
+}
+
+#[test]
+fn the_whole_borrow_close_and_reopen_included_is_at_most_2_s() {
+    // T-A1-66 (a), 0041: the net loop takes socket 7 at `t0` and sends at once; it polls the
+    // client every 2 ms while it borrows (the borrowed path's sleep) and gives the socket back
+    // at the first poll that finds the client no longer listening; the reopen then takes at
+    // most a few ms of CH394 commands.
+    const LOOP_MS: u64 = 2;
+    const REOPEN_MAX_MS: u64 = 5;
+    for t0 in [4_000u64, 4_001] {
+        let mut c = Client::new(MAC, 100, ll(), None, 0);
+        assert!(matches!(c.poll(t0), Action::Send { .. }));
+        let mut t = t0;
+        while c.listening() {
+            t += LOOP_MS;
+            c.poll(t);
+        }
+        let end = t + REOPEN_MAX_MS;
+        assert!(end - t0 <= BORROW_MS, "borrow {} ms", end - t0);
+        assert!(end - t0 > BORROW_MS - 50, "not much shorter either: {} ms", end - t0);
+    }
 }
 
 #[test]
