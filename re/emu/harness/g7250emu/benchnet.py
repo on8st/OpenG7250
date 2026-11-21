@@ -36,17 +36,15 @@ SPEC_PORTS = list(range(1024, 1036)) + [7250, 7251]
 # 52000-52299), and only if every port in that span can be bound.
 PORT_BASES = (20000, 30000, 10000)
 CONNECT_OFF, LIMITED_OFF, DIRECTED_OFF, HOST_OFF = 0, 100, 200, 8000
-# hosts[0] owns 1024..7250, so the fixed source ports the spec tests need (1024,
-# 7250) are bound at the same numbers; both must be free. No runner port lies in
-# that range (every base puts them above 11000).
+# The fixed source ports the spec tests need (T-B3-33: 1024, T-B8-19: 7250).
+# Format v1.4: hosts[0].fixed_ports lists them; the bench binds one only when a
+# test asks for that exact port, so they are not in hosts[0].ports. Each is
+# offered when it is free at the start of the run (G7250_NO_FIXED_PORTS=1:
+# never). A datagram from such a local port maps to hosts[0] with that port.
+# No runner port lies there (every base puts them above 11000), and the
+# reference model never binds 1024-7251 (v1.4).
 HOST0_FIXED = (1024, 7250)
-# RE-side runs that need no fixed source ports (self-checks, store checks) may
-# set G7250_NO_FIXED_PORTS=1: hosts[0] then gets a range like the others
-# Default (2026-11-21): no fixed ports. With hosts[0] = [1024, 7250] the bench
-# binds its ordinary host-0 sockets at 1024, which changes what every host-0
-# test sends; opt in with G7250_FIXED_PORTS=1 until the format has a separate
-# field for fixed ports.
-NO_FIXED = os.environ.get("G7250_FIXED_PORTS") != "1" or os.environ.get("G7250_NO_FIXED_PORTS") == "1"
+NO_FIXED = os.environ.get("G7250_NO_FIXED_PORTS") == "1"
 RADIO_MAC = "02:00:00:00:72:50"
 
 
@@ -157,7 +155,7 @@ class Bridge:
                     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     got.append((s, kind, p))
                     s.bind(("127.0.0.1", b + off + p))
-            for port in list(range(b + HOST_OFF, b + HOST_OFF + 300)) + ([] if NO_FIXED else list(HOST0_FIXED)):
+            for port in range(b + HOST_OFF, b + HOST_OFF + 300):
                 t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 try:
                     t.bind(("127.0.0.1", port))
@@ -167,6 +165,17 @@ class Bridge:
             for s, _, _ in got:
                 s.close()
             return False
+        self.fixed = []
+        if not NO_FIXED:
+            for port in HOST0_FIXED:
+                t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    t.bind(("127.0.0.1", port))
+                    self.fixed.append(port)
+                except OSError:
+                    pass
+                finally:
+                    t.close()
         for s, kind, p in got:
             self.socks[s] = (kind, p)
             if kind == "connect":
@@ -189,8 +198,10 @@ class Bridge:
         hosts = []
         for i, hip in enumerate(hosts_in + [outside]):
             lo = self.base + HOST_OFF + 100 * i
-            rng = [HOST0_FIXED[0], HOST0_FIXED[1]] if i == 0 and not NO_FIXED else [lo, lo + 99]
-            hosts.append({"ip": hip, "in_subnet": i < 2, "bind": "127.0.0.1", "ports": rng})
+            h = {"ip": hip, "in_subnet": i < 2, "bind": "127.0.0.1", "ports": [lo, lo + 99]}
+            if i == 0 and getattr(self, "fixed", None):
+                h["fixed_ports"] = list(self.fixed)
+            hosts.append(h)
         # publish the address last: the runner waits for radio_ip
         self.hosts, self.directed, self.netmask = hosts, str(net.broadcast_address), netmask
         self.radio_ip = ip
@@ -449,6 +460,7 @@ class Agent:
         self.traces = []
         self.closed = False
         self.on_cut = None
+        self.cycling = False
         self.events = 0
         self.lock = threading.Lock()
         threading.Thread(target=self._accept, daemon=True).start()
@@ -469,6 +481,10 @@ class Agent:
                 self._serve(c.makefile("r"))
             except (OSError, ValueError):
                 pass    # the emulator went away (power cycle, cut): accept the next one
+            # no emulator until the next one connects: asks fail at once ("emulator
+            # not ready") instead of waiting their timeout on a dead connection
+            if self.conn is c:
+                self.conn = None
 
     def _serve(self, f):
         for line in f:
@@ -492,8 +508,11 @@ class Agent:
             time.sleep(0.05)
         return self.conn is not None
 
-    def ask(self, line, timeout=10.0):
-        if self.conn is None:
+    def ask(self, line, timeout=10.0, internal=False):
+        # during a power cycle only the runner's own steps (halt, flash dump) reach the
+        # emulator; a bench request gets "emulator not ready" at once, not after the
+        # dump (which can take longer than the bench's socket timeout)
+        if self.conn is None or (self.cycling and not internal):
             return None
         with self.lock:
             while not self.replies.empty():
@@ -591,9 +610,14 @@ class FixtureServer:
                 path = agent.new_trace()
                 self.trace_pins = list(args.get("pins", []))
                 r = agent.ask(("trace start " + " ".join(self.trace_pins)).strip())
-                if r != "ok":
+                if not r or not (r == "ok" or r.startswith("ok ")):
                     return {"ok": False, "error": r or "emulator not ready"}
-                return {"ok": True, "value": {"file": path}}
+                # "ok <t_us>": the emulated time the trace started; replayed boot
+                # events lie before it, live events at or after it
+                v = {"file": path}
+                if r.startswith("ok "):
+                    v["t_us"] = int(r.split()[1])
+                return {"ok": True, "value": v}
             if action == "stop":
                 r = agent.ask("trace stop") if agent else None
                 if not r or not r.startswith("ok"):
@@ -651,8 +675,24 @@ class FixtureServer:
             r = agent.ask("link %d" % sp) if agent else None
             return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
         if op == "reset.wdt":
-            r = agent.ask("wdt") if agent else None
-            return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            if not agent:
+                return {"ok": False, "error": "emulator not ready"}
+            def resets():
+                q = agent.ask("resets")
+                return int(q.split()[1]) if q and q.startswith("resets ") else None
+            n0 = resets()
+            r = agent.ask("wdt")
+            if r != "ok":
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            # return once the reset has happened (the emulator applies it at its next
+            # synchronisation point, and emulated time can run slower than wall time)
+            t0 = time.time()
+            while n0 is not None and time.time() - t0 < 30.0:
+                n = resets()
+                if n is not None and n > n0:
+                    break
+                time.sleep(0.02)
+            return {"ok": True}
         if op == "power.cut":
             at = args.get("at_us")
             if not isinstance(at, int) or at < 0:

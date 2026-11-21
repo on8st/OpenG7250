@@ -28,7 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import benchnet  # noqa: E402
 
-FORMAT_MINOR = 3
+FORMAT_MINOR = 4
 BOOT_WALL_TIMEOUT = 180.0     # host seconds for the image to bring up its address
 
 
@@ -125,21 +125,26 @@ class Boot:
             self._power_cycle(cut)
 
     def _power_cycle(self, cut):
-        tracing = self.agent.trace is not None and not self.agent.trace.closed
-        seq = 0
-        if tracing:
-            seq = sum(1 for _ in open(self.agent.trace.name))
-        if not cut:
-            self.agent.ask("halt")          # supply gone: the core stops first
-        dump = os.path.join(self.out, "flash-%d.bin" % self.boots)
-        if self.agent.ask("flashdump " + dump, timeout=30) == "ok":
-            self.flash = dump
-        self.stop_emulator()
-        self.start()
-        self.agent.wait_connected(BOOT_WALL_TIMEOUT)
-        if tracing:
-            self.agent.append_event({"seq": seq, "t_us": 0, "kind": "reset", "cause": "power"})
-            self.agent.ask(("trace start @%d %s" % (seq + 1, " ".join(self.fixtures.trace_pins))).strip())
+        self.agent.cycling = True
+        try:
+            tracing = self.agent.trace is not None and not self.agent.trace.closed
+            seq = 0
+            if tracing:
+                seq = sum(1 for _ in open(self.agent.trace.name))
+            if not cut:
+                self.agent.ask("halt", internal=True)          # supply gone: the core stops first
+            dump = os.path.join(self.out, "flash-%d.bin" % self.boots)
+            if self.agent.ask("flashdump " + dump, timeout=30, internal=True) == "ok":
+                self.flash = dump
+            self.stop_emulator()
+            self.agent.conn = None          # the old emulator's link: wait for the new one
+            self.start()
+            self.agent.wait_connected(BOOT_WALL_TIMEOUT)
+            if tracing:
+                self.agent.append_event({"seq": seq, "t_us": 0, "kind": "reset", "cause": "power"})
+                self.agent.ask(("trace start @%d %s" % (seq + 1, " ".join(self.fixtures.trace_pins))).strip(), internal=True)
+        finally:
+            self.agent.cycling = False
 
     def wait_ready(self):
         if not self.agent.wait_connected(BOOT_WALL_TIMEOUT):

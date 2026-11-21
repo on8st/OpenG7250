@@ -109,10 +109,16 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   from (0x08020000 under the stand-in), `pc` the reset handler from it. The runner
   arms it after the image is loaded (`sysbus.spi1.agent ArmBootHook`); later resets
   re-arm it.
-- Pin changes of the watched pins (HIS 85 safe pins, latch pins, the traced pins)
-  are taken from write hooks on the GPIO ports (MODER, OTYPER, PUPDR, ODR, BSRR),
-  at the instant of the write; the 50 us sampler stays for changes the hooks do
-  not see (16-bit writes, inputs).
+- Watched pins: the 11 HIS 85 safe pins, PH9 and the latch/strobe pins PA11,
+  PH12, PD13, PG2, PG5. A trace start emits the state of each of them (and of
+  the requested pins); hw.observe `pins` lists them.
+- In the boot phase (10 ms of emulated time after a boot event) pin changes of the
+  watched pins come from write hooks on the GPIO ports (MODER, OTYPER, PUPDR, ODR,
+  BSRR) at the instant of the write. Afterwards the 50 us sampler reports changes,
+  as before: the handler at every GPIO write slows emulation about tenfold.
+- `hw.trace start` returns `{"file", "t_us"}`: `t_us` is the emulated time of the
+  start; replayed boot events lie before it.
+- `reset.wdt` returns once the reset has happened.
 - Within 10 ms (emulated) of a boot event a gpio event also carries
   `since_boot_us`: executed instructions since the boot event / core MHz. In that
   phase each instruction is its own translation block, so the count is exact; it

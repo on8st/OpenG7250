@@ -130,7 +130,14 @@ def run_test(tid, ep):
         f = (r1.get("value") or {}).get("file")
         t = ctl.op("hw.observe")["value"]["t_us"]
         pc = ctl.op("power.cut", at_us=t + 200000)
-        time.sleep(3.0)
+        # wait in emulated time, not wall time: the cut comes 200 ms of emulated time later
+        t_end = time.time() + 60.0
+        while time.time() < t_end:
+            o = ctl.op("hw.observe")
+            if o.get("ok") and o["value"]["t_us"] < t:
+                break                       # the new emulator after the cut counts from 0
+            time.sleep(0.2)
+        time.sleep(0.5)
         d, src = echo(ep, 0, c, b"after-cut", wait=60.0)
         ctl.op("hw.trace", action="stop")
         evs = [json.loads(l) for l in open(f)] if f and os.path.isfile(f) else []

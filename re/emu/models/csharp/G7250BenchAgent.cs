@@ -51,7 +51,9 @@ namespace Antmicro.Renode.Peripherals.SPI
         private NetworkStream stream;
         private bool tracing;
         private ulong seq, dropped;
-        private string[] tracePins = SafePins;
+        private static readonly string[] WatchedPins = Concat(SafePins, LatchPins);
+        private static string[] Concat(string[] a, string[] b) { var r = new string[a.Length + b.Length]; a.CopyTo(r, 0); b.CopyTo(r, a.Length); return r; }
+        private string[] tracePins = WatchedPins;
         private readonly Dictionary<string, int> lastLevel = new Dictionary<string, int>();
         private readonly Dictionary<string, int> drivenLevel = new Dictionary<string, int>();
         private readonly Dictionary<string, string> lastState = new Dictionary<string, string>();
@@ -69,7 +71,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(agentPort > 0) new Thread(Serve) { IsBackground = true, Name = "bench-agent" }.Start();
             HookConsole();
             ArmBootHook();
-            HookPorts();
+            if(Environment.GetEnvironmentVariable("G7250_NO_PORT_HOOKS") != "1") HookPorts();
             machine.MachineReset += _ => OnMachineReset();
         }
 
@@ -198,10 +200,12 @@ namespace Antmicro.Renode.Peripherals.SPI
             string name = "sysbus.gpioPort" + (char)('A' + port);
             if(!machine.TryGetByName(name, out p) || !(p is IGPIOReceiver)) return "err no port " + name;
             ((IGPIOReceiver)p).OnGPIO(bit, level != 0);
+            lock(sync) drivenLevel[pin] = level != 0 ? 1 : 0;
+            // bus reads outside the lock: the CPU thread takes it at every GPIO write
+            var st = State(pin);
             lock(sync)
             {
-                drivenLevel[pin] = level != 0 ? 1 : 0;
-                if(tracing) { var st = State(pin); lastState[pin] = st.Level + "/" + st.Mode + "/" + st.Pull; Send("ev " + GpioState(pin)); }
+                if(tracing) { lastState[pin] = st.Level + "/" + st.Mode + "/" + st.Pull; Send("ev " + GpioStateFrom(pin, st)); }
             }
             return "ok";
         }
@@ -213,25 +217,30 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         private string Event(string body) { return "{\"seq\": " + (seq++) + ", \"t_us\": " + NowUs() + ", " + body + "}"; }
         private string Gpio(string pin, int level) { return Event("\"kind\": \"gpio\", \"pin\": \"" + pin + "\", \"level\": " + level); }
-        private string GpioState(string pin)
+        private string GpioState(string pin) { return GpioStateFrom(pin, State(pin)); }
+        private string GpioStateFrom(string pin, PinState s)
         {
-            var s = State(pin);
             return Event("\"kind\": \"gpio\", \"pin\": \"" + pin + "\", \"level\": " + s.Level + ", \"mode\": \"" + s.Mode + "\", \"pull\": \"" + s.Pull + "\"");
         }
 
         private void Sample()
         {
             List<string> evs = null;
+            string[] pins;
+            lock(sync) { if(!tracing) return; pins = tracePins; }
+            // bus reads outside the lock (the CPU thread takes it at every GPIO write)
+            var states = new PinState[pins.Length];
+            for(int i = 0; i < pins.Length; i++) states[i] = State(pins[i]);
             lock(sync)
             {
                 if(!tracing) return;
-                foreach(var pin in tracePins)
+                for(int i = 0; i < pins.Length; i++)
                 {
-                    var s = State(pin);
+                    var s = states[i];
                     string key = s.Level + "/" + s.Mode + "/" + s.Pull, prev;
-                    if(lastState.TryGetValue(pin, out prev) && prev == key) continue;
-                    lastState[pin] = key;
-                    (evs = evs ?? new List<string>()).Add(GpioState(pin));
+                    if(lastState.TryGetValue(pins[i], out prev) && prev == key) continue;
+                    lastState[pins[i]] = key;
+                    (evs = evs ?? new List<string>()).Add(GpioStateFrom(pins[i], s));
                 }
                 if(evs != null) foreach(var e in evs) Send("ev " + e);
             }
@@ -256,16 +265,20 @@ namespace Antmicro.Renode.Peripherals.SPI
         {
             string rst;
             string dac = DacWords(out rst);
+            // pin states from the bus first, outside the lock (the CPU thread takes it at every GPIO write)
+            string tr = ", \"tr_lines\": {\"PF4\": " + Level("PF4") + ", \"PF6\": " + Level("PF6") + ", \"PC7\": " + Level("PC7") + ", \"PH11\": " + Level("PH11") + "}";
+            string oeA = Level("PA10"), oeB = Level("PH10"), pb10 = Level("PB10"), pd12 = Level("PD12");
+            string pins = string.Join(", ", Array.ConvertAll(WatchedPins, x => "\"" + x + "\": " + PinJson(x)));
             lock(sync)
             {
                 return "{\"t_us\": " + NowUs()
-                    + ", \"tr_lines\": {\"PF4\": " + Level("PF4") + ", \"PF6\": " + Level("PF6") + ", \"PC7\": " + Level("PC7") + ", \"PH11\": " + Level("PH11") + "}"
-                    + ", \"spi1_a\": {\"oe_PA10\": " + Level("PA10") + ", \"last_frame\": " + (chainA < 0 ? "null" : chainA.ToString()) + "}"
-                    + ", \"spi1_b\": {\"oe_PH10\": " + Level("PH10") + ", \"last_frame\": " + (chainB == null ? "null" : "\"" + chainB + "\"") + "}"
+                    + tr
+                    + ", \"spi1_a\": {\"oe_PA10\": " + oeA + ", \"last_frame\": " + (chainA < 0 ? "null" : chainA.ToString()) + "}"
+                    + ", \"spi1_b\": {\"oe_PH10\": " + oeB + ", \"last_frame\": " + (chainB == null ? "null" : "\"" + chainB + "\"") + "}"
                     + ", \"atu_latch_writes\": {\"PD13\": " + atuWrites[0] + ", \"PG2\": " + atuWrites[1] + ", \"PG5\": " + atuWrites[2] + "}"
                     + ", \"pa_dac\": {\"reset_PB14\": " + rst + ", \"ch\": [" + dac + "]}"
-                    + ", \"codec_reset_PB10\": " + Level("PB10") + ", \"PD12\": " + Level("PD12")
-                    + ", \"pins\": {" + string.Join(", ", Array.ConvertAll(SafePins, x => "\"" + x + "\": " + PinJson(x))) + "}}";
+                    + ", \"codec_reset_PB10\": " + pb10 + ", \"PD12\": " + pd12
+                    + ", \"pins\": {" + pins + "}}";
             }
         }
 
@@ -297,17 +310,27 @@ namespace Antmicro.Renode.Peripherals.SPI
         private void StartBootPhase()
         {
             SetBlockSize(null);
+            portHooksActive = true;
             if(bootPhaseEnd == null)
             {
                 bootPhaseEnd = new Antmicro.Renode.Peripherals.Timers.LimitTimer(machine.ClockSource, 1000000, this, "bootphase", 1UL << 40,
-                    enabled: false, workMode: Antmicro.Renode.Time.WorkMode.Periodic, eventEnabled: true);
-                bootPhaseEnd.LimitReached += () => { bootPhaseEnd.Enabled = false; if(savedBlockSize != null) SetBlockSize(savedBlockSize); };
+                    direction: Direction.Ascending, enabled: false, workMode: Antmicro.Renode.Time.WorkMode.Periodic, eventEnabled: true);
+                bootPhaseEnd.LimitReached += () =>
+                {
+                    bootPhaseEnd.Enabled = false;
+                    portHooksActive = false;
+                    if(savedBlockSize != null) SetBlockSize(savedBlockSize);
+                    this.Log(LogLevel.Debug, "agent: boot phase ended, block size {0}", savedBlockSize);
+                };
             }
             bootPhaseEnd.Enabled = false;
             bootPhaseEnd.Value = (1UL << 40) - 10000;
             bootPhaseEnd.Enabled = true;
         }
         private bool portsHooked;
+        // exact events only in the boot phase (spec 0045); afterwards the 50 us sampler
+        // reports changes, because the handler at every GPIO write slows emulation ~10x
+        private volatile bool portHooksActive;
 
         private void HookPorts()
         {
@@ -322,7 +345,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 shadow[pn] = new uint[] { machine.SystemBus.ReadDoubleWord(b), machine.SystemBus.ReadDoubleWord(b + 4),
                                           machine.SystemBus.ReadDoubleWord(b + 0x0C), machine.SystemBus.ReadDoubleWord(b + 0x14) };
                 machine.SystemBus.SetHookBeforePeripheralWrite<uint>((Antmicro.Renode.Peripherals.Bus.IBusPeripheral)gp,
-                    (value, offset) => { PortWrite(pn, offset, value); return value; });
+                    (value, offset) => { if(portHooksActive) PortWrite(pn, offset, value); return value; });
             }
             portsHooked = true;
         }
@@ -364,8 +387,30 @@ namespace Antmicro.Renode.Peripherals.SPI
         private void PortWrite(int port, long offset, uint value)
         {
             var s = shadow[port];
+            string[] watchedNow = tracePins;
+            var bits = new List<int>();
+            for(int bit = 0; bit < 16; bit++)
+            {
+                string pn = "P" + (char)('A' + port) + bit;
+                if(Array.IndexOf(WatchedPins, pn) >= 0 || Array.IndexOf(watchedNow, pn) >= 0) bits.Add(bit);
+            }
+            if(bits.Count == 0)
+            {
+                lock(sync)
+                {
+                    switch(offset)
+                    {
+                        case 0x00: s[0] = value; break;
+                        case 0x04: s[1] = value; break;
+                        case 0x0C: s[2] = value; break;
+                        case 0x14: s[3] = value & 0xFFFF; break;
+                        case 0x18: s[3] = (s[3] & ~(value >> 16)) | (value & 0xFFFF); break;
+                    }
+                }
+                return;
+            }
             var before = new Dictionary<int, string>();
-            for(int bit = 0; bit < 16; bit++) { string m, pl; before[bit] = ShadowLevel(port, bit, out m, out pl) + "/" + m + "/" + pl; }
+            foreach(int bit in bits) { string m, pl; before[bit] = ShadowLevel(port, bit, out m, out pl) + "/" + m + "/" + pl; }
             switch(offset)
             {
                 case 0x00: s[0] = value; break;
@@ -382,11 +427,9 @@ namespace Antmicro.Renode.Peripherals.SPI
             var evs = new List<string>();
             lock(sync)
             {
-                for(int bit = 0; bit < 16; bit++)
+                foreach(int bit in bits)
                 {
                     string pin = "P" + (char)('A' + port) + bit;
-                    bool watched = Array.IndexOf(SafePins, pin) >= 0 || Array.IndexOf(tracePins, pin) >= 0 || Array.IndexOf(LatchPins, pin) >= 0;
-                    if(!watched) continue;
                     string m, pl, lv = ShadowLevel(port, bit, out m, out pl);
                     if(lv + "/" + m + "/" + pl == before[bit]) continue;
                     lastState[pin] = lv + "/" + m + "/" + pl;
@@ -456,8 +499,11 @@ namespace Antmicro.Renode.Peripherals.SPI
         }
 
         // a reset of the MCU while the emulator keeps running (watchdog, software)
+        private int resetCount;     // MCU resets in this emulator process ("resets")
+
         private void OnMachineReset()
         {
+            System.Threading.Interlocked.Increment(ref resetCount);
             string cause = "software";
             IPeripheral wd;
             if(machine.TryGetByName("sysbus.watchdog", out wd))
@@ -475,15 +521,13 @@ namespace Antmicro.Renode.Peripherals.SPI
             // after the reset event: port shadows back to the reset values, boot hook re-armed
             try
             {
-                lock(sync)
+                for(int port = 0; port < 11; port++)
                 {
-                    for(int port = 0; port < 11; port++)
-                    {
-                        if(!shadow.ContainsKey(port)) continue;
-                        ulong b = 0x58020000UL + 0x400UL * (ulong)port;
-                        shadow[port] = new uint[] { machine.SystemBus.ReadDoubleWord(b), machine.SystemBus.ReadDoubleWord(b + 4),
-                                                    machine.SystemBus.ReadDoubleWord(b + 0x0C), machine.SystemBus.ReadDoubleWord(b + 0x14) };
-                    }
+                    if(!shadow.ContainsKey(port)) continue;
+                    ulong b = 0x58020000UL + 0x400UL * (ulong)port;
+                    var v = new uint[] { machine.SystemBus.ReadDoubleWord(b), machine.SystemBus.ReadDoubleWord(b + 4),
+                                         machine.SystemBus.ReadDoubleWord(b + 0x0C), machine.SystemBus.ReadDoubleWord(b + 0x14) };
+                    lock(sync) shadow[port] = v;
                 }
                 ArmBootHook();
             }
@@ -633,6 +677,18 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case "time": return "time " + NowUs();
                     case "ft": return FlashTiming(w);
                     case "wdt": return WatchdogReset();
+                    case "resets": return "resets " + resetCount;
+                    case "blk":
+                    {
+                        // diagnostics: the core's translation block size and the boot-phase timer
+                        foreach(var cpu in machine.SystemBus.GetCPUs())
+                        {
+                            var pr = cpu.GetType().GetProperty("MaximumBlockSize");
+                            return "blk " + (pr != null ? pr.GetValue(cpu) : "?") + " saved " + savedBlockSize
+                                + " timer " + (bootPhaseEnd == null ? "none" : bootPhaseEnd.Enabled + "/" + bootPhaseEnd.Value);
+                        }
+                        return "blk ?";
+                    }
                     case "cut": return ScheduleCut(ulong.Parse(w[1], CultureInfo.InvariantCulture));
                     case "flashdump": return FlashDump(line.Substring(10));
                     case "halt":
@@ -655,9 +711,11 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case "trace":
                         if(w.Length >= 2 && w[1] == "start")
                         {
+                            ulong startUs;
                             lock(sync)
                             {
-                                var pins = new List<string>(SafePins);
+                                startUs = NowUs();     // replayed boot events lie before it
+                                var pins = new List<string>(WatchedPins);
                                 ulong first = 0;
                                 for(int i = 2; i < w.Length; i++)
                                 {
@@ -672,7 +730,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                             }
                             sampler.Enabled = true;
                             Sample();
-                            return "ok";
+                            return "ok " + startUs;
                         }
                         lock(sync) tracing = false;
                         sampler.Enabled = false;
