@@ -560,7 +560,10 @@ class FixtureServer:
 
     OFFERED = ["hw.observe", "hw.trace", "hw.input", "ctrl.set", "time.scale",
                "net.broadcast", "net.hosts", "power.cycle", "power.cut", "reset.wdt", "link.set",
-               "dhcp.server"]
+               "dhcp.server",
+               # the operations of dhcp.server and net.endpoint by name too: the bench's
+               # fixture() looks up the operation name (cdfe899, T-A1-66 dhcp.stop)
+               "dhcp.start", "dhcp.stop", "dhcp.offer", "dhcp.nak", "dhcp.expire", "dhcp.log", "net.endpoint"]
 
     def __init__(self, agent_getter, on_power_cycle, bridge_getter=None):
         self.bridge_getter = bridge_getter
