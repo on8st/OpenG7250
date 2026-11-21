@@ -287,6 +287,10 @@ def run_bench(tbdir, endpoint_path, test, agent, wall_cap):
     t_emu0 = agent.now_us()
     t0 = time.time()
     cmd = [sys.executable, "-m", "testbench", "run", "--endpoint", endpoint_path, "--test", test["id"], "--json"]
+    # the test's params (e.g. package_slot_a/b) reach the bench as --param key=value
+    for k, v in (test.get("params") or {}).items():
+        if isinstance(v, (str, int, float)) and not isinstance(v, bool):
+            cmd += ["--param", "%s=%s" % (k, v)]
     p = subprocess.Popen(cmd, cwd=tbdir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     out = []
     threading.Thread(target=lambda: out.append(p.stdout.read()), daemon=True).start()
@@ -381,6 +385,12 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         json.dump(ep, open(ep_path, "w"), indent=2)
         wall_cap = 30.0 * float(t.get("timeout_s", 30)) + 120.0
         entries, err, emu, wall = run_bench(tbdir, ep_path, t, bt.agent, wall_cap)
+        # keep the emulator running a little after the bench ended, so a late answer to its
+        # last request is still in the capture and the logs (G7250_GRACE_S, default 5 s wall)
+        try:
+            time.sleep(float(os.environ.get("G7250_GRACE_S", "5")))
+        except ValueError:
+            pass
         nm = pr.not_modelled(bt.log) if os.path.isfile(bt.log) else []
         macraw = macraw_seen(bt.log)
         if macraw:

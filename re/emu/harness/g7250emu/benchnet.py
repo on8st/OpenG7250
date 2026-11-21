@@ -141,9 +141,9 @@ class Bridge:
         self.pcap.udp(src_ip, 67, dst_ip, dport, payload, False)
         if self.ch is None:
             return
-        frame = socket.inet_aton(src_ip) + struct.pack("!HHB", 67, dport, 1 if broadcast else 0) + payload
+        frame = struct.pack("!Q", int(time.time() * 1e6)) + socket.inet_aton(src_ip) + struct.pack("!HHB", 67, dport, 1 if broadcast else 0) + payload
         try:
-            self.ch.sendall(struct.pack("!BH", 2, len(frame)) + frame)
+            self.ch.sendall(struct.pack("!BH", 7, len(frame)) + frame)
         except OSError:
             pass
 
@@ -310,10 +310,11 @@ class Bridge:
                     continue
                 bcast = kind != "connect"
                 dst = self.radio_ip if not bcast else ("255.255.255.255" if kind == "limited" else self.directed)
+                cap_us = int(time.time() * 1e6)       # the capture time, passed on for host_delay_us
                 self.pcap.udp(h["ip"], lport, dst, rport, data, False)
-                payload = socket.inet_aton(h["ip"]) + struct.pack("!HHB", lport, rport, 1 if bcast else 0) + data
+                payload = struct.pack("!Q", cap_us) + socket.inet_aton(h["ip"]) + struct.pack("!HHB", lport, rport, 1 if bcast else 0) + data
                 try:
-                    self.ch.sendall(struct.pack("!BH", 2, len(payload)) + payload)
+                    self.ch.sendall(struct.pack("!BH", 7, len(payload)) + payload)
                     self.stats["to_radio"] += 1
                 except OSError:
                     self.stats["unroutable"] += 1
@@ -812,10 +813,23 @@ class FixtureServer:
         if op == "time.advance":
             if not agent:
                 return {"ok": False, "error": "emulator not ready"}
-            r = agent.ask("advance %d" % int(args.get("us", 0)), timeout=3700)
-            if not r or not r.startswith("ok "):
-                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
-            return {"ok": True, "value": {"t_us": int(r.split()[1])}}
+            r0 = agent.ask("advance_on", timeout=30)
+            if not r0 or not r0.startswith("ok "):
+                return {"ok": False, "error": (r0 or "emulator not ready").replace("err ", "", 1)}
+            target = int(r0.split()[1]) + int(args.get("us", 0))
+            now = 0
+            t_end = time.time() + 3600
+            try:
+                while time.time() < t_end:
+                    now = agent.now_us() or 0
+                    if now >= target:
+                        break
+                    time.sleep(0.05)
+            finally:
+                agent.ask("advance_off", timeout=30)
+            if now < target:
+                return {"ok": False, "error": "advance timed out at %d us" % now}
+            return {"ok": True, "value": {"t_us": now}}
         if op == "sock.log":
             action = args.get("action")
             if action not in ("start", "read", "stop"):

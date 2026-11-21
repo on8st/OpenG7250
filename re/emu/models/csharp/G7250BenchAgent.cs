@@ -429,20 +429,53 @@ namespace Antmicro.Renode.Peripherals.SPI
             return "ok " + at;
         }
 
-        // advance <us>: emulated time skips idle time (advance immediately) until now + us
-        private string AdvanceCommand(string[] w)
+        // advance_on / advance_off: Renode's GLOBAL advance-immediately (the master and every
+        // machine's time source, as the monitor's "emulation SetGlobalAdvanceImmediately");
+        // the fixture server switches it on, polls the emulated time to the target and
+        // switches it off, so other fixture calls are answered during an advance
+        // the 50 us pin sampler gives the clock an event every 50 us, so no idle time could be
+        // skipped: it pauses during an advance and samples once at its end
+        private bool samplerBeforeAdvance;
+
+        // After an advance the emulated time is ahead of the host time the time source paces
+        // against (its stopwatches), and in normal mode Renode would stall until the host
+        // caught up. The stopwatches are moved forward by the time gained, so the emulation
+        // goes on at real time from where the advance ended.
+        private void CatchUpHostClock()
         {
-            ulong target = NowUs() + ulong.Parse(w[1], CultureInfo.InvariantCulture);
             var mts = Antmicro.Renode.Core.EmulationManager.Instance.CurrentEmulation.MasterTimeSource;
-            bool before = mts.AdvanceImmediately;
-            mts.AdvanceImmediately = true;
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            try
-            {
-                while(NowUs() < target && sw.Elapsed.TotalSeconds < 3600) System.Threading.Thread.Sleep(2);
-            }
-            finally { mts.AdvanceImmediately = before; }
-            return NowUs() >= target ? "ok " + NowUs() : "err advance timed out at " + NowUs();
+            double virtUs = mts.ElapsedVirtualTime.TotalMicroseconds;
+            for(var ty = mts.GetType(); ty != null && ty != typeof(object); ty = ty.BaseType)
+                foreach(var fi in ty.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public))
+                {
+                    if(fi.FieldType != typeof(System.Diagnostics.Stopwatch)) continue;
+                    var sw = fi.GetValue(mts) as System.Diagnostics.Stopwatch;
+                    if(sw == null) continue;
+                    double aheadUs = virtUs - sw.Elapsed.TotalMilliseconds * 1000.0;
+                    if(aheadUs <= 0) continue;
+                    long add = (long)(aheadUs * 1e-6 * System.Diagnostics.Stopwatch.Frequency);
+                    var ef = typeof(System.Diagnostics.Stopwatch).GetField("_elapsed", BindingFlags.Instance | BindingFlags.NonPublic)
+                          ?? typeof(System.Diagnostics.Stopwatch).GetField("elapsed", BindingFlags.Instance | BindingFlags.NonPublic);
+                    if(ef == null) { this.Log(LogLevel.Warning, "agent: cannot move the host stopwatch (no elapsed field)"); continue; }
+                    ef.SetValue(sw, (long)ef.GetValue(sw) + add);
+                }
+        }
+
+        private string Advance(bool on)
+        {
+            if(on) { samplerBeforeAdvance = sampler.Enabled; sampler.Enabled = false; }
+            else if(samplerBeforeAdvance) { sampler.Enabled = true; Sample(); }
+            if(!on) CatchUpHostClock();
+            var emu = Antmicro.Renode.Core.EmulationManager.Instance.CurrentEmulation;
+            var setGlobal = emu.GetType().GetMethod("SetGlobalAdvanceImmediately");
+            if(setGlobal != null) setGlobal.Invoke(emu, new object[] { on });
+            else emu.MasterTimeSource.AdvanceImmediately = on;
+            // the machine's own time source as well (a slave of the master)
+            var lts = machine.LocalTimeSource;
+            var pr = lts.GetType().GetProperty("AdvanceImmediately");
+            if(pr != null && pr.CanWrite) pr.SetValue(lts, on);
+            return "ok " + NowUs() + " global=" + (setGlobal != null) + " master=" + emu.MasterTimeSource.AdvanceImmediately
+                + " local=" + (pr != null ? pr.GetValue(lts) : "n/a") + " localtype=" + lts.GetType().Name;
         }
 
         // ---- events from other models (CH394 link) ----
@@ -1056,7 +1089,20 @@ namespace Antmicro.Renode.Peripherals.SPI
                             + ", \"after_boot_us\": " + (firstIdrReadUs - firstIdrBootUs) + ", \"port\": \"" + firstIdrPort + "\"}";
                     case "force": return ForceCommand(w);
                     case "dacforce": return DacForceCommand(w);
-                    case "advance": return AdvanceCommand(w);
+                    case "tsfields":     // diagnostics: the master time source's fields
+                    {
+                        var mts = Antmicro.Renode.Core.EmulationManager.Instance.CurrentEmulation.MasterTimeSource;
+                        var sb = new StringBuilder("ok");
+                        for(var ty = mts.GetType(); ty != null && ty != typeof(object); ty = ty.BaseType)
+                            foreach(var fi in ty.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public))
+                            {
+                                object v = null; try { v = fi.GetValue(mts); } catch(Exception) { }
+                                sb.Append(" | " + ty.Name + "." + fi.Name + ":" + fi.FieldType.Name + "=" + (v == null ? "null" : v.ToString().Replace(" ", "_")));
+                            }
+                        return sb.ToString();
+                    }
+                    case "advance_on": return Advance(true);
+                    case "advance_off": return Advance(false);
                     case "socklog":
                     {
                         var r = Call(Ch394(), "SockLogRead", w.Length > 1 ? int.Parse(w[1], CultureInfo.InvariantCulture) : 0);

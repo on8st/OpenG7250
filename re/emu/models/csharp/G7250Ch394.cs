@@ -78,6 +78,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         private static string Ip(byte[] b, int o) { return b[o] + "." + b[o + 1] + "." + b[o + 2] + "." + b[o + 3]; }
 
         private long curShift;      // the delivery shift of the datagram being delivered (0 = on its spacing)
+        private static double WallNow() { return (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds; }
         private double curWall;     // its host wall-clock arrival, epoch seconds (matches the bench's burst windows)
 
         private void NetRecord(string dir, int n, int radioPort, string peer, byte[] data, int off, int len, string reason = null)
@@ -89,7 +90,8 @@ namespace Antmicro.Renode.Peripherals.SPI
                 + (reason != null ? ", \"reason\": \"" + reason + "\"" : "")
                 + (dir != "from_radio" && curShift != 0 ? ", \"shift_us\": " + curShift : "")
                 + (dir != "from_radio" && curWall > 0 ? ", \"t_wall\": " + curWall.ToString("F6", System.Globalization.CultureInfo.InvariantCulture) : "")
-                + (dir != "from_radio" && curInjected ? ", \"injected\": true" : "") + "}";
+                + (dir != "from_radio" && curInjected ? ", \"injected\": true" : "")
+                + (dir != "from_radio" && curWall > 0 ? ", \"host_delay_us\": " + (long)((WallNow() - curWall) * 1e6) : "") + "}";
             if(runLog.Count >= 200000) runLogDropped++; else runLog.Add(e);
             if(!netLogOn) return;
             if(netLog.Count >= LogCap) { netLogDropped++; return; }
@@ -455,9 +457,9 @@ namespace Antmicro.Renode.Peripherals.SPI
             return double.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out d) && d > 0 ? d : 1.0;
         }
 
-        private void Arrive(byte[] p)
+        private void Arrive(byte[] p, double captureWall = 0)
         {
-            double wall = (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+            double wall = captureWall > 0 ? captureWall : (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
             if(machine == null) { Deliver(p, 0, wall); return; }
             double host = hostClock.Elapsed.TotalMilliseconds * 1000.0;
             ulong now = NowUs();
@@ -628,6 +630,15 @@ namespace Antmicro.Renode.Peripherals.SPI
                     var p = new byte[len];
                     if(!ReadFull(p, len)) break;
                     if(head[0] == 2) Arrive(p);
+                    else if(head[0] == 7 && p.Length >= 8)
+                    {
+                        // the bridge's capture time (epoch us) in front of the datagram
+                        ulong cap = 0;
+                        for(int i = 0; i < 8; i++) cap = (cap << 8) | p[i];
+                        var q = new byte[p.Length - 8];
+                        Array.Copy(p, 8, q, 0, q.Length);
+                        Arrive(q, cap / 1e6);
+                    }
                 }
             }
             catch(Exception) { }
