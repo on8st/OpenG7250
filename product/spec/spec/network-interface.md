@@ -149,8 +149,8 @@ Table A1-2 — Management commands (0020 §27)
 | 0x0001 | `IDENTIFY` | no | A1.5 |
 | 0x0002 | `GET_STATS` | no | packet, error and gap counters (B11) |
 | 0x0010 | `GET_CHALLENGE` | no | fresh challenge for one authenticated request (A1.10) |
-| 0x0011 | `SET_FIRST_SECRET` | no (window only) | A1.10 |
-| 0x0012 | `CHANGE_SECRET` | yes | A1.10 |
+| 0x0011 | `SET_FIRST_SECRET` | no (window only) | A1.10; refused with status 50 while armed or keyed (B2.3, "Flash work"; 0055) |
+| 0x0012 | `CHANGE_SECRET` | yes | A1.10; refused with status 50 while armed or keyed (B2.3, "Flash work"; 0055) |
 | 0x0013 | `END_WRITE_SESSION` | yes | releases the write session (A1.10) |
 | 0x0020, 0x0021 | `GET_CONFIG`, `SET_CONFIG` | no, yes | A1.6 |
 | 0x0022 | `FACTORY_RESET` | yes | A1.6 C-5; scope Table A1-4 (0022 §60) |
@@ -1739,7 +1739,24 @@ G7250 MUST process without loss:
 2. a sequence of any length in which the packets arrive at least 1 ms apart.
 
 These figures hold at the SPI clock known to work and do not depend on P-NET-1; a faster clock
-(up to 62 MHz, [CH394]) only adds margin. A host SHOULD NOT send High Priority packets closer
+(up to 62 MHz, [CH394]) only adds margin.
+
+**Flash work** (0055). Writing or erasing the MCU's flash can stall the processor for up to a
+few seconds (a sector erase). While a management write that writes flash (`SET_CONFIG`,
+`SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET`, `SET_CALIBRATION`, `CLEAR_CALIBRATION`,
+and a compaction of the store that such a write needs), or a firmware update (A1.8) is in
+progress, the rules above do not apply: High Priority packets beyond the two that port 1027
+holds may be lost, and a P2 session may end by its watchdog (B5.6) and be restarted by the host
+(B5.4). To keep this away from transmit:
+
+- flash work MUST NOT start while TX is armed or keyed on any level: a `SET_CONFIG` while armed
+  first unkeys and disarms (A1.6), the other writes are refused with status 50 while armed or
+  keyed, and updates are refused as A1.8 says;
+- the G7250 MUST NOT start flash work on its own while a P2 session runs, except the trial-boot
+  confirmation (A1.8), which happens while no arm is possible (`MAINTENANCE`); a store compaction
+  runs only as part of the management write that needs it;
+- the host learns of it from the management reply, which is sent after the flash work has
+  ended, and from the update state (`UPDATE_STATUS`, `IDENTIFY`). A host SHOULD NOT send High Priority packets closer
 than 1 ms apart, except a stop or run directly after another packet, which item 1 covers.
 
 B2.4 **Remote endpoint.** The G7250 MUST reply to the discovery from local port 1024 to the
@@ -3837,7 +3854,8 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-17 | Host A streams DDC0 at 192 ksps on 7.1 MHz with PA enable and CW select set; its C&C is cut for 1.5 s (watchdog standby), after which it continues its High Priority keepalive with run = 1 unchanged: the first packet restarts the session without a run 0→1 edge, DDC0 resumes at 192 ksps on 7.1 MHz with sequence numbers continuing from before the standby, PA enable and CW select read cleared (Table A3-4), and an arm is rejected with `WATCHDOG_DISABLED` until A sends a General packet with byte 38 bit [0] set, then accepted (A2.3, B5.4, B2.7). The same after a link loss and return to 100 Mbit/s; after a stop and run the counters start at 0. |
 | T-B5-18 | After host A's session ends by a watchdog standby, a run bit alone from host B gives DDC0 `STREAM_STATUS` reason 1 and counters starting at 0; A's RX settings are not used for B (B5.4 item 3, B2.7). |
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
-| T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost (emulator, at the SPI clock known to work; B2.3 "High Priority bursts", Table B2-2; 0053, 0054). |
+| T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 "High Priority bursts", Table B2-2; 0053, 0054). |
+| T-B5-21 | While armed: `SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET` (as a commanded reset, A1.9) and `SET_CALIBRATION` get status 50 or first unkey and disarm as their rules say, and no flash work starts while TX is armed or keyed; unarmed, a `SET_CONFIG` is answered only after its flash write has ended (emulator; B2.3 "Flash work"; 0055). |
 
 ### Streams (B6)
 
