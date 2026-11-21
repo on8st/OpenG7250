@@ -4,15 +4,20 @@
 //!
 //! Runs from 0x08020000, where the vendor bootloader starts an application ([HIS] HIS 10).
 //! Order: safe state first ([HIS] HIS 85), then clocks on HSI, console, watchdog, then the slot
-//! choice. It never writes flash in milestone F1; it is never updated over the network (0008 U-7).
+//! choice. It writes only the boot record in the store (sectors 6-7), through the flash guard as
+//! `Writer::BootStage`: a trial attempt before a trial start, a rollback (A1.8 U-6;
+//! `g7250_update::boot`). Never sector 0, the option bytes, the EEPROM or the Backup SRAM
+//! ([HIS] HIS 15). It is never updated over the network (0008 U-7).
 #![no_std]
 #![no_main]
 
 use cortex_m_rt::entry;
 use g7250_board::{FW_BETA, FW_MAJOR, FW_MINOR, FW_BUILD, FW_VERSION, console, early_init, println, reset, safe, wdg};
 use g7250_layout::header::{self, Header, Kind};
-use g7250_layout::select::{self, Choice};
-use g7250_layout::{BOOT_STAGE, Range, STORE, Slot};
+use g7250_board::flash::RawFlash;
+use g7250_layout::select::Choice;
+use g7250_layout::{BOOT_STAGE, Range, Slot, Writer};
+use g7250_store::Store;
 
 #[unsafe(link_section = ".image_header")]
 #[used]
@@ -71,7 +76,6 @@ fn main() -> ! {
     wdg::start();
     println!("boot: safe state held, watchdog {} ms", wdg::TIMEOUT_MS);
 
-    let record = select::last_record(flash(STORE));
     let valid = |s: Slot| {
         let r = s.range();
         match header::validate(flash(r), Kind::Application, r, APP_RAM) {
@@ -82,17 +86,38 @@ fn main() -> ! {
             }
         }
     };
-    let mut choice = select::choose(record, &valid);
-    if let Choice::Trial(_) = choice {
-        // F1 does not write the boot record, so it cannot count a trial attempt. Without that
-        // count a broken trial image would be restarted for ever; start the active slot instead.
-        println!("boot: trial boot not supported in this boot stage; using the active slot");
-        let r = record.map(|r| select::BootRecord { trial: None, ..r });
-        choice = select::choose(r, &valid);
-    }
+    let (va, vb) = (valid(Slot::A), valid(Slot::B));
+    let valid = |s: Slot| if s == Slot::A { va } else { vb };
+    let choice = match Store::open(RawFlash::new(Writer::BootStage), Writer::BootStage) {
+        Ok(mut store) => {
+            let before = g7250_update::boot::load(&mut store).ok().flatten();
+            if let Some(r) = before {
+                println!(
+                    "boot: record active {} trial {} attempts {} confirmed {} seq {}",
+                    slot_name(r.active),
+                    r.trial.map(slot_name).unwrap_or("-"),
+                    r.attempts_left,
+                    r.confirmed,
+                    r.seq
+                );
+            }
+            let c = g7250_update::boot::boot_stage(&mut store, valid);
+            let after = g7250_update::boot::load(&mut store).ok().flatten();
+            if after.is_some_and(|r| r.rolled_back) && before.is_some_and(|r| !r.rolled_back) {
+                println!("boot: trial not confirmed: rolled back (U-6)");
+            }
+            c
+        }
+        Err(e) => {
+            // No record can be read or written: no trial (it could not be counted).
+            println!("boot: store not readable ({:?}); no trial boot", e);
+            g7250_layout::select::choose(None, valid)
+        }
+    };
     match choice {
         Choice::Boot(s) | Choice::Trial(s) => {
-            println!("boot: starting slot {} at {:#010x}", slot_name(s), s.range().start);
+            let trial = if matches!(choice, Choice::Trial(_)) { " as a trial" } else { "" };
+            println!("boot: starting slot {}{} at {:#010x}", slot_name(s), trial, s.range().start);
             console::flush();
             // SAFETY: the slot holds a sealed application linked for this address, checked above.
             unsafe { jump(s.range().start) }

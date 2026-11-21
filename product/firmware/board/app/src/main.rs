@@ -137,8 +137,7 @@ async fn main(spawner: Spawner) {
     }
     // Non-volatile store in sector 7: boot counter (B10.2 item 5), secret, configuration,
     // calibration set. A store that cannot be opened is reported and the radio runs on defaults.
-    let flash = embassy_stm32::flash::Flash::new_blocking(p.FLASH);
-    let mut store = match g7250_store::Store::open(nv::BoardFlash { flash, writer: nv::writer_for(SLOT) }, nv::writer_for(SLOT)) {
+    let mut store = match g7250_store::Store::open(nv::BoardFlash::new(nv::writer_for(SLOT)), nv::writer_for(SLOT)) {
         Ok(s) => Some(s),
         Err(e) => {
             println!("app: FAULT store in sector 7 cannot be read ({:?}); running on defaults", e);

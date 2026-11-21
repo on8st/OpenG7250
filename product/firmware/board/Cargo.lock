@@ -614,6 +614,7 @@ dependencies = [
  "cortex-m",
  "g7250-layout",
  "g7250-safety",
+ "g7250-store",
  "stm32-metapac",
 ]
 
@@ -626,6 +627,8 @@ dependencies = [
  "g7250-board",
  "g7250-layout",
  "g7250-safety",
+ "g7250-store",
+ "g7250-update",
 ]
 
 [[package]]
@@ -668,6 +671,15 @@ name = "g7250-store"
 version = "0.1.0"
 dependencies = [
  "g7250-layout",
+]
+
+[[package]]
+name = "g7250-update"
+version = "0.1.0"
+dependencies = [
+ "g7250-layout",
+ "g7250-store",
+ "sha2",
 ]
 
 [[package]]

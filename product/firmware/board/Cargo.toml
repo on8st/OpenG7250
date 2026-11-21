@@ -17,6 +17,7 @@ g7250-safety = { path = "../crates/safety" }
 g7250-proto = { path = "../crates/proto" }
 g7250-ch394 = { path = "../crates/ch394" }
 g7250-store = { path = "../crates/store" }
+g7250-update = { path = "../crates/update" }
 g7250-radio = { path = "../crates/radio" }
 g7250-board = { path = "common" }
 cortex-m = { version = "0.7.10", features = ["critical-section-single-core", "inline-asm"] }

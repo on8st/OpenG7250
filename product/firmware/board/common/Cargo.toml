@@ -10,5 +10,6 @@ publish.workspace = true
 [dependencies]
 g7250-safety = { workspace = true }
 g7250-layout = { workspace = true }
+g7250-store = { workspace = true }
 cortex-m = { workspace = true }
 stm32-metapac = { workspace = true }

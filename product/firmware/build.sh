@@ -32,7 +32,8 @@ cp "$rel/g7250-boot" "$out/g7250-boot.elf"
 cp "$rel/g7250-app" "$out/g7250-app-a.elf"
 cp "$relb/g7250-app" "$out/g7250-app-b.elf"
 
-echo "== flash erase runs from RAM"
+echo "== flash erase and program run from RAM"
+sh board/check-ramfunc.sh "$out/g7250-boot.elf"
 sh board/check-ramfunc.sh "$out/g7250-app-a.elf"
 sh board/check-ramfunc.sh "$out/g7250-app-b.elf"
 
