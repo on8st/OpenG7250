@@ -16,40 +16,45 @@
 //! ECC, and a read of such a word is a bus error (RM0468, RAMECC). So every read is of a block
 //! this application wrote since power-up.
 //!
-//! How: two slots, each `[magic, sequence, value, check]`; a write goes to the slot that is not
-//! the newest valid one, so a reset in the middle of a write leaves the other slot whole.
+//! How: two slots, each two 64-bit words `[magic, sequence | value, check]`; a write goes to the
+//! slot that is not the newest valid one, so a reset in the middle of a write leaves the other
+//! slot whole.
 
 use core::ptr::{addr_of_mut, read_volatile, write_volatile};
 
 const MAGIC: u32 = 0x4737_5043; // "G7PC"
 
+/// Two slots of two 64-bit words: `[magic | sequence << 32, value | check << 32]`. The AXI SRAM
+/// has a 64-bit ECC word: it is written in whole, aligned 64-bit words only ([HIS] HIS 10,
+/// MEDIUM), never in halves, so no write merges into a word whose ECC was never set.
 #[unsafe(link_section = ".persist")]
-static mut BLOCK: core::mem::MaybeUninit<[[u32; 4]; 2]> = core::mem::MaybeUninit::uninit();
+static mut BLOCK: core::mem::MaybeUninit<[[u64; 2]; 2]> = core::mem::MaybeUninit::uninit();
 
 fn check(seq: u32, v: u32) -> u32 {
     !(v ^ seq.rotate_left(16)) ^ MAGIC
 }
 
-fn slot(i: usize) -> *mut [u32; 4] {
+fn slot(i: usize) -> *mut u64 {
     // SAFETY: a static of this module; only raw pointers, read and written volatile.
-    unsafe { (addr_of_mut!(BLOCK) as *mut [u32; 4]).add(i) }
+    unsafe { (addr_of_mut!(BLOCK) as *mut [u64; 2]).add(i) as *mut u64 }
 }
 
 fn read(i: usize) -> Option<(u32, u32)> {
-    // SAFETY: `slot` points into the `.persist` block; volatile, as it outlives the program.
-    let s = unsafe { read_volatile(slot(i)) };
-    (s[0] == MAGIC && s[3] == check(s[1], s[2])).then_some((s[1], s[2]))
+    // SAFETY: `slot` points into the `.persist` block (8-aligned); volatile, as it outlives the
+    // program.
+    let (w0, w1) = unsafe { (read_volatile(slot(i)), read_volatile(slot(i).add(1))) };
+    let (magic, seq) = (w0 as u32, (w0 >> 32) as u32);
+    let (v, c) = (w1 as u32, (w1 >> 32) as u32);
+    (magic == MAGIC && c == check(seq, v)).then_some((seq, v))
 }
 
 fn write(i: usize, seq: u32, v: u32) {
-    // SAFETY: as `read`; each slot is written whole, magic last.
+    // SAFETY: as `read`. Value and check first, magic and sequence last: a reset between the
+    // two leaves a check that does not match the sequence, so this slot is invalid and the other
+    // one is used.
     unsafe {
-        let p = slot(i) as *mut u32;
-        write_volatile(p, 0);
-        write_volatile(p.add(1), seq);
-        write_volatile(p.add(2), v);
-        write_volatile(p.add(3), check(seq, v));
-        write_volatile(p, MAGIC);
+        write_volatile(slot(i).add(1), v as u64 | (check(seq, v) as u64) << 32);
+        write_volatile(slot(i), MAGIC as u64 | (seq as u64) << 32);
     }
 }
 

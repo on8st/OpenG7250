@@ -25,7 +25,7 @@ SECTIONS
 /* Kept over a reset, never initialised by the start code (persist.rs checks it). */
 SECTIONS
 {
-  .persist (NOLOAD) : ALIGN(4)
+  .persist (NOLOAD) : ALIGN(8)
   {
     KEEP(*(.persist .persist.*));
   } > PERSIST
