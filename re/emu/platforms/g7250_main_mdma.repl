@@ -1,0 +1,7 @@
+// g7250_main_mdma.repl — generic MDMA (models/csharp/G7250Mdma.cs,
+// docs/MDMA-model.md); Renode 1.17 has no MDMA model.
+// MDMA global interrupt 122 (ST RM0468 vector table). Hardware trigger inputs
+// (GPIO numbers = CTBR.TSEL) are left unconnected until a source is modelled.
+// Load after `i @models/csharp/G7250Mdma.cs`.
+mdma: DMA.G7250Mdma @ sysbus <0x52000000, +0x1000>
+    0 -> nvic@122

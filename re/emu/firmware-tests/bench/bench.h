@@ -7,6 +7,7 @@
 
 #define REG(a) (*(volatile uint32_t *)(a))
 #define RCC_BASE      0x58024400u
+#define RCC_AHB3ENR   REG(RCC_BASE + 0xD4)
 #define RCC_AHB1ENR   REG(RCC_BASE + 0xD8)
 #define RCC_AHB4ENR   REG(RCC_BASE + 0xE0)
 #define RCC_APB1LENR  REG(RCC_BASE + 0xE8)

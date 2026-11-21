@@ -50,7 +50,7 @@ GENERIC = [
     ("repl", P("platforms", "g7250_main_i2c1_func.repl")),
     ("repl", P("platforms", "g7250_main_spi6_ch394.repl")),
     ("cs", P("models", "csharp", "G7250Mdma.cs")),
-    ("str", 'mdma: Antmicro.Renode.Peripherals.DMA.G7250Mdma @ sysbus <0x52000000, +0x1000>'),
+    ("repl", P("platforms", "g7250_main_mdma.repl")),
     ("cs", P("models", "csharp", "G7250Dma.cs")),
     ("cmd", "sysbus Unregister sysbus.dma1"),
     ("cmd", "sysbus Unregister sysbus.dma2"),

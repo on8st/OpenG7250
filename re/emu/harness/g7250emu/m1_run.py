@@ -26,6 +26,7 @@ REPL_FPGA = os.path.join(REPO, "platforms", "g7250_main_fpga.repl")
 CS_GPIOE = os.path.join(REPO, "models", "csharp", "G7250Gpioe.cs")
 CS_SLAVES = os.path.join(REPO, "models", "csharp", "G7250Slaves.cs")
 CS_MDMA = os.path.join(REPO, "models", "csharp", "G7250Mdma.cs")
+REPL_MDMA = os.path.join(REPO, "platforms", "g7250_main_mdma.repl")
 CS_PA = os.path.join(REPO, "models", "csharp", "G7250PaPlant.cs")
 CS_DMA = os.path.join(REPO, "models", "csharp", "G7250Dma.cs")
 REPL_DMA = os.path.join(REPO, "platforms", "g7250_main_dma.repl")
@@ -66,8 +67,7 @@ def build_resc(image_path, log_path, fpga=False):
         # polled software-request MDMA (docs/MDMA-model.md): the DSP's MDMA
         # copies/fills must complete, or every poll runs into its timeout.
         'i @%s' % CS_MDMA,
-        'machine LoadPlatformDescriptionFromString "mdma: '
-        'Antmicro.Renode.Peripherals.DMA.G7250Mdma @ sysbus <0x52000000, +0x1000>"',
+        'machine LoadPlatformDescription @%s' % REPL_MDMA,
         # generic DMA1/DMA2 with circular mode (docs/DMA-model.md) in place of
         # Renode's STM32DMA; dmamux1 is re-wired to the new streams.
         'i @%s' % CS_DMA,

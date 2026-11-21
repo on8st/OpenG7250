@@ -27,22 +27,47 @@ g7250-base `docs/dma.md` and `main_unit/docs/memory_map.md` (VERIFIED):
 - the copy helper falls back to a CPU copy when the MDMA is busy and does its own
   D-cache maintenance.
 
-## What the model does
+## What the model does (since step 1d, 2026-11-21)
 
-Register layout per ST RM0468 (public): channel x at 0x40 + 0x40·x with CISR,
-CIFCR, CESR, CCR, CTCR, CBNDTR, CSAR, CDAR, CBRUR, CLAR, CTBR, CMAR, CMDR; GISR0
-at 0x00.
+Generic, per ST RM0468 (public); step 1d of `docs/PRODUCT-TESTBENCH-PLAN.md`.
+Loaded with `platforms/g7250_main_mdma.repl` (interrupt 122) by `m1_run.py`
+and `product_run.py`.
 
-- Writing CCR with EN and SWRQ set performs the whole transfer at once: BNDT
-  bytes per block, BRC + 1 blocks, element sizes and increments from CTCR
-  (SINC/DINC, SSIZE/DSIZE, SINCOS/DINCOS).
-- Then it sets CTCIF, BRTIF, BTIF and TCIF, clears EN and BNDT. CIFCR clears flags.
-- Element sizes that differ between source and destination fall back to a
-  byte-wise copy.
+- 16 channels at 0x40 + 0x40·x (CISR, CIFCR, CESR, CCR, CTCR, CBNDTR, CSAR,
+  CDAR, CBRUR, CLAR, CTBR, CMAR, CMDR) and GISR0.
+- Requests: software (CTCR.SWRM with a CCR write that sets SWRQ while EN) or a
+  hardware trigger on GPIO input TSEL (CTBR.TSEL). No trigger source is
+  connected yet; a product image that uses one gets "not modelled".
+- Each request transfers one unit of CTCR.TRGM: a buffer (TLEN + 1 bytes), a
+  block (BNDT bytes), a repeated block (BRC + 1 blocks, with the CBRUR source
+  and destination updates and BRSUM/BRDUM) or the whole channel transfer
+  including linked-list nodes.
+- Increment, decrement or fixed addresses with SINCOS/DINCOS; different source
+  and destination element sizes are packed through a byte stream.
+- Flags TCIF, BTIF, BRTIF, CTCIF and TEIF (with CESR) on an unmapped address;
+  EN cleared at channel completion; one interrupt line from the enables.
+- Linked list: at the end of a node with CLAR ≠ 0 the next node is loaded from
+  memory (CTCR, CBNDTR, CSAR, CDAR, CBRUR, CLAR, CTBR, reserved, CMAR, CMDR).
+- Configuration registers are writable only while the channel is disabled.
 
 ## Not modelled (assumptions)
 
-Hardware triggers, linked lists (CLAR), repeated-block address updates (CBRUR),
-exact packing semantics, transfer timing (the transfer is instantaneous in
-virtual time), interrupts and bus errors. None of these is used by the stock Main
-according to the analysis; if one is, the model will be wrong there.
+Transfer timing (each unit is instantaneous in virtual time), bursts, bus
+selection, priorities, mask writes (CMAR/CMDR), endianness exchange
+(BEX/HEX/WEX), padding and alignment modes beyond equal sizes or byte packing,
+buffer-wise hardware request handshakes (BWM), secure and privileged
+attributes.
+
+## Self-test
+
+`firmware-tests/bench/mdma_test.c`: buffer mode (one request per buffer),
+block mode with word-to-half-word packing, repeated block with a destination
+update, fill with a fixed source, a two-node linked list, the channel
+interrupt, and a transfer error. 10 of 10 pass. The stock Main still reaches
+its superloop on this model.
+
+## History
+
+The first version (2026-11-20) performed the whole transfer on a software
+request and was written for the stock image's use (polled, full-transfer
+trigger); it is replaced by the model above.

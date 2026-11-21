@@ -1,6 +1,6 @@
 # Plan: the emulator as test bench for the product firmware
 
-Status: plan, nothing built yet. Implements proposed decision 0007
+Status: in progress on branch `emu/bench` (see "Progress" at the end). Implements proposed decision 0007
 (`decisions/0007-emulator-as-test-bench.md`, on the umbrella branch).
 
 ## Goal
@@ -144,3 +144,18 @@ also gets a product-style test. Total about 11–15 sessions.
   Embassy test ELFs.
 - Where the result file goes for the product side (a path in `testbench/` or a
   CI artifact later, per 0007).
+
+## Progress (branch emu/bench)
+
+| Step | State | Commit |
+| --- | --- | --- |
+| 1a DMA1/DMA2 | done | e9b71e8 |
+| 1b DMAMUX1 | done (Renode's model, routing verified) | e9b71e8 |
+| Runner skeleton + smoke ELF | done (`--selftest` lists) | e9b71e8 |
+| 1e USART2 RX/TX through the DMA | done; RX ring shim removed | 91de8ef |
+| 1c ADC1 | done | fc15adf |
+| 2 PA (bus/pin level) | done; stock metering feed removed | 9e53770 |
+| 1f stock-only shims | done: none left in the models; the fused GPIOE+FPGA port is loaded only for stock runs (`--fpga`) and is replaced in step 2 FPGA | this table |
+| 1d MDMA | done | (this commit) |
+| 2 FPGA | next | |
+| 3 product runner (g7250-testlist v1) | after 2 FPGA; format being agreed with the testbench side | |
