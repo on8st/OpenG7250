@@ -28,16 +28,12 @@ fn version_of(v: u32) -> Version {
     Version { major: (v >> 24) as u8, minor: (v >> 16) as u8, build: v as u16 }
 }
 
-fn flash(r: Range) -> &'static [u8] {
-    // SAFETY: on-chip flash, always mapped and readable.
-    unsafe { core::slice::from_raw_parts(r.start as *const u8, r.len() as usize) }
-}
-
 /// Integrity code of Table M-2 tag 9 (0 none: erased header, 1 good, 2 bad) and the version.
 fn image_state(kind: ImageKind, r: Range) -> (u8, Version) {
     const RAM: Range = Range::new(0x2400_0000, 0x2402_0000);
     let h = HEADER_OFFSET as usize;
-    let image = flash(r);
+    // An unreadable (ECC) word anywhere in the area: integrity bad (R0), and no slice read.
+    let Ok(image) = g7250_board::flash::mapped(r) else { return (2, Version::default()) };
     if image[h..h + 4].iter().all(|&b| b == 0xFF) {
         return (0, Version::default());
     }

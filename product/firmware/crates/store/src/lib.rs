@@ -24,7 +24,8 @@
 //! The live sector is the one whose newest commit has the highest generation; with no commit
 //! anywhere (a fresh unit, or a store written before commits existed) sector 7 is live as
 //! generation 0. Records are appended to the live sector; the newest valid record of each kind
-//! wins; a torn record fails its CRC and is skipped.
+//! wins; a torn record fails its CRC and is skipped. A flash word that cannot be read at all (a
+//! double ECC error, [`FlashIo::unreadable`]) is skipped the same way, and never written again.
 //!
 //! Compaction, when the live sector is full: (1) erase the other sector, (2) copy the newest
 //! record of every kind into it, (3) write a commit with the next generation, (4) switch to it.
@@ -72,6 +73,12 @@ impl Kind {
 pub trait FlashIo {
     type Error;
     fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), Self::Error>;
+    /// `e` from [`FlashIo::read`] means a flash word in the range could not be read (on the H7: a
+    /// double ECC error, a word torn by a power loss). The scan skips such a word like a torn
+    /// record instead of failing.
+    fn unreadable(_e: &Self::Error) -> bool {
+        false
+    }
     /// Program whole flash words at a word-aligned address. Words must be erased.
     fn program(&mut self, addr: u32, data: &[u8]) -> Result<(), Self::Error>;
     /// Erase the whole sector that starts at `addr`.
@@ -88,6 +95,9 @@ impl<T: FlashIo + ?Sized> FlashIo for &mut T {
     }
     fn erase_sector(&mut self, addr: u32) -> Result<(), Self::Error> {
         (**self).erase_sector(addr)
+    }
+    fn unreadable(e: &Self::Error) -> bool {
+        T::unreadable(e)
     }
 }
 
@@ -183,10 +193,14 @@ impl<F: FlashIo> Store<F> {
         self.live
     }
 
-    fn read_header(&mut self, addr: u32) -> Result<[u8; HEADER], Error<F::Error>> {
+    /// The header at `addr`; `None` if its flash word cannot be read.
+    fn read_header(&mut self, addr: u32) -> Result<Option<[u8; HEADER]>, Error<F::Error>> {
         let mut h = [0u8; HEADER];
-        self.io.read(addr, &mut h).map_err(Error::Io)?;
-        Ok(h)
+        match self.io.read(addr, &mut h) {
+            Ok(()) => Ok(Some(h)),
+            Err(e) if F::unreadable(&e) => Ok(None),
+            Err(e) => Err(Error::Io(e)),
+        }
     }
 
     fn check(&mut self, r: Range, addr: u32, h: &[u8; HEADER]) -> Result<Option<Found>, Error<F::Error>> {
@@ -203,7 +217,12 @@ impl<F: FlashIo> Store<F> {
         let mut at = 0usize;
         while at < len as usize {
             let n = (len as usize - at).min(buf.len());
-            self.io.read(addr + (HEADER + at) as u32, &mut buf[..n]).map_err(Error::Io)?;
+            match self.io.read(addr + (HEADER + at) as u32, &mut buf[..n]) {
+                Ok(()) => {}
+                // An unreadable word in the payload: the record is lost, as a torn one.
+                Err(e) if F::unreadable(&e) => return Ok(None),
+                Err(e) => return Err(Error::Io(e)),
+            }
             c = crc32::update(c, &buf[..n]);
             at += n;
         }
@@ -218,7 +237,12 @@ impl<F: FlashIo> Store<F> {
         let mut out = SectorScan { end: r.start, ..Default::default() };
         let mut addr = r.start;
         while addr + FLASH_WORD <= r.end {
-            let h = self.read_header(addr)?;
+            let Some(h) = self.read_header(addr)? else {
+                // Unreadable word (ECC): written, so not free; skip it like a torn word.
+                addr += FLASH_WORD;
+                out.end = addr;
+                continue;
+            };
             if h.iter().all(|&b| b == 0xFF) {
                 // Erased word: the end, or the gap after a torn write. A record never starts
                 // with an erased word, so step one word.
@@ -238,7 +262,7 @@ impl<F: FlashIo> Store<F> {
                     addr += padded(found.len as usize);
                     f(self, found)?;
                 }
-                None => addr += FLASH_WORD, // torn, foreign or partly erased word: skip it
+                None => addr += FLASH_WORD, // torn, foreign, partly erased or unreadable: skip it
             }
             out.end = addr;
         }
@@ -394,11 +418,15 @@ mod tests {
 
     /// Sectors 6 and 7 in RAM, with the rules of H7 flash: program only erased, aligned, whole
     /// words, each word once; erase whole sectors. Power can be cut after `budget` flash words,
-    /// or in the middle of an erase (`erase_cut`: the sector is left half erased).
+    /// or in the middle of an erase (`erase_cut`: the sector is left half erased). With
+    /// `ecc_on_cut` the word being programmed when the power goes (or the word at the erase
+    /// boundary) is left unreadable, as a double ECC error on the H7; `bad` marks such words.
     #[derive(Clone)]
     struct Sim {
         mem: std::vec::Vec<u8>,
         written: std::vec::Vec<bool>,
+        bad: std::vec::Vec<bool>,
+        ecc_on_cut: bool,
         budget: Option<usize>,
         erase_cut: bool,
         erases: usize,
@@ -408,13 +436,14 @@ mod tests {
     #[derive(Debug, PartialEq)]
     enum SimErr {
         PowerLost,
+        Ecc,
         Rule(&'static str),
     }
 
     impl Sim {
         fn new() -> Self {
             let n = STORE.len() as usize;
-            Sim { mem: vec![0xFF; n], written: vec![false; n / 32], budget: None, erase_cut: false, erases: 0, programs: 0 }
+            Sim { mem: vec![0xFF; n], written: vec![false; n / 32], bad: vec![false; n / 32], ecc_on_cut: false, budget: None, erase_cut: false, erases: 0, programs: 0 }
         }
         /// Power comes back: no more failures.
         fn power_on(mut self) -> Self {
@@ -428,8 +457,14 @@ mod tests {
         type Error = SimErr;
         fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), SimErr> {
             let o = (addr - STORE.start) as usize;
+            if !buf.is_empty() && self.bad[o / 32..=(o + buf.len() - 1) / 32].iter().any(|&b| b) {
+                return Err(SimErr::Ecc);
+            }
             buf.copy_from_slice(&self.mem[o..o + buf.len()]);
             Ok(())
+        }
+        fn unreadable(e: &SimErr) -> bool {
+            *e == SimErr::Ecc
         }
         fn program(&mut self, addr: u32, data: &[u8]) -> Result<(), SimErr> {
             if addr % FLASH_WORD != 0 || data.len() % FLASH_WORD as usize != 0 || !STORE.contains_span(addr, data.len() as u32) {
@@ -438,6 +473,13 @@ mod tests {
             for (i, w) in data.chunks(FLASH_WORD as usize).enumerate() {
                 if let Some(b) = self.budget.as_mut() {
                     if *b == 0 {
+                        if self.ecc_on_cut {
+                            let wi = ((addr - STORE.start) / FLASH_WORD) as usize + i;
+                            self.written[wi] = true;
+                            self.bad[wi] = true;
+                            // Half the bits made it: still neither erased nor the data.
+                            self.mem[wi * 32..wi * 32 + 16].copy_from_slice(&w[..16]);
+                        }
                         return Err(SimErr::PowerLost);
                     }
                     *b -= 1;
@@ -463,12 +505,19 @@ mod tests {
                 for w in &mut self.written[o / 32..(o + n / 2) / 32] {
                     *w = false;
                 }
+                self.bad[o / 32..(o + n / 2) / 32].fill(false);
+                if self.ecc_on_cut {
+                    // The word at the boundary was being erased: unreadable.
+                    self.bad[(o + n / 2) / 32] = true;
+                    self.written[(o + n / 2) / 32] = true;
+                }
                 return Err(SimErr::PowerLost);
             }
             self.mem[o..o + n].fill(0xFF);
             for w in &mut self.written[o / 32..(o + n) / 32] {
                 *w = false;
             }
+            self.bad[o / 32..(o + n) / 32].fill(false);
             self.erases += 1;
             Ok(())
         }
@@ -512,17 +561,64 @@ mod tests {
 
     #[test]
     fn torn_write_is_skipped_and_appending_goes_on() {
+        for ecc in [false, true] {
+            let mut sim = Sim::new();
+            sim.ecc_on_cut = ecc;
+            let mut s = Store::open(sim, APP).unwrap();
+            s.put(Kind::Config, 1, b"good").unwrap();
+            let mut io = s.release();
+            io.budget = Some(1);
+            let mut s = Store::open(io, APP).unwrap();
+            assert_eq!(s.put(Kind::Config, 1, &[9u8; 100]), Err(Error::Io(SimErr::PowerLost)));
+            let mut s = Store::open(s.release().power_on(), APP).unwrap();
+            assert_eq!(get(&mut s, Kind::Config).unwrap(), b"good");
+            s.put(Kind::Config, 1, b"after").unwrap();
+            let mut s = Store::open(s.release(), APP).unwrap();
+            assert_eq!(get(&mut s, Kind::Config).unwrap(), b"after");
+        }
+    }
+
+    #[test]
+    fn unreadable_words_anywhere_are_skipped_r0() {
+        // A word with a double ECC error in a record's header, in its payload, and in the commit
+        // of the other sector: the scan goes on, the older value of that kind wins, the store
+        // keeps working and never programs the bad word.
         let mut s = Store::open(Sim::new(), APP).unwrap();
-        s.put(Kind::Config, 1, b"good").unwrap();
+        s.put(Kind::Config, 1, b"old").unwrap();
+        s.compact().unwrap(); // sector 6, generation 1
+        s.put(Kind::Calibration, 1, &[7u8; 100]).unwrap();
+        let cal_at = s.end - padded(100);
+        s.put(Kind::Config, 1, b"new").unwrap();
+        let cfg_at = s.end - padded(3);
+        s.put(Kind::Calibration, 1, &[8u8; 100]).unwrap();
+        let cal2_at = s.end - padded(100);
         let mut io = s.release();
-        io.budget = Some(1);
+        let w = |a: u32| ((a - STORE.start) / FLASH_WORD) as usize;
+        io.bad[w(cfg_at)] = true; // header of the newest config
+        io.bad[w(cal2_at) + 2] = true; // payload of the newest calibration
         let mut s = Store::open(io, APP).unwrap();
-        assert_eq!(s.put(Kind::Config, 1, &[9u8; 100]), Err(Error::Io(SimErr::PowerLost)));
-        let mut s = Store::open(s.release().power_on(), APP).unwrap();
-        assert_eq!(get(&mut s, Kind::Config).unwrap(), b"good");
-        s.put(Kind::Config, 1, b"after").unwrap();
+        assert_eq!((s.live_sector(), s.generation()), (0, 1));
+        assert_eq!(get(&mut s, Kind::Config).unwrap(), b"old");
+        assert_eq!(get(&mut s, Kind::Calibration).unwrap(), vec![7u8; 100]);
+        assert!(cal_at < cfg_at);
+        s.put(Kind::Config, 1, b"again").unwrap();
         let mut s = Store::open(s.release(), APP).unwrap();
-        assert_eq!(get(&mut s, Kind::Config).unwrap(), b"after");
+        assert_eq!(get(&mut s, Kind::Config).unwrap(), b"again");
+        // A compaction carries the readable values over; the bad words go with the erase.
+        s.compact().unwrap();
+        let mut s = Store::open(s.release(), APP).unwrap();
+        assert_eq!(get(&mut s, Kind::Config).unwrap(), b"again");
+        assert_eq!(get(&mut s, Kind::Calibration).unwrap(), vec![7u8; 100]);
+        // An unreadable commit word in the newer sector: the older generation stays live.
+        let gen_before = s.generation();
+        let live = s.live_sector();
+        s.compact().unwrap();
+        let commit_word = s.end - padded(4);
+        let mut io = s.release();
+        io.bad[w(commit_word)] = true;
+        let mut s = Store::open(io, APP).unwrap();
+        assert_eq!((s.live_sector(), s.generation()), (live, gen_before));
+        assert_eq!(get(&mut s, Kind::Config).unwrap(), b"again");
     }
 
     #[test]
@@ -571,26 +667,29 @@ mod tests {
 
     #[test]
     fn power_loss_at_every_word_of_a_compaction_loses_nothing() {
-        let (base, n) = full_store();
-        // How many words does the compaction plus the triggering record take?
-        let mut probe = Store::open(base.clone(), APP).unwrap();
-        let before = probe.io.programs;
-        probe.next_boot_counter().unwrap();
-        let words = probe.io.programs - before;
-        assert!(words > 5);
-        for cut in 0..=words {
-            let mut io = base.clone();
-            io.budget = Some(cut);
-            let mut s = Store::open(io, APP).unwrap();
-            let r = s.next_boot_counter();
-            let io = s.release().power_on();
-            // Every value is there after the restart, whatever the cut.
-            let mut s = check_all(io, n);
-            // And the store goes on working.
-            let m = s.next_boot_counter().unwrap();
-            assert!(m > n);
-            if cut == words {
-                assert_eq!(r, Ok(n + 1));
+        for ecc in [false, true] {
+            let (mut base, n) = full_store();
+            base.ecc_on_cut = ecc;
+            // How many words does the compaction plus the triggering record take?
+            let mut probe = Store::open(base.clone(), APP).unwrap();
+            let before = probe.io.programs;
+            probe.next_boot_counter().unwrap();
+            let words = probe.io.programs - before;
+            assert!(words > 5);
+            for cut in 0..=words {
+                let mut io = base.clone();
+                io.budget = Some(cut);
+                let mut s = Store::open(io, APP).unwrap();
+                let r = s.next_boot_counter();
+                let io = s.release().power_on();
+                // Every value is there after the restart, whatever the cut.
+                let mut s = check_all(io, n);
+                // And the store goes on working.
+                let m = s.next_boot_counter().unwrap();
+                assert!(m > n);
+                if cut == words {
+                    assert_eq!(r, Ok(n + 1));
+                }
             }
         }
     }
@@ -599,8 +698,9 @@ mod tests {
     fn power_loss_during_the_erase_loses_nothing() {
         let (base, n) = full_store();
         // First compaction erases sector 6 (fresh), the second one sector 7 with old data in it.
-        for round in 0..2 {
+        for (round, ecc) in [(0, false), (1, false), (0, true), (1, true)] {
             let mut io = base.clone();
+            io.ecc_on_cut = ecc;
             if round == 1 {
                 let mut s = Store::open(io, APP).unwrap();
                 while s.generation() < 1 {

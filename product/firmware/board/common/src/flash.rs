@@ -12,6 +12,13 @@
 //! while it is erased or programmed (vector table and handlers are in it), and a sector erase can
 //! outlast the 2 s IWDG, so the routines refresh it on every poll. `board/check-ramfunc.sh` checks
 //! that they are in RAM and never branch to flash.
+//!
+//! Reads are fault-tolerant (R0): a flash word left half-programmed or half-erased by a power
+//! loss can carry an invalid ECC, and a CPU read of it returns a bus error (RM0468, flash ECC:
+//! double error, DBECCERR1). [`read_tolerant`] reads with bus faults ignored (FAULTMASK set and
+//! SCB CCR.BFHFNMIGN, ARMv7-M) and reports such a word from FLASH_SR1, instead of a fault and a
+//! watchdog reset at every start. The store scan skips the word like a torn one; a slot with
+//! one is not bootable ([`probe`]).
 
 use g7250_layout::{FLASH_BASE, FLASH_WORD, FlashGuard, Op, SECTOR_SIZE, Writer};
 use g7250_store::FlashIo;
@@ -21,6 +28,16 @@ const FLASH_CR1: u32 = 0x5200_200C;
 const FLASH_SR1: u32 = 0x5200_2010;
 const FLASH_CCR1: u32 = 0x5200_2014;
 const IWDG1_KR: u32 = 0x5800_4800;
+/// FLASH_SR1 / FLASH_CCR1: SNECCERR1 bit 25 (single error, corrected), DBECCERR1 bit 26 (double
+/// error: the read returned a bus error).
+const SR_SNECC: u32 = 1 << 25;
+const SR_DBECC: u32 = 1 << 26;
+/// SCB CCR.BFHFNMIGN (bit 8): at priority -1 (FAULTMASK) a precise data bus fault is ignored.
+const SCB_CCR: u32 = 0xE000_ED14;
+const CCR_BFHFNMIGN: u32 = 1 << 8;
+/// SCB CFSR; the BusFault status is bits 8-15, cleared by writing ones.
+const SCB_CFSR: u32 = 0xE000_ED28;
+const CFSR_BFSR: u32 = 0x0000_FF00;
 /// FLASH_CR1: LOCK bit 0, PG bit 1, SER bit 2, START bit 7, SNB bits 10:8.
 const CR_LOCK: u32 = 1 << 0;
 const CR_PG: u32 = 1 << 1;
@@ -41,6 +58,72 @@ pub enum FlashError {
     Guard,
     /// Final FLASH_SR1 of a failed operation, or [`TIMEOUT`].
     Hw(u32),
+    /// A read met a flash word with a double ECC error (unreadable; for example torn by a power
+    /// loss while it was programmed or its sector erased).
+    Ecc,
+}
+
+/// Read `buf.len()` bytes of flash at `addr` without faulting on an unreadable word: `Err(())` if
+/// any word read had a double ECC error (the bytes from it are not valid). Interrupts (and every
+/// fault but NMI) are held off for the copy only.
+/// One instance (never inlined): `board/check-faultmask.py` checks that nothing between `cpsid f`
+/// and `cpsie f` calls or branches out of it.
+#[inline(never)]
+pub fn read_tolerant(addr: u32, buf: &mut [u8]) -> Result<(), ()> {
+    use core::ptr::{read_volatile as rd, write_volatile as wr};
+    // SAFETY: on-chip flash, always mapped; the SCB and FLASH registers are the core's and the
+    // flash interface's. FAULTMASK is set only around the copy and restored before returning.
+    unsafe {
+        wr(FLASH_CCR1 as *mut u32, SR_DBECC | SR_SNECC);
+        core::arch::asm!("cpsid f", options(nostack, preserves_flags));
+        let ccr = rd(SCB_CCR as *const u32);
+        wr(SCB_CCR as *mut u32, ccr | CCR_BFHFNMIGN);
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        // Pointer steps, not checked integer adds: no panic path while FAULTMASK is set.
+        let src = addr as *const u8;
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = rd(src.add(i));
+        }
+        cortex_m::asm::dsb();
+        wr(SCB_CCR as *mut u32, ccr);
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        core::arch::asm!("cpsie f", options(nostack, preserves_flags));
+        let bad = rd(FLASH_SR1 as *const u32) & SR_DBECC != 0;
+        wr(FLASH_CCR1 as *mut u32, SR_DBECC | SR_SNECC);
+        if bad {
+            // The ignored fault left its status in the BFSR; clear it so that a later real fault
+            // is reported alone.
+            wr(SCB_CFSR as *mut u32, CFSR_BFSR);
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+/// The flash of `r` as a slice, once [`probe`] found every word of it readable; else the address
+/// of the first unreadable word. Image checks read through this, never through a raw slice.
+pub fn mapped(r: g7250_layout::Range) -> Result<&'static [u8], u32> {
+    probe(r.start, r.end)?;
+    // SAFETY: on-chip flash, always mapped, and every word of it reads without an ECC error.
+    Ok(unsafe { core::slice::from_raw_parts(r.start as *const u8, r.len() as usize) })
+}
+
+/// Check that every flash word of `[start, end)` can be read (one read per 32-byte word, which
+/// makes the flash check the whole word's ECC). Returns the address of the first unreadable
+/// word. A caller validates an image from its mapped slice only after this, so that a torn word
+/// in it cannot fault (a slot staged when the power failed).
+pub fn probe(start: u32, end: u32) -> Result<(), u32> {
+    let mut a = start & !(FLASH_WORD - 1);
+    let mut b = [0u8; 1];
+    while a < end {
+        if read_tolerant(a, &mut b).is_err() {
+            return Err(a);
+        }
+        a += FLASH_WORD;
+    }
+    Ok(())
 }
 
 /// Flash access for one writer.
@@ -126,10 +209,11 @@ impl FlashIo for RawFlash {
     type Error = FlashError;
 
     fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), FlashError> {
-        // SAFETY: on-chip flash, always mapped; the guard's range check keeps callers inside it.
-        let src = unsafe { core::slice::from_raw_parts(addr as *const u8, buf.len()) };
-        buf.copy_from_slice(src);
-        Ok(())
+        read_tolerant(addr, buf).map_err(|_| FlashError::Ecc)
+    }
+
+    fn unreadable(e: &FlashError) -> bool {
+        *e == FlashError::Ecc
     }
 
     fn program(&mut self, addr: u32, data: &[u8]) -> Result<(), FlashError> {

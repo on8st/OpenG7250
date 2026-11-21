@@ -37,6 +37,9 @@ sh board/check-ramfunc.sh "$out/g7250-boot.elf"
 sh board/check-ramfunc.sh "$out/g7250-app-a.elf"
 sh board/check-ramfunc.sh "$out/g7250-app-b.elf"
 
+echo "== fault-tolerant flash read: nothing leaves the FAULTMASK window (R0)"
+python3 board/check-faultmask.py "$out/g7250-boot.elf" "$out/g7250-app-a.elf" "$out/g7250-app-b.elf"
+
 echo "== safe state within 20 us of the boot stage's first instruction (0045)"
 python3 board/check-safe-margin.py "$out/g7250-boot.elf"
 

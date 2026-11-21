@@ -109,7 +109,7 @@ What the emulator should force, and what passes:
 | ST-03 | Power cut during the erase of the other sector (any point) | Next start: same generation as before, every value present, N ≥ the last value |
 | ST-04 | Power cut after each flash word written during steps 2-3 (copy, commit) | Next start: generation G or G+1, every value present, N never goes back |
 | ST-05 | During ST-01, check the bus | No instruction fetch from 0x08000000–0x080FFFFF between START and the end of BSY/QW; interrupts masked; IWDG KR written with 0xAAAA during the poll |
-| ST-06 | Flash ECC fault on reading a word of a half-erased sector, if the emulator can model it | Known residual risk (see `docs/memory-layout.md`, "Residual risk"); please report what happens |
+| ST-06 | Flash ECC: a word with a double ECC error (DBECCERR1, the read a bus error), if the emulator can model it: (a) in the live store sector, in a record's header or payload; (b) in the other slot (a power cut while a block was programmed); (c) in the newest commit word | No fault and no watchdog reset. (a) the store opens, the older record of that kind is used, writes go on after the word; (b) `boot: slot B not bootable: unreadable flash word at 0x… (ECC)` and slot A starts; IDENTIFY tag 9 of that slot 2 (bad); ROLLBACK refused; (c) the previous generation stays live. See `docs/memory-layout.md`, "Flash ECC (R0)" |
 
 "Every value present" can be read over the management channel once step 4 exists; until then
 the console boot counter (monotonic, never back to 1) is the visible check.

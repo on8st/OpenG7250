@@ -51,7 +51,7 @@ old sector is never touched by this; it is erased by the next compaction. A rese
 any step leaves the old committed sector live (steps 0–3, until the commit word is complete) or
 the new one (after), with every value present. Host tests cut power at every flash word of a
 compaction and halfway through the erase, and check that a half-erased sector's old commit does
-not win (`crates/store`, 11 tests).
+not win (`crates/store`, 12 tests).
 
 **Erase from RAM.** A 128 KiB sector erase can outlast the 2 s IWDG, and the CPU cannot fetch
 from the bank being erased (RM0468). `board/app/src/nv.rs` erases with `erase_sector_from_ram`:
@@ -61,10 +61,21 @@ bounded (far above the datasheet maximum); a timeout or an error flag is an erro
 stays on the old sector. `board/check-ramfunc.sh` (run by `build.sh`) fails the build if the
 function is not in RAM or branches out of it.
 
-**Residual risk: flash ECC.** On the radio, a word left half-programmed or half-erased by a power
-loss may carry an invalid ECC; reading it can raise a bus fault (RM0468, flash ECC), which the CRC
-scheme cannot catch. A fault-tolerant read path for the store scan is the proposed next fix;
-until then this case resets (watchdog) instead of continuing.
+**Flash ECC (R0).** On the radio, a word left half-programmed or half-erased by a power loss may
+carry an invalid ECC; a CPU read of it returns a bus error (RM0468, flash ECC: double error,
+DBECCERR1 in FLASH_SR1), which the CRC scheme alone cannot catch. Every flash read of the store
+and of the stager goes through `g7250_board::flash::read_tolerant`: FAULTMASK set and SCB
+CCR.BFHFNMIGN for the copy only (a precise data bus fault at priority -1 is ignored, ARMv7-M),
+then FLASH_SR1 says whether a word was unreadable (flags and the BusFault status cleared). The
+store skips such a word like a torn record and never programs it (`FlashIo::unreadable`; host
+tests cut power at every word of a compaction and during the erase with the cut word left
+unreadable, and put unreadable words in a header, a payload and a commit). A slot is read
+through its mapped slice only after `flash::probe` read every word of it: the boot stage, the
+rollback check and IDENTIFY's integrity code treat a slot with an unreadable word as not
+bootable / bad (code 2), and the stager's VERIFY answers 55. `board/check-faultmask.py` (run by
+`build.sh`) checks in each ELF that nothing between `cpsid f` and `cpsie f` calls or branches
+out. Not covered: an unreadable word in the image that is running, or in the boot stage itself
+(both are only written by the vendor bootloader or a completed, verified update).
 
 **Test build.** `out/test/g7250-compact.elf` (feature `test-compact-at-start`) compacts at every
 start, for the emulator run (`docs/emulator-run.md`, "Store").

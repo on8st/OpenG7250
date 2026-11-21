@@ -102,8 +102,8 @@ fn status(r: Refusal) -> Status {
 
 fn other_slot_valid(slot: Slot) -> bool {
     let r = slot.other().range();
-    // SAFETY: on-chip flash, always mapped and readable.
-    let image = unsafe { core::slice::from_raw_parts(r.start as *const u8, r.len() as usize) };
+    // A slot with an unreadable (ECC) word is not valid, and is never read through a slice.
+    let Ok(image) = g7250_board::flash::mapped(r) else { return false };
     g7250_layout::header::validate(image, ImageKind::Application, r, APP_RAM).is_ok()
 }
 

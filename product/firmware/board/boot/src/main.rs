@@ -27,11 +27,6 @@ static HEADER: [u8; header::HEADER_LEN] =
 /// RAM an application may put its initial stack in (AXI SRAM, see memory-slot-*.x).
 const APP_RAM: Range = Range::new(0x2400_0000, 0x2402_0000);
 
-fn flash(r: Range) -> &'static [u8] {
-    // SAFETY: the range is inside the on-chip flash, which is always mapped and readable.
-    unsafe { core::slice::from_raw_parts(r.start as *const u8, r.len() as usize) }
-}
-
 fn slot_name(s: Slot) -> &'static str {
     match s {
         Slot::A => "A",
@@ -87,7 +82,16 @@ fn main() -> ! {
 
     let valid = |s: Slot| {
         let r = s.range();
-        match header::validate(flash(r), Kind::Application, r, APP_RAM) {
+        // A word torn by a power loss while the slot was staged reads with an ECC error: the
+        // slot is then not bootable, and the scan does not fault (R0).
+        let image = match g7250_board::flash::mapped(r) {
+            Ok(i) => i,
+            Err(at) => {
+                println!("boot: slot {} not bootable: unreadable flash word at {:#010x} (ECC)", slot_name(s), at);
+                return false;
+            }
+        };
+        match header::validate(image, Kind::Application, r, APP_RAM) {
             Ok(_) => true,
             Err(e) => {
                 println!("boot: slot {} not bootable: {:?}", slot_name(s), e);
