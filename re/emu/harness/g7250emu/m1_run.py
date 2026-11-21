@@ -34,6 +34,7 @@ REPL_MDMA = os.path.join(REPO, "platforms", "g7250_main_mdma.repl")
 CS_PA = os.path.join(REPO, "models", "csharp", "G7250PaPlant.cs")
 CS_DMA = os.path.join(REPO, "models", "csharp", "G7250Dma.cs")
 REPL_DMA = os.path.join(REPO, "platforms", "g7250_main_dma.repl")
+CS_PWR = os.path.join(REPO, "models", "csharp", "G7250Pwr.cs")
 CS_IWDG = os.path.join(REPO, "models", "csharp", "G7250Iwdg.cs")
 REPL_IWDG = os.path.join(REPO, "platforms", "g7250_main_iwdg_stock.repl")
 CS_ADC = os.path.join(REPO, "models", "csharp", "G7250Adc.cs")
@@ -95,6 +96,10 @@ def build_resc(image_path, log_path, fpga=False):
         'i @%s' % CS_ADC,
         'sysbus Unregister sysbus.adcM1S2',
         'machine LoadPlatformDescription @%s' % REPL_ADC,
+        # generic PWR: write-once supply configuration, ACTVOSRDY (docs/PWR-model.md)
+        'i @%s' % CS_PWR,
+        'sysbus Unregister sysbus.pwr',
+        'machine LoadPlatformDescriptionFromString "pwr: Miscellaneous.G7250Pwr @ sysbus <0x58024800, +0x400>"',
         # generic IWDG1 with the RCC_RSR reset flags (docs/IWDG-model.md)
         'i @%s' % CS_IWDG,
         'sysbus Unregister sysbus.watchdog',
@@ -116,6 +121,10 @@ def build_resc(image_path, log_path, fpga=False):
     # H72x-only + unmodelled (DAC1/MDMA) blocks: tag so a touch is named/logged
     lines += platform_extras.all_tag_commands(exclude=("MDMA",))
     lines += observe.strict_logging_commands("machine", log_file=log_path)
+    # the stock supply routine polls PWR_CR3 until its 1 s timeout (a flag it
+    # never sees, on the hardware too; docs/PWR-model.md): log nothing for that
+    # poll, or the fully logged boot needs hours of host time for 1 s
+    lines += ["sysbus LogPeripheralAccess sysbus.pwr false"]
     lines += [
         'sysbus LoadBinary @%s 0x%08X' % (image_path, LOAD_BASE),
         'cpu VectorTableOffset 0x%08X' % LOAD_BASE,

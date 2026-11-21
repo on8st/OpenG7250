@@ -162,4 +162,5 @@ also gets a product-style test. Total about 11–15 sessions.
 | 3 reset.wdt (IWDG1 + RCC_RSR reset flags) | done | e059b2c |
 | Boot path for product runs (bootloader stand-in, `--boot none`) | done | 95cfbe8 |
 | 1g BDMA + DMAMUX2 + SPI DMA requests | done (SPI6; `docs/SPI-model.md`, `docs/BDMA-model.md`) | d282451 |
-| link.set, power.cut (flash kept over power cycles) | done | (this commit) |
+| link.set, power.cut (flash kept over power cycles) | done | bf7c634 |
+| PWR (write-once supply configuration, ACTVOSRDY), DBGMCU; result `testbench.commit` | done (found with the first product images) | (this commit) |

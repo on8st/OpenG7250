@@ -72,6 +72,12 @@ GENERIC = [
     ("cs", P("models", "csharp", "G7250PaPlant.cs")),
     ("repl", P("platforms", "g7250_main_pa_plant.repl")),
     ("cmd", "sysbus.spi2.pa Publish"),
+    # PWR (docs/PWR-model.md) and DBGMCU (docs/DBGMCU-model.md)
+    ("cs", P("models", "csharp", "G7250Pwr.cs")),
+    ("cmd", "sysbus Unregister sysbus.pwr"),
+    ("str", 'pwr: Miscellaneous.G7250Pwr @ sysbus <0x58024800, +0x400>'),
+    ("cs", P("models", "csharp", "G7250Dbgmcu.cs")),
+    ("str", 'dbgmcu: Miscellaneous.G7250Dbgmcu @ sysbus <0x5C001000, +0x1000>'),
     # IWDG1 with the RCC_RSR reset flags (docs/IWDG-model.md)
     ("cs", P("models", "csharp", "G7250Iwdg.cs")),
     ("cmd", "sysbus Unregister sysbus.watchdog"),

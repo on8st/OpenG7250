@@ -13,7 +13,10 @@ python3 harness/g7250emu/product_run.py <image.elf> <tests.json> [-o result.json
 The test bench directory comes from `testbench_dir = <dir>` in `local.config`
 (git-ignored) or the env `G7250_TESTBENCH`: the directory where
 `python3 -m testbench run ...` works. The runner starts it as a subprocess and
-never imports it.
+never imports it. The result's `testbench.commit` is the bench's own commit: a
+`.tb-commit` file in that directory (for a tree unpacked without git, e.g. by
+`git archive`), else the commit of the git work tree it belongs to; "unknown"
+if neither applies.
 
 ## Boot (reset path)
 
@@ -42,8 +45,9 @@ Per test (or once per list with `"boot": "per-list"`):
    the one selected, or a `needs` fixture the runner does not offer
    (`fixture:<name>`).
 2. Boot the image on the Main platform with the generic models only (DMA,
-   DMAMUX, USART2, ADC, MDMA, PA plant, GPIOE + FPGA at the his/80 rate, CH394,
-   EEPROM and I2C devices), plus the network bridge and the bench agent. No
+   DMAMUX, USART2, ADC, MDMA, PA plant, GPIOE + FPGA at the his/80 rate, SPI6 +
+   BDMA + DMAMUX2, CH394, IWDG + reset flags, PWR, DBGMCU, EEPROM and I2C
+   devices), plus the network bridge and the bench agent. No
    stock image map, no stock-only shim.
 3. Wait until the image has programmed an address into the Ethernet
    controller; else `error` "the image configured no IP address ...".

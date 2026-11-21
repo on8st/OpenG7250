@@ -52,6 +52,22 @@ def testbench_dir(repo):
     return d
 
 
+def testbench_commit(tbdir, repo):
+    """The test bench's own commit: a .tb-commit file in the bench directory
+    (written when a tree is unpacked without git), else the commit of the git
+    work tree the bench directory belongs to, unless that is this repository."""
+    if not tbdir:
+        return ""
+    marker = os.path.join(tbdir, ".tb-commit")
+    if os.path.isfile(marker):
+        return open(marker).read().strip()[:12]
+    top = subprocess.run(["git", "-C", tbdir, "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    mine = subprocess.run(["git", "-C", repo, "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
+    if not top or top == mine:
+        return "unknown"
+    return subprocess.run(["git", "-C", tbdir, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+
 class Boot:
     """One emulator process with its bridge, agent and fixture server."""
 
@@ -255,8 +271,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
     try:
         commit = subprocess.run(["git", "-C", pr.REPO, "rev-parse", "--short", "HEAD"],
                                 capture_output=True, text=True).stdout.strip()
-        tbcommit = subprocess.run(["git", "-C", tbdir, "rev-parse", "--short", "HEAD"],
-                                  capture_output=True, text=True).stdout.strip() if tbdir else ""
+        tbcommit = testbench_commit(tbdir, pr.REPO)
     except Exception:  # noqa: BLE001
         commit = tbcommit = ""
     result = {
