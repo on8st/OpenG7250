@@ -47,6 +47,9 @@ def console_line_t_us(ctx, text: str) -> int | None:
         out += r.get("entries", [])
         if len(out) >= r.get("count", 0):
             break
+    if any("boot" in e for e in out):  # t_us restarts at each power-on: the last boot only
+        last = max(e.get("boot", 0) for e in out)
+        out = [e for e in out if e.get("boot", 0) == last]
     ts = [e["t_us"] for e in out if text in str(e.get("line", ""))]
     return min(ts) if ts else None
 
