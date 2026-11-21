@@ -1,10 +1,11 @@
 # 0038 — The AetherSDR G7250 backend: C++/Qt, after firmware milestone F2, offered through the RFC
 
-- Status: proposed (advice recorded on ON8ST's request, 2026-11-20; ON8ST may still change it)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); recorded as advice on
+  ON8ST's request, 2026-11-20
 - Date: 2026-11-20
 - Builds on: 0013, 0016, annex AetherSDR §4 (option B with C as fallback; option D rejected).
 
-## Decision (proposed)
+## Decision
 
 1. The G7250 P2 backend is written in C++/Qt, inside AetherSDR, on its `IRadioBackend` seam.
 2. A separate product-side session writes it, after firmware milestone F2.

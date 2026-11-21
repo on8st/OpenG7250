@@ -1,6 +1,6 @@
 # 0033 — Firmware language: Rust, no_std, on Embassy
 
-- Status: proposed (to the repository owner, ON8ST)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session)
 - Decided by: ON8ST (relayed by the openg7250 session, 2026-11-20)
 - Date: 2026-11-20
 - Applies to: `product/firmware/` (build phase, 0028 Decision 4); `product/refmodel/` and
@@ -29,7 +29,7 @@ host before any hardware exists (0019, 0027).
 - For: most openHPSDR server software is C; the vendor HAL is C.
 - Against: no memory safety for the network parsers; host testing needs more scaffolding.
 
-## Decision (proposed)
+## Decision
 
 Option A. Rust, `no_std`, on Embassy with `embassy-stm32`; hardware drivers against
 `embedded-hal` traits; protocol and state code tested on the host with `cargo test`.

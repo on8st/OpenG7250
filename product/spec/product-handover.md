@@ -62,33 +62,33 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0030 | Local PTT and key inputs on the main unit not used in v1.0 | accepted (2026-11-20) |
 | 0031 | No audio through the main unit's codec in v1.0 | accepted (2026-11-20) |
 | 0032 | Own ATU control; bypass and `NOT_CALIBRATED` until its parameters are measured | accepted (2026-11-20) |
-| 0033 | Firmware in Rust, `no_std`, on Embassy; host-tested protocol and state code | proposed |
-| 0034 | Every firmware image tested as a black box on the emulator before the radio (product side of project decision 0007) | proposed |
-| 0035 | v1.0 freeze without the radio: Annex P (pending hardware), `NOT_CALIBRATED`, values settled from the HIS | proposed |
+| 0033 | Firmware in Rust, `no_std`, on Embassy; host-tested protocol and state code | accepted (2026-11-21) |
+| 0034 | Every firmware image tested as a black box on the emulator before the radio (product side of project decision 0007) | accepted (2026-11-21) |
+| 0035 | v1.0 freeze without the radio: Annex P (pending hardware), `NOT_CALIBRATED`, values settled from the HIS | accepted (2026-11-21) |
 | 0036 | Transmit is part of r1.0, armable only once calibrated | accepted (2026-11-20) |
-| 0037 | `g7250ctl` in Rust, sharing the protocol crate with the firmware; reference model independent; test bench Python | proposed |
-| 0038 | AetherSDR G7250 backend in C++/Qt after firmware F2, offered through the RFC | proposed |
-| 0039 | Testbench findings SF-01..18: calibration set and commands (A1.12), transmit ranges Table A3-0, management payloads Annex M | proposed |
-| 0040 | Faults before the network (supply check) reported on the debug console only | proposed |
-| 0041 | DHCP exchanges borrow the management socket, at most 2 s at a time | proposed |
-| 0042 | DDC0 not offered until the FPGA configuration frame is understood (P-RX-2) | proposed |
-| 0043 | Update packages linked for one slot (header byte 52, status 63); no update during a trial boot | proposed |
-| 0044 | Self-confirmation of a trial boot: 10 s with network up and main loop running; 60 s limit; reset before confirmation rolls back | proposed |
-| 0045 | Safe state holds from 20 µs after the boot stage starts; before that outside the spec (P-SYS-1) | proposed |
-| 0046 | CW keyer timing: unit 1200/S ms, weight as mark/space shift, Curtis iambic A/B, strict spacing, tolerance | proposed |
-| 0047 | Unkey reason 11 when an ATU tune cycle ends by itself; abort gives 1 | proposed |
-| 0048 | Sockets open within 5 s (DHCP) or 15 s (no DHCP) of link up | proposed |
-| 0049 | Link-local probe on socket 0 (MACRAW), defence by giving the address up; conflicts on DHCP/static addresses | proposed |
-| 0050 | Fault counters across a reset: pending hardware P-SYS-9, part of the TX gate | proposed |
-| 0051 | Port 7250 sequence counters per destination (owner, non-owners, old owner) | proposed |
-| 0052 | DHCP messages while link-local carry the link-local source, ciaddr 0, BROADCAST flag | proposed |
-| 0053 | Normative socket buffer split, Table B2-2, powers of two (port 1027: 4 KB in, 2 KB out for wideband) | proposed |
-| 0054 | High Priority bursts without loss: two at wire speed, or any number at >= 1 ms | proposed |
-| 0055 | Flash work exempt from the burst rule; never while armed or keyed; secret writes refused while armed | proposed |
-| 0056 | A malformed command payload is status 17, in the framing group | proposed |
-| 0057 | Link-local used unprobed (visible) if MACRAW fails; start-up bound 17 s | proposed |
-| 0058 | GET_STATS `hp_rx`: High Priority packets read from port 1027 | proposed |
-| 0059 | Unasked capability record may come in up to three parts | proposed |
+| 0037 | `g7250ctl` in Rust, sharing the protocol crate with the firmware; reference model independent; test bench Python | accepted (2026-11-21) |
+| 0038 | AetherSDR G7250 backend in C++/Qt after firmware F2, offered through the RFC | accepted (2026-11-21) |
+| 0039 | Testbench findings SF-01..18: calibration set and commands (A1.12), transmit ranges Table A3-0, management payloads Annex M | accepted (2026-11-21) |
+| 0040 | Faults before the network (supply check) reported on the debug console only | accepted (2026-11-21) |
+| 0041 | DHCP exchanges borrow the management socket, at most 2 s at a time | accepted (2026-11-21) |
+| 0042 | DDC0 not offered until the FPGA configuration frame is understood (P-RX-2) | accepted (2026-11-21) |
+| 0043 | Update packages linked for one slot (header byte 52, status 63); no update during a trial boot | accepted (2026-11-21) |
+| 0044 | Self-confirmation of a trial boot: 10 s with network up and main loop running; 60 s limit; reset before confirmation rolls back | accepted (2026-11-21) |
+| 0045 | Safe state holds from 20 µs after the boot stage starts; before that outside the spec (P-SYS-1) | accepted (2026-11-21) |
+| 0046 | CW keyer timing: unit 1200/S ms, weight as mark/space shift, Curtis iambic A/B, strict spacing, tolerance | accepted (2026-11-21) |
+| 0047 | Unkey reason 11 when an ATU tune cycle ends by itself; abort gives 1 | accepted (2026-11-21) |
+| 0048 | Sockets open within 5 s (DHCP) or 15 s (no DHCP) of link up; 17 s by 0057 | accepted (2026-11-21) |
+| 0049 | Link-local probe on socket 0 (MACRAW), defence by giving the address up; conflicts on DHCP/static addresses | accepted (2026-11-21) |
+| 0050 | Fault counters across a reset: pending hardware P-SYS-9, part of the TX gate | accepted (2026-11-21) |
+| 0051 | Port 7250 sequence counters per destination (owner, non-owners, old owner) | accepted (2026-11-21) |
+| 0052 | DHCP messages while link-local carry the link-local source, ciaddr 0, BROADCAST flag | accepted (2026-11-21) |
+| 0053 | Normative socket buffer split, Table B2-2, powers of two (port 1027: 4 KB in, 2 KB out for wideband) | accepted (2026-11-21) |
+| 0054 | High Priority bursts without loss: two at wire speed, or any number at >= 1 ms | accepted (2026-11-21) |
+| 0055 | Flash work exempt from the burst rule; never while armed or keyed; secret writes refused while armed | accepted (2026-11-21) |
+| 0056 | A malformed command payload is status 17, in the framing group | accepted (2026-11-21) |
+| 0057 | Link-local used unprobed (visible) if MACRAW fails; start-up bound 17 s | accepted (2026-11-21) |
+| 0058 | GET_STATS `hp_rx`: High Priority packets read from port 1027 | accepted (2026-11-21) |
+| 0059 | Unasked capability record may come in up to three parts | accepted (2026-11-21) |
 
 All numbers 0001–0059 are now in use.
 

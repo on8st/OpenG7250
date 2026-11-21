@@ -1,13 +1,13 @@
 # 0037 — g7250ctl in Rust, sharing the protocol crate with the firmware; an independent reference model
 
-- Status: proposed (to the repository owner)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session)
 - Decided by: ON8ST (2026-11-20 advice; amended 2026-11-21 on the independence of the reference
   model, relayed by the openg7250 session)
 - Date: 2026-11-20, amended 2026-11-21
 - Builds on: 0019 (reference model), 0026 (g7250ctl as reference implementation), 0027
   (test bench), 0033 (firmware in Rust), 0034 (emulator run).
 
-## Decision (proposed)
+## Decision
 
 1. `g7250ctl` is written in Rust and ships as one static binary for Linux, macOS and Windows.
 2. **The firmware and `g7250ctl` share one Rust protocol crate**: they are the two ends of the

@@ -1,8 +1,8 @@
 # 0039 — Calibration set, transmit ranges and management payloads (testbench findings SF-01 to SF-18)
 
-- Status: proposed (to the repository owner, ON8ST); written by the product session from the
-  testbench's review by test (openg7250-tb, `testbench/docs/spec-findings.md`, fork branch
-  `tb/main` at `823d484`)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); written by the product
+  session from the testbench's review by test (openg7250-tb, `testbench/docs/spec-findings.md`,
+  fork branch `tb/main` at `823d484`)
 - Date: 2026-11-21
 - Builds on: 0008, 0020 §23, §27, 0028, 0032, 0035, 0036; [G7250-MAN] "Parameters".
 
@@ -13,7 +13,7 @@ already resolved by the v1.0 work (SF-01 in part, SF-02, SF-03, SF-14, SF-15). S
 SF-01 (TX locked until calibrated), SF-05 (no way from locked to calibrated), SF-07 (transmit
 ranges not tabulated), SF-12 (built-in S2 and T3 unknown).
 
-## Decision (proposed)
+## Decision
 
 1. **Calibration set** (SF-05, SF-12). The measured values of Annex P form a unit's calibration
    set, written with new management commands `GET_CALIBRATION`, `SET_CALIBRATION`,

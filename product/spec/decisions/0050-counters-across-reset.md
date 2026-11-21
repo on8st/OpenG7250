@@ -1,6 +1,6 @@
 # 0050 — Fault counters across a reset: pending hardware, part of the TX gate
 
-- Status: proposed (to the repository owner, ON8ST)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session)
 - Date: 2026-11-21
 - Builds on: 0022 §27 (counters survive resets without power loss), 0035 (Annex P, freeze rule).
 
@@ -11,7 +11,7 @@ and every reset without power loss. The firmware keeps them in AXI SRAM. Whether
 survives the vendor bootloader, which runs before the boot stage, is not known; it goes to the
 HIS as an open item. The P-SYS-2 placeholder ("lost at every reset") contradicted the rule.
 
-## Decision (proposed)
+## Decision
 
 1. New Annex P parameter P-SYS-9: survival of the firmware's RAM content across a software reset
    and a watchdog reset, through the vendor bootloader; radio check by writing a pattern,

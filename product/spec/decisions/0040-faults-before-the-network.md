@@ -1,6 +1,7 @@
 # 0040 — Faults found before the network are reported on the debug console only
 
-- Status: proposed (to the repository owner, ON8ST); answers firmware question SQ-F1-4
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers firmware
+  question SQ-F1-4
 - Date: 2026-11-21
 - Builds on: 0028 (boot stage), 0035 (freeze rule); [HIS] HIS 10, HIS 40, HIS 85, HIS 90
   (`6e2208a`).
@@ -23,7 +24,7 @@ network, so a host cannot be told through identification.
 - **(c) A stored fault code shown by a later boot.** Against: needs a flash write on that
   supply, and a later boot that finds the same fault stops at the same place. Rejected for r1.0.
 
-## Decision (proposed)
+## Decision
 
 Option (a), spec A3.5a: safe state of A3.6, CH394 held in reset, no flash write; one ASCII line
 per second on USART1 TX (PB6) at 115200 8N1:

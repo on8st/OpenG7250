@@ -1,7 +1,7 @@
 # 0053 — Normative socket buffer split (Table B2-2), sizes powers of two
 
-- Status: proposed (to the repository owner, ON8ST); from a firmware point after emulator test
-  T-B10-L13, final split agreed with the firmware (097b08c), 2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); from a firmware point
+  after emulator test T-B10-L13, final split agreed with the firmware (097b08c), 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0004 ("CH394Q buffer split", indicative), 0008, 0017, 0031, 0036; [CH394] sections
   7.2.12–7.2.13, 12.2.4.
@@ -14,7 +14,7 @@ in UDP mode, the stop was lost. Port 1027 also transmits wideband data from M2, 
 (0036), so its transmit buffer cannot be 0. The CH394's socket pointers are 16-bit and wrap at
 65536; how a buffer of a size other than a power of two handles that wrap is not documented.
 
-## Decision (proposed)
+## Decision
 
 1. Table B2-2 in spec B2.3 is normative, in KB for ports 1024, 1025, 1026, 1027, 1029, 1035,
    7250, 7251: receive 1, 2, 1, 4, 4, 0, 2, 2 (16); transmit 1, 1, 0, 2, 0, 8, 2, 2 (16).

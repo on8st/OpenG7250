@@ -1,11 +1,11 @@
 # 0044 — Self-confirmation of a trial boot
 
-- Status: proposed (to the repository owner, ON8ST); answers a firmware question of
-  2026-11-21 (7ee0b1c)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers a firmware
+  question of 2026-11-21 (7ee0b1c)
 - Date: 2026-11-21
 - Builds on: 0008 (U-6), 0020 §24 (60 s), 0022 §10, 0028 (boot stage), 0043.
 
-## Decision (proposed)
+## Decision
 
 The firmware's criterion is accepted and written into A1.8:
 

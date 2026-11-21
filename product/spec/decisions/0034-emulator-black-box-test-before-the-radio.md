@@ -1,12 +1,12 @@
 # 0034 — Every firmware image is tested on the emulator, as a black box, before the radio
 
-- Status: proposed (to the repository owner, ON8ST)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session)
 - Decided by: ON8ST (relayed by the openg7250 session, 2026-11-20)
 - Date: 2026-11-20
 - Product side of project decision 0007 (root `decisions/` of the umbrella repository, not in
   this clone). This file records only what the product side does and receives.
 
-## Decision (proposed)
+## Decision
 
 1. Before any product firmware image runs on the radio, it is tested in full on the emulator
    of the RE side, as a black box.
