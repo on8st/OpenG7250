@@ -216,3 +216,24 @@ fn rf_ports_and_rf_peripherals_are_named_only_by_the_safe_state() {
         }
     }
 }
+
+#[test]
+fn every_task_is_spawned_once() {
+    // A task pool holds one task: a second spawn of the same task returns an error, and its
+    // unwrap panics at start (fw-42b4f68 spawned tx_path twice, so it never got past start).
+    let text = std::fs::read_to_string(firmware_root().join("board/app/src/main.rs")).unwrap();
+    let mut seen: Vec<String> = Vec::new();
+    for l in text.lines() {
+        let l = l.trim();
+        if l.starts_with("//") {
+            continue;
+        }
+        if let Some(at) = l.find(".spawn(") {
+            let rest = &l[at + ".spawn(".len()..];
+            let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':').collect();
+            assert!(!seen.contains(&name), "task {name} spawned twice in main.rs");
+            seen.push(name);
+        }
+    }
+    assert!(seen.len() >= 4, "{seen:?}");
+}

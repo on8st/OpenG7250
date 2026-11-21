@@ -265,7 +265,6 @@ async fn main(spawner: Spawner) {
     // task pump into the USART FIFO (0054: a blocking line costs about 5 ms).
     console::set_buffered(true);
     spawner.spawn(console_pump().unwrap());
-    spawner.spawn(tx_path().unwrap());
 
     let mut n: u64 = 0;
     loop {
