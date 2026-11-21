@@ -180,7 +180,7 @@ Table A1-3 — Management status codes (0020 §27)
 | 18 | unsupported protocol version | 52 | older image without downgrade flag |
 | 19 | too large | 53 | bad block CRC |
 | 32 | authentication required | 54 | block out of order |
-| 33 | authentication failed | 55 | verification failed |
+| 33 | authentication failed | 55 | verification failed; also a flash write that failed (B2.3; 0065) and a `ROLLBACK` without a good other image (A1.8; 0064) |
 | 34 | rate-limited | 56 | not supported in this firmware |
 | 35 | busy (another writer) | 57 | refused while a P2 session runs |
 | 36 | first-secret window closed or secret already set | 58 | refused while a firmware update is in progress (0022 §51) |
@@ -253,6 +253,16 @@ A1.6 **Configuration** (write needs authentication, A1.10) (0008, Functions):
   after the reply is sent; if the new network configuration cannot be brought up, or an
   address conflict is detected ([CH394] section 7.1.7, GINT IP_CONFLI), the G7250 MUST fall
   back to the previous configuration and log it (C-4);
+- **Store writes** (0065): the store (A1.8 "Store location") MUST survive a power loss at any
+  point of a write or a compaction, the erase of the other store sector included: afterwards
+  every item holds either its value before the interrupted write or the value that write
+  stored, never a mix and never an older value; a write answered with status 0 is kept; the
+  store generation never goes back. A store word that cannot be read (a double ECC error of the
+  flash) is treated as a torn record: the store uses the older record of that kind, or the
+  previous generation if the newest commit word is unreadable, logs it once per start, never
+  programs that word again, and raises no fault and no reset. An item with no readable record
+  takes its Table A1-4 factory value, and a calibration set with none is absent (record `tx`
+  bit 4 = 0); each is logged. A single-bit error corrected by the flash is not reported;
 - a factory reset of network configuration and secrets MUST be possible over this channel
   (authenticated) and MUST also be possible locally without the network; this headless product
   has no local input for it, so the local path is a re-install through the vendor path
@@ -410,6 +420,23 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   for any other reason before it has confirmed itself (a crash, the watchdog, a power loss),
   the boot stage MUST also start the previous image at the next start, because the boot record
   still marks the trial as unconfirmed. Either rollback is logged.
+  **Torn boot-record writes** (0064). The boot stage records a trial attempt in the boot
+  record before it starts the trial image, and the image records its self-confirmation there.
+  A boot-record write cut by a power loss counts as not written (the store keeps the older
+  record, A1.6 "Store writes"). A torn attempt record therefore means the trial image has not
+  run, and the boot stage MAY start it as a trial once more; a torn confirmation means the
+  trial is unconfirmed, and the boot stage starts the previous image (rollback, logged). In
+  every case one bootable image starts.
+  **`ROLLBACK`** (0064). `ROLLBACK` makes the image in the other slot the active one. It is
+  accepted only if the running image is confirmed (during a trial boot: 58, A1.8 "No update
+  during a trial boot"; during an update: 58) and the other slot holds an image of this
+  firmware that checks good (`IDENTIFY` tag 9 = 1 for that slot); otherwise it gets 55 and
+  nothing changes. It needs no downgrade flag. When accepted, the G7250 writes the boot
+  record, logs `rollback commanded: slot <from> <version> to slot <to> <version>`, replies
+  with status 0 and resets as a commanded reset (A1.9; status 59 and no change if RF stays).
+  The image started is a trial (U-6): if it does not confirm itself, the boot stage returns to
+  the image that carried out the `ROLLBACK`. Configuration that the older image does not
+  understand is kept but not used (U-8).
   Until the image has confirmed itself, RX works but an arm MUST be rejected with
   `MAINTENANCE` (0022 §10).
   Two slots and an atomic boot choice are feasible with the boot stage above (U-10; 0028).
@@ -1817,7 +1844,20 @@ holds may be lost, and a P2 session may end by its watchdog (B5.6) and be restar
   confirmation (A1.8), which happens while no arm is possible (`MAINTENANCE`); a store compaction
   runs only as part of the management write that needs it;
 - the host learns of it from the management reply, which is sent after the flash work has
-  ended, and from the update state (`UPDATE_STATUS`, `IDENTIFY`). A host SHOULD NOT send High Priority packets closer
+  ended, and from the update state (`UPDATE_STATUS`, `IDENTIFY`);
+- **during flash work** (0065), up to `t_erase_max`, the maximum 128 KiB sector erase time of
+  the datasheet of the MCU fitted ([STM32H72x]; [HIS] HIS 10): the processor watchdog MUST NOT
+  expire, the RF control pins MUST hold their A3.6 levels, no FPGA bus cycle may be open (STB
+  PE9 and CMD PE8 low, [HIS] HIS 80; the firmware ends any cycle before it starts an erase or a
+  program), and after it the radio goes on as before. A3.10 has nothing to cover then, because
+  flash work never overlaps an arm;
+- **flash work that fails** (0065): an erase or program that ends with an error flag, or does
+  not end within 2 × `t_erase_max`, has failed. The operation is abandoned: a firmware update
+  as a write failure (A1.8, status 55), a store write with status 55, the store keeping the
+  values it had (A1.6 "Store writes"); it is logged and raises `INTERNAL_ERROR` (class 2,
+  Table B8-3), so TX stays locked until a reset while RX goes on. If the processor stalls so
+  that the watchdog resets it, the store and the boot record are as before the operation and
+  the start-up reports `WDT_RESET_AT_START`. A host SHOULD NOT send High Priority packets closer
 than 1 ms apart, except a stop or run directly after another packet, which item 1 covers.
 
 B2.4 **Remote endpoint.** The G7250 MUST reply to the discovery from local port 1024 to the
@@ -3723,7 +3763,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-20 | Two hosts (same IP, different ports) each get their own challenge; a request authenticated with the other host's challenge fails with status 33; a challenge works once. |
 | T-A1-21 | A repeated request id within 5 s gets the cached reply; after 5 s a replayed authenticated request fails with status 33. |
 | T-A1-22 | `CHANGE_SECRET` carries the masked new secret; the captured datagram does not contain the new secret; the new secret works afterwards. |
-| T-A1-23 | After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 "After `UPDATE_ABORT`"; 0063). |
+| T-A1-23 | After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 "After `UPDATE_ABORT`"; 0063). `CAP_REQUEST` is still answered, and an arm after `UPDATE_BEGIN` is rejected with `MAINTENANCE` (A1.8; 0022 §10). |
 | T-A1-24 | During an unconfirmed trial boot RX works and an arm is rejected with `MAINTENANCE`; after confirmation it is accepted. |
 | T-A1-25 | A region change is refused with status 50 while armed or keyed on either level and with status 57 while a P2 session runs. |
 | T-A1-26 | More than 20 management requests per second from one source are answered at most 20 times per second; the excess is counted in `GET_STATS`. |
@@ -3768,7 +3808,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-65 | A region other than 0 in `SET_CONFIG` (tag 6) gets status 48; with region 0 a DUC0 frequency at each edge of every range of Table A3-0 is inside, 1 Hz outside each edge is outside (reference model with a complete calibration set; A1.6 C-6; Table A3-0; 0039). |
 | T-A1-66 | With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041). |
 | T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
-| T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
+| T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down, and one with a class 2 fault (a safe-state pin forced, `TX_PATH_NOT_BLOCKED`), is not confirmed and rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
 | T-A1-69 | From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 17 s, from the link-local address, after both announcements (reference model or emulator; A1.11 "Bound on start-up"; 0048, 0057). |
 | T-A1-70 | At start-up with no DHCP server: the radio sends the RFC 3927 probes for its chosen link-local address with the section 9 timing before it answers discovery; an ARP reply claiming that address during the probe makes it choose another and probe again (reference model or emulator; A1.11; 0049). |
 | T-A1-71 | After a successful probe the radio sends the RFC 3927 announcements, and only then answers discovery and `IDENTIFY` on the link-local address, within the start-up bound (A1.11; 0048, 0049). |
@@ -3783,6 +3823,11 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-80 | With no transfer in progress (after a restart, after `UPDATE_ABORT`, and after an activation): `UPDATE_BLOCK` gets 54, also with a bad CRC; `UPDATE_VERIFY` and `UPDATE_ACTIVATE` get 55; nothing is written and `UPDATE_STATUS` stays idle; with a malformed payload the reply is 17 (reference model or emulator; A1.8 "No transfer in progress"; 0063). |
 | T-A1-81 | `UPDATE_BEGIN` with a wrong magic, or with header version 2, gets 17 and nothing changes; with a readable header and component 2 it gets 56; with component 2 and the wrong hardware id, 51 (order 51, 56, 63, 61, 52) (reference model or emulator; A1.8 "Unreadable or unsupported header"; 0063). |
 | T-A1-82 | After `UPDATE_ABORT`, a stray `UPDATE_BLOCK` (54), `UPDATE_VERIFY` (55), `UPDATE_ACTIVATE` (55), `UPDATE_BEGIN` (58), `ROLLBACK` (58) and a second `UPDATE_ABORT` (0) sent every 60 s do not delay the restart: the radio restarts into the running image 10 min (± 5 s) after the reply to the first `UPDATE_ABORT`, logs it, and RX works afterwards; the same with a `RESTART` after 2 min restarts at once. During a transfer, a block refused with 53 every 60 s does not delay the abandonment either (reference model or emulator; A1.8 "What restarts the timer", "After `UPDATE_ABORT`"; 0063). |
+| T-A1-83 | A power loss during the boot stage's trial-attempt write starts the trial image as a trial at the next start (or the previous image), and one during the self-confirmation write starts the previous image, logged; in each case one bootable image starts and the store is readable (emulator; A1.8 "Torn boot-record writes"; 0064). |
+| T-A1-84 | Running a confirmed image with a good other slot, `ROLLBACK` replies 0, logs the rollback line, resets and starts the other image as a trial, which confirms itself; with the other slot empty or bad it gets 55; during a trial boot 58; while armed 50; the started image that fails to confirm returns to the image that sent `ROLLBACK` (reference model or emulator; A1.8 "`ROLLBACK`"; 0064). |
+| T-A1-85 | With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported (emulator; B2.3 "Flash work"; 0065). |
+| T-A1-86 | A power loss after each word of a store write, and at points during the erase of the other store sector in a compaction: after the restart each item holds its old or its new value, never a mix or an older value, a write answered 0 is kept, and the generation does not go back (emulator, flash.log; A1.6 "Store writes"; 0065). |
+| T-A1-87 | A double ECC error in a record of the live store sector, and one in the newest commit word: the store opens without a fault or reset, uses the older record or the previous generation, logs it, and later writes skip the word; an item with no readable record takes its Table A1-4 value (emulator, if it models flash ECC; A1.6 "Store writes"; 0065). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
@@ -3949,6 +3994,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
 | T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost; in each case `GET_STATS` `hp_rx` rises by exactly the number of packets sent (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 "High Priority bursts", Table B2-2; 0053, 0054, 0058). |
 | T-B5-21 | While armed: `SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET` (as a commanded reset, A1.9) and `SET_CALIBRATION` get status 50 or first unkey and disarm as their rules say, and no flash work starts while TX is armed or keyed; unarmed, a `SET_CONFIG` is answered only after its flash write has ended (emulator; B2.3 "Flash work"; 0055). |
+| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, STB and CMD stay low with no bus cycle open across an erase, and after it RX, discovery and the management channel go on (B2.3 "Flash work"; 0065). |
 
 ### Streams (B6)
 
