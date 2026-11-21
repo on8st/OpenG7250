@@ -15,8 +15,11 @@ otherwise.
 
 ## Decision (proposed)
 
-1. **Gaps 1 and 2: tests only.** `CAP_REQUEST` during an update and the `MAINTENANCE` arm
-   reject (0022 §10) are added to T-A1-23. A trial image with a class 2 fault is not confirmed
+1. **Gaps 1 and 2: tests only.** `CAP_REQUEST` during an update and the arm reject (0022 §10)
+   are added to T-A1-23. Corrected after testbench finding SF-28: over P2 every register write
+   during an update gets `BUSY`, which takes precedence (B8.4), so a `TX_ARM` write gets `BUSY`
+   in `WRITE_STATUS` and the radio stays disarmed; `MAINTENANCE` appears only in the arm-update
+   race (T-A1-40) and on level 2. A trial image with a class 2 fault is not confirmed
    and rolls back (0044); this is added to T-A1-68.
 2. **Torn boot-record writes** (gap 3). A boot-record write cut by a power loss counts as not
    written; the store keeps the older record (0065). A torn attempt record means the trial

@@ -1419,6 +1419,26 @@ reset starts (0022 §40).
 What the hardware does between reset and the moment the firmware drives these pins is
 HIS-13; if the PA can key from floating lines, M4 waits for a mitigation (0007).
 
+A3.6b **TX path check** (0066). While TX is not armed and not keyed, the TX path MUST be
+blocked as A3.6 sets it, and the firmware MUST check that it is, at least every 5 ms from the
+end of the safe-state set-up of the boot stage (0045). The check covers each TX-side output of
+A3.6 (TX path disable, SEND, TUNER trigger, PA bias channels; [HIS] HIS 85) and compares two
+things with the safe state:
+
+1. **the configuration the MCU holds**: the pin is an output of the kind A3.6 sets, not an
+   input or an alternate function, and its output register holds the safe level; for a bias
+   channel, the DAC value is 0;
+2. **the level at the pin**: the input register of each of those pins reads the safe level, so
+   that a line held at the other level from outside (a board fault) is seen as well; bias
+   channels have no such read and are checked by item 1 only.
+
+A mismatch seen by every check over at least 10 ms (so a mismatch shorter than 10 ms never
+counts, and one that lasts 20 ms always does, within 20 ms of its start) is drop event 13 (Table A3-1), fault code 16 `TX_PATH_NOT_BLOCKED`, class 2 (A3.5):
+TX stays locked until a reset, RX goes on, and the log names the pin and which comparison
+failed. The firmware does not try to correct the pin and then go on; it sets the safe state
+again and stays in the fault. While armed or keyed the check is not made, because the TX path
+is then meant to be open; the pins concerned are those of A3.6 that the arm opens (B10.9).
+
 A3.6a **TX settings at every session end and takeover** (0022 §64). The transmit settings that a
 level-1 host writes in General and DUC-specific packets belong to its session. At every session
 end and at every takeover, after the unkey and before the new owner's first packet is
@@ -1847,9 +1867,11 @@ holds may be lost, and a P2 session may end by its watchdog (B5.6) and be restar
   ended, and from the update state (`UPDATE_STATUS`, `IDENTIFY`);
 - **during flash work** (0065), up to `t_erase_max`, the maximum 128 KiB sector erase time of
   the datasheet of the MCU fitted ([STM32H72x]; [HIS] HIS 10): the processor watchdog MUST NOT
-  expire, the RF control pins MUST hold their A3.6 levels, no FPGA bus cycle may be open (STB
-  PE9 and CMD PE8 low, [HIS] HIS 80; the firmware ends any cycle before it starts an erase or a
-  program), and after it the radio goes on as before. A3.10 has nothing to cover then, because
+  expire, the RF control pins MUST hold their A3.6 levels, no FPGA bus cycle may be open: while
+  the bus gate is closed ([HIS] HIS 80; 0042) the MCU drives none of PE0–PE10, which is the
+  required state (no strobe, no command; the levels are then the board's); once it is open,
+  STB (PE9) and CMD (PE8) are driven low, the firmware ending any cycle before it starts an
+  erase or a program, and after it the radio goes on as before. A3.10 has nothing to cover then, because
   flash work never overlaps an arm;
 - **flash work that fails** (0065): an erase or program that ends with an error flag, or does
   not end within 2 × `t_erase_max`, has failed. The operation is abandoned: a firmware update
@@ -3763,7 +3785,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-20 | Two hosts (same IP, different ports) each get their own challenge; a request authenticated with the other host's challenge fails with status 33; a challenge works once. |
 | T-A1-21 | A repeated request id within 5 s gets the cached reply; after 5 s a replayed authenticated request fails with status 33. |
 | T-A1-22 | `CHANGE_SECRET` carries the masked new secret; the captured datagram does not contain the new secret; the new secret works afterwards. |
-| T-A1-23 | After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 "After `UPDATE_ABORT`"; 0063). `CAP_REQUEST` is still answered, and an arm after `UPDATE_BEGIN` is rejected with `MAINTENANCE` (A1.8; 0022 §10). |
+| T-A1-23 | After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 "After `UPDATE_ABORT`"; 0063). `CAP_REQUEST` is still answered; a `TX_ARM` write after `UPDATE_BEGIN` gets `BUSY` in `WRITE_STATUS` and `TX_ARM_STATE` stays disarmed, because `BUSY` takes precedence (B8.4); `MAINTENANCE` belongs to the arm-update race (A1.8 "Arm and update serialise") and to level 2 (A1.8; 0022 §10, §13). |
 | T-A1-24 | During an unconfirmed trial boot RX works and an arm is rejected with `MAINTENANCE`; after confirmation it is accepted. |
 | T-A1-25 | A region change is refused with status 50 while armed or keyed on either level and with status 57 while a P2 session runs. |
 | T-A1-26 | More than 20 management requests per second from one source are answered at most 20 times per second; the excess is counted in `GET_STATS`. |
@@ -3808,7 +3830,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-65 | A region other than 0 in `SET_CONFIG` (tag 6) gets status 48; with region 0 a DUC0 frequency at each edge of every range of Table A3-0 is inside, 1 Hz outside each edge is outside (reference model with a complete calibration set; A1.6 C-6; Table A3-0; 0039). |
 | T-A1-66 | With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041). |
 | T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
-| T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down, and one with a class 2 fault (a safe-state pin forced, `TX_PATH_NOT_BLOCKED`), is not confirmed and rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
+| T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down, and one with a class 2 fault (the level at a TX-side pin of A3.6b forced to the other level, `TX_PATH_NOT_BLOCKED`), is not confirmed and rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
 | T-A1-69 | From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 17 s, from the link-local address, after both announcements (reference model or emulator; A1.11 "Bound on start-up"; 0048, 0057). |
 | T-A1-70 | At start-up with no DHCP server: the radio sends the RFC 3927 probes for its chosen link-local address with the section 9 timing before it answers discovery; an ARP reply claiming that address during the probe makes it choose another and probe again (reference model or emulator; A1.11; 0049). |
 | T-A1-71 | After a successful probe the radio sends the RFC 3927 announcements, and only then answers discovery and `IDENTIFY` on the link-local address, within the start-up bound (A1.11; 0048, 0049). |
@@ -3905,6 +3927,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-58 | v1.0 (0030): with level 1 active, armed and unarmed, with and without hardware CW selected, toggling the local PTT input (PH6) and the KEY contacts (PH3, PH4) keys nothing, and High Priority status byte 4 bits [0]–[2] stay 0 (reference model with simulated inputs; [HIS] HIS 85). |
 | T-A3-59 | With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040). |
 | T-A3-60 | Needs the radio (P-SYS-9): after two `SWR_REPEATED` entries, a `RESTART` and then a processor watchdog reset leave the fault entry counter and `TRIP_COUNT` unchanged, so the third entry is class 2; a power cycle clears them. Before P-SYS-9 is set the arm is rejected with `NOT_CALIBRATED` (A3.5; Annex P; 0050). |
+| T-A3-61 | Not armed: forcing the level at each TX-side pin of A3.6b to the other level from outside (output register unchanged), and, separately, changing a pin's output register or making it an input (emulator memory write): each held for 20 ms or more gives `FAULT_CODE` 16 `TX_PATH_NOT_BLOCKED`, class 2, within 20 ms of its start; a pulse of 5 ms gives no fault; RX goes on; the log names the pin and the comparison; after a `RESTART` with the force removed the fault is gone, with it kept it comes back at start-up; armed with the TX path open, no fault (emulator; A3.6b; 0066). |
 
 ### Discovery (B3)
 
@@ -3994,7 +4017,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
 | T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost; in each case `GET_STATS` `hp_rx` rises by exactly the number of packets sent (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 "High Priority bursts", Table B2-2; 0053, 0054, 0058). |
 | T-B5-21 | While armed: `SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET` (as a commanded reset, A1.9) and `SET_CALIBRATION` get status 50 or first unkey and disarm as their rules say, and no flash work starts while TX is armed or keyed; unarmed, a `SET_CONFIG` is answered only after its flash write has ended (emulator; B2.3 "Flash work"; 0055). |
-| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, STB and CMD stay low with no bus cycle open across an erase, and after it RX, discovery and the management channel go on (B2.3 "Flash work"; 0065). |
+| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run ("idle"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on (B2.3 "Flash work"; 0065). |
 
 ### Streams (B6)
 
