@@ -186,7 +186,7 @@ Table A1-3 — Management status codes (0020 §27)
 | 36 | first-secret window closed or secret already set | 58 | refused while a firmware update is in progress (0022 §51) |
 | | | 59 | reset refused: RF present (A1.9; 0022 §59) |
 | | | 60 | not possible: one-way installation in progress (A1.8a item 3; 0028) |
-| | | 61 | image too large for the application area (A1.8a item 3; 0028) |
+| | | 61 | image too large for the application area (A1.8a item 3; 0028) or, for an image of this firmware, for its slot (A1.8; 0061) |
 | | | 62 | refused: the value needs the calibration set (A1.12; 0039) |
 | | | 63 | image linked for the running slot (A1.8; 0043) |
 
@@ -347,6 +347,12 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   reads the running slot from identification (Annex M, Table M-2 tag 23) and sends the
   package for the other one; a release therefore ships one package per slot. A package carries
   one image; a package with both is not defined in this version.
+- **Slot size and the store** (0061 addendum). An image of this firmware longer than the
+  slot it is linked to MUST be refused with status 61 before anything is written; the slots
+  end where the store begins (sectors 6 and 7, "Store location" below), so no image of this
+  firmware reaches the store. 61 is checked after the hardware id (51) and the slot (63). An
+  update to an image of this firmware MUST NOT erase or write sectors 6 and 7 except as a
+  store write or a store compaction (the boot record of the activation and the trial boot).
 - **No update during a trial boot** (0043). From the start of a trial boot until the image has
   confirmed itself or has been rolled back, the update is still in progress: `UPDATE_BEGIN`
   MUST be refused with status 58, because staging would erase the image a rollback returns to.
@@ -3744,6 +3750,8 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-74 | At power-on before any address, DHCPDISCOVER has IP source 0.0.0.0; while link-local, DHCPDISCOVER and DHCPREQUEST have the link-local address as IP source, `ciaddr` 0.0.0.0 and the BROADCAST flag set, and a server's broadcast OFFER and ACK give the radio its lease (emulator or reference model; A1.11; 0052). |
 | T-A1-75 | While armed and during a P2 session: `SET_FIRST_SECRET` with a 31-byte payload and `SET_CALIBRATION` with a TLV that runs past the end get 17, not 50 or 57; `SET_CALIBRATION` with a well-formed payload and an unknown parameter id gets 57 during the session and, outside it while armed, 50; unarmed and outside a session, 48 (A1.4 "Malformed payload", Table A1-3; 0056). |
 | T-A1-76 | With socket 0 failing to open in MACRAW (simulated): after three tries 10 ms apart the radio uses the chosen link-local address unprobed, answers `IDENTIFY` with tag 24 = 1, logs an entry containing `link-local <address> used without a complete RFC 3927 probe`, raises `GET_STATS` `ll_unprobed`, prints a `G7250 FAULT LINKLOCAL` console line, and still gives the address up on IP_CONFLI; no A3.5 fault is set (emulator; A1.11; 0057). |
+| T-A1-77 | During a complete update to an image of this firmware (`UPDATE_BEGIN` to the confirmed trial boot), and during an aborted one, flash.log shows no erase or write in sectors 6 and 7 other than store writes or compactions (whole store records of the store format, no erase of the only live store sector), and none outside the staging slot and the store (emulator, flash.log; A1.8 "Slot size and the store"; 0061). |
+| T-A1-78 | `UPDATE_BEGIN` for an image of this firmware, linked for the other slot, with a length one byte more than that slot (slot size from the firmware's layout) gets 61 and nothing is written; with a length equal to the slot size it is accepted; with the wrong hardware id it gets 51 and for the running slot 63, whatever its length (emulator or reference model; A1.8; 0043, 0061). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
