@@ -28,6 +28,10 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   and the boot-stage lines follow each start. Survival through the stage before the boot
   stage is part of P-SYS-9; P-SYS-2 keeps the reset cause only. A1.7, P-SYS-2, P-SYS-9;
   T-A1-34 rewritten, T-A1-91 new.
+- 0068, firmware questions: the boot stage writes the start entry and its own lines; the cause
+  is named from the reset flags (order watchdog, software, power-on, brown-out, pin; `unknown`
+  only with no flag), read once and cleared; tag 17 values; P-SYS-2 is only whether the flags
+  are trustworthy on this radio.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 

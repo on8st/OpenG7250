@@ -1,7 +1,8 @@
 # 0068 — The log is kept over a reset without power loss
 
 - Status: proposed (2026-11-22); answers a testbench question on T-A1-34, with the firmware's
-  input (relayed by the openg7250 session, 2026-11-22)
+  input and two firmware questions on the start entry folded in (relayed by the openg7250
+  session, 2026-11-22)
 - Date: 2026-11-22
 - Builds on: 0008 (L-1 to L-3), 0022 §27 (counters), §40 (commanded reset), 0035 (P-SYS-2),
   0050 (P-SYS-9), 0055 (flash work), 0063 (abandonment), 0064 (`ROLLBACK`), 0067 (log names,
@@ -49,28 +50,37 @@ wear.
      <version>`.
    Slots and versions are written as 0067 says (`A` or `B`; `major.minor.build`). For a reset
    it does not command (watchdog, a crash), the entries written before it are what survives.
-4. **The start entry.** At every start the application MUST log, as the first entry of the
-   run, `start after <cause>: log kept` or `start after <cause>: log lost`, with `<cause>` one
-   of `power-on`, `software`, `watchdog`, `brown-out`, `pin`, `unknown`. "lost" means the
-   ring started empty (power loss, or the check of point 2 failed as a whole). Until P-SYS-2
-   is set the cause is not read and is `unknown` (`IDENTIFY` tag 17 = 0, Annex P placeholder).
-5. **Boot stage.** The boot stage's outcomes (a trial started, a rollback because the trial
-   reset before confirming itself, a slot refused, 0067) MUST appear in the log right after
-   the start entry, either written by the boot stage into the kept ring or derived by the
-   application from the boot record (the firmware's choice). Lines: `boot: trial of slot <s>
+4. **The start entry, written by the boot stage** (firmware question 1, 2026-11-22). At
+   every start the boot stage MUST write, as the first entry of the run and before anything
+   else it logs, `start after <cause>: log kept` or `start after <cause>: log lost`. "lost"
+   means the ring started empty (power loss, or the check of point 2 failed as a whole). It
+   is the only writer of the start entry: the application writes none and continues the ring.
+   If the boot stage starts no image (0067 point 3.3), the start entry and its lines are still
+   in the ring and are read after the next start that reaches the network.
+   **The cause** (firmware question 2, 2026-11-22) is named from the MCU's reset flags, read
+   once per start by the boot stage and then cleared, so that each start reports its own
+   reset. A reset that sets several flags is named by the first of this order: `watchdog`
+   (either watchdog), `software`, `power-on`, `brown-out`, `pin`; `unknown` only when no flag
+   is set. The application gets the cause from the boot stage (the firmware's way), and the
+   start entry, `IDENTIFY` tag 17, the reset counters of A3.5 and `WDT_RESET_AT_START` all use
+   that one reading. P-SYS-2 is only whether the flags are trustworthy on this radio, the
+   vendor bootloader having run first; its radio check confirms, for each kind of reset, the
+   cause named.
+5. **Boot stage lines.** The boot stage's outcomes (a trial started, a rollback because the
+   trial reset before confirming itself, a slot refused, 0067) MUST follow the start entry,
+   written by the boot stage into the kept ring. Lines: `boot: trial of slot <s>
    started`, `boot: rollback to slot <s> (trial not confirmed)`, `boot: slot <s> refused:
    <check>` (0067).
 6. **Pending hardware.** Whether this RAM survives the stage that runs before the boot stage
    at a reset is the question P-SYS-9 already asks for the counters, and is measured by the
-   same radio check, now over the log ring's range too. P-SYS-2 keeps only the reset cause.
+   same radio check, now over the log ring's range too. P-SYS-2 is now only whether the reset flags are trustworthy (point 4).
    Until P-SYS-9 is set the log is allowed to start empty after a reset (`log lost`); nothing
    else depends on it. P-SYS-9 stays part of the freeze rule because of the counters, not
    because of the log.
 7. **What T-A1-34 checks** (reference model or emulator, where RAM survives a reset without
    power loss): after the restart, `READ_LOG` returns, in sequence with no gap, the entry
    `restart: update-abandoned` with an uptime of the previous run within 5 s of the
-   `UPDATE_BEGIN` plus 10 min, then `start after software: log kept` (`start after unknown:
-   log kept` before P-SYS-2), then the entries of the new run; `UPDATE_STATUS` reports idle,
+   `UPDATE_BEGIN` plus 10 min, then `start after software: log kept`, then the entries of the new run; `UPDATE_STATUS` reports idle,
    `IDENTIFY` tag 10 reports 0, and RX works. On the radio it is run once P-SYS-9 is set;
    before that it checks only that the start entry is present, with `log kept` or `log lost`.
    Test T-A1-91 (new) covers the other reasons, the boot-stage lines, a watchdog reset with
@@ -90,7 +100,8 @@ wear.
 
 ## Consequences
 
-- Spec A1.7 ("Kept over a reset"); Annex P rows P-SYS-2 (reset cause only) and P-SYS-9 (the
+- Spec A1.7 ("Kept over a reset", "The start entry"); Table M-2 tag 17 (values); Annex P rows
+  P-SYS-2 (whether the reset flags are trustworthy) and P-SYS-9 (the
   log ring added); tests T-A1-34 (rewritten) and T-A1-91 (new).
 
 ## Sources
