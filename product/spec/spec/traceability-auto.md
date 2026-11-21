@@ -47,4 +47,5 @@
 | 0043 | 0043 — Update packages are linked for one slot; no update during a trial boot | 1 | 3 | network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0044 | 0044 — Self-confirmation of a trial boot | 0 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0045 | 0045 — The safe state holds from 20 µs after the boot stage starts | 0 | 3 | network-interface: A3 Safety behaviour visible on the network; network-interface: Annex P — Pending hardware parameters; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0046 | 0046 — CW keyer timing, weight, strict spacing and iambic modes | 1 | 2 | network-interface: B10 Transmit (milestone M4); network-interface: Transmit (B10) |  |
 
