@@ -94,6 +94,9 @@ pub enum Error<E> {
     TooLarge,
     /// SEND ended with a timeout (ARP for the destination failed).
     SendTimeout,
+    /// The previous SEND on this socket had not ended within `send_wait_polls` (its ARP still
+    /// under way): this datagram was not sent, and is counted in `dropped_busy`.
+    Busy,
     /// Polling a command or flag gave up.
     Stuck,
 }
@@ -145,11 +148,17 @@ pub struct Ch394<S> {
     pub poll_limit: u32,
     /// A SEND is under way on the socket; the next send waits for its end first.
     pending: [bool; SOCKETS as usize],
+    /// Bound on that wait, in status reads (one SPI transaction each, about 10 us at 16 MHz).
+    /// Never the full `poll_limit`: an ARP to a host that is gone takes RTIME x RCN (default
+    /// 200 ms x 8, [CH394] 7.1.11-12), which would stall the caller (0054).
+    pub send_wait_polls: u32,
+    /// Datagrams not sent because the previous send on their socket had not ended.
+    pub dropped_busy: [u32; SOCKETS as usize],
 }
 
 impl<S: SpiDevice> Ch394<S> {
     pub fn new(spi: S) -> Self {
-        Self { spi, buf_kib: [2; SOCKETS as usize], poll_limit: 100_000, pending: [false; SOCKETS as usize] }
+        Self { spi, buf_kib: [2; SOCKETS as usize], poll_limit: 100_000, pending: [false; SOCKETS as usize], send_wait_polls: 100, dropped_busy: [0; SOCKETS as usize] }
     }
 
     pub fn release(self) -> S {
@@ -345,7 +354,10 @@ impl<S: SpiDevice> Ch394<S> {
 
     /// Send one raw Ethernet frame (without FCS) from socket 0 in MACRAW.
     pub fn macraw_send(&mut self, frame: &[u8]) -> Result<(), Error<S::Error>> {
-        let _ = self.finish_send(0);
+        if let Ok(false) = self.finish_send(0) {
+            self.dropped_busy[0] = self.dropped_busy[0].saturating_add(1);
+            return Err(Error::Busy);
+        }
         let free = self.read_u16_stable(bsb::sock_reg(0), sock::TX_FSR)? as usize;
         if frame.len() > free {
             return Err(Error::TooLarge);
@@ -359,16 +371,18 @@ impl<S: SpiDevice> Ch394<S> {
     }
 
     /// Wait for the end of a SEND under way on socket `n` (SEND_OK or TIMEOUT).
-    fn finish_send(&mut self, n: u8) -> Result<(), Error<S::Error>> {
+    /// Wait, at most `send_wait_polls` status reads, for the end of the SEND under way on socket
+    /// `n`. Ok(true): no send under way any more; Ok(false): still under way.
+    fn finish_send(&mut self, n: u8) -> Result<bool, Error<S::Error>> {
         if !self.pending[n as usize] {
-            return Ok(());
+            return Ok(true);
         }
-        for _ in 0..self.poll_limit {
+        for _ in 0..self.send_wait_polls.max(1) {
             let ir = self.read_u8(bsb::sock_reg(n), sock::IR)?;
             if ir & sock::IR_SENDOK != 0 {
                 self.write(bsb::sock_reg(n), sock::IR, &[sock::IR_SENDOK])?;
                 self.pending[n as usize] = false;
-                return Ok(());
+                return Ok(true);
             }
             if ir & sock::IR_TIMEOUT != 0 {
                 self.write(bsb::sock_reg(n), sock::IR, &[sock::IR_TIMEOUT])?;
@@ -376,16 +390,23 @@ impl<S: SpiDevice> Ch394<S> {
                 return Err(Error::SendTimeout);
             }
         }
-        self.pending[n as usize] = false;
-        Err(Error::Stuck)
+        Ok(false)
     }
 
-    /// Send one datagram from socket `n`. Does not wait for the datagram to leave: a send waits
-    /// only for the end of the previous send on the same socket (the chip takes one SEND at a
-    /// time per socket), so a slow destination (ARP) never stalls the caller's other work. A
-    /// timeout of the previous datagram is reported by this call and the new one is still sent.
+    /// Send one datagram from socket `n`. Does not wait for the datagram to leave. The chip takes
+    /// one SEND at a time per socket, so a send first waits for the end of the previous one on
+    /// the same socket, at most `send_wait_polls` reads (about 1 ms); if it has not ended (an ARP
+    /// under way) the datagram is dropped, counted in `dropped_busy`, and `Busy` returned: a
+    /// slow destination never stalls the caller. A timeout of the previous datagram is reported
+    /// by this call and the new one is still sent.
     pub fn udp_send(&mut self, n: u8, ip: [u8; 4], port: u16, data: &[u8]) -> Result<(), Error<S::Error>> {
+        // The previous send on this socket must have ended: wait a little, else drop this one
+        // (counted) rather than stall the caller on an ARP (0054).
         let previous = self.finish_send(n);
+        if let Ok(false) = previous {
+            self.dropped_busy[n as usize] = self.dropped_busy[n as usize].saturating_add(1);
+            return Err(Error::Busy);
+        }
         let cap = self.buf_kib[n as usize] as usize * 1024;
         if data.len() > cap {
             return Err(Error::TooLarge);

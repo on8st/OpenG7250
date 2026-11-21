@@ -693,6 +693,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 }
                 // Counters of the key path for GET_STATS (Table B10-1, B10.5a item 1).
                 server.stats.net_busy_pass_max_us = busy_pass_max_us;
+                server.stats.net_send_dropped = chip.dropped_busy.iter().map(|&n| n as u64).sum();
                 server.stats.cw_hang_clamped = p2.key.cw_hang_clamped;
                 server.stats.cw_speed_clamped = p2.key.cw_speed_clamped;
                 server.stats.takeovers = p2.takeovers;

@@ -21,11 +21,13 @@ struct Chip {
     tx_rd: [u16; 8],
     /// RX read pointer at the last RECV, to compute what a RECV consumed.
     rx_base: [u16; 8],
+    /// SEND does not end (an ARP under way): SEND_OK is not set.
+    hold_sendok: bool,
 }
 
 impl Chip {
     fn new() -> Self {
-        let mut c = Chip { common: [0; 0x40], sreg: [[0; 0x30]; 8], rx: [[0; 2048]; 8], tx: [[0; 2048]; 8], sent: vec![], tx_rd: [0; 8], rx_base: [0; 8] };
+        let mut c = Chip { common: [0; 0x40], sreg: [[0; 0x30]; 8], rx: [[0; 2048]; 8], tx: [[0; 2048]; 8], sent: vec![], tx_rd: [0; 8], rx_base: [0; 8], hold_sendok: false };
         c.common[0x39] = 0x04;
         c.common[0x09..0x0F].copy_from_slice(&[0x02, 0xAB, 0xCD, 0x00, 0x00, 0x01]);
         c.common[0x2E] = 0b011; // link up, 100 Mbit/s, half duplex
@@ -75,7 +77,9 @@ impl Chip {
                 let ip = [self.sreg[n][0x0C], self.sreg[n][0x0D], self.sreg[n][0x0E], self.sreg[n][0x0F]];
                 let port = u16::from_be_bytes([self.sreg[n][0x10], self.sreg[n][0x11]]);
                 self.sent.push((n as u8, ip, port, d));
-                self.sreg[n][0x02] |= 0x10;
+                if !self.hold_sendok {
+                    self.sreg[n][0x02] |= 0x10;
+                }
             }
             _ => {}
         }
@@ -211,4 +215,29 @@ fn buffers_are_checked() {
     c.set_buffers([1, 2, 1, 3, 6, 0, 2, 1], [1, 1, 1, 0, 0, 8, 2, 3]).unwrap();
     // A datagram larger than its socket's transmit buffer is refused.
     assert!(matches!(c.udp_send(0, [1, 2, 3, 4], 1, &[0u8; 1500]), Err(Error::TooLarge)));
+}
+
+#[test]
+fn a_send_behind_an_unfinished_one_is_dropped_and_counted_not_waited_for() {
+    // 0054: a send waits at most send_wait_polls for the previous one on its socket (an ARP
+    // under way), then drops and counts the new datagram.
+    let mut c = chip();
+    c.udp_open(1, 1025).unwrap();
+    let mut d = c.release().0;
+    d.hold_sendok = true;
+    let mut c = Ch394::new(Dev(d));
+    c.udp_send(1, [10, 0, 0, 1], 5000, &[1]).unwrap();
+    assert!(matches!(c.udp_send(1, [10, 0, 0, 1], 5000, &[2]), Err(Error::Busy)));
+    assert_eq!(c.dropped_busy[1], 1);
+    // Another socket is not affected.
+    c.udp_open(2, 1026).unwrap();
+    // The first send ends: the next one goes out.
+    let mut d = c.release().0;
+    d.hold_sendok = false;
+    d.sreg[1][0x02] |= 0x10;
+    let mut c = Ch394::new(Dev(d));
+    c.udp_send(1, [10, 0, 0, 1], 5000, &[3]).unwrap();
+    let d = c.release().0;
+    let sent: Vec<u8> = d.sent.iter().filter(|s| s.0 == 1).map(|s| s.3[0]).collect();
+    assert_eq!(sent, vec![1, 3]);
 }
