@@ -37,7 +37,13 @@ region, never in sector 0) and writes `out/` (`docs/memory-layout.md`, "Outputs"
 
 Rust, `no_std`, on Embassy (`embassy-stm32`). Hardware drivers are written against
 `embedded-hal` traits, so that protocol and state code also builds and is tested on the host
-(`cargo test`, against `testbench/` and `product/refmodel/`).
+(`cargo test`), with test inputs written from the spec only.
+
+The reference model (`product/refmodel/`) is independent of this firmware (0037). It is never a
+code dependency: no crate, file or test of the firmware imports, reads or copies from it. It
+appears only as a network peer in black-box interoperability tests (the `testbench/` runs
+against the model and against the firmware over the network). The protocol crate
+(`crates/proto`) is shared with `g7250ctl`, not with the model.
 
 ## Inputs
 
