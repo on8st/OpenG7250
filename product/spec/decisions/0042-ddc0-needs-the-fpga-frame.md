@@ -26,7 +26,7 @@ not taken here.
 4. P-RX-2 is also part of the TX gate of the freeze rule, because the frame may hold a transmit
    enable.
 5. Not decided here: whether the unit's factory calibration values may be reused for bytes 9–18
-   (ON8ST). Decided by 0060 (proposed): reused, confirmed by measurement on the radio.
+   (ON8ST). Decided by 0060: reused, confirmed by measurement on the radio.
 
 ## Addendum: stream reason order (firmware question, 2026-11-21)
 

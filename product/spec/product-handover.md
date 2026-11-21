@@ -89,8 +89,8 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0057 | Link-local used unprobed (visible) if MACRAW fails; start-up bound 17 s | accepted (2026-11-21) |
 | 0058 | GET_STATS `hp_rx`: High Priority packets read from port 1027 | accepted (2026-11-21) |
 | 0059 | Unasked capability record may come in up to three parts | accepted (2026-11-21) |
-| 0060 | DDC0 frame values (P-RX-2) from the unit's factory calibration, confirmed by measurement on the radio (T-B6-28); gate unchanged until then | proposed |
-| 0061 | The store is in flash sectors 6 and 7, used in turn; sector 6 checked in F1; addendum: own images too large for their slot get 61, updates touch the store only as store writes | accepted (2026-11-21); addendum proposed |
+| 0060 | DDC0 frame values (P-RX-2) from the unit's factory calibration, confirmed by measurement on the radio (T-B6-28); gate unchanged until then | accepted (2026-11-21) |
+| 0061 | The store is in flash sectors 6 and 7, used in turn; sector 6 checked in F1; addendum: own images too large for their slot get 61, updates touch the store only as store writes | accepted (2026-11-21), addendum too |
 | 0062 | Flash layout (slots A, B and the store) reported in `IDENTIFY` tag 25; layout stays firmware design | proposed |
 | 0063 | Update codes: no transfer in progress gives 54 (block) or 55 (verify, activate); unreadable package header 17, unsupported component 56 | proposed |
 | 0064 | Torn boot-record writes; `ROLLBACK` needs a confirmed image and a good other slot (else 55), starts it as a trial | proposed |
