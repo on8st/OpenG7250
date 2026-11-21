@@ -360,6 +360,14 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
 - Activation MUST be atomic; power loss before the switch leaves the old image running (U-5).
 - The first boot of a new image is a trial; without self-confirmation within 60 s of start,
   the boot stage MUST return to the previous image and log the rollback (U-6; 0020 §24; 0028).
+  **Self-confirmation** (0044): the image confirms itself, by writing the boot record, once it
+  has run for at least 10 s with the network up (CH394 initialised and the management socket
+  open), its main loop running and the watchdog serviced, and with no class 2 fault (A3.5). It
+  needs no host. If it has not confirmed itself 60 s after start, it MUST carry out a commanded
+  reset (A1.9) after which the boot stage starts the previous image. If the trial image resets
+  for any other reason before it has confirmed itself (a crash, the watchdog, a power loss),
+  the boot stage MUST also start the previous image at the next start, because the boot record
+  still marks the trial as unconfirmed. Either rollback is logged.
   Until the image has confirmed itself, RX works but an arm MUST be rejected with
   `MAINTENANCE` (0022 §10).
   Two slots and an atomic boot choice are feasible with the boot stage above (U-10; 0028).
@@ -3525,6 +3533,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-65 | A region other than 0 in `SET_CONFIG` (tag 6) gets status 48; with region 0 a DUC0 frequency at each edge of every range of Table A3-0 is inside, 1 Hz outside each edge is outside (reference model with a complete calibration set; A1.6 C-6; Table A3-0; 0039). |
 | T-A1-66 | With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041). |
 | T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
+| T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
