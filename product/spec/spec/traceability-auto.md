@@ -65,4 +65,6 @@
 | 0061 | 0061 — The store is in flash sectors 6 and 7, checked in F1 | 1 | 3 | network-interface: A1 Management channel; network-interface: Annex P — Pending hardware parameters; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0062 | 0062 — The flash layout is reported in IDENTIFY (tag 25) | 1 | 3 | network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0063 | 0063 — Status codes for an unreadable package header and for update commands with no transfer | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0064 | 0064 — Torn boot-record writes and the ROLLBACK command | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0065 | 0065 — Flash work: erase timing, failure, power loss and ECC errors | 1 | 4 | network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Management channel, ownership, safety (A1–A3); network-interface: Session, ownership, watchdog (B5) |  |
 

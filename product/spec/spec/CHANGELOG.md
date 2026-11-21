@@ -64,6 +64,9 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
   magic or version gets 17, an unsupported component 56; new tests T-A1-80 and T-A1-81.
 - 0063 addendum: only update commands answered 0 or 1 restart the 10-minute timer; the state
   after `UPDATE_ABORT` is set out in A1.8; new test T-A1-82.
+- 0064, 0065 (proposed), from the testbench run-sheet gaps: torn boot-record writes, `ROLLBACK`,
+  flash erase timing and failure, power loss in store writes, flash ECC; source [STM32H72x];
+  new tests T-A1-83 to T-A1-87 and T-B5-22.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 
