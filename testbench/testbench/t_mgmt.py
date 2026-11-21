@@ -345,6 +345,21 @@ def dhcp_messages(ctx) -> list[dict]:
     return [m for m in (r or []) if isinstance(m, dict)]
 
 
+def retry_exchanges(log, linklocal: str) -> list[int]:
+    """Start times (t_us) of the DHCP retry exchanges while link-local: the client's DISCOVERs
+    from the link-local address (0052), those less than 2 s apart counted as one exchange (one
+    borrow of at most 2 s, 0041)."""
+    t = sorted(m["t_us"] for m in log if str(m.get("type", "")).upper().replace("DHCP", "") == "DISCOVER"
+               and str(m.get("src", "")).split(":")[0] == linklocal)
+    starts: list[int] = []
+    last = None
+    for x in t:
+        if last is None or x - last > 2_000_000:
+            starts.append(x)
+        last = x
+    return starts
+
+
 def discovers(log):
     """t_us of the client's DHCPDISCOVER and DHCPREQUEST messages in a dhcp.log (only a client
     sends these two types, RFC 2131 Table 2)."""
@@ -367,29 +382,35 @@ def t_a1_66(ctx):
     with m(ctx) as c:
         t = identify(ctx, c)
         ctx.check("management answers on the link-local address", t.get(1) == b"G7250", repr(t.get(1)))
-    # wait for six attempts: 4 + 8 + 16 + 32 + 64 s after the first, about 2 min
+    # The retries while no lease is held (A1.11; 0041). The power-on exchange is not a retry: its
+    # DISCOVERs come from 0.0.0.0, the retries from the link-local address (0052). Each retry is
+    # one exchange inside a borrow of at most 2 s; the 4, 8, 16, 32, 64 s are the free gaps
+    # between borrows, so exchange start to exchange start is gap + borrow (<= 2 s), each gap
+    # randomised by -1 to +1 s (RFC 2131 4.1).
     deadline = time.monotonic() + 200
-    times = []
+    starts = []
     while time.monotonic() < deadline:
-        times = discovers(dhcp_messages(ctx))
-        if len(times) >= 6:
+        starts = retry_exchanges(dhcp_messages(ctx), ip)
+        if len(starts) >= 6:
             break
         time.sleep(2.0)
-    gaps = [(b - a) / 1e6 for a, b in zip(times, times[1:])]
-    want = [4, 8, 16, 32, 64][:len(gaps)]
-    # RFC 2131 4.1: each delay randomised by -1 to +1 s
-    ctx.check("at least six DHCP attempts within 200 s", len(times) >= 6, f"{len(times)} attempts")
-    ctx.all_of("retry spacing 4 s doubling to 64 s (each +-1 s)", list(zip([round(g, 2) for g in gaps], want)),
-               lambda x: abs(x[0] - x[1]) <= 1.0)
+    times = starts
+    gaps = [(b - a) / 1e6 for a, b in zip(starts, starts[1:])]
+    want = [min(4 * 2 ** n, 64) for n in range(len(gaps))]
+    ctx.check("at least six DHCP retry exchanges while link-local within 200 s", len(starts) >= 6, f"{len(starts)} exchanges")
+    ctx.all_of("retry spacing: free gap 4 s doubling to 64 s plus a borrow of at most 2 s (each gap +-1 s), "
+               "exchange start to exchange start", list(zip([round(g, 2) for g in gaps], want)),
+               lambda x: x[1] - 1.0 <= x[0] <= x[1] + 2.0 + 1.0)
     if len(times) < 2:
         return
-    # the borrow: send IDENTIFY every 500 ms from 0.5 s before the next expected retry for 2.5 s
+    # the borrow: send IDENTIFY every 500 ms from 1.5 s before the next expected retry for 6 s
+    # (the retry starts 64 s +-1 s after the end of the last borrow, which lasted up to 2 s)
     nxt = times[-1] / 1e6 + 64.0
     now_emu = (ctx.fixture("hw.observe") or {}).get("t_us", 0) / 1e6 if "hw.observe" in ctx.endpoint.get("fixtures", []) else None
     if now_emu is None:
         ctx.notes.append("borrow part not run: no emulated clock (hw.observe t_us)")
         return
-    wait = nxt - 0.5 - now_emu
+    wait = nxt - 1.5 - now_emu
     if wait > 70:
         ctx.notes.append(f"borrow part not run: next retry {wait:.0f} s away")
         return
@@ -397,11 +418,11 @@ def t_a1_66(ctx):
     answered = []
     with m(ctx) as c:
         rid = c.next_id()
-        for i in range(6):
+        for i in range(12):
             r = c.raw(build(CMD["IDENTIFY"], b"", rid), timeout=0.45)  # one request id: retransmissions
             answered.append(bool(r))
             time.sleep(0.05)
-    ctx.check("a request repeated every 500 ms for 2.5 s around a retry is answered", any(answered), str(answered))
+    ctx.check("a request repeated every 500 ms for 6 s around a retry is answered", any(answered), str(answered))
     longest, run = 0, 0
     for a in answered:
         run = 0 if a else run + 1
