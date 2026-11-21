@@ -421,7 +421,7 @@ def main() -> int:
     doc = {"format": "g7250-catalogue", "version": 1,
            "spec": {"branch": "spec/draft", "commit": git("log", "-1", "--format=%h", "--",
                     "product/spec"), "sha256_of_inputs": src_hash},
-           "his": {"commit": "72591aa"},
+           "his": {"commit": "069ea0b"},
            "targets": ["host", "emulator", "needs-radio"],
            "tests": tests}
     (OUT / "catalogue.json").write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n",
