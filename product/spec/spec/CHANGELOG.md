@@ -19,7 +19,9 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   `ROLLBACK` to a slot whose trial failed is accepted (tag 9 = 1) and starts a trial.
 - Annex P, P-SYS-9: the persist block is stated as a firmware-chosen range of AXI SRAM
   (currently 0x2401FF80–0x2401FFFF, as [HIS] `069ea0b` names it), without a pointer into the
-  firmware documents.
+  firmware documents; its radio check is the spec's own test T-A3-60.
+- Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
+  a row may cite another test; a second definition is still a finding (542 ids, as before).
 
 ## 1.0 — version 1.0, 2026-11-21 (tag `spec-v1.0`)
 
