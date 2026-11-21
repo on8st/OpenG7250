@@ -51,4 +51,5 @@
 | 0047 | 0047 — Unkey reason at the end of an ATU tune cycle | 1 | 4 | network-interface: A3 Safety behaviour visible on the network; network-interface: B8 G7250 register map; network-interface: Transmit (B10); part-c-tci-profile: C5.5 TX arm on TCI |  |
 | 0048 | 0048 — Bound from link up to open sockets | 0 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0049 | 0049 — Link-local probe on socket 0, defence by giving the address up | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0050 | 0050 — Fault counters across a reset: pending hardware, part of the TX gate | 0 | 3 | network-interface: A1 Management channel; network-interface: A3 Safety behaviour visible on the network; network-interface: Management channel, ownership, safety (A1–A3) |  |
 

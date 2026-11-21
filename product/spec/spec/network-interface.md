@@ -283,7 +283,7 @@ Table A1-4 — What a factory reset restores (0022 §60)
 | C-7 TCI allow-list | empty (any address in the radio's own subnet) | 0020 §31 |
 | TCI port (part C C2.4) | 50001 | 0021 §2 |
 | Log (A1.7) | kept | 0008 L-2 |
-| Fault entry counters, reset counters, `TRIP_COUNT` (A3.5) | kept; cleared only at power-on | 0022 §27 |
+| Fault entry counters, reset counters, `TRIP_COUNT` (A3.5) | kept; cleared only at power-on (survival across resets: P-SYS-9) | 0022 §27; 0050 |
 | Firmware images and update state (A1.8) | unchanged | 0008 U-5 |
 | Calibration set (A1.12) | kept | 0039 |
 | Write session, challenges, stored replies (A1.4, A1.10) | discarded, as at every reset | 0022 §11 |
@@ -1274,8 +1274,11 @@ A3.5 **Fault state** (0007, Decision 5):
   `NOT_CLEARABLE`.
 - **Counters** (0022 §27). The fault entry counter per code, a reset counter per reset cause
   and `TRIP_COUNT` count since power-on. They MUST survive `RESTART` and every other reset
-  without loss of power and are cleared only at power-on; whether the hardware keeps them
-  across a processor reset: HIS-13. They are read with `GET_STATS` and logged (A1.7). An
+  without loss of power and are cleared only at power-on. They are kept in RAM; whether that RAM
+  content survives a reset without power loss, including the vendor bootloader that runs
+  before the boot stage, is pending hardware (P-SYS-9; HIS-13). P-SYS-9 is part of the freeze
+  rule of Annex P: until it is shown, TX stays locked, so a lost count can never let a
+  `RESTART` lift an escalation (0050). They are read with `GET_STATS` and logged (A1.7). An
   escalated code therefore stays class 2 after a `RESTART`; only a power cycle at the radio
   clears the count.
 
@@ -3389,7 +3392,7 @@ unit are written as its calibration set (A1.12); fixing the encoding or a defaul
 is a spec change, made in this table.
 
 **Freeze rule** (0035). Transmit stays disabled until every parameter of groups P-RF, P-PWR,
-P-SEN and P-TIM, and P-RX-2, P-TX-1, P-ATU-1 and P-ANT-1, is set (the configuration frame of P-RX-2
+P-SEN and P-TIM, and P-RX-2, P-TX-1, P-ATU-1, P-ANT-1 and P-SYS-9, is set (the configuration frame of P-RX-2
 may hold a transmit enable, [HIS] HIS 80): the RF path in transmit is only known
 once the ATU and antenna latches have known safe values ([HIS] HIS 85). Until then record `tx`
 bit 4 is 0, and every arm is rejected with `NOT_CALIBRATED` (Table B8-3; B10.2 item 3; part C
@@ -3430,13 +3433,14 @@ Table P-1 — Pending hardware parameters
 | P-NET-2 | Whether the CH394 MAC address is unique per unit ([HIS] HIS 40) | A1.5, B3 | HIS-15 | the CH394 value is used as it is |
 | P-NET-3 | Whether the CH394 reports the destination address (unicast, directed or limited broadcast) of a received UDP datagram ([HIS] HIS 40, HIS 90) | B3.9 (Set IP) | HIS-14 | treat every Set IP as unicast or directed broadcast: own subnet only, any source while link-local (B3.9) |
 | P-SYS-1 | Pin states between reset and the boot stage's GPIO init (board pull resistors on the RF control pins of [HIS] HIS 85, and what the vendor bootloader leaves); whether they hold the safe levels in that window | A3.6, A3.5 | HIS-13 | outside this spec before the boot stage runs; the boot stage sets the safe state within 20 µs of its first instruction (A3.6; 0045) |
-| P-SYS-2 | Reset cause and RAM retained across a warm reset (fault counters, log) | A1.7, A3.5, Table B8-3 `WDT_RESET_AT_START` | HIS-13, HIS-18 | counters and log are lost at every reset |
+| P-SYS-2 | Reset cause (power-on, software, watchdog), and whether the log survives a warm reset | A1.7, Table B8-3 `WDT_RESET_AT_START`, Annex M tag 17 | HIS-13, HIS-18 | reset cause reported as 0 (unknown); the log is lost at every reset |
 | P-SYS-3 | Power-up path without the controller (HIS 20 H1/H2) | part A scope (0029) | HIS-17 | none; observation T0-P2 |
 | P-SYS-4 | Behaviour of the stock controller's panel with a silent main unit | part A scope (0023) | HIS-17 | CTRL idle ([HIS] HIS 70) |
 | P-SYS-5 | Drill F1: the vendor bootloader starts an image of this firmware, and the vendor path installs the stock firmware into an empty application area; whether the vendor bootloader uses an application sector as staging ([HIS] HIS 15 rule 5) | A1.8 (slot layout), A1.8a items 3, 9 (0028) | HIS-19 | no first install before F1; foreign `UPDATE_BEGIN` gets status 56 |
 | P-SYS-6 | Power draw in idle, for a later standby (0029) | part A scope | — | quiet idle only |
 | P-SYS-7 | Start mode of the independent watchdog (IWDG1_SW option byte, [HIS] HIS 10, HIS 90) | A1.8a item 3 (installer), firmware | HIS-13 | the firmware and the installer service the watchdog whenever it may run |
 | P-SYS-8 | SEND and TUNER interfaces on the main unit: whether and how the firmware drives or reads them | A3.6, A3.7, B4.8 `atu` bit 4, `regmap_groups` bit 7 | HIS-09 | released (inactive) and not offered |
+| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`). Radio check: write a pattern, then a software reset (`RESTART`) and a watchdog reset, and read it back in the boot stage | A3.5 "Counters", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters are kept as far as the hardware keeps them, and nothing relies on them |
 | P-RX-1 | Physical receive paths behind the two receive tuning words ([HIS] HIS 80) | B2, B3, 0004 | HIS-02 | one DDC |
 | P-RX-2 | FPGA configuration frame (command 0x01, [HIS] HIS 80): meaning and safe values of the status byte 0 and of bytes 9–18 (per-rate calibration among them), position of the spectral-inversion flag; which tuning word (offset 1 or 5) is DDC0; I/Q order of the 0x04 samples; bus set-up, strobe width and turnaround | B6.1, B6.7, B4.8 `streams` | HIS-01, HIS-02 | DDC0 not offered (`streams` bit 0 = 0, `STREAM_STATUS` reason 2); no configuration frame written outside the A3.6 safe state |
 | P-TX-1 | The third tuning word as the transmit word ([HIS] HIS 80, HYPOTHESIS) | B10 (firmware) | HIS-02 | not applicable while TX is disabled |
@@ -3688,6 +3692,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-57 | Level 1, a P2 host sending CW as DUC I&Q with PTT, zero samples (I = Q = 0) between elements and a gap of 300 ms, `t_blank` below the gap (reference model): RF above the "RF while not keyed" threshold injected in a gap is detected, the fault state with `RF_NOT_KEYED` entered, no later than `t_blank` + 10 ms after the last non-zero sample (or after the injection, if later), while PTT stays set; RF that decays within `t_blank` after each element gives no fault; the same with the zero samples fed during an underflow shorter than the underrun time; with non-zero noise samples in the gaps the check does not run there (known limit) (Table A3-2, A3.9a item 6; 0022 §88 item 1). |
 | T-A3-58 | v1.0 (0030): with level 1 active, armed and unarmed, with and without hardware CW selected, toggling the local PTT input (PH6) and the KEY contacts (PH3, PH4) keys nothing, and High Priority status byte 4 bits [0]–[2] stay 0 (reference model with simulated inputs; [HIS] HIS 85). |
 | T-A3-59 | With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040). |
+| T-A3-60 | Needs the radio (P-SYS-9): after two `SWR_REPEATED` entries, a `RESTART` and then a processor watchdog reset leave the fault entry counter and `TRIP_COUNT` unchanged, so the third entry is class 2; a power cycle clears them. Before P-SYS-9 is set the arm is rejected with `NOT_CALIBRATED` (A3.5; Annex P; 0050). |
 
 ### Discovery (B3)
 
