@@ -30,6 +30,10 @@ Priority: **M1** = needed for milestone M1 (discovery, capability block, RX-IQ);
 - **Update** ([HIS] `5292ba8`, gate review 8): bus cycle (STB/CMD active-high, MEDIUM; read turnaround rule), 0x04 samples big-endian 24-bit, six strobes per sample (MEDIUM), I/Q order unknown; which word is DDC0 unknown; byte 0 and bytes 9–18 of 0x01 unknown, so DDC0 cannot run until they are understood (P-RX-2; 0042).
 - Question: how many independent receive channels (DDCs) can the main unit run at the same
   time?
+- Added by 0060: does the factory calibration (24Cxx EEPROM at I²C1 0x50, HIS 15 rule 3) hold
+  the values the factory firmware writes into bytes 0 and 9–18 of the 0x01 frame, and if so
+  where and in what layout? Until answered, P-RX-2 is taken from a capture of the frames on
+  PE0–PE10 (HIS 90).
 - Why: P2 reports the number of DDCs in the discovery reply [P2]. Each DDC adds one I&Q
   socket and its bandwidth (`analysis/ch394-network-budget.md`).
 - Known: "one receiver" comes from the start brief (0001) and is not stated in

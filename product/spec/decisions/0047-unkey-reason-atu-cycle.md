@@ -1,6 +1,7 @@
 # 0047 — Unkey reason at the end of an ATU tune cycle
 
-- Status: proposed (to the repository owner, ON8ST); answers a firmware question of 2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers a firmware
+  question of 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0022 §22, §38 (tune cycle), 0032 (own ATU control).
 
@@ -10,7 +11,7 @@
 request released) for both a tuned end and an abort. Reason 1 is right for an abort, which
 releases the request, but misleading for a cycle that ends by itself.
 
-## Decision (proposed)
+## Decision
 
 1. New unkey reason 11, "ATU tune cycle ended by itself", for a cycle that ends tuned
    (`ATU_STATE` 3) or failed by itself (`ATU_STATE` 4).

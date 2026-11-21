@@ -1,7 +1,7 @@
 # 0051 — Port 7250 sequence counters per destination
 
-- Status: proposed (to the repository owner, ON8ST); answers an ambiguity found by test
-  T-A2-11 (firmware and testbench, 2026-11-21)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers an ambiguity
+  found by test T-A2-11 (firmware and testbench, 2026-11-21)
 - Date: 2026-11-21
 - Builds on: 0022 §3, §29, §73 item 22, §83 item 4, §86 item 10; [P2] "Sequence Number".
 
@@ -11,7 +11,7 @@ B2.7 keeps a counter "for each local port and direction"; A2.4 step 1 gave the t
 "the next sequence number of local port 7250". The firmware numbered an answer to a non-owner
 with the owner's counter, so the owner's stream showed a gap; the bench expected none.
 
-## Decision (proposed)
+## Decision
 
 Reading (b), as the firmware proposed and openg7250 advised:
 

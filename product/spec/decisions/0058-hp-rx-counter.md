@@ -1,11 +1,11 @@
 # 0058 — Counter of High Priority packets received
 
-- Status: proposed (to the repository owner, ON8ST); answers a testbench request on T-B5-20,
-  2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers a testbench
+  request on T-B5-20, 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0054, 0055; [CH394].
 
-## Decision (proposed)
+## Decision
 
 1. `GET_STATS` counts every High Priority packet read from port 1027, from any source and before
    the owner check, as `hp_rx`. A lost packet then shows even when it repeats the state in force.

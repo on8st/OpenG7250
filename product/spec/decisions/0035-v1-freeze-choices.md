@@ -1,7 +1,7 @@
 # 0035 — Choices for the v1.0 freeze without the radio
 
-- Status: proposed (to the repository owner, ON8ST); written by the product session to finish
-  the spec without the radio (ON8ST's go for items 1–5, 2026-11-20)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); written by the product
+  session to finish the spec without the radio (ON8ST's go for items 1–5, 2026-11-20)
 - Date: 2026-11-20
 - Applies to: `spec/network-interface.md` (conventions, A1.6, A1.7, A1.10, A1.11, A3.6, B2,
   B4.8, B6, B10.2, Table B8-3, General and DUC-specific bytes, Annex P), part C (C5.5.6, C5.7,
@@ -14,7 +14,7 @@
 79 values in the spec were "TBD" with a HIS id. The cleared HIS answers some of them; the rest
 need the real radio, which is not delivered yet (HIS 90). A v1.0 must be frozen without it.
 
-## Decision (proposed)
+## Decision
 
 1. **Pending hardware.** Every value that needs the radio gets a parameter id in the new Annex P
    (Table P-1) with a safe placeholder. "TBD" no longer appears; the text says "pending hardware

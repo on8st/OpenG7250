@@ -1,10 +1,11 @@
 # 0059 — The unasked capability record may come in up to three parts
 
-- Status: proposed (to the repository owner, ON8ST); answers a firmware question, 2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers a firmware
+  question, 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0003 §2, 0022 §49, 0051, 0054.
 
-## Decision (proposed)
+## Decision
 
 The firmware's reading is accepted and written into B4.4:
 

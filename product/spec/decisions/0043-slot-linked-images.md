@@ -1,7 +1,7 @@
 # 0043 — Update packages are linked for one slot; no update during a trial boot
 
-- Status: proposed (to the repository owner, ON8ST); answers a firmware design question of
-  2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers a firmware
+  design question of 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0008 (U-3 to U-6), 0028 (boot stage, two slots), 0039 (Annex M).
 
@@ -20,7 +20,7 @@ the package header (Table M-4) did not say so.
 - **C. Position-independent images.** Against: hard to guarantee for `no_std` Rust on Cortex-M
   with a vector table at a fixed address, and not needed.
 
-## Decision (proposed)
+## Decision
 
 1. Table M-4 byte 52 names the target slot (0 either, 1 A, 2 B); identification tag 23 names
    the running slot. `UPDATE_BEGIN` with an image for the running slot gets the new status 63

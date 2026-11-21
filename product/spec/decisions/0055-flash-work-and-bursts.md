@@ -1,7 +1,7 @@
 # 0055 — Flash work: exempt from the burst rule, never while armed or keyed
 
-- Status: proposed (to the repository owner, ON8ST); answers a firmware follow-up on 0054,
-  2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers a firmware
+  follow-up on 0054, 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0054, 0039 (calibration set), A1.6, A1.8, A1.10.
 
@@ -11,7 +11,7 @@ Flash writes and erases in the network task (management writes, a store compacti
 block, the boot or trial record) stall it, a sector erase for up to seconds. During that time
 High Priority packets beyond the two that port 1027 holds can be lost (firmware estimate).
 
-## Decision (proposed)
+## Decision
 
 1. The firmware's exemption is accepted: while a management write that writes flash, a store
    compaction or a firmware update is in progress, 0054's no-loss rule does not apply, and a P2

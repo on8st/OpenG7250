@@ -1,11 +1,12 @@
 # 0048 — Bound from link up to open sockets
 
-- Status: proposed (to the repository owner, ON8ST); answers testbench finding SF-24
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers testbench
+  finding SF-24
 - Date: 2026-11-21
 - Amended by 0057 (start-up bound 17 s; MACRAW failure).
 - Builds on: 0035 (DHCP with link-local fallback), 0041 (DHCP socket borrow); [RFC3927].
 
-## Decision (proposed)
+## Decision
 
 Counted from link up (the CH394 reports the link), the management and P2 sockets are open
 within 5 s when a DHCP server answers the first DISCOVER, and within 15 s when none answers
