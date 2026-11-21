@@ -163,7 +163,11 @@ Table A1-2 — Management commands (0020 §27)
 | 0x0060 | `GET_CALIBRATION` | no | reads the calibration set (A1.12; 0039) |
 | 0x0061, 0x0062 | `SET_CALIBRATION`, `CLEAR_CALIBRATION` | yes | write or clear the calibration set; refused with status 57 while a P2 session runs, 50 while armed or keyed on any level, 58 during an update (A1.12; 0039) |
 
-The payload of every command is in Annex M (0039).
+The payload of every command is in Annex M (0039). Every status this table names for a
+command applies subject to the precedence of Table A1-3: where an earlier code also applies (for
+example 36 for `SET_FIRST_SECRET` with a secret already set, or 57 for `SET_CALIBRATION` during a
+P2 session), the reply carries that one. Every such request is refused either way, so the order
+changes only the code, never whether flash work starts (B2.3, "Flash work"; 0055).
 
 Table A1-3 — Management status codes (0020 §27)
 
