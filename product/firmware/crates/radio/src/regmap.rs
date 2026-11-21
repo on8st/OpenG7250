@@ -323,8 +323,9 @@ impl RegMap {
         }
     }
 
-    /// The pairs pushed to the owner at a session start (B10.2 item 1; B8.2).
-    pub fn session_start_pairs(&self, tx: &TxCore) -> [Pair; 6] {
+    /// The pairs pushed to the owner at a session start (B10.2 item 1; B8.2): the arm, stream
+    /// and link state and every status register a host reads without writing.
+    pub fn session_start_pairs(&self, tx: &TxCore) -> [Pair; 10] {
         [
             (TX_ARM_TOKEN, tx.token()),
             (TX_ARM_STATE, tx.arm_state_reg()),
@@ -332,6 +333,10 @@ impl RegMap {
             (WATCHDOG_STATE, self.watchdog_state()),
             (STREAM_STATUS, self.stream_status),
             (LINK_STATUS, self.link_status),
+            (SAFETY_STATE, 0),
+            (SENSOR_VALID, 0),
+            (ATU_STATE, ATU_STATE_UNKNOWN),
+            (ANT_STATE, 0),
         ]
     }
 }

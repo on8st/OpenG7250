@@ -340,6 +340,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let mut answered: u32 = 0;
     let mut last_link = link;
     loop {
+        // Session watchdog and status first, on every pass, so that no branch below can delay
+        // the standby beyond B5.6's 1100 ms (T-B5-10).
+        p2.tick(&mut chip, Instant::now().as_millis());
         match chip.udp_recv(SOCK_DISCOVERY, &mut rx) {
             // General packet on 1024: byte 4 = 0x00 (B11.4; Table B11-1).
             Ok(Some(d)) if d.len >= 5 && rx[4] == 0x00 && d.src_port != discovery::PORT => {

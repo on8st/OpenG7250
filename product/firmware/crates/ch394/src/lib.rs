@@ -136,11 +136,13 @@ pub struct Ch394<S> {
     buf_kib: [u8; SOCKETS as usize],
     /// Bound on polling loops (each iteration one SPI transaction).
     pub poll_limit: u32,
+    /// A SEND is under way on the socket; the next send waits for its end first.
+    pending: [bool; SOCKETS as usize],
 }
 
 impl<S: SpiDevice> Ch394<S> {
     pub fn new(spi: S) -> Self {
-        Self { spi, buf_kib: [2; SOCKETS as usize], poll_limit: 100_000 }
+        Self { spi, buf_kib: [2; SOCKETS as usize], poll_limit: 100_000, pending: [false; SOCKETS as usize] }
     }
 
     pub fn release(self) -> S {
@@ -262,6 +264,7 @@ impl<S: SpiDevice> Ch394<S> {
     }
 
     pub fn udp_close(&mut self, n: u8) -> Result<(), Error<S::Error>> {
+        self.pending[n as usize] = false;
         self.command(n, sock::CR_CLOSE)?;
         self.write(bsb::sock_reg(n), sock::IR, &[0xFF])
     }
@@ -293,8 +296,34 @@ impl<S: SpiDevice> Ch394<S> {
         }))
     }
 
-    /// Send one datagram from socket `n`. Waits for SEND_OK or TIMEOUT.
+    /// Wait for the end of a SEND under way on socket `n` (SEND_OK or TIMEOUT).
+    fn finish_send(&mut self, n: u8) -> Result<(), Error<S::Error>> {
+        if !self.pending[n as usize] {
+            return Ok(());
+        }
+        for _ in 0..self.poll_limit {
+            let ir = self.read_u8(bsb::sock_reg(n), sock::IR)?;
+            if ir & sock::IR_SENDOK != 0 {
+                self.write(bsb::sock_reg(n), sock::IR, &[sock::IR_SENDOK])?;
+                self.pending[n as usize] = false;
+                return Ok(());
+            }
+            if ir & sock::IR_TIMEOUT != 0 {
+                self.write(bsb::sock_reg(n), sock::IR, &[sock::IR_TIMEOUT])?;
+                self.pending[n as usize] = false;
+                return Err(Error::SendTimeout);
+            }
+        }
+        self.pending[n as usize] = false;
+        Err(Error::Stuck)
+    }
+
+    /// Send one datagram from socket `n`. Does not wait for the datagram to leave: a send waits
+    /// only for the end of the previous send on the same socket (the chip takes one SEND at a
+    /// time per socket), so a slow destination (ARP) never stalls the caller's other work. A
+    /// timeout of the previous datagram is reported by this call and the new one is still sent.
     pub fn udp_send(&mut self, n: u8, ip: [u8; 4], port: u16, data: &[u8]) -> Result<(), Error<S::Error>> {
+        let previous = self.finish_send(n);
         let cap = self.buf_kib[n as usize] as usize * 1024;
         if data.len() > cap {
             return Err(Error::TooLarge);
@@ -309,17 +338,10 @@ impl<S: SpiDevice> Ch394<S> {
         self.write(bsb::sock_tx(n), wr, data)?;
         self.write(bsb::sock_reg(n), sock::TX_WR, &wr.wrapping_add(data.len() as u16).to_be_bytes())?;
         self.command(n, sock::CR_SEND)?;
-        for _ in 0..self.poll_limit {
-            let ir = self.read_u8(bsb::sock_reg(n), sock::IR)?;
-            if ir & sock::IR_SENDOK != 0 {
-                self.write(bsb::sock_reg(n), sock::IR, &[sock::IR_SENDOK])?;
-                return Ok(());
-            }
-            if ir & sock::IR_TIMEOUT != 0 {
-                self.write(bsb::sock_reg(n), sock::IR, &[sock::IR_TIMEOUT])?;
-                return Err(Error::SendTimeout);
-            }
+        self.pending[n as usize] = true;
+        match previous {
+            Err(Error::SendTimeout) => Err(Error::SendTimeout),
+            _ => Ok(()),
         }
-        Err(Error::Stuck)
     }
 }
