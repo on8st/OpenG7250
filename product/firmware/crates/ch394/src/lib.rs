@@ -232,7 +232,9 @@ impl<S: SpiDevice> Ch394<S> {
 
     /// Set the receive and transmit buffer of every socket, in KiB: any value 0-16, each
     /// direction 16 KiB in total ([CH394] 7.2.12, 7.2.13, p.19: Sn_RXBUF_SIZE, Sn_TXBUF_SIZE,
-    /// 1 KiB blocks given out in socket order). Set before the sockets open.
+    /// 1 KiB blocks given out in socket order). Set before the sockets open. Use powers of two:
+    /// the 16-bit socket pointers wrap at 65536, and how a wrap maps onto a buffer whose size
+    /// does not divide 65536 is not documented.
     pub fn set_buffers(&mut self, rx: [u8; SOCKETS as usize], tx: [u8; SOCKETS as usize]) -> Result<(), Error<S::Error>> {
         let sum = |k: &[u8; SOCKETS as usize]| k.iter().map(|&k| k as u32).sum::<u32>();
         if sum(&rx) > 16 || sum(&tx) > 16 || rx.iter().chain(tx.iter()).any(|&k| k > 16) {
