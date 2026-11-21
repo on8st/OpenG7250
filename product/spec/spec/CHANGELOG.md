@@ -70,6 +70,7 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
 - SF-28: the update-state test expects `BUSY` for a P2 arm during an update, not `MAINTENANCE`.
 - 0066 (proposed, SF-29): A3.6b TX path check: configuration and pin level, every 5 ms, fault
   after 10 ms of mismatch; new test T-A3-61.
+- 0066 addendum (SF-30): Table A3-6b lists the checked pins; SEND and TUNER join it with P-SYS-8.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 
