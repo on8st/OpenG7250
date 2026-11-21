@@ -73,6 +73,8 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
 - 0066 addendum (SF-30): Table A3-6b lists the checked pins; SEND and TUNER join it with P-SYS-8.
 - 0066 addendum: first check within 100 ms of the boot stage's first instruction; DAC rows by
   host test until a DAC driver exists.
+- 0066 addendum: during flash work the check samples in the wait loop and runs at the end; fault
+  within 20 ms after the end.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 

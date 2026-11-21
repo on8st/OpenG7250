@@ -56,7 +56,7 @@
 | 0052 | 0052 — DHCP messages while link-local carry the link-local source address | 0 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0053 | 0053 — Normative socket buffer split (Table B2-2), sizes powers of two | 0 | 2 | network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
 | 0054 | 0054 — High Priority bursts the radio must take without loss | 0 | 2 | network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
-| 0055 | 0055 — Flash work: exempt from the burst rule, never while armed or keyed | 0 | 3 | network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
+| 0055 | 0055 — Flash work: exempt from the burst rule, never while armed or keyed | 0 | 4 | network-interface: A1 Management channel; network-interface: A3 Safety behaviour visible on the network; network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
 | 0056 | 0056 — A malformed command payload is status 17, in the framing group | 0 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0057 | 0057 — Link-local without MACRAW, and the start-up bound corrected to 17 s | 0 | 3 | network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0058 | 0058 — Counter of High Priority packets received | 0 | 2 | network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
@@ -67,5 +67,5 @@
 | 0063 | 0063 — Status codes for an unreadable package header and for update commands with no transfer | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0064 | 0064 — Torn boot-record writes and the ROLLBACK command | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0065 | 0065 — Flash work: erase timing, failure, power loss and ECC errors | 1 | 4 | network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Management channel, ownership, safety (A1–A3); network-interface: Session, ownership, watchdog (B5) |  |
-| 0066 | 0066 — What `TX_PATH_NOT_BLOCKED` detects, and how fast | 1 | 2 | network-interface: A3 Safety behaviour visible on the network; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0066 | 0066 — What `TX_PATH_NOT_BLOCKED` detects, and how fast | 1 | 3 | network-interface: A3 Safety behaviour visible on the network; network-interface: Management channel, ownership, safety (A1–A3); network-interface: Session, ownership, watchdog (B5) |  |
 
