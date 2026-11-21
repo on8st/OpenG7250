@@ -68,8 +68,8 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
   flash erase timing and failure, power loss in store writes, flash ECC; source [STM32H72x];
   new tests T-A1-83 to T-A1-87 and T-B5-22.
 - SF-28: the update-state test expects `BUSY` for a P2 arm during an update, not `MAINTENANCE`.
-- 0066 (proposed, SF-29): A3.6b TX path check: configuration and pin level, every 10 ms, two
-  checks in a row; new test T-A3-61.
+- 0066 (proposed, SF-29): A3.6b TX path check: configuration and pin level, every 5 ms, fault
+  after 10 ms of mismatch; new test T-A3-61.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 
