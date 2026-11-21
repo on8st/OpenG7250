@@ -814,13 +814,13 @@ def t_a1_88(ctx: Ctx):
         real, run_real = real_package(ctx, other), real_package(ctx, run)
         if real:
             h, img, f = real
-            # 32 bytes appended: the record's length differs from the header ("header"); a
-            # firmware whose integrity check covers what it received may name "integrity"
+            # 32 bytes appended: hash and image check pass (judged over the record's length), the
+            # record against the header fails: "header" (A1.8 "Image check"; 0067 point 1)
             cases += [("a failing integrity check", flip(img), reheader(h, flip(img), slot=other), {"integrity"}),
                       ("the record's version differs from the header", img, reheader(h, img, version=newer(f["version"]), slot=other),
                        {"header"}),
                       ("the record's length differs from the header", img + b"\xff" * 32, reheader(h, img + b"\xff" * 32, slot=other),
-                       {"header", "integrity"})]
+                       {"header"})]
         if run_real:
             h, img, f = run_real
             cases.append(("linked for the running slot", img, reheader(h, img, slot=0), {"slot"}))
