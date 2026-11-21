@@ -27,8 +27,9 @@ not hardware evidence.
   gives a window of 12–19 ms after RST# goes high in which the chip must not be
   accessed (VERIFIED, datasheet). The minimum RST# low time is open: to be
   taken from CH394DS1 (`90-needs-hardware.md`).
-- **SCK:** the maximum SPI clock is open: to be taken from CH394DS1. Until then:
-  about 17 MHz is the upper value seen in use on the board link, not a
+- **SCK:** the CH394 SPI device interface runs at up to 62 MHz in SPI mode 0
+  or 3 (WCH CH394 manual CH394DS1 V1.2, features list; VERIFIED, datasheet).
+  About 17 MHz is the upper value seen in use on the board link, not a
   datasheet limit (MEDIUM).
 - **Version register (F2-Q2):** CHIPV at 0x0039, read-only (CH394DS1 V1.2,
   table 6-1 and §7.1.16; VERIFIED). Its value on the radio is **not known**
