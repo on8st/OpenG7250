@@ -2040,8 +2040,9 @@ B4.4 **When the record is sent** (0003 §2):
    **In parts** (0059). Unlike the answer of item 1, the unasked record MAY be sent in up to
    three memory-mapped packets, so that no single send blocks the reading of port 1027 (B2.3,
    "High Priority bursts"). The parts go to the same register destination, in ascending
-   register address order, with consecutive numbers of the session's port 7250 counter (B2.7),
-   all within 50 ms of the first; together they hold every register of the record exactly once.
+   register address order, with increasing numbers of the session's port 7250 counter (B2.7):
+   a register push sent between two parts takes the numbers in between, so the parts need not
+   be numbered n, n+1, n+2; all within 50 ms of the first; together they hold every register of the record exactly once.
    The record is constant within a session (B4.7), so the parts never disagree; a host MUST
    NOT assume the unasked record arrives in one packet, and between parts it may see other
    register pushes. A host that needs the record in one packet uses `CAP_REQUEST` (item 1).
@@ -3864,7 +3865,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B4-16 | On a 10 Mbit/s link a `CAP_REQUEST` is answered with the record and with `LINK_STATUS` and `STREAM_STATUS`; the status answers are at most one per 100 ms per source and 10 per second in total (B5.8). |
 | T-B4-17 | A `CAP_REQUEST` from a non-owner repeated 1 s after an answered one is answered again; one repeated after 200 ms is dropped by the rate limit and counted (B4.4 items 3, 4). |
 | T-B4-18 | An r1.0 firmware reports record `tx` bits 0–3 = 1 and bit 4 = 0 without a complete calibration set; an arm that meets every other condition gets `NOT_CALIBRATED` (12), not `TX_NOT_IMPLEMENTED` (11). A build with bit 1 = 0 reports bit 4 = 0 and rejects the arm with 11, which precedes 12 (B4.8, B10, B10.2 item 3; 0036, 0039). |
-| T-B4-19 | The unasked record at a session start arrives in one to three packets to the owner's register destination, in ascending address order, with consecutive port 7250 sequence numbers, within 50 ms, together holding every record register once with the values of a `CAP_REQUEST` answer in the same session; the `CAP_REQUEST` answer is one packet (B4.4 items 1, 2; 0059). |
+| T-B4-19 | The unasked record at a session start arrives in one to three packets to the owner's register destination, in ascending address order, with increasing port 7250 sequence numbers (gaps only where other register pushes were sent in between, which the test sees as packets with those numbers), within 50 ms, together holding every record register once with the values of a `CAP_REQUEST` answer in the same session; the `CAP_REQUEST` answer is one packet (B4.4 items 1, 2; 0059). |
 
 ### Session, ownership, watchdog (B5)
 
