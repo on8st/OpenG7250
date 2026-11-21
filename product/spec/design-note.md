@@ -98,7 +98,7 @@ PTT paths, what the CTRL cable carries.
   never looser (0011).
 - **Network budget.** The CH394Q has 8 sockets. G7250-P2 with one receiver uses 7: ports 1024,
   1025, 1026, 1027, 1029, 1035 and the G7250 register map. DDC audio (1028) is not offered
-  (0017). One socket is left, for the management channel (0008). SPI at most 62 MHz limits
+  (0017). One socket is left, for the management channel (0008). SPI at most 62 MHz by the datasheet (about 17 MHz seen in use on the board, Annex P P-NET-1) limits
   receive IQ to about 384 ksps in practice (`analysis/ch394-network-budget.md`; 0004).
 
 ### 4.1 Capabilities, telemetry, management

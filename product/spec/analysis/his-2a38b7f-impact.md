@@ -183,3 +183,9 @@ with the streaming installer and no rollback. Recommendation: A/B, which keeps U
   P-ATU-1 placeholder say so. The latches stay unwritten.
 - HIS 10 (part, supply, AXI SRAM, HSE, state at start) and the CH394 reset window: firmware
   detail; no spec change.
+
+## 10. Addendum: `6e2208a` (gate review 7)
+
+- HIS 40 confirms the datasheet SPI maximum, 62 MHz in mode 0 or 3 (VERIFIED), which the spec
+  already cited as [CH394]; 17 MHz seen in use stays the safe bound (P-NET-1). P-NET-1 now cites
+  both. No other spec change.

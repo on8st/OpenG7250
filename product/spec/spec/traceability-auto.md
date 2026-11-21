@@ -41,4 +41,5 @@
 | 0037 | 0037 — g7250ctl in Rust, sharing the protocol crate with the firmware; an independent reference model | 2 | 0 |  | language of the management CLI |
 | 0038 | 0038 — The AetherSDR G7250 backend: C++/Qt, after firmware milestone F2, offered through the RFC | 2 | 1 | annex-aethersdr: For ON8ST |  |
 | 0039 | 0039 — Calibration set, transmit ranges and management payloads (testbench findings SF-01 to SF-18) | 1 | 14 | glossary: (top); network-interface: A1 Management channel; network-interface: A2 Ownership and level selection; network-interface: A3 Safety behaviour visible on the network; network-interface: Annex M — Management payloads; network-interface: B10 Transmit (milestone M4) … |  |
+| 0040 | 0040 — Faults found before the network are reported on the debug console only | 2 | 2 | network-interface: A3 Safety behaviour visible on the network; network-interface: Management channel, ownership, safety (A1–A3) |  |
 

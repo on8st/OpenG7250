@@ -69,8 +69,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0037 | `g7250ctl` in Rust, sharing the protocol crate with the firmware; reference model independent; test bench Python | proposed |
 | 0038 | AetherSDR G7250 backend in C++/Qt after firmware F2, offered through the RFC | proposed |
 | 0039 | Testbench findings SF-01..18: calibration set and commands (A1.12), transmit ranges Table A3-0, management payloads Annex M | proposed |
+| 0040 | Faults before the network (supply check) reported on the debug console only | proposed |
 
-All numbers 0001–0039 are now in use.
+All numbers 0001–0040 are now in use.
 
 ## Open questions for ON8ST
 

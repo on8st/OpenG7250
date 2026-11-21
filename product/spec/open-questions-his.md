@@ -1,6 +1,6 @@
 # Open questions for the hardware-interface spec (HIS)
 
-Questions that only the hardware-interface spec (`g7250-his`, now `his/` in the umbrella repository) can answer. The HIS was cleared by gate review 2 on 2026-11-20 and answered at commit `2a38b7f`; the answers to the follow-up questions passed gate review 3 at `d0a39b0`, the HIS-02 frame layout gate review 4 at `b95f519`, the HIS-02 word roles gate review 5 at `9d10e72`, and the answers to the firmware's questions gate review 6 at `d199d33`. Each question below carries its status; "pending hardware" means only the radio can settle it (HIS 90). This repository
+Questions that only the hardware-interface spec (`g7250-his`, now `his/` in the umbrella repository) can answer. The HIS was cleared by gate review 2 on 2026-11-20 and answered at commit `2a38b7f`; the answers to the follow-up questions passed gate review 3 at `d0a39b0`, the HIS-02 frame layout gate review 4 at `b95f519`, the HIS-02 word roles gate review 5 at `9d10e72`, the answers to the firmware's questions gate review 6 at `d199d33`, and the CH394 SPI maximum gate review 7 at `6e2208a`. Each question below carries its status; "pending hardware" means only the radio can settle it (HIS 90). This repository
 does not look for the answers itself (AGENTS.md rules 1 and 7). Each question says why we
 need it, which decision or milestone waits for it, and what public sources already say.
 
@@ -181,6 +181,7 @@ Priority: **M1** = needed for milestone M1 (discovery, capability block, RX-IQ);
 
 - **HIS answer** ([HIS] `2a38b7f`): partly (HIS 40); see `analysis/his-2a38b7f-impact.md` §2.
 - **Update** ([HIS] `d199d33`, gate review 6): CH394 reset window 12–19 ms after RST# high (VERIFIED, CH394DS1); minimum RST# low and maximum SCK still to be taken from the datasheet; about 17 MHz seen in use, not a datasheet limit (MEDIUM); CHIPV at 0x0039; whether the chip reports a datagram's destination address is not known (P-NET-3).
+- **Update** ([HIS] `6e2208a`, gate review 7): maximum SPI clock 62 MHz in mode 0 or 3 (CH394DS1 V1.2, VERIFIED); about 17 MHz seen in use stays MEDIUM and the safe bound until measured (P-NET-1). Open from F2-Q1: only the minimum RST# low time (firmware detail).
 - Question: please confirm the WCH CH394Q. Which interface connects it to the processor
   (SPI), at what clock, and does the existing design use the chip's sockets or MACRAW mode?
 - Why: the SPI clock caps all network throughput (at most 62 MHz [CH394]); the socket mode

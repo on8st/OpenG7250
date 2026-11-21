@@ -1223,6 +1223,24 @@ A3.5 **Fault state** (0007, Decision 5):
   escalated code therefore stays class 2 after a `RESTART`; only a power cycle at the radio
   clears the count.
 
+A3.5a **Faults before the network** (0040). Some faults are found by the boot stage before the
+network is brought up, so no host can be told over the network. In this version this is the
+core supply check: the supply configuration of the MCU can be written only once per power-on,
+and one that does not match the board wiring can harm the part ([HIS] HIS 10, `6e2208a`).
+
+1. If the boot stage finds a supply configuration that does not match the one this firmware
+   selects ([HIS] HIS 10), or cannot confirm it within its time-out, it MUST hold the safe
+   state of A3.6 ([HIS] HIS 85), MUST NOT bring up the CH394 (RST# held low, [HIS] HIS 40) or
+   any other peripheral beyond the debug console, and MUST NOT write flash.
+2. It reports the fault only on the debug console, USART1 TX on PB6 ([HIS] HIS 90), 115200
+   bit/s, 8 data bits, no parity, 1 stop bit, once per second, as one ASCII line:
+   `G7250 FAULT SUPPLY <PWR_CR3 as 8 hex digits> <MISMATCH|TIMEOUT>` followed by CR LF.
+3. The radio stays in that state until power is removed. A host sees no discovery reply and no
+   management answer; `g7250ctl discover` finds nothing. The owner's way out is the vendor path
+   (A1.8a item 9), which does not depend on this firmware.
+4. The fault is not stored and not reported in identification: writing flash on a supply the
+   firmware believes wrong is not safe, and a network bring-up on it is not either (0040).
+
 A3.6 **State after power-on, any reset, and every session end** (0007, Decision 5): PA and
 its bias off (bias channels at 0; the transmit bias per unit is P-PWR-5), TX path disabled, SEND and TUNER trigger released (HIS-09, HIS-10, HIS-13; [HIS] HIS 85); the firmware sets this state first in its start-up, because pin states before its GPIO init are pending hardware (P-SYS-1); DUC
 FIFO emptied (0022 §32); not armed, new token, session limits back to the persistent values (A3.4; after a reset the
@@ -1230,7 +1248,8 @@ persistent values are read from the stored configuration), `TX_MODE_CLASS` = 0,
 `KEYED_TIMEOUT` = 500 ms, watchdog counted as enabled, the TX settings of A3.6a at their
 session-start values (0022 §64); ATU not tuning, its latches unwritten and its state
 unknown (`ATU_STATE` 5) until P-ATU-1 is set, then as stored per band (0032; HIS-08); antenna latch unwritten and
-`ANT_STATE` 0 until P-ANT-1 is set (HIS-06); filters for the default RX frequency, preamplifier
+`ANT_STATE` 0 until P-ANT-1 is set (HIS-06); the strobes of these latches (PD13, PG2, PG5) are
+held at their inactive level (high) and never pulsed ([HIS] HIS 85, `d199d33`, MEDIUM); filters for the default RX frequency, preamplifier
 off and attenuation as pending hardware (P-RF-5; HIS-07).
 At a takeover only the TX-side part applies; RX-side settings are kept for the new owner
 (A2.4; 0022 §3). At a session end by a stop, a watchdog standby or a link loss (Table A3-1
@@ -1558,8 +1577,10 @@ Host Protocol"). Diagrams in this document show the UDP payload only, starting a
 B2.2 **Link.** The Ethernet interface is 10/100 Mbit/s; Gigabit is not available. Source:
 WCH CH394Q, 10/100 MAC and PHY [CH394] (ON8ST hardware inspection, 2026-11-19; to be
 confirmed, HIS-14). A host MUST NOT assume Gigabit throughput. The throughput towards the
-host is further limited by the SPI link between processor and CH394Q, at most 62 MHz [CH394]
-(`analysis/ch394-network-budget.md` §2; 0004, "Throughput arithmetic"; HIS-14). On a link
+host is further limited by the SPI link between processor and CH394Q: at most 62 MHz by the
+datasheet [CH394], and on this board about 17 MHz seen in use (MEDIUM), the highest working
+clock being pending hardware (P-NET-1; [HIS] HIS 40, `d199d33`; `analysis/ch394-network-budget.md`
+§2; 0004, "Throughput arithmetic"; HIS-14). On a link
 below 100 Mbit/s the G7250 refuses the session (B5.8; 0004 point 9).
 
 B2.3 **Local ports.** The G7250 MUST open exactly the local UDP ports in Table B2-1, and no
@@ -2269,7 +2290,7 @@ B6.10 **Wideband data (milestone M2).** (0004 point 4; option 5C; Resolved.)
   will be used"); byte 27 has the range "0 to 255mS" ([P2] General packet bytes 24–28). The
   G7250 reads zero in bytes 24–25, 27 and 28 as its fixed values; zero in byte 26 is the [P2]
   default 16 (Annex X1, D14; 0022 §21).
-- Informative: 160 packets/s, 1.32 Mbit/s payload, about 2.3 % SPI at 62 MHz (0004 point 4).
+- Informative: 160 packets/s, 1.32 Mbit/s payload, about 2.3 % SPI at 62 MHz, the datasheet maximum [CH394]; at the clock that works on this board the share is higher (P-NET-1) (0004 point 4).
   The frequency resolution is the ADC rate / 4096 (HIS-01). Depends on HIS-01 and HIS-18; if
   raw ADC blocks cannot be delivered, this is revisited (0004 point 4).
 
@@ -3272,7 +3293,7 @@ Table P-1 — Pending hardware parameters
 | P-RF-3 | RF-gone guard: forward-power threshold `P_rf_off` or guard time `t_rf_off`, with `t_rf_off` + `t_settle` ≤ 98.75 ms | A1.9, A3.9a items 1, 1a, 3; B10.5 | HIS-07, HIS-12 | not applicable while TX is disabled; a commanded reset waits the full `t_reset_wait` = 2 s if RF could be present |
 | P-RF-4 | RX step attenuator and preamplifier steps (chain B bits), attenuation during TX | A3.6, B7, part C C5.9 | HIS-07 | preamplifier off, attenuator at its first known position or unwritten; `G7250_ATT` absent |
 | P-RF-5 | RX default state: filters for the default receive frequency, preamplifier, attenuation | A3.6, B5.5 | HIS-07 | chain B output disabled (OE high, [HIS] HIS 85) until a known frame exists; then the P-RF-4 placeholder |
-| P-ANT-1 | Antenna selection (most likely PD13 latch bits 4–5, [HIS] HIS 85) and the default antenna after reset | A3.6, B8 `ANT_STATE`, part C C5.8 | HIS-06 | latch unwritten; `ANT_STATE` = 0 (unknown); `G7250_ANT` reports 0 and a set is answered with `READ_ONLY` |
+| P-ANT-1 | Antenna selection (most likely PD13 latch bits 4–5, [HIS] HIS 85) and the default antenna after reset | A3.6, B8 `ANT_STATE`, part C C5.8 | HIS-06 | latch unwritten, its strobe PD13 held inactive (high) and never pulsed ([HIS] HIS 85); `ANT_STATE` = 0 (unknown); `G7250_ANT` reports 0 and a set is answered with `READ_ONLY` |
 | P-ATU-1 | ATU latch meanings and safe values; tune power of the ATU profile; tune-time margin; where tuned states are stored | A3.4 rule 5, A3.9b, Table A3-2, B10.9, part C C5.7 | HIS-08, HIS-12 | latches unwritten, strobes PD13, PG2, PG5 held inactive (high) and never pulsed ([HIS] HIS 85); state unknown (`ATU_STATE` 5); `ATU_TUNE` rejected with `NOT_CALIBRATED` (0032) |
 | P-PWR-1 | Mapping of P2 drive level 0–255 and TCI `DRIVE` 0–100 to forward power (DAC channel 1, [HIS] HIS 85) | A3.4 rule 4, B10.8, part C C4 | HIS-12 | not applicable while TX is disabled |
 | P-PWR-2 | Limit values: SWR S1, S2, `P_min`; temperatures T1–T4 and their hysteresis; under-voltage `REDUCE` and `UNKEY` values; fold-back caps `P_swr`, `P_temp`; `P_ssb_mean`; maximum power at 50 MHz | Table A3-2, A3.4a, A3.4c, A3.5, B4.8 `tx_band` | HIS-11, HIS-12 | not applicable while TX is disabled |
@@ -3286,7 +3307,7 @@ Table P-1 — Pending hardware parameters
 | P-SEN-5 | Calibration of the receive signal level in dBm | part C C4 `RX_SENSORS` | HIS-11 | level reported uncalibrated, relative to full scale |
 | P-TIM-1 | Delay from the DUC input to the coupler | A3.4c, A3.9a item 6 | HIS-18 | not applicable while TX is disabled |
 | P-TIM-2 | DUC FIFO capacity while keyed; exact TX underrun time | B10.5, B10.7, Annex X1 D8, annex AetherSDR | HIS-18 | not applicable while TX is disabled |
-| P-NET-1 | Highest SPI clock to the CH394 that works on the radio (about 17 MHz seen in use, not a datasheet limit; the datasheet maximum is still to be taken from CH394DS1, [HIS] HIS 40) | B6, 0004 | HIS-14 | DDC0 rates 48, 96 and 192 ksps; 384 ksps offered only once ≥ 50 MHz is shown |
+| P-NET-1 | Highest SPI clock to the CH394 that works on the radio (datasheet maximum 62 MHz in SPI mode 0 or 3 [CH394], manual V1.2, features list, VERIFIED in [HIS] HIS 40, `6e2208a`; about 17 MHz seen in use on the board, MEDIUM, the safe bound until the board link is measured) | B6, 0004 | HIS-14 | DDC0 rates 48, 96 and 192 ksps; 384 ksps offered only once ≥ 50 MHz is shown |
 | P-NET-2 | Whether the CH394 MAC address is unique per unit ([HIS] HIS 40) | A1.5, B3 | HIS-15 | the CH394 value is used as it is |
 | P-NET-3 | Whether the CH394 reports the destination address (unicast, directed or limited broadcast) of a received UDP datagram ([HIS] HIS 40, HIS 90) | B3.9 (Set IP) | HIS-14 | treat every Set IP as unicast or directed broadcast: own subnet only, any source while link-local (B3.9) |
 | P-SYS-1 | Pin states between reset and the firmware's GPIO init (board pull-ups) | A3.6, A3.5 | HIS-13 | firmware sets the safe state first in its start-up ([HIS] HIS 85) |
@@ -3538,6 +3559,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-56 | With a DUC0 change that needs another RF-path state sent with a PTT 0→1 edge (reference model, `t_settle` 20 ms), a CWX paddle edge and an `ATU_TUNE` write 5 ms after the PTT edge are refused (the write with `KEYED`) and not latched; the PTT request keys after the settle; with the PTT request refused at the bound instead, the CWX bit still held does not key until a new edge (A3.9a item 3; 0022 §87 item 4). |
 | T-A3-57 | Level 1, a P2 host sending CW as DUC I&Q with PTT, zero samples (I = Q = 0) between elements and a gap of 300 ms, `t_blank` below the gap (reference model): RF above the "RF while not keyed" threshold injected in a gap is detected, the fault state with `RF_NOT_KEYED` entered, no later than `t_blank` + 10 ms after the last non-zero sample (or after the injection, if later), while PTT stays set; RF that decays within `t_blank` after each element gives no fault; the same with the zero samples fed during an underflow shorter than the underrun time; with non-zero noise samples in the gaps the check does not run there (known limit) (Table A3-2, A3.9a item 6; 0022 §88 item 1). |
 | T-A3-58 | v1.0 (0030): with level 1 active, armed and unarmed, with and without hardware CW selected, toggling the local PTT input (PH6) and the KEY contacts (PH3, PH4) keys nothing, and High Priority status byte 4 bits [0]–[2] stay 0 (reference model with simulated inputs; [HIS] HIS 85). |
+| T-A3-59 | With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040). |
 
 ### Discovery (B3)
 
