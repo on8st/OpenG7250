@@ -28,6 +28,14 @@ not taken here.
 5. Not decided here: whether the unit's factory calibration values may be reused for bytes 9–18
    (ON8ST).
 
+## Addendum: stream reason order (firmware question, 2026-11-21)
+
+When several `STREAM_STATUS` reasons apply to one stream, the first in this order is reported:
+10, 9, 8 (radio-wide); 1 (not enabled by the host); 13, 6, 11, 12, 5 (General-packet
+refusals); 2, 14 (not offered or not calibrated); 3, 4, 7 (stream parameters). So before
+P-RX-2 a DDC0 enable with an unsupported rate or sample size gets 2, and one with a
+General-packet refusal gets that refusal. Table B8-3; tests T-B6-10, 18, 19, 20, T-B7-04.
+
 ## Consequences
 
 - Spec B6.1, record `streams` bit 0, Annex P (P-RX-2, freeze rule, reception paragraph); test

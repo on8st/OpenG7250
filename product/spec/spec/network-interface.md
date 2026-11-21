@@ -2192,7 +2192,9 @@ DDC0 needs a complete FPGA configuration frame (command 0x01), whose status byte
 9–18 have no known meaning or safe values yet, and the I/Q order and the tuning word of DDC0
 are not known ([HIS] HIS 80, `5292ba8`). Until these are set (pending hardware, P-RX-2) DDC0
 is not offered: record `streams` bit 0 = 0, a DDC0 enable gets `STREAM_STATUS` reason 2 (not
-offered by this firmware), and no DDC0 packet is sent; discovery, the register map, the
+offered by this firmware), which takes precedence over the rate and sample-size reasons 3 and
+4 but not over the General-packet refusals (Table B8-3, stream reason order), and no DDC0
+packet is sent; discovery, the register map, the
 management channel and sessions work as usual. The firmware MUST NOT write a configuration
 frame unless the RF section is in the safe state of A3.6, because its status byte may hold a
 transmit enable ([HIS] HIS 80, HIS 85) (0042).
@@ -2558,7 +2560,7 @@ Table B8-3 — Reason and fault codes (0020 §8; 0022 §5, §19)
 | Drop reason (`TX_ARM_STATE` [23:16]; Table A3-1) | 0 none; 1 `HOST_DISARM`; 2 `RUN_CLEARED`; 3 `WATCHDOG`; 4 `TAKEOVER`; 5 `RESET`; 6 `FAULT` (events 6 and 13); 8 `LINK_DOWN`; 9 `SESSION_CHANGED`; 10 `LEVEL_CHANGE`; 11 `MAINTENANCE`; 12 `REDISCOVERY`; 13 `STOP` (TCI only: `STOP` command, part C C5.5.5 row 2); 14 `HOLDER_LOST` (TCI only: arm holder's connection closed, part C C5.5.5 row 3); 7 unused; 13 and 14 are never set over P2; 0x40 + limit id `LIMIT_<name>` (event 7: action `DISARM` only; a trip with action `FAULT` gives 6 `FAULT`, the cause in `FAULT_CODE`; 0022 §41) (0022 §30) |
 | Limit id (`TX_STATE` [31:24]; `LIMIT_STATUS` bit *n*; drop reason 0x40 + id) | 1 `LIMIT_TX_FREQ` (TX frequency); 2 `LIMIT_SWR` (SWR; host-tunable); 3 `LIMIT_PA_TEMP` (PA temperature; host-tunable); 4 `LIMIT_FWD_POWER` (forward power; host-tunable); 5 `LIMIT_SUPPLY_VOLTAGE` (supply voltage); 6 `LIMIT_CURRENT` (supply or PA current); 7 `LIMIT_TX_TIME` (maximum continuous TX time; host-tunable); 8 `LIMIT_ATU_TIME` (ATU tune time); 9 `LIMIT_SENSOR` (sensor plausibility); 10 `LIMIT_RF_NOT_KEYED` (RF while not keyed) |
 | Fault code (`FAULT_CODE`, `FAULT_FLAGS` bit) and class | 0 none; 2 `SWR_REPEATED` (3 SWR trips in 10 s), class 1; 3 `PA_OVERTEMP` (PA temperature above T4), class 1; 9 `SENSOR_IMPLAUSIBLE` (sensor missing, stuck or out of range), class 2; 10 `RF_NOT_KEYED` (RF while not keyed), class 2; 16 `TX_PATH_NOT_BLOCKED` (drop event 13), class 2; 17 `WDT_RESET_AT_START` (processor watchdog reset seen at start-up, HIS-13), class 1; 18 `SELFTEST_FAILED` (start-up self-test failed), class 2; 19 `INTERNAL_ERROR` (internal consistency error), class 2; codes 1 and 4–8 reserved (those limits have no `FAULT` action) |
-| Stream reason (`STREAM_STATUS` [6:0] per byte) | 0 none or running; 1 not enabled by the host; 2 not offered by this firmware; 3 sample rate not offered; 4 sample size not offered; 5 data format not offered (General byte 39); 6 time stamp or VITA-49 requested; 7 wideband parameters not offered; 8 link below 100 Mbit/s; 9 run bit clear; 10 update in progress; 11 VNA mode requested; 12 EER requested; 13 frequency encoding mismatch (General byte 37 bit [3] differs from discovery byte 21, B3.8; 0022 §73 item 12); 14 TX not calibrated (record `tx` bit 4 = 0, A1.12; 0039) |
+| Stream reason (`STREAM_STATUS` [6:0] per byte) | 0 none or running; 1 not enabled by the host; 2 not offered by this firmware; 3 sample rate not offered; 4 sample size not offered; 5 data format not offered (General byte 39); 6 time stamp or VITA-49 requested; 7 wideband parameters not offered; 8 link below 100 Mbit/s; 9 run bit clear; 10 update in progress; 11 VNA mode requested; 12 EER requested; 13 frequency encoding mismatch (General byte 37 bit [3] differs from discovery byte 21, B3.8; 0022 §73 item 12); 14 TX not calibrated (record `tx` bit 4 = 0, A1.12; 0039). Where several apply to one stream, the byte carries the first in this order: 10, 9, 8 (radio-wide), 1 (not enabled by the host), 13, 6, 11, 12, 5 (General-packet refusals), 2, 14 (not offered or not calibrated in this firmware), 3, 4, 7 (stream parameters) (0042) |
 | Write reject reason (`WRITE_STATUS` [7:0]) | 1 `UNKNOWN_ADDRESS`; 2 `READ_ONLY`; 3 `NOT_OWNER`; 4 `BAD_VALUE`; 5 `LOOSER_LIMIT`; 6 `BUSY`; 7 `NOT_CLEARABLE`; 8 `KEYED` (RF-path change or ATU tune while keyed); 9 `NOT_ARMED`; 10 `NOT_KEYABLE` (ATU tune while another key condition of A3.1a fails, A3.9b); 11 `NOT_CALIBRATED` (ATU tune before the ATU parameters are set, A3.9b; 0032) (B8.4; 0022 §22, §51) |
 
 Names introduced in this part and not in the decisions 0003–0008 (`STREAM_STATUS`,
@@ -3681,7 +3683,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B6-07 | Sequence number rolls over from 0xFFFFFFFF to 0 (reference model; forced counter). |
 | T-B6-08 | Packet rate matches the selected sample rate (rate / 238 per second) within tolerance, per offered rate. |
 | T-B6-09 | Each offered rate (48, 96, 192, and 384 if offered) streams without loss for a set duration, with and without TX IQ. |
-| T-B6-10 | A DDC0 rate outside `ddc_rates` (including 768 and 1536) stops DDC0, is not clamped, and is reported in `STREAM_STATUS`; a valid rate resumes it. |
+| T-B6-10 | A DDC0 rate outside `ddc_rates` (including 768 and 1536) stops DDC0, is not clamped, and is reported in `STREAM_STATUS`; a valid rate resumes it. With P-RX-2 set (reference model); before it, reason 2 (Table B8-3 order; 0042). |
 | T-B6-11 | A known test tone at a set offset from the DDC0 frequency appears at the right frequency and sign (I before Q). |
 | T-B6-12 | Samples are signed two's complement, MSB first (full-scale positive and negative test signals). |
 | T-B6-13 | Clearing DDC-specific byte 7 bit [0] stops DDC0 data; setting it resumes. |
@@ -3689,9 +3691,9 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B6-15 | Changing between offered rates while running takes effect without a stop. |
 | T-B6-16 | Fields listed as ignored in Table B6-2 have no effect on the stream. |
 | T-B6-17 | A host that does not know board type 200 and never writes the register map still receives DDC0 data (0015), tuned to the frequency it set as a phase word for a 122.88 MHz clock (B3.8, B4.11). |
-| T-B6-18 | A sample size other than 0 or 24 stops DDC0 with a reason. |
-| T-B6-19 | General byte 39 asking for little-endian, float or double stops DDC0 with a reason. |
-| T-B6-20 | General byte 37 bit [0] or [1] set stops DDC0 with a reason; time stamp bytes 4–11 are otherwise zero. |
+| T-B6-18 | A sample size other than 0 or 24 stops DDC0 with a reason. With P-RX-2 set (reference model); before it, reason 2 (Table B8-3 order; 0042). |
+| T-B6-19 | General byte 39 asking for little-endian, float or double stops DDC0 with a reason. The reason is 5, also before P-RX-2 (Table B8-3 order; 0042). |
+| T-B6-20 | General byte 37 bit [0] or [1] set stops DDC0 with a reason; time stamp bytes 4–11 are otherwise zero. The reason is 6, also before P-RX-2 (Table B8-3 order; 0042). |
 | T-B6-21 | Before M2, a wideband enable sends nothing; from M2, ADC0 wideband gives 8 packets of 1028 bytes every 50 ms, with sequence numbers 0–7 in every frame. |
 | T-B6-22 | From M2, wideband parameters other than 0 or the fixed values stop wideband with a reason. |
 | T-B6-23 | No microphone packets are sent unless `streams` bit 3 is set. |
@@ -3707,7 +3709,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B7-01 | Every field marked "ignored" in Tables B7-1, B7-2 and B10-1 has no effect. |
 | T-B7-02 | High Priority byte 4 bits [2]–[7], the TUNE bit and byte 1401 never key or switch anything. |
 | T-B7-03 | A non-default radio-side port in General bytes 5–22 or 29–30 is not honoured: the default stays, `LINK_STATUS` bit 17 is set and the request is logged; non-zero bytes 31–32 redirect register packets. |
-| T-B7-04 | General byte 37 bit [2] set stops DDC0 with reason 11. |
+| T-B7-04 | General byte 37 bit [2] set stops DDC0 with reason 11. Also before P-RX-2 (Table B8-3 order; 0042). |
 | T-B7-05 | General byte 58 bit [0] = 0 keeps a TX request from keying and sets `TX_STATE` bit 4. |
 | T-B7-06 | A General packet whose byte 37 bit [3] differs from discovery byte 21 stops DDC0 with `STREAM_STATUS` reason 13, keeps PTT from keying and is logged; a General packet with the matching bit ends it (B3.8). |
 | T-B8-01 | All registers of Table B8-2 marked "on change" or "event" are pushed within 5 ms of a change. |
