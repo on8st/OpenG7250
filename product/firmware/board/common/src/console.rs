@@ -70,6 +70,21 @@ pub fn init() {
     g.moder().modify(|w| w.set_moder(6, Moder::ALTERNATE));
 }
 
+/// Wait 100 ms on the core SysTick timer (polled, no interrupt), with the CPU on HSI 64 MHz
+/// ([`clocks_hsi`]). Used where the HAL timer is not running (boot stage, fault holds).
+pub fn wait_100ms() {
+    // SAFETY: SysTick is a core timer; early_init stopped it and nothing else uses it on these
+    // paths.
+    let mut syst = unsafe { cortex_m::Peripherals::steal() }.SYST;
+    syst.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
+    syst.set_reload(HSI_HZ / 10 - 1); // 6 399 999, fits the 24-bit reload
+    syst.clear_current();
+    syst.disable_interrupt();
+    syst.enable_counter();
+    while !syst.has_wrapped() {}
+    syst.disable_counter();
+}
+
 pub fn write_bytes(b: &[u8]) {
     let u = pac::USART1;
     for &c in b {

@@ -93,7 +93,12 @@ async fn main(spawner: Spawner) {
     // "supply-once") and runs only if it holds the board's configuration and is ready.
     let (supply_ok, cr3) = g7250_board::supply::ready_for_init();
     if !supply_ok {
-        hold_without_hal(cr3);
+        let o = if g7250_safety::supply::is_his10(cr3) {
+            g7250_safety::supply::Outcome::NotReady { cr3 }
+        } else {
+            g7250_safety::supply::Outcome::Mismatch { found: cr3 }
+        };
+        hold_without_hal(o);
     }
     let p = embassy_stm32::init(clock_config());
     // The HAL init does not touch GPIO levels (feature gpio-init-analog is off); re-assert anyway.
@@ -152,20 +157,20 @@ async fn main(spawner: Spawner) {
     }
 }
 
-/// Supply not as HIS 10 says: no HAL init, no network, no transmit. Safe state held, raw
-/// console, watchdog refreshed (the boot stage started it).
-fn hold_without_hal(cr3: u32) -> ! {
+/// Supply not as HIS 10 says (the boot stage should have stopped already): no HAL init, no
+/// network, no transmit; the same fault line as the boot stage, once per second (spec A3.5a;
+/// 0040). Safe state held, CH394 RST# still low, watchdog refreshed (the boot stage started it).
+fn hold_without_hal(o: g7250_safety::supply::Outcome) -> ! {
     console::init();
-    println!("app: FAULT supply PWR_CR3={:#010x} is not SMPS->LDO 2.5 V or not ready; holding the safe state", cr3);
-    let mut n: u32 = 0;
+    let mut line = [0u8; g7250_safety::supply::FAULT_LINE_MAX];
+    let n = g7250_safety::supply::fault_line(o, &mut line).unwrap_or(0);
     loop {
+        console::write_bytes(&line[..n]);
         for _ in 0..10 {
-            cortex_m::asm::delay(console::HSI_HZ / 10);
+            console::wait_100ms();
             safe::reassert();
             wdg::refresh();
         }
-        n = n.wrapping_add(1);
-        println!("app: supply fault, idle {}", n);
     }
 }
 

@@ -114,6 +114,36 @@ pub fn configure(r: &mut impl PwrRegs, polls: u32, mut refresh: impl FnMut()) ->
     Outcome::NotReady { cr3: r.read_cr3() }
 }
 
+/// Length of the fault line of spec A3.5a item 2, CR LF included:
+/// "G7250 FAULT SUPPLY " (19) + 8 hex digits + " " + "MISMATCH" or " TIMEOUT"-padded word + CR LF.
+pub const FAULT_LINE_MAX: usize = 19 + 8 + 1 + 8 + 2;
+
+/// The fault line of spec A3.5a item 2 (decision 0040; T-A3-59), sent once per second on the
+/// debug console: `G7250 FAULT SUPPLY <PWR_CR3 as 8 hex digits> <MISMATCH|TIMEOUT>` CR LF.
+/// Hex digits are upper case. `None` for an outcome that is not a fault.
+pub fn fault_line(o: Outcome, out: &mut [u8; FAULT_LINE_MAX]) -> Option<usize> {
+    let (cr3, word): (u32, &[u8]) = match o {
+        Outcome::Mismatch { found } => (found, b"MISMATCH"),
+        Outcome::NotReady { cr3 } => (cr3, b"TIMEOUT"),
+        Outcome::Kept | Outcome::Written => return None,
+    };
+    let head = b"G7250 FAULT SUPPLY ";
+    let mut n = 0;
+    out[..head.len()].copy_from_slice(head);
+    n += head.len();
+    for i in (0..8).rev() {
+        let d = ((cr3 >> (4 * i)) & 0xF) as u8;
+        out[n] = if d < 10 { b'0' + d } else { b'A' + d - 10 };
+        n += 1;
+    }
+    out[n] = b' ';
+    n += 1;
+    out[n..n + word.len()].copy_from_slice(word);
+    n += word.len();
+    out[n..n + 2].copy_from_slice(b"\r\n");
+    Some(n + 2)
+}
+
 /// For the application: the supply is usable for the HAL init only if it holds the HIS 10
 /// configuration and ACTVOSRDY is set. Reads only.
 pub fn ready_for_init(cr3: u32, csr1: u32) -> bool {
@@ -218,6 +248,19 @@ mod tests {
         p.ready_after = None;
         assert_eq!(configure(&mut p, 10, || {}), Outcome::NotReady { cr3: HIS10 });
         assert_eq!(p.writes, 0);
+    }
+
+    #[test]
+    fn fault_line_a3_5a() {
+        let mut b = [0u8; FAULT_LINE_MAX];
+        let n = fault_line(Outcome::Mismatch { found: 0x0000_0002 }, &mut b).unwrap();
+        assert_eq!(&b[..n], b"G7250 FAULT SUPPLY 00000002 MISMATCH\r\n");
+        let n = fault_line(Outcome::NotReady { cr3: 0x0100_002E }, &mut b).unwrap();
+        assert_eq!(&b[..n], b"G7250 FAULT SUPPLY 0100002E TIMEOUT\r\n");
+        let n = fault_line(Outcome::Mismatch { found: 0xDEAD_BEEF }, &mut b).unwrap();
+        assert_eq!(&b[..n], b"G7250 FAULT SUPPLY DEADBEEF MISMATCH\r\n");
+        assert_eq!(fault_line(Outcome::Kept, &mut b), None);
+        assert_eq!(fault_line(Outcome::Written, &mut b), None);
     }
 
     #[test]

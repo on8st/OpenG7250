@@ -41,7 +41,6 @@ fn main() -> ! {
     early_init();
     console::clocks_hsi();
     console::init();
-    wdg::start();
     let cause = reset::read(false);
 
     println!("");
@@ -61,19 +60,16 @@ fn main() -> ! {
         println!("boot: FAULT safe state not held; staying in the boot stage");
         hold();
     }
-    println!("boot: safe state held, watchdog {} ms", wdg::TIMEOUT_MS);
-
-    // Core supply, once and explicitly ([HIS] HIS 10; g7250_safety::supply).
+    // Core supply, once and explicitly ([HIS] HIS 10; g7250_safety::supply), before any other
+    // peripheral beyond the debug console is brought up (spec A3.5a item 1).
     match g7250_board::supply::configure() {
         g7250_safety::supply::Outcome::Kept => println!("boot: supply PWR_CR3 already SMPS->LDO 2.5 V, not written"),
         g7250_safety::supply::Outcome::Written => println!("boot: supply PWR_CR3 set to SMPS->LDO 2.5 V (was the power-on value)"),
-        o => {
-            // Not the board's configuration, or not ready: no further init that depends on it,
-            // no application start, no transmit. Safe state held, watchdog refreshed.
-            println!("boot: FAULT supply {:?}; PWR_CR3 not written; holding the safe state", o);
-            hold();
-        }
+        o => supply_fault(o),
     }
+
+    wdg::start();
+    println!("boot: safe state held, watchdog {} ms", wdg::TIMEOUT_MS);
 
     let record = select::last_record(flash(CONFIG));
     let valid = |s: Slot| {
@@ -108,12 +104,30 @@ fn main() -> ! {
     }
 }
 
+/// Fault before the network (spec A3.5a; 0040; T-A3-59): safe state held, CH394 RST# held low
+/// (it has been since the safe state, and nothing here releases it), no flash write, no other
+/// peripheral beyond the debug console, and once per second exactly the line of A3.5a item 2,
+/// until power is removed. The IWDG is refreshed in case the option bytes start it from reset
+/// ([HIS] HIS 10); the boot stage itself has not started it on this path.
+fn supply_fault(o: g7250_safety::supply::Outcome) -> ! {
+    let mut line = [0u8; g7250_safety::supply::FAULT_LINE_MAX];
+    let n = g7250_safety::supply::fault_line(o, &mut line).unwrap_or(0);
+    loop {
+        console::write_bytes(&line[..n]);
+        for _ in 0..10 {
+            console::wait_100ms();
+            safe::reassert();
+            wdg::refresh();
+        }
+    }
+}
+
 /// Stay in the boot stage: safe state held, watchdog refreshed, a heartbeat on the console.
 fn hold() -> ! {
     let mut n: u32 = 0;
     loop {
         for _ in 0..10 {
-            cortex_m::asm::delay(console::HSI_HZ / 10);
+            console::wait_100ms();
             wdg::refresh();
         }
         n = n.wrapping_add(1);
