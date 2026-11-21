@@ -94,6 +94,9 @@ class Mgmt:
                 time.sleep(max(0.0, 1.0 - (now - sent[0])) + 0.005)
             sent.append(time.monotonic())
         self.s.sendto(data, self.net.dest(7251, kind))
+        # only the reply to this request: a late reply to an earlier one (same socket) is not its
+        # answer and is counted in self.stale (a framing-error reply, 16-19, may not carry the id)
+        sent = parse(data)
         got, end = [], time.monotonic() + timeout
         while (left := end - time.monotonic()) > 0:
             r, _, _ = select.select([self.s], [], [], left)
@@ -101,7 +104,11 @@ class Mgmt:
                 break
             d, src = self.s.recvfrom(4096)
             if self.net.radio_port(src) == 7251:
-                got.append(parse(d) or {"raw": d})
+                rep = parse(d)
+                if sent and rep and rep["id"] != sent["id"] and rep["status"] not in (16, 17, 18, 19):
+                    self.stale = getattr(self, "stale", 0) + 1
+                    continue
+                got.append(rep or {"raw": d})
                 break
         return got
 
@@ -133,15 +140,31 @@ class Mgmt:
 RETRANSMIT_S, RETRANSMITS = 0.5, 5  # A1.4 host retransmission: every 500 ms, up to 5 times (0041)
 
 
-def req_retransmit(c: "Mgmt", cmd: str, payload: bytes = b""):
-    """A request sent as a host does (A1.4; A1.11 bound on a borrow): the same request id
-    every 500 ms, up to 5 retransmissions, so a DHCP borrow of at most 2 s is covered."""
-    rid = c.next_id()
+def send_retransmit(c: "Mgmt", data: bytes):
+    """One request datagram sent as a host does (A1.4; A1.11 bound on a borrow): the same bytes,
+    so the same request id, every 500 ms, up to 5 retransmissions; a DHCP borrow of at most 2 s
+    is covered. The reply, or None."""
     for _ in range(1 + RETRANSMITS):
-        r = c.raw(build(CMD[cmd], payload, rid), timeout=RETRANSMIT_S)
+        r = c.raw(data, timeout=RETRANSMIT_S)
         if r:
             return r[0]
     return None
+
+
+def req_retransmit(c: "Mgmt", cmd: str, payload: bytes = b""):
+    """An unauthenticated request with A1.4 retransmission."""
+    return send_retransmit(c, build(CMD[cmd], payload, c.next_id()))
+
+
+def authed_retransmit(c: "Mgmt", cmd: str, secret: bytes, payload: bytes = b""):
+    """An authenticated request with A1.4 retransmission: GET_CHALLENGE retransmitted, then the
+    signed request retransmitted unchanged (same id, same challenge and MAC: a retransmission the
+    radio already answered is answered from its stored reply)."""
+    r = req_retransmit(c, "GET_CHALLENGE")
+    if not r or r["status"] != 0:
+        return None
+    msg = build(CMD[cmd], payload, c.next_id(), flags=1)
+    return send_retransmit(c, msg + hmac.new(secret, r["payload"] + msg, hashlib.sha256).digest())
 
 
 def identify(ctx, c: Mgmt) -> dict[int, bytes]:

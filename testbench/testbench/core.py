@@ -135,13 +135,15 @@ class Ctx:
         # power cycle the runner answers "emulator not ready" at once (v1.4): retry for 60 s.
         deadline = time.monotonic() + NOT_READY_RETRY_S
         while True:
+            t_call = time.monotonic()
             try:
                 with socket.create_connection((host, int(port)), timeout=_timeout) as s:
                     s.sendall((json.dumps({"op": op, "args": args}) + "\n").encode())
                     line = s.makefile().readline()
                 rep = json.loads(line)
             except (OSError, ValueError) as e:  # socket.timeout is an OSError
-                raise RunnerFault(f"runner: fixture {op}: {type(e).__name__}: {e}") from None
+                raise RunnerFault(f"runner: fixture {op}: {type(e).__name__}: {e} (after {time.monotonic() - t_call:.1f} s "
+                                  f"wall, bench timeout {_timeout:.0f} s)") from None
             if rep.get("ok") or "not ready" not in str(rep.get("error", "")):
                 break
             if time.monotonic() >= deadline:

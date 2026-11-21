@@ -53,15 +53,21 @@ def updating(ctx, s: bytes, restart_at_end: bool = True):
                 restart(ctx, u)
             else:
                 u.req("END_WRITE_SESSION")  # leave the write session free for the next test
+            if getattr(c, "stale", 0):
+                ctx.notes.append(f"{c.stale} late management replies (to an earlier request id) set aside")
 
 
 def facts(ctx, u: Updater):
     """(running slot, other slot, version, layout) from IDENTIFY, or Skip."""
     t = u.identify()
+    if not t:
+        from .core import Missing
+        raise Missing("IDENTIFY: no reply to the request and 5 retransmissions 500 ms apart (A1.4)"
+                      if getattr(u, "no_identify", False) else "IDENTIFY: a status other than 0")
     lay = layout(t)
     run = t.get(23, b"")[:1]
     if not lay or run not in (b"\x01", b"\x02"):
-        raise Skip("IDENTIFY has no flash layout (tag 25) or running slot (tag 23)")
+        raise Skip(f"IDENTIFY has no flash layout (tag 25: {t.get(25)!r}) or running slot (tag 23: {t.get(23)!r})")
     slot = run[0]
     return slot, 3 - slot, version_of(t) or (0, 0, 0), lay
 

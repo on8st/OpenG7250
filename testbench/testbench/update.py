@@ -111,10 +111,17 @@ class Updater:
         c.pace = 18
 
     def req(self, cmd: str, payload: bytes = b""):
-        return self.c.authed(cmd, self.s, payload)
+        """Every update command as a host sends it: retransmitted per A1.4 (a DHCP borrow of up
+        to 2 s closes the management socket, A1.11)."""
+        from .mgmt import authed_retransmit
+        return authed_retransmit(self.c, cmd, self.s, payload)
 
     def identify(self) -> dict[int, bytes]:
-        r = self.c.req("IDENTIFY")
+        """IDENTIFY TLVs; {} when the radio gave no reply to the request and its retransmissions
+        (self.no_identify is then True), or a status other than 0."""
+        from .mgmt import req_retransmit
+        r = req_retransmit(self.c, "IDENTIFY")
+        self.no_identify = r is None
         return tlv(r["payload"]) if r and r.get("status") == 0 else {}
 
     def begin(self, hdr: bytes, flags: int = 0):
@@ -133,7 +140,8 @@ class Updater:
         return 0, n
 
     def status(self):
-        r = self.c.req("UPDATE_STATUS")
+        from .mgmt import req_retransmit
+        r = req_retransmit(self.c, "UPDATE_STATUS")
         if not r or r.get("status") != 0 or len(r["payload"]) < 10:
             return None
         p = r["payload"]
