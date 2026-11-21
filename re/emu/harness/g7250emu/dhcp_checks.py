@@ -62,6 +62,47 @@ class Run:
         self.boot.close()
 
 
+def sockets(out):
+    """The CH394 socket log of the first boot: OPEN/CLOSE with port and t_us."""
+    path = os.path.join(out, "sockets.jsonl")
+    return [json.loads(l) for l in open(path)] if os.path.isfile(path) else []
+
+
+P2_PORTS = (1024, 1025, 1026, 1027, 1029, 1035, 7250, 7251)
+
+
+def borrows(socks):
+    """Exchanges seen in the socket log. The power-on exchange: a socket open on
+    port 68 before the first P2 socket opens. A borrow: a socket that had a P2
+    port, reopened on port 68, until that socket is reopened on a P2 port.
+    Returns (p2_open_s, poweron (start, end) or None, [(start, end), ...]) in s."""
+    p2_open = None
+    poweron = None
+    out = []
+    cur = {}
+    for e in socks:
+        if e["op"] != "open":
+            continue
+        t = e["t_us"] / 1e6
+        n, port = e["socket"], e["port"]
+        if port == 68:
+            cur[n] = t
+            continue
+        if port in P2_PORTS:
+            if n in cur:
+                st = cur.pop(n)
+                if p2_open is None or st < p2_open:    # began before the P2 sockets opened
+                    poweron = (st, t)
+                else:
+                    out.append((st, t))
+            if p2_open is None:
+                p2_open = t
+    if p2_open is None:
+        for n, t in cur.items():
+            poweron = (t, None)
+    return p2_open, poweron, out
+
+
 def times(msgs):
     return [round(m["t_us"] / 1e6, 2) for m in msgs if m.get("t_us") is not None]
 
@@ -78,14 +119,37 @@ def dh01(elf, out):
     finally:
         r.close()
     disc = times(r.log("DISCOVER"))
-    gaps = [round(b - a, 2) for a, b in zip(disc, disc[1:])]
     addrs = RE_ADDR.findall(con)
-    leased = bool(RE_LEASE.search(con))
-    ok = bool(RE_NOLEASE.search(con) or (addrs and addrs[0][1] == "LinkLocal")) and leased
+    # the lease: the image's lease line, or an address line from DHCP (later images
+    # log only the address line), or the server's ACK
+    leased = bool(RE_LEASE.search(con)) or any(k == "Dhcp" for _, k in addrs) or bool(r.log("ACK", "to_radio"))
+    p2_open, poweron, bw = borrows(sockets(out))
+    # rule (A1.11, 0041): every borrow <= 2 s; the free gap after exchange n (n = 0:
+    # the power-on exchange, before the P2 sockets) = min(4 * 2^n, 64) s +- 0.5 s,
+    # counted between two exchanges while no server answers; no DISCOVER after the
+    # first P2 socket opens except inside a borrow
+    lengths = [round(b - a, 3) for a, b in bw]
+    ends = ([poweron[1]] if poweron and poweron[1] is not None else []) + [b for a, b in bw]
+    starts = [a for a, b in bw]
+    gaps = [round(st - en, 3) for en, st in zip(ends, starts)]
+    no_server = [g for g, en in zip(gaps, ends) if en < start]         # gaps that began before the server came up
+    want = [min(4 * 2 ** n, 64) for n in range(len(no_server))]
+    gaps_ok = all(abs(g - w) <= 0.5 for g, w in zip(no_server, want))
+    borrow_ok = all(l <= 2.0 + 0.05 for l in lengths)
+    outside = [t for t in disc if p2_open is not None and t > p2_open
+               and not any(a - 0.01 <= t <= b + 0.01 for a, b in bw)]
+    ll_first = bool(RE_NOLEASE.search(con) or (addrs and addrs[0][1] == "LinkLocal"))
+    ok = ll_first and leased and borrow_ok and gaps_ok and not outside and p2_open is not None
     return {"id": "DH-01", "set_up": "no server until %.0f s emulated, then a server (lease 600 s)" % start,
-            "pass_dhcp_part": ok, "discover_times_s": disc, "gaps_s": gaps,
-            "expected_gaps_s": "4, then 8, 16, 32, 64, then every 64 (each exchange waits 3 s)",
+            "rule": "borrow <= 2 s; free gap after exchange n = min(4*2^n, 64) s +-0.5 s (n = 0: power-on "
+                    "exchange); no DISCOVER after the first P2 socket opens except in a borrow (A1.11, 0041)",
+            "pass_dhcp_part": ok, "p2_open_s": p2_open, "poweron_exchange_s": poweron,
+            "borrows_s": [(round(a, 3), round(b, 3)) for a, b in bw], "borrow_lengths_s": lengths,
+            "free_gaps_s": gaps, "free_gaps_without_server_s": no_server, "expected_s": want,
+            "discover_times_s": disc, "discover_outside_borrows_s": outside,
             "addresses": addrs, "lease_line": RE_LEASE.findall(con),
+            "evidence": "CH394 socket log (sockets.jsonl: the management socket reopened on port 68) and the "
+                        "emulated DHCP server's message log",
             "not_checked": "a running session ends on the address change (bench)"}
 
 
@@ -130,7 +194,7 @@ def dh02(elf, out):
 
 
 def dh03(elf, out):
-    r, t = lease_run(elf, out, 112, at_t1=lambda r: setattr(r.dhcp, "running", False))
+    r, t = lease_run(elf, out, 180, at_t1=lambda r: setattr(r.dhcp, "running", False))
     try:
         con = r.console()
     finally:
@@ -140,9 +204,23 @@ def dh03(elf, out):
     reqs = [m for m in r.log("REQUEST") if m["t_us"] / 1e6 > t + 1]
     rel = [(round(m["t_us"] / 1e6 - t, 2), m["dst"]) for m in reqs]
     rebind = [x for x in rel if x[1] == "255.255.255.255"]
-    ok = bool(rel) and abs(rel[0][0] - 60) < 3 and bool(rebind) and abs(rebind[0][0] - 105) < 3
-    return {"id": "DH-03", "set_up": "lease 120 s; server silent from 55 s after the lease", "pass_dhcp_part": ok,
-            "requests_after_lease_s_and_dst": rel, "expected": "60 s unicast, retries after half the remaining time (at least 60 s), 105 s broadcast"}
+    disc = [round(x - t, 2) for x in times(r.log("DISCOVER")) if x > t + 1]
+    after_end = [d for d in disc if d >= 120 - 0.5]
+    _, _, bw = borrows(sockets(out))
+    bw_rel = [(round(a - t, 3), round(b - t, 3)) for a, b in bw]
+    # after the lease end: DISCOVER at once, then the back-off of DH-01 (4 s free gap first)
+    post = [(a, b) for a, b in bw_rel if a >= 120 - 0.5]
+    first_gap = round(post[1][0] - post[0][1], 3) if len(post) >= 2 else None
+    addr_lines = RE_ADDR.findall(con)
+    ok = bool(rel) and abs(rel[0][0] - 60) < 3 and bool(rebind) and abs(rebind[0][0] - 105) < 3 \
+        and bool(after_end) and after_end[0] - 120 < 1.0 and first_gap is not None and abs(first_gap - 4) <= 0.5
+    return {"id": "DH-03", "set_up": "lease 120 s; server silent from 55 s after the lease; observed to 180 s",
+            "pass_dhcp_part": ok, "observed_to_s": 180,
+            "requests_after_lease_s_and_dst": rel, "rebind_broadcast_s": rebind[0][0] if rebind else None,
+            "discover_after_lease_s": disc, "borrows_after_lease_s": bw_rel,
+            "first_free_gap_after_lease_end_s": first_gap, "addresses": addr_lines,
+            "expected": "60 s unicast REQUEST; broadcast REQUEST at T2 = 105 s (RFC 2131 4.4.5); at the lease end "
+                        "(120 s) link-local and a DISCOVER at once, then the DH-01 back-off (first free gap 4 s)"}
 
 
 def dh04(elf, out):
