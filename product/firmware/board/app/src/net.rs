@@ -874,7 +874,12 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 server.stats.cw_hang_clamped = p2.key.cw_hang_clamped;
                 server.stats.cw_speed_clamped = p2.key.cw_speed_clamped;
                 server.stats.takeovers = p2.takeovers;
-                // Management channel, socket 7 (not while lent to DHCP).
+                // Management channel, socket 7 (not while lent to DHCP). While the unasked record
+                // goes out in parts, a request waits in its socket (two or three passes), so that
+                // no flash write delays a part beyond 50 ms (0059).
+                if p2.record_pending() {
+                    continue;
+                }
                 if dhcp_borrowed {
                     Timer::after_millis(2).await;
                     continue;

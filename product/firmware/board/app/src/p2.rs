@@ -86,7 +86,9 @@ pub struct P2 {
     /// whole 1246-byte send (0054). B4.4 item 2 asks for one record, not one packet (only the
     /// CAP_REQUEST answer is one packet, item 1).
     record_due: bool,
-    record_next: Option<(Addr, usize)>,
+    /// The next part: destination, first register, and the time of the first part (0059: all
+    /// parts within 50 ms of the first).
+    record_next: Option<(Addr, usize, u64)>,
     /// The longest session-event handling and the longest single register-packet send, us
     /// (GET_STATS step_events_us, step_send_us).
     pub max_events_us: u64,
@@ -143,6 +145,9 @@ struct Notice {
 /// Pairs per part of the unasked record: 207 registers in three parts of up to 70 pairs (424
 /// bytes each), so that one send stays near a third of the whole (0054).
 const RECORD_PART: usize = 70;
+/// All parts of the unasked record go within 50 ms of the first (0059); from 40 ms on, the rest
+/// goes at once.
+const RECORD_WINDOW_MS: u64 = 40;
 
 const NOTICE_COPIES: u8 = 3;
 const NOTICE_SPACING_MS: u64 = 10;
@@ -449,12 +454,20 @@ impl P2 {
         }
         self.unasked_sent = true;
         self.last_unasked = Some((dest, now));
-        self.send_record_part(chip, dest, 0);
+        self.send_record_part(chip, dest, 0, now);
     }
 
-    /// One part of the unasked record (RECORD_PART pairs from `at`); the next part on the next
-    /// tick, while the session's register destination is still `dest`.
-    fn send_record_part(&mut self, chip: &mut Chip, dest: Addr, at: usize) {
+    /// A record is being sent in parts: the net loop then leaves management requests (which may
+    /// write flash for a long time) in their socket until it is done (0059: 50 ms).
+    pub fn record_pending(&self) -> bool {
+        self.record_due || self.record_next.is_some()
+    }
+
+    /// One part of the unasked record (RECORD_PART pairs from `at`, ascending register address);
+    /// the next part on the next tick, while the session's register destination is still
+    /// `dest`. Each part takes the next number of the session counter (B2.7): numbers increase,
+    /// with gaps where other pushes to that destination went between (0059).
+    fn send_record_part(&mut self, chip: &mut Chip, dest: Addr, at: usize, first: u64) {
         if self.session.register_destination() != Some(dest) {
             return;
         }
@@ -464,7 +477,7 @@ impl P2 {
             let _ = pairs.push((i as u16, self.regs.record[i]));
         }
         self.send_regs(chip, dest, &pairs);
-        self.record_next = (end < self.regs.record.len()).then_some((dest, end));
+        self.record_next = (end < self.regs.record.len()).then_some((dest, end, first));
     }
 
     /// The takeover log: at most one entry per second per pair of hosts, with the number of
@@ -663,8 +676,19 @@ impl P2 {
             if let Some(dest) = self.session.register_destination() {
                 self.send_unasked_record(chip, dest, now);
             }
-        } else if let Some((dest, at)) = self.record_next.take() {
-            self.send_record_part(chip, dest, at);
+        } else if let Some((dest, at, first)) = self.record_next.take() {
+            // One part per tick; if a long step held the loop, the rest at once, so that every
+            // part goes within 50 ms of the first (0059; RECORD_WINDOW_MS leaves a margin).
+            self.send_record_part(chip, dest, at, first);
+            if let Some((d, a, f)) = self.record_next {
+                if now.saturating_sub(f) >= RECORD_WINDOW_MS {
+                    self.record_next = None;
+                    self.send_record_part(chip, d, a, f);
+                    if let Some((d, a, f)) = self.record_next.take() {
+                        self.send_record_part(chip, d, a, f);
+                    }
+                }
+            }
         }
         // The second and third copy of the takeover notice, about 10 ms apart (A2.4 step 1).
         if let Some(n) = self.notice.as_mut() {
