@@ -46,6 +46,8 @@ def console_line_t_us(ctx, text: str) -> int | None:
         r = ctx.fixture("console.log", action="read", **{"from": len(out)}) or {}
         out += r.get("entries", [])
         if len(out) >= r.get("count", 0):
+            if r.get("dropped"):
+                ctx.check("console.log: no lines dropped", False, f"dropped {r.get('dropped')}")
             break
     if any("boot" in e for e in out):  # t_us restarts at each power-on: the last boot only
         last = max(e.get("boot", 0) for e in out)
