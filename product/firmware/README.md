@@ -3,10 +3,35 @@
 New firmware for the main unit of the Xiegu G7250. It implements the network interface
 G7250-P2 (level 1) and later TCI with on-board DSP (level 2), as specified in `product/spec/`.
 
-- Status: **planned. No code yet.** The project is in the spec phase; code starts in the build
-  phase (decision 0028, Decision 4).
+- Status: **build phase, milestones F1–F2 in code, not yet run on the emulator or the radio.**
+  F1: boot stage, A/B slots, flash guards, safe state, watchdog, console. F2: CH394 on SPI6,
+  DHCP or link-local address, discovery and Set IP on port 1024. F3 (started): the transmit
+  gate; every TX request is rejected with `NOT_CALIBRATED` until the measured values are in the
+  spec (ON8ST, 2026-11-20). Open questions: `docs/questions.md`.
 - Only the main unit is reflashed. The controller keeps its stock firmware, and CTRL stays idle
   (decision 0023).
+
+## Layout of this folder
+
+| Path | What | Target |
+|---|---|---|
+| `crates/layout` | flash layout, write guard, EEPROM guard, image header, slot choice | host + MCU |
+| `crates/safety` | the RF safe state as data; the transmit gate (`tx`) | host + MCU |
+| `crates/proto` | discovery, rate limits, network configuration, DHCP messages | host + MCU |
+| `crates/ch394` | CH394 driver (W5500-compatible registers), UDP | host + MCU |
+| `tools/imgtool` | seal, check and merge images | host |
+| `board/common` | raw-register board support: safe state, watchdog, console, reset cause | MCU |
+| `board/boot` | boot stage at 0x08020000 | MCU |
+| `board/app` | application (slot A, or slot B with `--features slot-b`) | MCU |
+| `board/vendor` | embassy-stm32 0.6.0 with one patch: no backup-domain access (`board/vendor/README.md`) | MCU |
+| `docs/` | flash layout and boot, emulator run, open questions | |
+
+## Build
+
+Needs Rust stable with the `thumbv7em-none-eabihf` target (`rust-toolchain.toml`) and
+`shasum`. `./build.sh` runs the host tests (`cargo test`), builds the boot stage and both
+application builds, seals and checks them (`g7250-imgtool`: every loadable byte inside its own
+region, never in sector 0) and writes `out/` (`docs/memory-layout.md`, "Outputs").
 
 ## Language and toolchain (decision 0033, proposed)
 
@@ -29,7 +54,7 @@ the reverse-engineering side (`re/`), from disassembly or from stock firmware.
 
 ## Platform rules from the HIS
 
-Every rule below is a MUST from the HIS at `2a38b7f`. They are listed so that nobody starts
+Every rule below is a MUST from the HIS (cleared at `9d10e72`; first listed at `2a38b7f`). They are listed so that nobody starts
 without them; the HIS section is the authority.
 
 - **Image placement** (HIS 10): the image starts at 0x08020000 with its vector table there.
@@ -45,24 +70,24 @@ without them; the HIS section is the authority.
   HYPOTHESIS). Never enable a PMIC rail the HIS lists as off, never raise a listed rail.
 - **FPGA bus** (HIS 80): never send commands 0x05/0x06, 0x09/0x0A.
 
-## Planned structure (build phase)
+## Structure (decision 0028, spec A1.8)
 
-From decision 0028 and spec A1.8:
-
-- a **boot stage** at 0x08020000 that picks one of two image slots, runs the trial boot and
-  the rollback, and is never updated over the network;
-- two **image slots** and a configuration area in the application area (sectors 1–7);
+- a **boot stage** at 0x08020000 that picks one of two image slots and is never updated over
+  the network; trial boot and rollback come with the update path (the F1 boot stage writes no
+  flash);
+- two **image slots** of 256 KiB (sectors 2–3 and 4–5), sector 6 kept free, configuration, boot
+  record and log in sector 7;
 - a **streaming installer** that runs from RAM and writes an owner-supplied stock image over
-  the network (spec A1.8a item 3).
+  the network (spec A1.8a item 3): not built yet.
 
-The exact flash layout is a firmware design document, to be written at the start of the build
-phase.
+The flash layout and the boot sequence are in `docs/memory-layout.md`.
 
 ## Before the first flash
 
 Every image is first tested in full on the RE side's emulator, as a black box: the product side
 delivers the ELF and the spec-based tests and gets back pass or fail and the image's own
-console and network output only (decision 0034, proposed).
+console and network output only (decision 0034, proposed). What to run and what passes:
+`docs/emulator-run.md`.
 
 The rollback drill F1 on the real radio (HIS 15) must show that the vendor path through the
 controller can install both a stock image and an image of this firmware.
