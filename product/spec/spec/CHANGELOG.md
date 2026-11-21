@@ -62,6 +62,8 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
   (0061 addendum).
 - 0063 (proposed): update commands with no transfer get 54 or 55; a package header with a bad
   magic or version gets 17, an unsupported component 56; new tests T-A1-80 and T-A1-81.
+- 0063 addendum: only update commands answered 0 or 1 restart the 10-minute timer; the state
+  after `UPDATE_ABORT` is set out in A1.8; new test T-A1-82.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 
