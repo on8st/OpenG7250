@@ -1,7 +1,7 @@
 # 0064 — Torn boot-record writes and the ROLLBACK command
 
-- Status: proposed (to the repository owner, ON8ST); answers testbench run-sheet gaps 1–4 (tb
-  1b93429), 2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers testbench
+  run-sheet gaps 1–4 (tb 1b93429), 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0008 (U-5, U-6, U-8), 0022 §10, 0043, 0044, 0061, 0065 (store writes).
 
@@ -13,7 +13,7 @@ self-confirmation write, and what `ROLLBACK` does (Table M-1 and A1.8 gave only 
 rules). The reference model starts the other slot if its image is good, and gives 55
 otherwise.
 
-## Decision (proposed)
+## Decision
 
 1. **Gaps 1 and 2: tests only.** `CAP_REQUEST` during an update and the arm reject (0022 §10)
    are added to T-A1-23. Corrected after testbench finding SF-28: over P2 every register write

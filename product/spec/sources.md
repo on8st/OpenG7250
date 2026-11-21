@@ -83,13 +83,19 @@ the source has been found but not checked.
 
 ## Datasheets
 
-### [STM32H72x] STMicroelectronics STM32H725/H735 datasheet and reference manual RM0468
+### [STM32H72x] STMicroelectronics DS13311, STM32H725xE/G and STM32H735xG datasheet, Rev 5
 
-- What: the MCU of the main unit ([HIS] HIS 10). Cited only to name `t_erase_max`, the maximum
-  128 KiB sector erase time in its flash characteristics (B2.3 "Flash work"; 0065).
+- What: datasheet of the MCU of the main unit ([HIS] HIS 10). Used for `t_erase_max` (B2.3
+  "Flash work"; 0065).
 - Where: st.com.
-- Read: not read by the spec session; the value is taken from it by the firmware and the
-  emulator, not repeated in the spec.
+- Version: Rev 5, November 2023.
+- Section used: 6.3.13 "Memory characteristics", Table 48 "Flash memory programming"
+  (maximum values guaranteed by characterization). Sector (128 KiB) erase time tERASE max:
+  4 s at parallelism x8, 3.6 s at x16, 2.2 s at x32 (no x64 row); word (266 bits) programming
+  time tprog max: 580 µs at x8 (after 10 000 erase operations), 360 µs at x16, 260 µs at x32,
+  200 µs at x64; mass erase max 26 s at x8.
+- Read: the values were taken from the datasheet on the product side and relayed by the
+  openg7250 session with ON8ST's go, 2026-11-21. The spec session has not read the PDF itself.
 
 ### [CH394] WCH CH394 manual 1 (以太网协议栈芯片 CH394 手册 1), version 1.2
 
