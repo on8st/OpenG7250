@@ -34,6 +34,9 @@ use g7250_radio::mgmt::{Ctx, Server};
 /// is measured (P-NET-1). SPI6 kernel clock is PCLK4 = 64 MHz here; 64 / 4 = 16 MHz.
 const SPI_HZ: u32 = 16_000_000;
 const SOCK_DISCOVERY: u8 = 0;
+/// Socket receive and transmit buffers, KiB (0004 split with the 1024/1027 receive shift).
+const BUF_RX_KIB: [u8; 8] = [1, 2, 1, 3, 6, 0, 2, 1];
+const BUF_TX_KIB: [u8; 8] = [1, 1, 1, 0, 0, 8, 2, 3];
 const SOCK_MGMT: u8 = crate::p2::S7251;
 
 /// SPI device over the HAL bus with a GPIO chip select.
@@ -176,6 +179,12 @@ async fn bring_up(pins: NetPins<'static>) -> Result<Chip, ChError<spi::Error>> {
     }
     let v = last?;
     println!("net: CH394 answers, version register {:#04x}", v);
+    // The socket buffers of 0004 ("CH394Q buffer split"; B2.3), sockets 0-7 = ports 1024, 1025,
+    // 1026, 1027, 1029, 1035, 7250, 7251, with one shift: 1027 (High Priority) gets 3 KiB of
+    // receive buffer, so that two packets back to back (a stop and a new run, 2 x 1452 bytes)
+    // both fit, and 1024 (discovery, General: 60-byte packets) 1 KiB instead of 2. The CH394
+    // has no flow control in UDP mode: a packet that does not fit is lost (T-B10-L13).
+    chip.set_buffers(BUF_RX_KIB, BUF_TX_KIB)?;
     Ok(chip)
 }
 

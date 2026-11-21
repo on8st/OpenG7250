@@ -230,18 +230,19 @@ impl<S: SpiDevice> Ch394<S> {
         Ok(v)
     }
 
-    /// Set the RX and TX buffer size of every socket, in KiB (powers of two; total 16 per
-    /// direction, W5500 section 4.2). The split is TBD in the spec (B2.3, HIS-14).
-    pub fn set_buffers(&mut self, kib: [u8; SOCKETS as usize]) -> Result<(), Error<S::Error>> {
-        let total: u32 = kib.iter().map(|&k| k as u32).sum();
-        if total > 16 || kib.iter().any(|&k| !matches!(k, 0 | 1 | 2 | 4 | 8 | 16)) {
+    /// Set the receive and transmit buffer of every socket, in KiB: any value 0-16, each
+    /// direction 16 KiB in total ([CH394] 7.2.12, 7.2.13, p.19: Sn_RXBUF_SIZE, Sn_TXBUF_SIZE,
+    /// 1 KiB blocks given out in socket order). Set before the sockets open.
+    pub fn set_buffers(&mut self, rx: [u8; SOCKETS as usize], tx: [u8; SOCKETS as usize]) -> Result<(), Error<S::Error>> {
+        let sum = |k: &[u8; SOCKETS as usize]| k.iter().map(|&k| k as u32).sum::<u32>();
+        if sum(&rx) > 16 || sum(&tx) > 16 || rx.iter().chain(tx.iter()).any(|&k| k > 16) {
             return Err(Error::TooLarge);
         }
         for n in 0..SOCKETS {
-            self.write(bsb::sock_reg(n), sock::RXBUF_SIZE, &[kib[n as usize]])?;
-            self.write(bsb::sock_reg(n), sock::TXBUF_SIZE, &[kib[n as usize]])?;
+            self.write(bsb::sock_reg(n), sock::RXBUF_SIZE, &[rx[n as usize]])?;
+            self.write(bsb::sock_reg(n), sock::TXBUF_SIZE, &[tx[n as usize]])?;
         }
-        self.buf_kib = kib;
+        self.buf_kib = tx;
         Ok(())
     }
 

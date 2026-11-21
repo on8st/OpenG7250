@@ -204,8 +204,11 @@ fn udp_open_recv_send() {
 #[test]
 fn buffers_are_checked() {
     let mut c = chip();
-    assert!(matches!(c.set_buffers([4, 4, 4, 4, 1, 0, 0, 0]), Err(Error::TooLarge)));
-    assert!(matches!(c.set_buffers([3, 1, 1, 1, 1, 1, 1, 1]), Err(Error::TooLarge)));
-    c.set_buffers([4, 2, 2, 2, 2, 2, 1, 1]).unwrap();
-    assert!(matches!(c.udp_send(6, [1, 2, 3, 4], 1, &[0u8; 1500]), Err(Error::TooLarge)));
+    // More than 16 KiB in a direction, or a socket above 16: refused ([CH394] 7.2.12-13).
+    assert!(matches!(c.set_buffers([4, 4, 4, 4, 1, 0, 0, 0], [2; 8]), Err(Error::TooLarge)));
+    assert!(matches!(c.set_buffers([2; 8], [17, 0, 0, 0, 0, 0, 0, 0]), Err(Error::TooLarge)));
+    // Any size 0-16 is allowed, powers of two or not (3 KiB, 6 KiB).
+    c.set_buffers([1, 2, 1, 3, 6, 0, 2, 1], [1, 1, 1, 0, 0, 8, 2, 3]).unwrap();
+    // A datagram larger than its socket's transmit buffer is refused.
+    assert!(matches!(c.udp_send(0, [1, 2, 3, 4], 1, &[0u8; 1500]), Err(Error::TooLarge)));
 }
