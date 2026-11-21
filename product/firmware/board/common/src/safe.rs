@@ -195,7 +195,19 @@ pub fn boot_poll() {
     }
 }
 
+/// Set while a boot-stage check runs (its fault line prints through the console, whose wait loop
+/// polls again): no nested check.
+static IN_CHECK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 fn boot_check_now() {
+    if IN_CHECK.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    boot_check_inner();
+    IN_CHECK.store(false, core::sync::atomic::Ordering::Relaxed);
+}
+
+fn boot_check_inner() {
     let now_cyc = cyc();
     let now_ms = (now_cyc / (crate::console::HSI_HZ / 1000)) as u64;
     let seen = tx_path_mismatch();
@@ -210,16 +222,25 @@ fn boot_check_now() {
         }
         b.seen = seen.as_ref().map(pin_index);
         let r = b.check.observe(now_ms, false, seen);
-        if let Some(m) = r {
-            if b.fault.is_none() {
+        match r {
+            Some(m) if b.fault.is_none() => {
                 b.fault = Some(pin_index(&m));
+                Some(m)
             }
+            _ => None,
         }
-        r
     });
-    if hit.is_some() {
-        // The fault: the safe state again (the application reports TX_PATH_NOT_BLOCKED).
+    if let Some(m) = hit {
+        // The fault, raised here in the boot stage (0066 addendum: within 120 ms of its first
+        // instruction): the safe state again, the fault line on the boot stage's console, and
+        // the handover carries it to the application (TX_PATH_NOT_BLOCKED, logged there).
         reassert();
+        let what = match m.what {
+            g7250_safety::txpath::Comparison::Configuration => "configuration (mode or output register) not the safe state",
+            g7250_safety::txpath::Comparison::PinLevel => "pin level (input register) not the safe level",
+            g7250_safety::txpath::Comparison::DacValue(_) => "PA DAC value last written not 0",
+        };
+        crate::println!("boot: FAULT TX path not blocked: P{:?}{} {}; safe state set again (TX_PATH_NOT_BLOCKED)", m.port, m.pin, what);
     }
 }
 

@@ -25,16 +25,22 @@ use g7250_safety::counters::{Counters, SLOT_WORDS};
 
 /// Two slots. The AXI SRAM has a 64-bit ECC word: it is written in whole, aligned 64-bit words
 /// only ([HIS] HIS 10, MEDIUM), never in halves.
+/// The whole block as one static with a fixed layout, so that the boot stage (which uses only
+/// the handover) and the application place every part at the same address: the counter slots
+/// at 0x2401FF80, the handover after them. (Two statics let the boot stage's linker drop the
+/// unused slots and put the handover 96 bytes lower than the application looked for it.)
+#[repr(C)]
+struct Region {
+    slots: [[u64; SLOT_WORDS]; 2],
+    handover: [u64; 2],
+}
 #[unsafe(link_section = ".persist")]
-static mut BLOCK: core::mem::MaybeUninit<[[u64; SLOT_WORDS]; 2]> = core::mem::MaybeUninit::uninit();
-const _: () = assert!(core::mem::size_of::<[[u64; SLOT_WORDS]; 2]>() <= 128);
+static mut REGION: core::mem::MaybeUninit<Region> = core::mem::MaybeUninit::uninit();
+const _: () = assert!(core::mem::size_of::<Region>() <= 128);
 
-/// The boot stage's TX path check, handed to the application (A3.6b; 0066 addendum): written by
-/// the boot stage just before the jump (whole 64-bit words, so read only what was written this
-/// start), taken and cleared by the application.
-#[unsafe(link_section = ".persist")]
-static mut HANDOVER: core::mem::MaybeUninit<[u64; 2]> = core::mem::MaybeUninit::uninit();
-const _: () = assert!(core::mem::size_of::<[[u64; SLOT_WORDS]; 2]>() + 16 <= 128);
+// The boot stage's TX path check, handed to the application (A3.6b; 0066 addendum): written by
+// the boot stage just before the jump (whole 64-bit words, so read only what was written this
+// start), taken and cleared by the application. `Region::handover`.
 const HANDOVER_MAGIC: u32 = 0x4737_4842; // "G7HB"
 
 /// What the boot stage's TX path check found.
@@ -50,7 +56,8 @@ pub struct Handover {
 }
 
 fn handover_ptr() -> *mut u64 {
-    addr_of_mut!(HANDOVER) as *mut u64
+    // SAFETY: a field of the module's static, raw pointer only.
+    unsafe { core::ptr::addr_of_mut!((*addr_of_mut!(REGION).cast::<Region>()).handover) as *mut u64 }
 }
 
 /// The boot stage, just before the jump.
@@ -84,7 +91,7 @@ pub fn take_handover() -> Option<Handover> {
 
 fn slot(i: usize) -> *mut u64 {
     // SAFETY: a static of this module; only raw pointers, read and written volatile.
-    unsafe { (addr_of_mut!(BLOCK) as *mut [u64; SLOT_WORDS]).add(i) as *mut u64 }
+    unsafe { (core::ptr::addr_of_mut!((*addr_of_mut!(REGION).cast::<Region>()).slots) as *mut [u64; SLOT_WORDS]).add(i) as *mut u64 }
 }
 
 fn read(i: usize) -> [u64; SLOT_WORDS] {
