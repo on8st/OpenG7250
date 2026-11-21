@@ -136,9 +136,19 @@ def t_b5_22(ctx: Ctx):
         erases = [e for e in entries if e.get("op") == "erase"]
         ctx.check("every erase took the stretched time", bool(erases) and all(
             (e.get("t_end_us", 0) - e.get("t_us", 0)) >= t_max * 0.99 for e in erases), f"{len(erases)} erases")
+        from .p2 import need_record
+        with Host(ctx.net) as h2:
+            gate_open = bool(need_record(ctx, h2)[0x0C] & 1)  # streams bit 0: DDC0 offered, the bus gate open (0042)
         open_ = [e for e in entries if e.get("op") in ("erase", "program") and e.get("fpga_bus") != "idle"]
-        ctx.check("no FPGA bus cycle open across an erase or program (STB, CMD low; item 8)", not open_,
-                  f"{len(open_)} operations with the bus open, first {open_[0]}" if open_ else "all idle")
+        if not gate_open:
+            ctx.check("bus gate closed: no MCU drive on PE0-PE10 for the whole run, fpga_bus idle at every erase and "
+                      "program (B2.3; c602628)", not open_,
+                      f"{len(open_)} operations with the bus driven, first {open_[0]}" if open_ else "all idle")
+        else:
+            ctx.check("bus gate open: no FPGA bus cycle open across an erase or program (STB, CMD low)", not open_,
+                      f"{len(open_)} operations with a cycle open, first {open_[0]}" if open_ else "all idle")
+            ctx.notes.append("gate open: 'STB and CMD driven low at every erase start until it ends' needs the trace of "
+                             "PE8/PE9 across the erase; judged from fpga_bus only")
         ff = fault_flags(ctx)
         ctx.check("no watchdog reset (FAULT_FLAGS bit 17 clear, WDT_RESET_AT_START)", ff is not None and not ff >> WDT_RESET_AT_START & 1,
                   f"FAULT_FLAGS {ff}")

@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "af03893",
-  "sha256_of_inputs": "63f49b2f39e5f53d61684d7f2dda22cc43f1f89d1af43ab18177c5875add25b1"
+  "commit": "c602628",
+  "sha256_of_inputs": "a202508adb0724f3d71404f915b99648dcdf1ed2b0bb051ca857e7ba6e16aacf"
  },
  "his": {
   "commit": "72591aa"
@@ -4837,7 +4837,7 @@
    "id": "T-B5-22",
    "origin": "spec",
    "part": "A-B",
-   "title": "With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, STB and CMD stay low with no bus cycle open across an erase, and after it RX, discovery and the management channel go on (B2.3 \"Flash work\"; 0065).",
+   "title": "With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run (\"idle\"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on (B2.3 \"Flash work\"; 0065).",
    "reqs": [
     "B5",
     "A3.6",
@@ -4851,8 +4851,10 @@
     "flash.timing"
    ],
    "pending": [],
-   "tx_part": false,
-   "notes": []
+   "tx_part": true,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
   },
   {
    "id": "T-B6-01",
