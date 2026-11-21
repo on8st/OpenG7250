@@ -12,6 +12,7 @@
 #define RCC_AHB4ENR   REG(RCC_BASE + 0xE0)
 #define RCC_APB1LENR  REG(RCC_BASE + 0xE8)
 #define RCC_APB2ENR   REG(RCC_BASE + 0xF0)
+#define RCC_APB4ENR   REG(RCC_BASE + 0xF4)
 
 #define NVIC_ISER(n)  REG(0xE000E100u + 4u * (n))
 static inline void nvic_enable(unsigned irq) { NVIC_ISER(irq >> 5) = 1u << (irq & 31); }

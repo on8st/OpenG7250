@@ -65,6 +65,10 @@ GENERIC = [
     ("cs", P("models", "csharp", "G7250PaPlant.cs")),
     ("repl", P("platforms", "g7250_main_pa_plant.repl")),
     ("cmd", "sysbus.spi2.pa Publish"),
+    # GPIOE with the RF FPGA on its pins (his/80), DRDY at the his/80 rate
+    ("cs", P("models", "csharp", "G7250Gpioe.cs")),
+    ("cmd", "sysbus Unregister sysbus.gpioPortE"),
+    ("repl", P("platforms", "g7250_main_fpga_his.repl")),
 ]
 BENCH = [
     ("cs", P("models", "csharp", "G7250BenchReq.cs")),

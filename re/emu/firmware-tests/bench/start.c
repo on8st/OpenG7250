@@ -15,6 +15,7 @@ void DMA1_Stream3_IRQHandler(void) WEAK;
 void ADC_IRQHandler(void) WEAK;
 void USART2_IRQHandler(void) WEAK;
 void MDMA_IRQHandler(void) WEAK;
+void EXTI15_10_IRQHandler(void) WEAK;
 
 void reset_handler(void)
 {
@@ -41,6 +42,7 @@ void (*const vectors[16 + 163])(void) = {
     [16 + 14] = DMA1_Stream3_IRQHandler,
     [16 + 18] = ADC_IRQHandler,
     [16 + 38] = USART2_IRQHandler,
+    [16 + 40] = EXTI15_10_IRQHandler,
     [16 + 122] = MDMA_IRQHandler,
 };
 

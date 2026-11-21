@@ -1,0 +1,22 @@
+// g7250_main_fpga.repl — fused GPIOE + RF-FPGA port (M3 / D2).
+//
+// Replaces the stock gpioPortE with models/csharp/G7250Gpioe.cs
+// `G7250GpioeFpga`, which is a full GPIO port that ALSO answers the FPGA's 8-bit
+// bit-banged bus internally (HIS 80: D0-7=PE0-7, CMD=PE8, STB=PE9, DRDY=PE10).
+// It handles the boot loopback bus-test (cmd 0x00), the version read (0x08), and
+// pulses DRDY (PE10) so the sample routine reads changing 24-bit RX I/Q — the
+// Main then logs "Check FPGA BUS... Check complete!" with no FPGA errors.
+//
+// Load procedure (the runner does this): compile the C# first
+//   i @models/csharp/G7250Gpioe.cs
+// then, after the base platform has registered gpioPortE,
+//   sysbus Unregister sysbus.gpioPortE
+//   machine LoadPlatformDescription @platforms/g7250_main_fpga.repl
+// The [0-15] -> syscfg#4 line restores the EXTI routing (so DRDY/PE10 reaches
+// EXTI15_10). Opt-in: the runtime-compiled port is slower, so m1_run uses it
+// only with --fpga.
+// This variant: the his/80 DRDY rate (model default, about 48 kHz), for bench
+// and product runs. The stock regression uses g7250_main_fpga.repl (reduced
+// DRDY rate for host speed).
+gpioPortE: Antmicro.Renode.Peripherals.GPIOPort.G7250GpioeFpga @ sysbus <0x58021000, +0x400>
+    [0-15] -> syscfg#4@[0-15]

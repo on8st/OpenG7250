@@ -15,5 +15,8 @@
 // The [0-15] -> syscfg#4 line restores the EXTI routing (so DRDY/PE10 reaches
 // EXTI15_10). Opt-in: the runtime-compiled port is slower, so m1_run uses it
 // only with --fpga.
+// Stock regression runs use a reduced DRDY rate (host speed); the model's
+// default and product runs use the his/80 rate (48 kHz).
 gpioPortE: Antmicro.Renode.Peripherals.GPIOPort.G7250GpioeFpga @ sysbus <0x58021000, +0x400>
+    drdyRate: 4000
     [0-15] -> syscfg#4@[0-15]
