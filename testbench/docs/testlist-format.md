@@ -511,8 +511,11 @@ A test with target `emulator` is also run against the reference model. A test wi
      `{op: "ecc", type, address, boot}` (T-A1-87).
    - Every erase and program entry carries `fpga_bus: "idle"|"open"` at its start (T-B5-22).
    - `console.log {action: "start"|"read"|"stop", from?}` → `{t_us, count, dropped, from, next,
-     entries: [{t_us, boot, line}]}`: every debug-console line (without CR LF), `t_us` when its
-     last character left USART1, on the clock of `hw.trace`, `net.log` and `flash.log`; it runs
+     entries: [{t_us, t_first_us, boot, line}]}`: every debug-console line (without CR LF),
+     `t_first_us` when its first character was written to USART1 and `t_us` when its last left;
+     the bench judges a fault time on `t_first_us` (judging the last character would be stricter
+     than the spec; without it, and with the endpoint's `usart1_timed` true, it subtracts
+     (len + 2) × 86.8 us); on the clock of `hw.trace`, `net.log` and `flash.log`; it runs
      from power-on without a `start` (`start` only moves the read origin, `stop` ends recording);
      across power cycles `boot` counts 1, 2, ... and `t_us` restarts at 0, so lines are compared
      within one boot; pages of 5000, cap 100 000 with `dropped` (a fail). The bench times a fault from its console line; the image's log

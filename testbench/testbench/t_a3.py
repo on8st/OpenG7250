@@ -52,8 +52,22 @@ def console_line_t_us(ctx, text: str) -> int | None:
     if any("boot" in e for e in out):  # t_us restarts at each power-on: the last boot only
         last = max(e.get("boot", 0) for e in out)
         out = [e for e in out if e.get("boot", 0) == last]
-    ts = [e["t_us"] for e in out if text in str(e.get("line", ""))]
-    return min(ts) if ts else None
+    timed = bool(ctx.endpoint.get("usart1_timed") or (ctx.endpoint.get("console") or {}).get("timed"))
+
+    def first_char(e: dict) -> float:
+        """The line's first character: t_first_us where given; else, with a timed USART1, its
+        last character minus the line's send time at 115200 baud ((len + 2) x 86.8 us, CR LF
+        included); untimed, t_us. Judging the last character would be stricter than the spec."""
+        if "t_first_us" in e:
+            return e["t_first_us"]
+        if timed:
+            return e["t_us"] - (len(str(e.get("line", ""))) + 2) * 86.8
+        return e["t_us"]
+
+    ts = [first_char(e) for e in out if text in str(e.get("line", ""))]
+    if ts and not timed and not any("t_first_us" in e for e in out):
+        ctx.notes.append("console line times: t_us taken as the line start (USART1 untimed, no t_first_us)")
+    return int(min(ts)) if ts else None
 
 
 def boot_t_us(ctx) -> int:
