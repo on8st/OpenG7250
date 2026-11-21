@@ -308,6 +308,7 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
     ] + ['sysbus LoadBinary @%s 0x%08X' % (f, a) for a, f in (flash_preload if not flash_image else ())] + [
         'sysbus.watchdog PowerOnBoot',
         'sysbus.spi1.agent ArmBootHook',
+    ] + (['emulation SetGlobalAdvanceImmediately true'] if os.environ.get("G7250_ADVANCE_IMMEDIATELY") == "1" else []) + [
         'start',
     ]
     return "\n".join(lines) + "\n"

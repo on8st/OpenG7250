@@ -167,6 +167,26 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   by `us` (the bench's waits in radio time).
 - Self-test T-EMU-18 (runner-selfcheck.json).
 
+## Format v1.8 (part 1): gpio.force, dac.force, time.advance
+
+- `gpio.force {pin, target: idr|odr|moder, level|mode, from_us?, duration_us?}`
+  -> `{pin, target, level|mode, t_us}`: `idr` holds the pin's input-register
+  bit at `level` (a board fault; persists across reset.wdt, released with
+  `level: null` or by power.cycle); `odr` writes the pin's output bit once and
+  `moder` its 2-bit mode once (`mode`: input, output, af, analog), as a
+  corrupted register the image may re-apply. `from_us` and `duration_us` are
+  exact in emulated time: the start is scheduled in the emulator, the release
+  (or, for odr/moder, the write-back of the previous value) exactly
+  `duration_us` after the start. Trace events `force` and `release`.
+- `dac.force {channel: 2|7|8, value, from_us?}`: the PA DAC channel's output word
+  is written as a simulated firmware fault; `value: null` restores the word
+  the image last wrote. Trace event `dac_force`.
+- `time.advance {us}` -> `{t_us}`: Renode's advance-immediately mode (idle time
+  skipped to the next timer event) until emulated now + us. The gain depends on
+  how much the image idles: fw-d01f507 with no traffic, 2.7 times real time.
+  The bench sends nothing during it but net.inject.
+- Self-test T-EMU-20.
+
 ## Fixtures (format section 4)
 
 Offered now: `hw.observe`, `hw.trace`, `hw.input`, `power.cycle`, `power.cut`,

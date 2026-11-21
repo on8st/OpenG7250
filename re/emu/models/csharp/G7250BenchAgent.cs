@@ -251,6 +251,179 @@ namespace Antmicro.Renode.Peripherals.SPI
             return r == null ? "err net.log action" : "ok " + r;
         }
 
+        // ---- exact scheduling in emulated time (gpio.force, dac.force) ----
+        private readonly List<Tuple<ulong, Action>> schedule = new List<Tuple<ulong, Action>>();
+        private LimitTimer schedTimer;
+
+        // runs act at emulated now + delayUs on the emulation thread; returns that time
+        private ulong ScheduleAt(ulong delayUs, Action act)
+        {
+            ulong at = 0;
+            var done = new System.Threading.ManualResetEventSlim(false);
+            machine.LocalTimeSource.ExecuteInNearestSyncedState(ts =>
+            {
+                at = NowUs() + delayUs;
+                lock(schedule) { schedule.Add(Tuple.Create(at, act)); schedule.Sort((a, b) => a.Item1.CompareTo(b.Item1)); }
+                ArmSchedule();
+                done.Set();
+            });
+            done.Wait(30000);
+            return at;
+        }
+
+        // from the emulation thread itself (a scheduled action scheduling another)
+        private void ScheduleFromEmulation(ulong at, Action act)
+        {
+            lock(schedule) { schedule.Add(Tuple.Create(at, act)); schedule.Sort((a, b) => a.Item1.CompareTo(b.Item1)); }
+        }
+
+        private void ArmSchedule()
+        {
+            ulong head;
+            lock(schedule) { if(schedule.Count == 0) return; head = schedule[0].Item1; }
+            if(schedTimer == null)
+            {
+                schedTimer = new LimitTimer(machine.ClockSource, 1000000, this, "agentsched", 1UL << 40,
+                    direction: Direction.Ascending, enabled: false, workMode: WorkMode.Periodic, eventEnabled: true);
+                schedTimer.LimitReached += OnSchedule;
+            }
+            ulong now = NowUs();
+            schedTimer.Enabled = false;
+            if(head <= now) { OnSchedule(); return; }
+            schedTimer.Value = (1UL << 40) - (head - now);
+            schedTimer.Enabled = true;
+        }
+
+        private void OnSchedule()
+        {
+            var due = new List<Action>();
+            lock(schedule)
+            {
+                if(schedTimer != null) schedTimer.Enabled = false;
+                ulong now = NowUs();
+                while(schedule.Count > 0 && schedule[0].Item1 <= now) { due.Add(schedule[0].Item2); schedule.RemoveAt(0); }
+            }
+            foreach(var a in due) { try { a(); } catch(Exception e) { this.Log(LogLevel.Warning, "agent: scheduled action: {0}", e.Message); } }
+            ArmSchedule();
+        }
+
+        // ---- gpio.force (format v1.8): idr held (read hook), odr and moder written once ----
+        private readonly Dictionary<int, uint> idrForceMask = new Dictionary<int, uint>();
+        private readonly Dictionary<int, uint> idrForceVal = new Dictionary<int, uint>();
+        private bool idrHooked;
+
+        private void HookIdr()
+        {
+            if(idrHooked) return;
+            for(int port = 0; port < 11; port++)
+            {
+                IPeripheral gp;
+                if(!machine.TryGetByName("sysbus.gpioPort" + (char)('A' + port), out gp) || !(gp is Antmicro.Renode.Peripherals.Bus.IBusPeripheral)) continue;
+                int pn = port;
+                machine.SystemBus.SetHookAfterPeripheralRead<uint>((Antmicro.Renode.Peripherals.Bus.IBusPeripheral)gp, (value, offset) =>
+                {
+                    if(offset != 0x10) return value;
+                    lock(idrForceMask)
+                    {
+                        uint m;
+                        if(!idrForceMask.TryGetValue(pn, out m) || m == 0) return value;
+                        return (value & ~m) | (idrForceVal[pn] & m);
+                    }
+                });
+            }
+            idrHooked = true;
+        }
+
+        private void ForceEvent(string pin, string target, string val, string kind)
+        {
+            lock(sync) if(tracing) Send("ev " + Event("\"kind\": \"" + kind + "\", \"pin\": \"" + pin + "\", \"target\": \"" + target + "\", \"value\": " + val));
+        }
+
+        private void ApplyForce(int port, int bit, string pin, string target, string val, bool release, uint[] saved)
+        {
+            ulong b = 0x58020000UL + 0x400UL * (ulong)port;
+            if(target == "idr")
+            {
+                lock(idrForceMask)
+                {
+                    uint m; idrForceMask.TryGetValue(port, out m);
+                    uint v; idrForceVal.TryGetValue(port, out v);
+                    if(release || val == "null") { m &= ~(1u << bit); }
+                    else { m |= 1u << bit; v = val == "1" ? v | (1u << bit) : v & ~(1u << bit); }
+                    idrForceMask[port] = m; idrForceVal[port] = v;
+                }
+            }
+            else if(target == "odr")
+            {
+                uint odr = machine.SystemBus.ReadDoubleWord(b + 0x14);
+                if(saved != null) saved[0] = (odr >> bit) & 1u;
+                int lv = release ? (int)saved[0] : (val == "1" ? 1 : 0);
+                machine.SystemBus.WriteDoubleWord(b + 0x18, lv == 1 ? (1u << bit) : (1u << (bit + 16)));
+            }
+            else if(target == "moder")
+            {
+                uint moder = machine.SystemBus.ReadDoubleWord(b);
+                if(saved != null) saved[0] = (moder >> (2 * bit)) & 3u;
+                uint m = release ? saved[0] : (val == "input" ? 0u : val == "output" ? 1u : val == "af" ? 2u : 3u);
+                machine.SystemBus.WriteDoubleWord(b, (moder & ~(3u << (2 * bit))) | (m << (2 * bit)));
+            }
+            ForceEvent(pin, target, val == "null" || release ? "null" : (target == "moder" ? "\"" + val + "\"" : val), release || val == "null" ? "release" : "force");
+        }
+
+        // force <pin> <idr|odr|moder> <value> <from_us> <duration_us|-> -> ok <t_us>
+        private string ForceCommand(string[] w)
+        {
+            if(w.Length < 6) return "err force arguments";
+            int port, bit;
+            if(!ParsePin(w[1], out port, out bit)) return "err bad pin " + w[1];
+            string target = w[2], val = w[3];
+            if(target != "idr" && target != "odr" && target != "moder") return "err target must be idr|odr|moder";
+            if(target == "idr") HookIdr();
+            ulong from = ulong.Parse(w[4], CultureInfo.InvariantCulture);
+            var saved = new uint[1];
+            long dur = w[5] == "-" ? -1 : long.Parse(w[5], CultureInfo.InvariantCulture);
+            ulong at = ScheduleAt(from, () =>
+            {
+                ApplyForce(port, bit, w[1], target, val, false, saved);
+                // the release exactly duration_us after the force itself (on the emulation thread)
+                if(dur >= 0) ScheduleFromEmulation(NowUs() + (ulong)dur, () => ApplyForce(port, bit, w[1], target, val, true, saved));
+            });
+            return "ok " + at;
+        }
+
+        // dacforce <channel> <value> <from_us> -> ok <t_us>
+        private string DacForceCommand(string[] w)
+        {
+            if(w.Length < 4) return "err dacforce arguments";
+            int ch = int.Parse(w[1], CultureInfo.InvariantCulture), val = int.Parse(w[2], CultureInfo.InvariantCulture);
+            IPeripheral pa;
+            if(!machine.TryGetByName("sysbus.spi2.pa", out pa)) return "err no PA DAC model";
+            var mi = pa.GetType().GetMethod("ForceDac");
+            if(mi == null) return "err no ForceDac";
+            ulong at = ScheduleAt(ulong.Parse(w[3], CultureInfo.InvariantCulture), () =>
+            {
+                mi.Invoke(pa, new object[] { ch, val });
+                lock(sync) if(tracing) Send("ev " + Event("\"kind\": \"dac_force\", \"channel\": " + ch + ", \"value\": " + val));
+            });
+            return "ok " + at;
+        }
+
+        // advance <us>: emulated time skips idle time (advance immediately) until now + us
+        private string AdvanceCommand(string[] w)
+        {
+            ulong target = NowUs() + ulong.Parse(w[1], CultureInfo.InvariantCulture);
+            var mts = Antmicro.Renode.Core.EmulationManager.Instance.CurrentEmulation.MasterTimeSource;
+            bool before = mts.AdvanceImmediately;
+            mts.AdvanceImmediately = true;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                while(NowUs() < target && sw.Elapsed.TotalSeconds < 3600) System.Threading.Thread.Sleep(2);
+            }
+            finally { mts.AdvanceImmediately = before; }
+            return NowUs() >= target ? "ok " + NowUs() : "err advance timed out at " + NowUs();
+        }
+
         // ---- events from other models (CH394 link) ----
         private string lastLink;           // replayed at every trace start, after the boot phase
 
@@ -825,6 +998,9 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case "wdt": return WatchdogReset();
                     case "resets": return "resets " + resetCount;
                     case "keylog": return KeyLogCommand(w);
+                    case "force": return ForceCommand(w);
+                    case "dacforce": return DacForceCommand(w);
+                    case "advance": return AdvanceCommand(w);
                     case "socklog":
                     {
                         var r = Call(Ch394(), "SockLogRead", w.Length > 1 ? int.Parse(w[1], CultureInfo.InvariantCulture) : 0);

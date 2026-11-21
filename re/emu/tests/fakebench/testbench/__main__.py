@@ -288,6 +288,30 @@ def run_test(tid, ep):
                 check("entries of the boot after the cycle", bool(b2), json.dumps(ents[:4])),
                 check("an OPEN of port 1024 after the cycle", any(e.get("port") == 1024 for e in opens), json.dumps(opens[:3])),
                 check("fields", all(set(("t_us", "socket", "action", "port", "mode", "boot")) <= set(e) for e in ents) and bool(ents))]
+    if tid == "T-EMU-20":
+        # format v1.8: gpio.force (exact start and release in emulated time), dac.force, time.advance
+        r1 = ctl.op("hw.trace", action="start", pins=["PF4"])
+        f = (r1.get("value") or {}).get("file")
+        m = ctl.op("gpio.force", pin="PF4", target="moder", mode="output", from_us=1000)
+        o = ctl.op("gpio.force", pin="PF4", target="odr", level=1, from_us=2000, duration_us=5000)
+        ctl.op("time.wait", us=20000)
+        dc = ctl.op("dac.force", channel=2, value=100)
+        ctl.op("time.wait", us=1000)
+        ob = ctl.op("hw.observe")
+        a0 = ctl.op("time.wait", us=0)
+        t0 = time.time()
+        av = ctl.op("time.advance", us=200000)     # this busy-polling image runs far below real time
+        wall = time.time() - t0
+        ctl.op("hw.trace", action="stop")
+        evs = [json.loads(l) for l in open(f)] if f and os.path.isfile(f) else []
+        fo = [e for e in evs if e.get("kind") in ("force", "release") and e.get("target") == "odr"]
+        span = fo[1]["t_us"] - fo[0]["t_us"] if len(fo) >= 2 else None
+        ch = ((ob.get("value") or {}).get("pa_dac") or {}).get("ch", [])
+        return [check("gpio.force moder and odr accepted", m.get("ok") and o.get("ok"), str(m) + str(o)),
+                check("odr force released exactly 5000 us later (trace)", span == 5000, json.dumps(fo)),
+                check("dac.force channel 2 = 100 in hw.observe", dc.get("ok") and len(ch) >= 2 and ch[1] == 100, str(ch)),
+                check("time.advance 200 ms of radio time", av.get("ok") and av["value"]["t_us"] - a0["value"]["t_us"] >= 200000,
+                      "%s -> %s in %.1f s wall" % (a0.get("value"), av.get("value"), wall))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

@@ -584,7 +584,9 @@ class FixtureServer:
                # format v1.6: datagram times and the keyer log, emulated time
                "net.log", "key.log",
                # format v1.7: datagrams placed at exact emulated offsets; waits in emulated time
-               "net.inject", "time.wait", "sock.log"]
+               "net.inject", "time.wait", "sock.log",
+               # format v1.8
+               "gpio.force", "dac.force", "time.advance"]
 
     def __init__(self, agent_getter, on_power_cycle, bridge_getter=None):
         self.bridge_getter = bridge_getter
@@ -728,6 +730,44 @@ class FixtureServer:
                 return {"ok": False, "error": "speed must be 0, 10 or 100"}
             r = agent.ask("link %d" % sp) if agent else None
             return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+        if op == "gpio.force":
+            if not agent:
+                return {"ok": False, "error": "emulator not ready"}
+            target = args.get("target", "idr")
+            if target == "moder":
+                val = args.get("mode")
+                val = "null" if val is None else str(val)
+                if val not in ("input", "output", "af", "analog", "null"):
+                    return {"ok": False, "error": "bad arguments: mode input|output|af|analog|null"}
+            else:
+                lv = args.get("level")
+                val = "null" if lv is None else str(int(lv))
+            dur = args.get("duration_us")
+            r = agent.ask("force %s %s %s %d %s" % (args.get("pin"), target, val, int(args.get("from_us", 0) or 0),
+                                                   "-" if dur is None else int(dur)), timeout=40)
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            v = {"pin": args.get("pin"), "target": target, "t_us": int(r.split()[1])}
+            v["mode" if target == "moder" else "level"] = args.get("mode" if target == "moder" else "level")
+            return {"ok": True, "value": v}
+        if op == "dac.force":
+            if not agent:
+                return {"ok": False, "error": "emulator not ready"}
+            ch = int(args.get("channel", 0))
+            if ch not in (2, 7, 8):
+                return {"ok": False, "error": "bad arguments: channel 2|7|8"}
+            val = args.get("value")
+            r = agent.ask("dacforce %d %d %d" % (ch, -1 if val is None else int(val), int(args.get("from_us", 0) or 0)), timeout=40)
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"channel": ch, "value": val, "t_us": int(r.split()[1])}}
+        if op == "time.advance":
+            if not agent:
+                return {"ok": False, "error": "emulator not ready"}
+            r = agent.ask("advance %d" % int(args.get("us", 0)), timeout=3700)
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"t_us": int(r.split()[1])}}
         if op == "sock.log":
             action = args.get("action")
             if action not in ("start", "read", "stop"):

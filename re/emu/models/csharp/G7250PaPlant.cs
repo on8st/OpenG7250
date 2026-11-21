@@ -63,6 +63,19 @@ namespace Antmicro.Renode.Peripherals.SPI
         public int GetDacCode(int channel) { return channel >= 1 && channel <= 8 ? dac[channel] : -1; }
         // last latched word value per channel, -1 if never written since reset
         public int GetDacWord(int channel) { return channel >= 1 && channel <= 8 && written[channel] ? dac[channel] : -1; }
+
+        // dac.force (format v1.8): the emulator writes a channel's output register as a
+        // simulated firmware fault (T-A3-61), as if the image had latched that word
+        // value < 0: release, the channel takes the word the image last wrote again
+        public void ForceDac(int channel, int value)
+        {
+            if(channel < 1 || channel > 8) return;
+            if(value < 0) { dac[channel] = imageDac[channel]; written[channel] = imageWritten[channel]; }
+            else { dac[channel] = value & 0x3FF; written[channel] = true; }
+            Publish();
+        }
+        private readonly int[] imageDac = new int[9];
+        private readonly bool[] imageWritten = new bool[9];
         public double Idd { get { return ComputeIdd(); } }
 
         public byte Transmit(byte data)
@@ -89,7 +102,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                     byte hi = word[(nbytes - 2) & 1], lo = word[(nbytes - 1) & 1];
                     int ch = Reverse4((hi >> 2) & 0xF);
                     int val = ((hi & 3) << 8) | lo;
-                    if(ch >= 1 && ch <= 8) { dac[ch] = val; written[ch] = true; }
+                    if(ch >= 1 && ch <= 8) { dac[ch] = val; written[ch] = true; imageDac[ch] = val; imageWritten[ch] = true; }
                     this.Log(LogLevel.Debug, "DAC ch {0} = {1}, Idd {2:F3} A", ch, val, ComputeIdd());
                     nbytes = 0;
                     Publish();

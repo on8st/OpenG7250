@@ -194,6 +194,22 @@
     "sock.log",
     "power.cycle"
    ]
+  },
+  {
+   "id": "T-EMU-20",
+   "title": "gpio.force, dac.force, time.advance (format v1.8)",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "gpio.force",
+    "dac.force",
+    "time.advance",
+    "hw.trace",
+    "time.wait"
+   ]
   }
  ]
 }
