@@ -337,6 +337,14 @@ def _t_a1_65(ctx, s, c):
 from .p2 import reread_endpoint, wait_reachable  # noqa: E402
 
 
+def dhcp_messages(ctx) -> list[dict]:
+    """dhcp.log: the runner answers {"messages": [...]}; a bare list is read too."""
+    r = ctx.fixture("dhcp.log")
+    if isinstance(r, dict):
+        r = r.get("messages", [])
+    return [m for m in (r or []) if isinstance(m, dict)]
+
+
 def discovers(log):
     """t_us of the client's DHCPDISCOVER and DHCPREQUEST messages in a dhcp.log (only a client
     sends these two types, RFC 2131 Table 2)."""
@@ -363,7 +371,7 @@ def t_a1_66(ctx):
     deadline = time.monotonic() + 200
     times = []
     while time.monotonic() < deadline:
-        times = discovers(ctx.fixture("dhcp.log") or [])
+        times = discovers(dhcp_messages(ctx))
         if len(times) >= 6:
             break
         time.sleep(2.0)
@@ -491,14 +499,14 @@ def t_a1_74(ctx):
     ll = ctx.endpoint["radio"]["ip"]
     if not ctx.check("link-local address after the power-on exchange", ll.startswith("169.254."), ll):
         return
-    first = [m for m in (ctx.fixture("dhcp.log") or []) if mtype(m) == "DISCOVER"]
+    first = [m for m in (dhcp_messages(ctx)) if mtype(m) == "DISCOVER"]
     ctx.check("power-on DHCPDISCOVER (before any address): IP source 0.0.0.0", bool(first) and str(first[0].get("src", "")).split(":")[0] == "0.0.0.0",
               str(first[0]) if first else "no DISCOVER in dhcp.log")
     # wait for a retry while link-local (from 4 s, doubling), then let a server answer
     deadline, retry = time.monotonic() + 20, None
     while time.monotonic() < deadline and retry is None:
         time.sleep(0.5)
-        retry = next((m for m in (ctx.fixture("dhcp.log") or []) if mtype(m) == "DISCOVER"
+        retry = next((m for m in (dhcp_messages(ctx)) if mtype(m) == "DISCOVER"
                       and str(m.get("src", "")).split(":")[0] == ll), None)
     if not ctx.check("a DHCPDISCOVER retry while link-local", retry is not None, "none within 20 s"):
         return
@@ -509,7 +517,7 @@ def t_a1_74(ctx):
         deadline, req = time.monotonic() + 40, None
         while time.monotonic() < deadline and req is None:
             time.sleep(0.5)
-            req = next((m for m in (ctx.fixture("dhcp.log") or []) if mtype(m) == "REQUEST"), None)
+            req = next((m for m in (dhcp_messages(ctx)) if mtype(m) == "REQUEST"), None)
         if ctx.check("a DHCPREQUEST after the server's OFFER", req is not None, "none within 40 s"):
             ctx.eq("while link-local: REQUEST source is the link-local address, ciaddr 0.0.0.0, BROADCAST flag set",
                    (str(req.get("src", "")).split(":")[0], req.get("ciaddr"), bflag(req)), (ll, "0.0.0.0", True))
