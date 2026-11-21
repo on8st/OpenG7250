@@ -75,6 +75,8 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
   host test until a DAC driver exists.
 - 0066 addendum: during flash work the check samples in the wait loop and runs at the end; fault
   within 20 ms after the end.
+- P-SYS-9: the persist block's range is named as the firmware's design (now 128 bytes at
+  0x2401FF80); radio check over the whole block.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 

@@ -173,7 +173,7 @@ Priority: **M1** = needed for milestone M1 (discovery, capability block, RX-IQ);
 ### HIS-13 — Fault and reset behaviour (M3)
 
 - **HIS answer** ([HIS] `2a38b7f`): partly (HIS 85); see `analysis/his-2a38b7f-impact.md` §2.
-- **Update** ([HIS] `0677c2d`, gate review 9): whether AXI SRAM content (the firmware's region 0x2401FFE0–0x2401FFFF) survives a software or watchdog reset through the stage before 0x08020000 is UNKNOWN; measurement in HIS 90. Spec: P-SYS-9 (0050).
+- **Update** ([HIS] `0677c2d`, gate review 9): whether AXI SRAM content (the firmware's region, then 0x2401FFE0–0x2401FFFF; since 2026-11-21 the persist block is 0x2401FF80–0x2401FFFF, 128 bytes, HIS update to follow) survives a software or watchdog reset through the stage before 0x08020000 is UNKNOWN; measurement in HIS 90. Spec: P-SYS-9 (0050).
 - **Update** ([HIS] `72591aa`): a system reset does not clear SRAM; AXI SRAM has a 64-bit ECC word, so whole aligned 64-bit words are written (both MEDIUM, ST citations not yet checked); whether the earlier stage writes the region stays not known. A surviving pattern shows both retention and that the earlier stage leaves the range alone; a lost one does not tell which. P-SYS-9 unchanged.
 - Question: what does the hardware do on a processor reset, brown-out or watchdog reset:
   does the PA drop out by itself, and in which state do relays and switches come up?
