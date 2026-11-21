@@ -86,6 +86,45 @@ fn renewal_at_t1_unicast_then_rebinding_at_t2_broadcast() {
 }
 
 #[test]
+fn silent_server_short_lease_renewing_rebinding_then_lease_end_dh_03() {
+    // Lease 120 s: T1 60 s, T2 105 s, end 120 s; the server never answers (emulator DH-03).
+    let mut c = bound(120);
+    let mut sends: Vec<(u64, [u8; 4])> = vec![];
+    let mut used = None;
+    let mut t = 0;
+    while t <= 200_000 {
+        match c.poll(t) {
+            Action::Send { to, .. } => sends.push((t, to)),
+            Action::Use(cfg) => {
+                used.get_or_insert((t, cfg));
+            }
+            Action::None => {}
+        }
+        t += 10;
+    }
+    // One unicast renewal at T1, a broadcast REQUEST at T2, none in between.
+    assert_eq!(sends[0], (60_000, SERVER));
+    assert_eq!(sends[1], (105_000, [255; 4]), "rebinding at T2: {sends:?}");
+    assert!(sends.iter().filter(|s| s.0 < 120_000).all(|s| s.0 + WAIT_MS <= 120_000 || s.1 == [255; 4]));
+    // Lease end: link-local, and the A1.11 retries start (a DISCOVER at once, then back-off).
+    assert_eq!(used, Some((120_000, ll())));
+    let d: Vec<u64> = sends.iter().filter(|s| s.0 >= 120_000).map(|s| s.0).collect();
+    assert!(d[0] <= 120_010, "DISCOVER at the next poll after the lease end");
+    // The immediate DISCOVER takes the place of the first 4 s wait; then the back-off goes on.
+    assert_eq!(d[1], d[0] + WAIT_MS + 8_000);
+    assert!(matches!(c.state, State::Init { .. } | State::Selecting { .. }));
+    // A rebinding ACK before the end keeps or moves the address (A1.11a).
+    let mut c = bound(120);
+    c.poll(60_000);
+    c.poll(60_000 + WAIT_MS);
+    assert!(matches!(c.poll(105_000), Action::Send { to: [255, 255, 255, 255], .. }));
+    let x = c.xid;
+    let a = c.on_reply(&reply(dhcp::ACK, x, [192, 168, 1, 91], 120), 105_100);
+    assert!(matches!(a, Action::Use(cfg) if cfg.ip == [192, 168, 1, 91]));
+    assert_eq!(c.state, State::Bound);
+}
+
+#[test]
 fn renewal_that_keeps_the_address_and_one_that_moves_it() {
     let mut c = bound(1000);
     c.poll(500_000);

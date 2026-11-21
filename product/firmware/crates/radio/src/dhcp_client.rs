@@ -148,8 +148,11 @@ impl Client {
                     }
                     State::Renewing { until_ms } | State::Rebinding { until_ms } if now >= until_ms => {
                         // No answer: back to Bound and try again after a pause (RFC 2131
-                        // section 4.4.5: half the remaining time, at least 60 s).
-                        let remaining = end.saturating_sub(now);
+                        // section 4.4.5): half the time remaining until T2 while renewing, until
+                        // the lease end while rebinding, at least 60 s, but never past that
+                        // point, so that T2 always gives the broadcast REQUEST (DH-03).
+                        let limit = if matches!(self.state, State::Renewing { .. }) && now < t2 { t2 } else { end };
+                        let remaining = limit.saturating_sub(now);
                         let pause = (remaining / 2).max(60_000).min(remaining);
                         self.state = State::Bound;
                         self.retry_at = Some(now + pause);
