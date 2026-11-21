@@ -82,8 +82,7 @@ def t_a3_61(ctx: Ctx):
         ctx.fixture("gpio.force", pin="PF4", target=target, level=None)
         clean(f"PF4 {target}")
     # a 5 ms pulse (a mismatch shorter than 10 ms never gives the fault; c245f5e): no fault
-    ctx.fixture("gpio.force", pin="PF4", level=0, target="idr", from_us=1000)
-    ctx.fixture("gpio.force", pin="PF4", level=None, target="idr", from_us=6000)
+    ctx.fixture("gpio.force", pin="PF4", level=0, target="idr", from_us=1000, duration_us=5000)
     wait_radio(ctx, 40)
     code, flags = faults(ctx)
     ctx.check("a 5 ms pulse gives no fault (a mismatch shorter than 10 ms never does)", not fault16(code, flags),
@@ -110,7 +109,9 @@ def t_a3_61(ctx: Ctx):
             code, flags = faults(ctx)
             ctx.check(f"DAC channel {ch} set non-zero: FAULT_CODE 16 within 20 ms", fault16(code, flags),
                       f"FAULT_CODE {code}, FAULT_FLAGS {flags}")
-            ctx.fixture("dac.force", channel=ch, value=0)
+            # null releases (the channel takes the word the image last wrote); the restart's
+            # start-up safe state resets the DAC (PB14 low) and clears the word
+            ctx.fixture("dac.force", channel=ch, value=None)
             clean(f"DAC channel {ch}")
     else:
         ctx.notes.append("DAC part (a non-zero value on channel 2, 7 or 8) not run: no dac.force")

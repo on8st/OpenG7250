@@ -510,7 +510,11 @@ A test with target `emulator` is also run against the reference model. A test wi
    - `flash.ecc {address, type: "double"|"single"}`; each detection is a `flash.log` entry
      `{op: "ecc", type, address, boot}` (T-A1-87).
    - Every erase and program entry carries `fpga_bus: "idle"|"open"` at its start (T-B5-22).
-   - `gpio.force {pin, level: 0|1|null, target?: "idr"|"odr"|"moder", mode?, from_us?}` →
+   - `dac.force {channel: 2|7|8, value: n|null}`: one write into the DAC output register (the
+     image may overwrite it); `null` releases (the channel takes the word the image last wrote);
+     the image's start-up safe state (PB14 low) and `power.cycle` clear it; traced
+     `{"kind": "dac_force", channel, value, t_us}` (T-A3-61).
+   - `gpio.force {pin, level: 0|1|null, target?: "idr"|"odr"|"moder", mode?, from_us?, duration_us?}` →
      `{pin, level, t_us}`: with `target` `idr` (the default) the pin reads `level` whatever the
      image drives; with `odr` the output register is written to `level`, with `moder` the pin
      made `mode` (e.g. `"input"`), both as an emulator memory write (A3.6b items 2 and 1; 0066);
