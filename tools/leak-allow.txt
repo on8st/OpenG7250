@@ -16,6 +16,10 @@ re/emu/docs/G7250-emulator-test-spec-v0.5.md
 product/refmodel/src/crypto.rs
 testbench/catalogue/catalogue.json
 
+# Cargo lock files carry the crates.io checksums of the Rust dependencies.
+product/firmware/Cargo.lock
+product/firmware/board/Cargo.lock
+
 # This file and the checker name the patterns themselves.
 tools/leak-allow.txt
 tools/leak-check.sh
