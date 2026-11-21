@@ -20,6 +20,21 @@ each row, chosen to stay on the safe side.
 | F2-Q4 | Is INT# (PC13) pulled up on the board, or must the MCU pull it up (HIS 40: "needs a pull-up")? | Interrupt-driven receive. | INT# not used yet; the driver polls every 2 ms. |
 | F2-Q5 | Does the CH394 report the destination address of a received UDP datagram (unicast, directed broadcast, limited broadcast)? The W5500 UDP header carries only the source. | B3.9 / T-B3-32: Set IP from outside the subnet is accepted only to 255.255.255.255. | See SQ-F2-2. |
 
+## HIS questions for the DDC0 stream (FPGA bus, step 4)
+
+The bus is gated in the code (`g7250_safety::fpga_gate`): no permit exists until every value
+below comes through the HIS, for the radio (`CLEARED`, measured, HIS 90) or for emulator runs
+(`EMULATOR`, an emulator observation the gate clears as such). Until then PE0–PE10 stay
+undriven and DDC0 reports reason 2.
+
+| Id | Question | Why |
+|---|---|---|
+| F4-Q1 | STB (PE9) and CMD (PE8) active levels; data set-up time, strobe width, and the bus turnaround: who drives D0–D7 after a command and when the FPGA releases them. | Bus contention is a hardware risk (HIS 80 "Open"). |
+| F4-Q2 | 0x01 config frame: meaning and safe value of byte 0 (status flags) and of bytes 9–18 for each rate index (per-rate calibration), and the position of the spectral-inversion flag. | Tuning DDC0 or setting its rate needs a full frame; writing unknown values to the FPGA is not acceptable. |
+| F4-Q3 | Which NCO word (offset 1 or 5) is the receive path for ADC0/DDC0, and f_clk (122.88 MHz, MEDIUM). | Frequency of DDC0 (B6.8; P-RX-1). |
+| F4-Q4 | 0x04 RX I&Q read: byte order of the two signed 24-bit values, I before Q?, number of samples per DRDY per rate index (8/4/2/1, MEDIUM), and how many strobes one read takes. | Packing DDC0 (B6.3). |
+| F4-Q5 | DRDY (PE10): active edge (rising, HIS 80) and what happens if a read is late (overrun flag in 0x02?). | Pacing and the DDC FIFO overflow bit (B9.2 byte 30). |
+
 ## HIS answers (cleared HIS `d199d33`, gate review 6)
 
 | Id | Answer | Firmware change |

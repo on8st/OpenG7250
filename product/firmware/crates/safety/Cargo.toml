@@ -7,4 +7,10 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# Emulator runs only: use the EMULATOR bus parameters (from the HIS as emulator observations).
+# Never in a radio image; build.sh does not set it for out/g7250.elf.
+emulator-fpga-bus = []
+
 [dependencies]

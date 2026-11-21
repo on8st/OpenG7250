@@ -116,6 +116,18 @@ pub const SAFE_STATE: &[PinRule] = &[
     r(H, 3, LeaveUntouched, "key contact, not used in v1.0 (0030)"),
     r(H, 4, LeaveUntouched, "key contact, not used in v1.0 (0030)"),
     r(H, 5, LeaveUntouched, "power key, ignored in v1.0 (0029 item 2)"),
+    // FPGA bus ([HIS] HIS 80): never driven until the bus parameters are cleared (fpga_gate).
+    r(E, 0, LeaveUntouched, "FPGA bus D0: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 1, LeaveUntouched, "FPGA bus D1: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 2, LeaveUntouched, "FPGA bus D2: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 3, LeaveUntouched, "FPGA bus D3: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 4, LeaveUntouched, "FPGA bus D4: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 5, LeaveUntouched, "FPGA bus D5: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 6, LeaveUntouched, "FPGA bus D6: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 7, LeaveUntouched, "FPGA bus D7: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 8, LeaveUntouched, "FPGA bus CMD: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 9, LeaveUntouched, "FPGA bus STB: undriven until the FPGA bus gate opens (HIS 80)"),
+    r(E, 10, LeaveUntouched, "FPGA bus DRDY (input): untouched (HIS 80)"),
 ];
 
 /// The rule for a pin, if the safe state lists it.
@@ -148,6 +160,14 @@ mod tests {
             assert_eq!(act(p, n), DriveHigh, "P{p:?}{n}");
             assert_eq!(rule(p, n).unwrap().kind, Kind::Rf);
         }
+    }
+
+    #[test]
+    fn fpga_bus_is_never_driven_by_the_safe_state() {
+        for n in 0..=10 {
+            assert_eq!(act(E, n), LeaveUntouched, "PE{n}");
+        }
+        assert!(!SAFE_STATE.iter().any(|r| r.port == E && r.action != LeaveUntouched));
     }
 
     #[test]

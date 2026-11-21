@@ -209,7 +209,9 @@ impl P2 {
             general: self.session.general,
             ddc: self.session.ddc,
             offered_384: false,
-            ddc0_built: false, // DDC0 I&Q comes with step 4
+            // DDC0 needs the FPGA bus, closed until its parameters are cleared (fpga_gate;
+            // coordinator 2026-11-21): reason 2 until then.
+            ddc0_built: false,
         };
         let v = g7250_radio::stream::register(g7250_radio::stream::ddc0(&i), g7250_radio::stream::duc0(self.tx.calibrated()));
         if v != self.regs.stream_status {

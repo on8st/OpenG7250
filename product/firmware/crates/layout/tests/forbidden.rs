@@ -113,3 +113,24 @@ fn vendored_embassy_keeps_supply_patch() {
     assert!(!h.contains("while !PWR.csr1().read().actvosrdy() {}"), "unbounded ACTVOSRDY wait");
     assert!(!h.contains("while !PWR.d3cr().read().vosrdy() {}"), "unbounded VOSRDY wait");
 }
+
+#[test]
+fn only_the_fpga_module_touches_gpioe() {
+    // [HIS] HIS 80: the FPGA bus is driven only through board/app/src/fpga.rs, behind the
+    // fpga_gate permit; no other board code may name GPIOE.
+    let mut v = Vec::new();
+    files(&firmware_root().join("board"), &mut v);
+    for f in v.iter().filter(|f| f.extension().is_some_and(|e| e == "rs")) {
+        // safe.rs maps every port, E included, but acts only on the safe-state table, and
+        // g7250-safety's test fpga_bus_is_never_driven_by_the_safe_state proves that table has no
+        // action on port E.
+        if f.ends_with("board/app/src/fpga.rs") || f.ends_with("board/common/src/safe.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(f).unwrap();
+        for line in text.lines() {
+            let code = line.split("//").next().unwrap();
+            assert!(!code.contains("GPIOE") && !code.contains("PE0") && !code.contains("Port::E"), "{} touches the FPGA bus: {line}", f.display());
+        }
+    }
+}

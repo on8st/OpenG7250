@@ -7,6 +7,7 @@
 #![no_std]
 #![no_main]
 
+mod fpga;
 mod net;
 mod p2;
 mod mgmt_init;
@@ -153,6 +154,11 @@ async fn main(spawner: Spawner) {
         None => 0,
     };
     println!("app: boot counter {}", boot_counter);
+    println!(
+        "app: FPGA bus {} (bus pins {})",
+        if g7250_safety::fpga_gate::permit().is_some() { "parameters cleared" } else { "closed: parameters not cleared (HIS 80); DDC0 not offered" },
+        if g7250_safety::fpga_gate::permit().is_some() { "available" } else { "undriven" }
+    );
     // Test build only: compact the store at every start, so that the emulator can cut power or
     // stretch the erase at any point of a compaction (docs/emulator-run.md, "Store").
     #[cfg(feature = "test-compact-at-start")]

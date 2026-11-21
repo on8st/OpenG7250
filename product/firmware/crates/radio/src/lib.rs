@@ -5,6 +5,7 @@
 //! and the limits (0037: the protocol crate is shared with g7250ctl).
 #![cfg_attr(not(test), no_std)]
 
+pub mod ddc;
 pub mod mgmt;
 pub mod record;
 pub mod regmap;
