@@ -673,6 +673,18 @@ change under A1.11a (0035).
     G7250 gives the address up at once, without a defending ARP, chooses a new one and probes
     it; after 10 conflicts it waits 60 s before the next probe ([RFC3927] section 9,
     MAX_CONFLICTS, RATE_LIMIT_INTERVAL). Every conflict is logged.
+- **DHCP messages while link-local** (0052). The CH394's source IP address is chip-wide
+  ([CH394]), and the P2 sockets keep using the link-local address during a borrow, so the
+  G7250 sends its DHCPDISCOVER and DHCPREQUEST with the link-local address as IP source while
+  it holds one. [RFC3927] section 2.11 requires the DHCP client to keep trying while a
+  link-local address is configured, and section 1.9 that the host not alter its use of DHCP
+  because of that address; [RFC2131] section 4.1 asks for source 0.0.0.0 "prior to that client
+  obtaining its IP address". Sending 0.0.0.0 would mean clearing the chip-wide address and
+  closing every socket for each retry, so this is a deliberate reading forced by the chip, kept
+  as close to [RFC2131] as it allows: these messages MUST carry `ciaddr` = 0.0.0.0 and the
+  BROADCAST flag set, so that the server or relay answers by broadcast and identifies the
+  client by `chaddr` and option 61, never by the source address. Before any address is held (the first exchange at
+  power-on), the source is 0.0.0.0 as [RFC2131] section 4.1 says.
 - **Conflict on a DHCP or static address** (0049). A conflict on a leased address: the G7250
   sends DHCPDECLINE ([RFC2131] section 3.1 item 5), uses a link-local address and starts DHCP
   again. A conflict on a static address: fall back to the previous configuration and log it
@@ -3450,7 +3462,7 @@ Table P-1 — Pending hardware parameters
 | P-SYS-6 | Power draw in idle, for a later standby (0029) | part A scope | — | quiet idle only |
 | P-SYS-7 | Start mode of the independent watchdog (IWDG1_SW option byte, [HIS] HIS 10, HIS 90) | A1.8a item 3 (installer), firmware | HIS-13 | the firmware and the installer service the watchdog whenever it may run |
 | P-SYS-8 | SEND and TUNER interfaces on the main unit: whether and how the firmware drives or reads them | A3.6, A3.7, B4.8 `atu` bit 4, `regmap_groups` bit 7 | HIS-09 | released (inactive) and not offered |
-| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`), [HIS] HIS 10, HIS 90 (`0677c2d`: UNKNOWN for the firmware's region 0x2401FFE0–0x2401FFFF). Radio check: write a pattern, then a software reset (`RESTART`) and a watchdog reset, and read it back in the boot stage | A3.5 "Counters", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters are kept as far as the hardware keeps them, and nothing relies on them |
+| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`), [HIS] HIS 10, HIS 90 (`72591aa`: a system reset does not clear SRAM and AXI SRAM has a 64-bit ECC word, both MEDIUM; whether the stage before 0x08020000 writes the firmware's region 0x2401FFE0–0x2401FFFF is not known). Radio check: write a pattern, then a software reset (`RESTART`) and a watchdog reset, and read it back in the boot stage | A3.5 "Counters", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters are kept as far as the hardware keeps them, and nothing relies on them |
 | P-RX-1 | Physical receive paths behind the two receive tuning words ([HIS] HIS 80) | B2, B3, 0004 | HIS-02 | one DDC |
 | P-RX-2 | FPGA configuration frame (command 0x01, [HIS] HIS 80): meaning and safe values of the status byte 0 and of bytes 9–18 (per-rate calibration among them), position of the spectral-inversion flag; which tuning word (offset 1 or 5) is DDC0; I/Q order of the 0x04 samples; bus set-up, strobe width and turnaround | B6.1, B6.7, B4.8 `streams` | HIS-01, HIS-02 | DDC0 not offered (`streams` bit 0 = 0, `STREAM_STATUS` reason 2); no configuration frame written outside the A3.6 safe state |
 | P-TX-1 | The third tuning word as the transmit word ([HIS] HIS 80, HYPOTHESIS) | B10 (firmware) | HIS-02 | not applicable while TX is disabled |
@@ -3626,6 +3638,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-71 | After a successful probe the radio sends the RFC 3927 announcements, and only then answers discovery and `IDENTIFY` on the link-local address, within the start-up bound (A1.11; 0048, 0049). |
 | T-A1-72 | While running on a link-local address, a conflict (IP_CONFLI) makes the radio give the address up at once without a defending ARP, end the session as an address change (A1.11a), probe a new address with discovery and management closed for at most 10 s, and log the conflict; after 10 conflicts it waits 60 s before the next probe (A1.11; 0049). |
 | T-A1-73 | A conflict on a DHCP-leased address sends DHCPDECLINE, moves to link-local and restarts DHCP; a conflict on a static address falls back to the previous configuration (C-4), or to link-local if there is none; each is logged (A1.6 C-4, A1.11; 0049). |
+| T-A1-74 | At power-on before any address, DHCPDISCOVER has IP source 0.0.0.0; while link-local, DHCPDISCOVER and DHCPREQUEST have the link-local address as IP source, `ciaddr` 0.0.0.0 and the BROADCAST flag set, and a server's broadcast OFFER and ACK give the radio its lease (emulator or reference model; A1.11; 0052). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |

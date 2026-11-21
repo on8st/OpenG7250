@@ -81,8 +81,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0049 | Link-local probe on socket 0 (MACRAW), defence by giving the address up; conflicts on DHCP/static addresses | proposed |
 | 0050 | Fault counters across a reset: pending hardware P-SYS-9, part of the TX gate | proposed |
 | 0051 | Port 7250 sequence counters per destination (owner, non-owners, old owner) | proposed |
+| 0052 | DHCP messages while link-local carry the link-local source, ciaddr 0, BROADCAST flag | proposed |
 
-All numbers 0001–0051 are now in use.
+All numbers 0001–0052 are now in use.
 
 ## Open questions for ON8ST
 
