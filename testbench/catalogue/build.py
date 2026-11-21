@@ -253,9 +253,11 @@ BENCH_TESTS = [
     ("T-B10-L01", "TX frozen: record `tx` reads bit 0 = 1, bit 1 = 1 (0036), bits 2 and 3 = 1, "
      "bit 4 = 0 until the calibration set is complete; `streams` bit 1 = 1; `regmap_groups` "
      "bits 0-5 set, 6-7 clear (B4.8; 0035).", ["B4.8", "B8.3", "B10", "Annex P", "0035", "0036"], []),
-    ("T-B10-L07", "TX frozen: `ATU_TUNE` = 0 from the owner is accepted as a no-op with "
-     "`ATU_STATE` 5 (unknown); from a non-owner `NOT_OWNER` (A3.9b item 1; Annex P).",
-     ["A3.9b", "B8.4", "Annex P"], []),
+    ("T-B10-L07", "TX frozen: `ATU_TUNE` = 0 from the owner is accepted as a no-op, answered "
+     "with (0x0400, 0) and no `WRITE_STATUS` (B8.4); `ATU_STATE` read by a write reads 5 "
+     "(unknown) with `READ_ONLY` (B8.4a); a start (1) is rejected with `NOT_CALIBRATED` and not "
+     "latched; from a non-owner `NOT_OWNER` (A3.9b item 1; 0032; Annex P).",
+     ["A3.9b", "B8.4", "B8.4a", "Annex P"], []),
     ("T-B10-L09", "TX frozen: `TX_MODE_CLASS`, `KEYED_TIMEOUT`, `LIMIT_TX_TIME` and "
      "`LIMIT_FWD_POWER` writes are answered as in Table B8-2 (accepted values, `BAD_VALUE`, "
      "`LOOSER_LIMIT`, 0 = back to the persistent value) and are reset at the session end; none "

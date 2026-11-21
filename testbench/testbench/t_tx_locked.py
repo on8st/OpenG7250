@@ -207,9 +207,22 @@ def t_b10_42(ctx):
 def t_l07(ctx):
     with host(ctx) as h, host(ctx) as other:
         session(h)
+        # A3.9b item 1: 0 from the owner is always accepted, a no-op with no cycle running;
+        # its answer is the pair (address, value in force) of B8.4. ATU_STATE comes with the
+        # answer only to a start that is a no-op, so it is read here as B8.4a says: a write
+        # to the read-only register answers its value with READ_ONLY.
         ans = h.write([(ATU_TUNE, 0)])
         ctx.eq("ATU_TUNE = 0 accepted (no rejection)", write_status(ans), [])
-        ctx.eq("answered with ATU_STATE 5", value(ans, ATU_STATE), 5)
+        ctx.eq("ATU_TUNE = 0 answered with the value in force 0 (B8.4)", value(ans, ATU_TUNE), 0)
+        ans = h.write([(ATU_STATE, 0)])
+        ctx.eq("ATU_STATE read by a write: READ_ONLY (B8.4a)", [r for _, _, r in write_status(ans)], ["READ_ONLY"])
+        st = value(ans, ATU_STATE)
+        ctx.eq("ATU_STATE 5 (unknown) while P-ATU-1 is not set (A3.9b; 0032)", st, 5)
+        if st == 5:
+            ans = h.write([(ATU_TUNE, 1)])
+            ctx.eq("ATU_TUNE = 1 rejected NOT_CALIBRATED before NOT_ARMED (A3.9b item 1)",
+                   [r for _, _, r in write_status(ans)], ["NOT_CALIBRATED"])
+            ctx.eq("the rejected start is not latched: ATU_TUNE in force 0", value(ans, ATU_TUNE), 0)
         ans = other.write([(ATU_TUNE, 0)])
         ctx.check("from a non-owner NOT_OWNER", any(r == "NOT_OWNER" for _, _, r in write_status(ans)), f"WRITE_STATUS seen: {write_status(ans)}")
         h.stop()

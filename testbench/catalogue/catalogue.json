@@ -9889,10 +9889,11 @@
    "id": "T-B10-L07",
    "origin": "testbench",
    "part": "A-B",
-   "title": "TX frozen: `ATU_TUNE` = 0 from the owner is accepted as a no-op with `ATU_STATE` 5 (unknown); from a non-owner `NOT_OWNER` (A3.9b item 1; Annex P).",
+   "title": "TX frozen: `ATU_TUNE` = 0 from the owner is accepted as a no-op, answered with (0x0400, 0) and no `WRITE_STATUS` (B8.4); `ATU_STATE` read by a write reads 5 (unknown) with `READ_ONLY` (B8.4a); a start (1) is rejected with `NOT_CALIBRATED` and not latched; from a non-owner `NOT_OWNER` (A3.9b item 1; 0032; Annex P).",
    "reqs": [
     "A3.9b",
     "B8.4",
+    "B8.4a",
     "Annex P"
    ],
    "needs": [],

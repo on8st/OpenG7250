@@ -1129,7 +1129,9 @@ impl Radio {
                 // A3.9b item 1 order: BUSY, NOT_OWNER, BAD_VALUE, NOT_CALIBRATED, NOT_ARMED, no-op,
                 // KEYED, NOT_KEYABLE. The tune cycle itself is not modelled: once calibrated and
                 // armed, a start is answered as the no-op with ATU_STATE (model gap).
-                0 => W::Answer(vec![(a, 0), (reg::ATU_STATE, self.atu_state())]),
+                // 0 is always accepted and a no-op with no cycle running; its answer is the
+                // pair of B8.4 only (ATU_STATE comes with a start's no-op only, item 1).
+                0 => W::Answer(vec![(a, 0)]),
                 1 if !self.has_param("P-ATU-1") => W::Reject(0, wr::NOT_CALIBRATED),
                 1 if !self.armed() => W::Reject(0, wr::NOT_ARMED),
                 1 => W::Answer(vec![(a, 0), (reg::ATU_STATE, self.atu_state())]),
