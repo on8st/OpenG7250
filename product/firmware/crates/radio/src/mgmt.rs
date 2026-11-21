@@ -1,0 +1,366 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 ON8ST
+//! Radio end of the management channel (spec A1.4, A1.5, A1.10, Annex M), step 2: the read
+//! commands `IDENTIFY`, `GET_STATS`, `GET_CHALLENGE`, `GET_CONFIG`, `GET_CALIBRATION`.
+//!
+//! Radio state kept here: the repeat cache (A1.4: last reply per host, 5 s, 4 hosts), one
+//! challenge per host (A1.10: 4 hosts, 10 s, single use), the first-secret window (300 s of
+//! network uptime while no secret is set), the source rules and reply caps (A1.10: own subnet
+//! only except `IDENTIFY`, never a broadcast source; 20/s per source, 100/s in total, 50/s
+//! `IDENTIFY`, 10/s `IDENTIFY` from outside the subnet), the authentication-failure limit (5 in
+//! 10 s → status 34) and the counters of `GET_STATS`.
+//!
+//! Not yet: the write commands (step 4). Until then no secret can be set, so every
+//! authenticated request fails with 33, and a command not built yet is answered with 56.
+
+use g7250_proto::mgmt::{self, auth, Command, Incoming, Status};
+use g7250_proto::netcfg;
+use g7250_proto::ratelimit::RateLimit;
+
+type Addr = ([u8; 4], u16);
+
+const HOSTS: usize = 4;
+const REPEAT_MS: u64 = 5_000;
+const CHALLENGE_MS: u64 = 10_000;
+pub const FIRST_SECRET_WINDOW_MS: u64 = 300_000;
+const AUTH_FAIL_WINDOW_MS: u64 = 10_000;
+const AUTH_FAIL_LIMIT: u8 = 5;
+
+/// `GET_STATS` counters (Table M-1: name, u64). Names are this firmware's; Annex M fixes only the
+/// layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stats {
+    pub mgmt_requests: u64,
+    pub mgmt_replies: u64,
+    pub mgmt_dropped_not_request: u64,
+    pub mgmt_dropped_source: u64,
+    pub mgmt_dropped_rate: u64,
+    pub mgmt_repeats: u64,
+    pub mgmt_auth_failures: u64,
+    pub discovery_answered: u64,
+    pub discovery_dropped_rate: u64,
+    pub discovery_from_port_1024: u64,
+    pub set_ip_ignored: u64,
+}
+
+impl Stats {
+    fn encode(&self, out: &mut [u8]) -> usize {
+        let items: [(&[u8], u64); 11] = [
+            (b"mgmt_requests", self.mgmt_requests),
+            (b"mgmt_replies", self.mgmt_replies),
+            (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
+            (b"mgmt_dropped_source", self.mgmt_dropped_source),
+            (b"mgmt_dropped_rate", self.mgmt_dropped_rate),
+            (b"mgmt_repeats", self.mgmt_repeats),
+            (b"mgmt_auth_failures", self.mgmt_auth_failures),
+            (b"discovery_answered", self.discovery_answered),
+            (b"discovery_dropped_rate", self.discovery_dropped_rate),
+            (b"discovery_from_port_1024", self.discovery_from_port_1024),
+            (b"set_ip_ignored", self.set_ip_ignored),
+        ];
+        let mut at = 0;
+        for (n, v) in items {
+            at = mgmt::payload::stat(out, at, n, v).unwrap_or(at);
+        }
+        at
+    }
+}
+
+/// What the server needs from the rest of the firmware for one request.
+pub struct Ctx<'a> {
+    pub now_ms: u64,
+    /// Our address and netmask (source rule, A1.10).
+    pub own_ip: [u8; 4],
+    pub own_mask: [u8; 4],
+    /// Encoded `IDENTIFY` TLV list without tag 12 (the server adds the window) and with tag 11
+    /// as `secret_set`.
+    pub identify: &'a mgmt::payload::Identify<'a>,
+    /// Encoded `GET_CONFIG` reply payload (Table M-3, every item).
+    pub config: &'a [u8],
+    /// Encoded `GET_CALIBRATION` reply payload (Table M-1).
+    pub calibration: &'a [u8],
+    /// Fills a challenge from the hardware RNG; false if it failed.
+    pub rng: &'a mut dyn FnMut(&mut [u8; 16]) -> bool,
+    /// Set if a secret is stored.
+    pub secret: Option<&'a [u8; 32]>,
+}
+
+#[derive(Clone, Copy)]
+struct Stored {
+    addr: Addr,
+    id: u32,
+    command: u16,
+    hash: [u8; 32],
+    at_ms: u64,
+    len: u16,
+    reply: [u8; mgmt::MAX_REPLY],
+}
+
+#[derive(Clone, Copy)]
+struct Challenge {
+    addr: Addr,
+    value: [u8; 16],
+    at_ms: u64,
+}
+
+#[derive(Clone, Copy)]
+struct AuthFail {
+    ip: [u8; 4],
+    count: u8,
+    last_ms: u64,
+}
+
+pub struct Server {
+    repeat: [Option<Stored>; HOSTS],
+    challenges: [Option<Challenge>; HOSTS],
+    fails: [Option<AuthFail>; HOSTS],
+    per_source: RateLimit<16>,
+    identify_all: RateLimit<1>,
+    identify_off_subnet: RateLimit<1>,
+    /// Network up since (window start); `None` until the network is up.
+    net_up_ms: Option<u64>,
+    window_used: bool,
+    pub stats: Stats,
+}
+
+fn is_broadcast_source(ip: [u8; 4], own: [u8; 4], mask: [u8; 4]) -> bool {
+    ip == [255; 4] || ip == [0; 4] || (netcfg::valid_mask(mask) && ip == netcfg::directed_broadcast(own, mask)) || ip[0] >= 224
+}
+
+impl Default for Server {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Server {
+    pub const fn new() -> Self {
+        Server {
+            repeat: [None; HOSTS],
+            challenges: [None; HOSTS],
+            fails: [None; HOSTS],
+            per_source: RateLimit::new(20, 100),
+            identify_all: RateLimit::new(u16::MAX, 50),
+            identify_off_subnet: RateLimit::new(u16::MAX, 10),
+            net_up_ms: None,
+            window_used: false,
+            stats: Stats {
+                mgmt_requests: 0,
+                mgmt_replies: 0,
+                mgmt_dropped_not_request: 0,
+                mgmt_dropped_source: 0,
+                mgmt_dropped_rate: 0,
+                mgmt_repeats: 0,
+                mgmt_auth_failures: 0,
+                discovery_answered: 0,
+                discovery_dropped_rate: 0,
+                discovery_from_port_1024: 0,
+                set_ip_ignored: 0,
+            },
+        }
+    }
+
+    /// The network came up: the first-secret window starts (A1.10).
+    pub fn network_up(&mut self, now_ms: u64) {
+        if self.net_up_ms.is_none() {
+            self.net_up_ms = Some(now_ms);
+        }
+    }
+
+    /// First-secret window: open, seconds left (A1.10; IDENTIFY tag 12).
+    pub fn window(&self, now_ms: u64, secret_set: bool) -> (bool, u16) {
+        match self.net_up_ms {
+            Some(t0) if !secret_set && !self.window_used => {
+                let end = t0 + FIRST_SECRET_WINDOW_MS;
+                if now_ms < end { (true, ((end - now_ms + 999) / 1000) as u16) } else { (false, 0) }
+            }
+            _ => (false, 0),
+        }
+    }
+
+    fn lru_slot<T: Copy>(slots: &[Option<T>; HOSTS], key: impl Fn(&T) -> bool, age: impl Fn(&T) -> u64) -> usize {
+        if let Some(i) = slots.iter().position(|s| s.as_ref().is_some_and(&key)) {
+            return i;
+        }
+        if let Some(i) = slots.iter().position(|s| s.is_none()) {
+            return i;
+        }
+        let mut best = 0;
+        for (i, s) in slots.iter().enumerate() {
+            if age(s.as_ref().unwrap()) < age(slots[best].as_ref().unwrap()) {
+                best = i;
+            }
+        }
+        best
+    }
+
+    fn auth_limited(&self, ip: [u8; 4], now: u64) -> bool {
+        self.fails.iter().flatten().any(|f| f.ip == ip && f.count >= AUTH_FAIL_LIMIT && now - f.last_ms < AUTH_FAIL_WINDOW_MS)
+    }
+
+    fn auth_failed(&mut self, ip: [u8; 4], now: u64) {
+        self.stats.mgmt_auth_failures += 1;
+        let i = Self::lru_slot(&self.fails, |f| f.ip == ip, |f| f.last_ms);
+        let f = match self.fails[i] {
+            Some(f) if f.ip == ip && now - f.last_ms < AUTH_FAIL_WINDOW_MS => AuthFail { ip, count: f.count.saturating_add(1), last_ms: now },
+            _ => AuthFail { ip, count: 1, last_ms: now },
+        };
+        self.fails[i] = Some(f);
+    }
+
+    /// Handle one datagram from `src`; returns the reply length in `out`, or `None` for no reply.
+    pub fn handle(&mut self, src: Addr, d: &[u8], ctx: &mut Ctx<'_>, out: &mut [u8; mgmt::MAX_REPLY]) -> Option<usize> {
+        let now = ctx.now_ms;
+        let req = match mgmt::check(d) {
+            Incoming::Drop => return None,
+            Incoming::DropNotRequest => {
+                self.stats.mgmt_dropped_not_request += 1;
+                return None;
+            }
+            Incoming::Answer { request_id, command, status } => {
+                self.stats.mgmt_requests += 1;
+                if !self.source_ok(src, false, ctx) || !self.rate_ok(src, false, ctx) {
+                    return None;
+                }
+                return self.reply(out, request_id, command, status, &[]);
+            }
+            Incoming::Request(r) => r,
+        };
+        self.stats.mgmt_requests += 1;
+        let cmd = req.command.unwrap();
+        let identify = cmd == Command::Identify;
+        if !self.source_ok(src, identify, ctx) {
+            return None;
+        }
+        // Repeat (A1.4): same host, id, command and payload hash within 5 s.
+        let hash = auth::sha256(req.payload);
+        if let Some(s) = self.repeat.iter().flatten().find(|s| {
+            s.addr == src && s.id == req.header.request_id && s.command == req.header.command && s.hash == hash && now - s.at_ms < REPEAT_MS
+        }) {
+            let s = *s;
+            if !self.rate_ok(src, identify, ctx) {
+                return None;
+            }
+            self.stats.mgmt_repeats += 1;
+            out[..s.len as usize].copy_from_slice(&s.reply[..s.len as usize]);
+            self.stats.mgmt_replies += 1;
+            return Some(s.len as usize);
+        }
+        if !self.rate_ok(src, identify, ctx) {
+            return None;
+        }
+        let (status, n) = self.execute(src, cmd, &req, ctx, out);
+        let id = req.header.request_id;
+        // Build the reply in place: the payload was written at out[HEADER_LEN..].
+        let mut tmp = [0u8; mgmt::MAX_REPLY - mgmt::HEADER_LEN];
+        tmp[..n].copy_from_slice(&out[mgmt::HEADER_LEN..mgmt::HEADER_LEN + n]);
+        let len = self.reply(out, id, cmd as u16, status, &tmp[..n])?;
+        let i = Self::lru_slot(&self.repeat, |s| s.addr == src, |s| s.at_ms);
+        let mut st = Stored { addr: src, id, command: cmd as u16, hash, at_ms: now, len: len as u16, reply: [0; mgmt::MAX_REPLY] };
+        st.reply[..len].copy_from_slice(&out[..len]);
+        self.repeat[i] = Some(st);
+        Some(len)
+    }
+
+    fn source_ok(&mut self, src: Addr, identify: bool, ctx: &Ctx<'_>) -> bool {
+        let ok = !is_broadcast_source(src.0, ctx.own_ip, ctx.own_mask)
+            && (identify || (netcfg::valid_mask(ctx.own_mask) && netcfg::in_subnet(ctx.own_ip, ctx.own_mask, src.0)));
+        if !ok {
+            self.stats.mgmt_dropped_source += 1;
+        }
+        ok
+    }
+
+    fn rate_ok(&mut self, src: Addr, identify: bool, ctx: &Ctx<'_>) -> bool {
+        let now = ctx.now_ms;
+        let mut ok = self.per_source.allow(src.0, src.1, now);
+        if ok && identify {
+            ok = self.identify_all.allow([0; 4], 0, now);
+            let inside = netcfg::valid_mask(ctx.own_mask) && netcfg::in_subnet(ctx.own_ip, ctx.own_mask, src.0);
+            if ok && !inside {
+                ok = self.identify_off_subnet.allow([0; 4], 0, now);
+            }
+        }
+        if !ok {
+            self.stats.mgmt_dropped_rate += 1;
+        }
+        ok
+    }
+
+    fn reply(&mut self, out: &mut [u8; mgmt::MAX_REPLY], id: u32, command: u16, status: Status, payload: &[u8]) -> Option<usize> {
+        let n = mgmt::build_reply(out, id, command, status, payload).ok()?;
+        self.stats.mgmt_replies += 1;
+        Some(n)
+    }
+
+    /// Run the command; the payload goes to `out[HEADER_LEN..]`. Returns (status, payload length).
+    fn execute(&mut self, src: Addr, cmd: Command, req: &mgmt::Request<'_>, ctx: &mut Ctx<'_>, out: &mut [u8; mgmt::MAX_REPLY]) -> (Status, usize) {
+        let now = ctx.now_ms;
+        let p = &mut out[mgmt::HEADER_LEN..];
+        if cmd.needs_auth() {
+            // A1.3 order: 32, 33, 34 come before command-specific codes.
+            if self.auth_limited(src.0, now) {
+                return (Status::RateLimited, 0);
+            }
+            let Some(trailer) = req.trailer else { return (Status::AuthRequired, 0) };
+            let ok = match (ctx.secret, self.take_challenge(src, now)) {
+                (Some(secret), Some(ch)) => auth::verify(secret, &ch, req.signed, trailer),
+                _ => false,
+            };
+            if !ok {
+                self.auth_failed(src.0, now);
+                return (Status::AuthFailed, 0);
+            }
+            // Authenticated writes come with step 4.
+            return (Status::NotSupported, 0);
+        }
+        match cmd {
+            Command::Identify => {
+                let mut id = *ctx.identify;
+                id.window = self.window(now, ctx.secret.is_some());
+                id.secret_set = ctx.secret.is_some();
+                match id.encode(p) {
+                    Some(n) => (Status::Ok, n),
+                    None => (Status::TooLarge, 0),
+                }
+            }
+            Command::GetStats => {
+                let n = self.stats.encode(p);
+                (Status::Ok, n)
+            }
+            Command::GetChallenge => {
+                if self.auth_limited(src.0, now) {
+                    return (Status::RateLimited, 0);
+                }
+                let mut c = [0u8; 16];
+                if !(ctx.rng)(&mut c) {
+                    return (Status::NotSupported, 0);
+                }
+                let i = Self::lru_slot(&self.challenges, |x| x.addr == src, |x| x.at_ms);
+                self.challenges[i] = Some(Challenge { addr: src, value: c, at_ms: now });
+                p[..16].copy_from_slice(&c);
+                (Status::Ok, 16)
+            }
+            Command::GetConfig => copy(p, ctx.config),
+            Command::GetCalibration => copy(p, ctx.calibration),
+            // Unauthenticated but not built yet: SET_FIRST_SECRET (step 4), READ_LOG,
+            // UPDATE_STATUS (with the update path).
+            _ => (Status::NotSupported, 0),
+        }
+    }
+
+    /// The host's challenge, if fresh; it is used up (A1.10: one request, 10 s).
+    fn take_challenge(&mut self, src: Addr, now: u64) -> Option<[u8; 16]> {
+        let i = self.challenges.iter().position(|c| c.as_ref().is_some_and(|c| c.addr == src))?;
+        let c = self.challenges[i].take()?;
+        if now - c.at_ms < CHALLENGE_MS { Some(c.value) } else { None }
+    }
+}
+
+fn copy(p: &mut [u8], src: &[u8]) -> (Status, usize) {
+    if src.len() > p.len() {
+        return (Status::TooLarge, 0);
+    }
+    p[..src.len()].copy_from_slice(src);
+    (Status::Ok, src.len())
+}

@@ -8,6 +8,8 @@
 #![no_main]
 
 mod net;
+mod mgmt_init;
+mod nv;
 
 use embassy_executor::Spawner;
 use embassy_stm32::wdg::IndependentWatchdog;
@@ -63,7 +65,9 @@ fn clock_config() -> embassy_stm32::Config {
     // HSI 64 MHz, no HSE, no PLL: the HSE frequency is not in the HIS (question F1-Q2).
     c.rcc.hsi = Some(HSIPrescaler::DIV1);
     c.rcc.csi = false;
-    c.rcc.hsi48 = None; // no USB on the Main
+    // HSI48 is the RNG kernel clock (RNGSEL reset value, RM0468); the RNG makes the management
+    // challenges (A1.10; [HIS] HIS 10).
+    c.rcc.hsi48 = Some(Default::default());
     c.rcc.hse = None;
     c.rcc.pll1 = None;
     c.rcc.pll2 = None;
@@ -129,9 +133,27 @@ async fn main(spawner: Spawner) {
         // 0007 sub-decision 5 "Entry": a watchdog reset seen at start-up is a fault.
         println!("app: FAULT watchdog reset seen at start-up");
     }
-    // Transmit gate (F3). The boot counter of B10.2 item 5 needs the configuration store, which
-    // does not exist yet; with no calibration the core can never arm, so 0 is safe here.
-    let tx = TxCore::new(0, &MEASURED);
+    // Non-volatile store in sector 7: boot counter (B10.2 item 5), secret, configuration,
+    // calibration set. A store that cannot be opened is reported and the radio runs on defaults.
+    let flash = embassy_stm32::flash::Flash::new_blocking(p.FLASH);
+    let mut store = match g7250_store::Store::open(nv::BoardFlash { flash, writer: nv::writer_for(SLOT) }, nv::writer_for(SLOT)) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            println!("app: FAULT store in sector 7 cannot be read ({:?}); running on defaults", e);
+            None
+        }
+    };
+    let boot_counter = match store.as_mut().map(|s| s.next_boot_counter()) {
+        Some(Ok(n)) => n,
+        Some(Err(e)) => {
+            println!("app: FAULT boot counter not stored ({:?})", e);
+            0
+        }
+        None => 0,
+    };
+    println!("app: boot counter {}", boot_counter);
+    // Transmit gate (F3). With no calibration the core can never arm.
+    let tx = TxCore::new(boot_counter, &MEASURED);
     println!(
         "app: safe state {}; TX {} (record tx bit 1 = {}, bit 4 = {}); ATU bypass; watchdog {} ms",
         if safe::holds() { "held" } else { "NOT HELD" },
@@ -149,7 +171,8 @@ async fn main(spawner: Spawner) {
 
     let id = g7250_proto::discovery::Identity { mac: [0; 6], fw_major: FW_MAJOR, fw_minor: FW_MINOR, beta: FW_BETA, num_ddc: 1 };
     let pins = net::NetPins { spi: p.SPI6, sck: p.PG13, mosi: p.PG14, miso: p.PG12, cs: p.PG15, rst: p.PB5 };
-    spawner.spawn(net::run(pins, id).unwrap());
+    let mgmt = mgmt_init::MgmtInit::new(store, tx.arm_state_reg(), SLOT);
+    spawner.spawn(net::run(pins, id, mgmt).unwrap());
 
     loop {
         Timer::after_secs(10).await;

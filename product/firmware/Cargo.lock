@@ -97,6 +97,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "g7250-radio"
+version = "0.1.0"
+dependencies = [
+ "g7250-proto",
+]
+
+[[package]]
 name = "g7250-safety"
 version = "0.1.0"
 

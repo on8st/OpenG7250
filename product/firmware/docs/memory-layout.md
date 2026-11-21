@@ -27,6 +27,28 @@ Single bank, 1 MiB, eight sectors of 128 KiB ([HIS] HIS 15, `9d10e72`, part MEDI
 - Backup SRAM and RTC backup registers are never used (HIS 15 rule 4). The vendored Embassy HAL
   is patched so that its init does not touch the backup domain (`board/vendor/README.md`).
 
+## Store (sector 7)
+
+`crates/store`: append-only records, each a whole number of 32-byte flash words, each word
+programmed once; header (magic "G7ST", kind, payload version, length, sequence number, CRC-32)
+and payload, padded with 0xFF. The newest valid record of a kind wins; a torn record fails its CRC
+and is skipped. Kinds: boot record (1), boot counter (2), configuration (3, Table M-3 TLVs),
+calibration set (4, the `SET_CALIBRATION` payload), management secret (5).
+
+When the sector is full, the newest record of every kind is copied to RAM, the sector erased and
+written back. A power loss in that window loses configuration, calibration set and secret: the
+radio then comes up with the factory configuration, TX disabled (no calibration) and a new
+first-secret window, which is the safe side. The boot counter then restarts at 1; the arm token
+still differs from the last one before the reset only if the boot counter does (B10.2 item 5),
+so this is an accepted risk while TX cannot be armed. Two-sector rotation needs sector 6, which
+stays free until the F1 drill (HIS 15 rule 5).
+
+At one boot-counter record per start, compaction happens about every 4000 starts. **Risk:** a
+128 KiB sector erase stalls the CPU while it runs from the same bank (RM0468), for a time the
+datasheet gives per sector; if it comes near the 2 s IWDG timeout, a compaction resets the MCU
+after the erase and before the write-back, with the effect above. The watchdog is refreshed
+right before and after the erase. Measure on the radio.
+
 ## RAM
 
 | Range | Use |

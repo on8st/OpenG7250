@@ -601,7 +601,9 @@ dependencies = [
  "g7250-ch394",
  "g7250-layout",
  "g7250-proto",
+ "g7250-radio",
  "g7250-safety",
+ "g7250-store",
  "heapless",
 ]
 
@@ -649,8 +651,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "g7250-radio"
+version = "0.1.0"
+dependencies = [
+ "g7250-proto",
+]
+
+[[package]]
 name = "g7250-safety"
 version = "0.1.0"
+
+[[package]]
+name = "g7250-store"
+version = "0.1.0"
+dependencies = [
+ "g7250-layout",
+]
 
 [[package]]
 name = "generator"

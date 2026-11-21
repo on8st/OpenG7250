@@ -1,0 +1,11 @@
+[package]
+name = "g7250-radio"
+description = "Radio-side state of the G7250 main firmware: management server (A1.4, A1.10)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+g7250-proto = { path = "../proto" }

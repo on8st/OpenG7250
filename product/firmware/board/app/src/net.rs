@@ -19,6 +19,8 @@ use g7250_proto::discovery::{self, Identity, Port1024, Status};
 use g7250_proto::netcfg::{self, Ip, Mode, NetConfig, Source};
 use g7250_proto::ratelimit::RateLimit;
 use g7250_proto::dhcp;
+use g7250_proto::mgmt as m;
+use g7250_radio::mgmt::{Ctx, Server};
 
 // DMA rule for later (RM0468): SPI6 is in the D3 domain and can use only the BDMA, which reaches
 // only D3 memory. When this driver moves from blocking transfers to DMA, its buffers MUST be in
@@ -270,7 +272,7 @@ fn print_cfg(c: &NetConfig, s: Source) {
 }
 
 #[embassy_executor::task]
-pub async fn run(pins: NetPins<'static>, id: Identity) {
+pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_init::MgmtInit) {
     let mut chip = match bring_up(pins).await {
         Ok(c) => c,
         Err(e) => {
@@ -301,6 +303,17 @@ pub async fn run(pins: NetPins<'static>, id: Identity) {
         return;
     }
     println!("net: discovery listening on UDP 1024 (board G7250-P2, type {})", discovery::BOARD_TYPE);
+    // Management channel on socket 7 (A1.2, A1.3), after DHCP has given the socket back.
+    if let Err(e) = chip.udp_open(SOCK_MGMT, m::PORT) {
+        println!("net: FAULT cannot open the management port {} ({:?})", m::PORT, e);
+        return;
+    }
+    let mut server = Server::new();
+    server.network_up(Instant::now().as_millis());
+    mgmt.identify.mac = mac;
+    println!("net: management listening on UDP {} (protocol {}.{})", m::PORT, m::VERSION_MAJOR, m::VERSION_MINOR);
+    let mut mrx = [0u8; 1100];
+    let mut mtx = [0u8; m::MAX_REPLY];
 
     let id = Identity { mac, ..id };
     let mut limit: RateLimit<16> = RateLimit::new(10, 50);
@@ -319,6 +332,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity) {
                             let r = discovery::reply(&id, Status::Available);
                             if chip.udp_send(SOCK_DISCOVERY, d.src_ip, d.src_port, &r).is_ok() {
                                 answered = answered.wrapping_add(1);
+                                server.stats.discovery_answered += 1;
                                 println!("net: discovery from {}:{} answered ({})", ip_str(d.src_ip).as_str(), d.src_port, answered);
                             }
                         }
@@ -331,6 +345,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity) {
                         let ok_src = netcfg::in_subnet(cfg.ip, cfg.mask, d.src_ip) || cfg.ip[..2] == [169, 254];
                         if !ok_src {
                             println!("net: Set IP from {} outside the subnet ignored", ip_str(d.src_ip).as_str());
+                            server.stats.set_ip_ignored += 1;
                         } else if limit.allow(d.src_ip, d.src_port, now) {
                             println!("net: Set IP {} from {} (kept in RAM until restart: no configuration store yet)", ip_str(ip).as_str(), ip_str(d.src_ip).as_str());
                             let r = discovery::reply(&id, Status::Available);
@@ -344,17 +359,45 @@ pub async fn run(pins: NetPins<'static>, id: Identity) {
                             let (c, s) = configure(&mut chip, mac, want).await;
                             cfg = c;
                             print_cfg(&cfg, if s == Source::Static { Source::SetIp } else { s });
-                            if chip.udp_open(SOCK_DISCOVERY, discovery::PORT).is_err() {
-                                println!("net: FAULT cannot reopen port 1024");
+                            // DHCP may have borrowed socket 7 (A1.11): reopen both.
+                            if chip.udp_open(SOCK_DISCOVERY, discovery::PORT).is_err() || chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
+                                println!("net: FAULT cannot reopen ports 1024 and {}", m::PORT);
                                 return;
                             }
                         }
                     }
                     Port1024::SetIp { .. } | Port1024::IgnoredProgramming | Port1024::Other => {}
-                    Port1024::FromPort1024 => dropped_1024 = dropped_1024.wrapping_add(1),
+                    Port1024::FromPort1024 => {
+                        dropped_1024 = dropped_1024.wrapping_add(1);
+                        server.stats.discovery_from_port_1024 += 1;
+                    }
                 }
+                server.stats.discovery_dropped_rate = limit.dropped as u64;
             }
             Ok(None) => {
+                // Management channel, socket 7.
+                if let Ok(Some(d)) = chip.udp_recv(SOCK_MGMT, &mut mrx) {
+                    let now = Instant::now().as_millis();
+                    let mut ident = mgmt.identify;
+                    ident.uptime_ms = now as u32;
+                    let mut rng = |c: &mut [u8; 16]| crate::nv::rng_fill(c);
+                    let mut ctx = Ctx {
+                        now_ms: now,
+                        own_ip: cfg.ip,
+                        own_mask: cfg.mask,
+                        identify: &ident,
+                        config: &mgmt.config,
+                        calibration: &mgmt.calibration,
+                        rng: &mut rng,
+                        secret: mgmt.secret.as_ref(),
+                    };
+                    // A datagram longer than the buffer arrives cut off; the header still decides
+                    // (A1.4: 19 for a declared length above 1000, else 17 for the length mismatch).
+                    if let Some(n) = server.handle((d.src_ip, d.src_port), &mrx[..d.len], &mut ctx, &mut mtx) {
+                        let _ = chip.udp_send(SOCK_MGMT, d.src_ip, d.src_port, &mtx[..n]);
+                    }
+                    continue;
+                }
                 if let Ok(irq) = chip.take_irq() {
                     if irq & g7250_ch394::common::IR_CONFLICT != 0 {
                         println!("net: address conflict on {} (fall-back of C-4 not implemented yet)", ip_str(cfg.ip).as_str());

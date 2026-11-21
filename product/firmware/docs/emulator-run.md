@@ -16,7 +16,7 @@ The checksums of the delivered files are in `out/SHA256SUMS`.
 | F1-03 | Watchdog refreshed | No reset during 60 s: no second `OpenG7250 boot` line (IWDG1 2 s, refreshed every 250 ms). |
 | F1-04 | Safe state before anything else | The first GPIO writes after reset, in this order: PA10 high, PH10 high, PB14 low, PF4 high, PF6 low, PC7 low, PH11 low, PD12 low, PD13 high, PG2 high, PG5 high (ATU strobes inactive, never pulsed), PB5 low, PB10 low, PH9 high (each pin: level written first, then made an output). Before any RCC clock-tree change. ([HIS] HIS 85 `d199d33`; 0029) |
 | F1-05 | Pins never driven | PA4, PA12, PA11, PH12, PD5 (USART2 TX), PH3–PH6 stay in their reset mode for the whole run; nothing is sent on USART2. PD13, PG2, PG5 go high once and never low (no strobe pulse, so no ATU latch is written). |
-| F1-06 | No forbidden write | No write to flash 0x08000000–0x0801FFFF; no write to any FLASH register except FLASH_ACR (no KEYR, OPTKEYR, OPTCR, CR, *_PRG); no I²C traffic to 0x50; no write to RCC_BDCR, PWR_CR1.DBP or PWR_BDCR; no access to the Backup SRAM (0x38800000). |
+| F1-06 | No forbidden write | No flash write outside sector 7 (0x080E0000–0x080FFFFF, the store; since step 2 the application writes one 32-byte record there at every start, the boot counter of B10.2 item 5); in particular nothing in 0x08000000–0x0801FFFF; no write to OPTKEYR, OPTCR or any `*_PRG` option-byte register (FLASH_ACR, KEYR, CR, SR, CCR are used for sector 7); no I²C traffic to 0x50; no write to RCC_BDCR, PWR_CR1.DBP or PWR_BDCR; no access to the Backup SRAM (0x38800000). |
 | F1-07 | No valid slot | With slot A erased (0xFF), the boot stage prints `boot: slot A not bootable: BadMagic` (and the same for B), then `boot: no bootable image in slot A or B; holding the safe state`, then `boot: idle N` once a second, and does not reset. |
 | F1-08 | Corrupt slot | With one byte of slot A changed after loading, `boot: slot A not bootable: BadCrc`; slot A is not started. |
 | F1-10 (T-A3-59) | Supply fault before the network (A3.5a; 0040) | With PWR_CR3 starting at another supply configuration (for example 0x00000002), or with ACTVOSRDY never set: after the banner and the `boot: start …` lines, exactly `G7250 FAULT SUPPLY <PWR_CR3, 8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) CR LF, once per second, nothing else; PWR_CR3 not written; safe state held; PB5 (CH394 RST#) stays low; the IWDG is not started by the image (only refreshed); no flash write; no application start; no discovery or management answer. |
@@ -40,6 +40,23 @@ Expected console after F1-01: `net: CH394 answers, version register …`, `net: 
 | T-B3-32 | expected to fail | second half: see spec question SQ-F2-2 |
 | T-B3-07, -08, -15, -17, -19, -22, -23, -27, -28, -29 | no | need the P2 session (B5), streams or the arm |
 | DHCP | yes | with a DHCP server on the emulated LAN: DISCOVER and REQUEST from 0.0.0.0:68 to 255.255.255.255:67 with the broadcast flag; the leased address is used. Without one: a 169.254.x.y address after about 9 s. |
+
+## Step 2: management channel, read commands (UDP 7251)
+
+Expected console after the discovery line: `net: management listening on UDP 7251 (protocol 1.0)`;
+before it, `app: boot counter N` (N + 1 after every start).
+
+Built: `IDENTIFY` (Table M-2; also from outside the subnet), `GET_STATS`, `GET_CHALLENGE`,
+`GET_CONFIG` (factory configuration until a write exists), `GET_CALIBRATION` (no set: id zeros,
+date 0); framing and status order of A1.4/A1.3; repeat cache; one challenge per host for 10 s;
+first-secret window (300 s from network up, reported in tag 12); source rule (own subnet only,
+except `IDENTIFY`; never a broadcast source); reply caps (20/s per source, 100/s total, 50/s
+`IDENTIFY`, 10/s `IDENTIFY` off-subnet); 5 authentication failures in 10 s → 34.
+
+Expected answers that look like failures but are this step's scope: every authenticated request
+gets 32 (no trailer) or 33 (no secret can be set yet); `SET_FIRST_SECRET`, `READ_LOG`,
+`UPDATE_STATUS` and all writes get 56 until step 4. `GET_CHALLENGE` gets 56 if the RNG does not
+deliver (HSI48 or RNG not modelled).
 
 ## F3 status (transmit gate)
 
