@@ -44,4 +44,5 @@
 | 0040 | 0040 — Faults found before the network are reported on the debug console only | 2 | 2 | network-interface: A3 Safety behaviour visible on the network; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0041 | 0041 — DHCP exchanges borrow the management socket, at most 2 s at a time | 2 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0042 | 0042 — DDC0 is not offered until the FPGA configuration frame is understood | 2 | 6 | network-interface: Annex P — Pending hardware parameters; network-interface: B4 Capability block; network-interface: B6 Streams from the radio: RX IQ, wideband, microphone; network-interface: B8 G7250 register map; network-interface: Field table and register map (B7, B8); network-interface: Streams (B6) |  |
+| 0043 | 0043 — Update packages are linked for one slot; no update during a trial boot | 1 | 3 | network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
 

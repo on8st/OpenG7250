@@ -72,8 +72,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0040 | Faults before the network (supply check) reported on the debug console only | proposed |
 | 0041 | DHCP exchanges borrow the management socket, at most 2 s at a time | proposed |
 | 0042 | DDC0 not offered until the FPGA configuration frame is understood (P-RX-2) | proposed |
+| 0043 | Update packages linked for one slot (header byte 52, status 63); no update during a trial boot | proposed |
 
-All numbers 0001–0042 are now in use.
+All numbers 0001–0043 are now in use.
 
 ## Open questions for ON8ST
 

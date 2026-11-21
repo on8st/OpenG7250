@@ -184,10 +184,11 @@ Table A1-3 — Management status codes (0020 §27)
 | | | 60 | not possible: one-way installation in progress (A1.8a item 3; 0028) |
 | | | 61 | image too large for the application area (A1.8a item 3; 0028) |
 | | | 62 | refused: the value needs the calibration set (A1.12; 0039) |
+| | | 63 | image linked for the running slot (A1.8; 0043) |
 
 Where several codes apply, the reply carries the first of: framing and version (19 for a
 declared length above 1000 bytes, then 17, 18, 16, and 19 for any other datagram size limit), authentication and rate (32, 33, 34, 36), 35, 58, 57, 50, then the command-specific codes
-(48, 49, 51–56, 59, 60, 61, 62) (0022 §51, §59; 0028, 0039). A region change while a P2 session runs and TX is armed therefore
+(48, 49, 51–56, 59, 60, 61, 62, 63) (0022 §51, §59; 0028, 0039, 0043). A region change while a P2 session runs and TX is armed therefore
 gets 57: ending the session also ends the arm on level 1 (A2.3, Table A3-1).
 
 A1.5 **Identification** (read; no authentication) (0008, Functions):
@@ -329,6 +330,20 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   list, versions, length, SHA-256 [FIPS180-4] per component, and a signature field that is
   reserved and empty in this version. An image for other hardware MUST be refused before
   anything is written (U-2; 0008 option I1).
+- **Slot-linked images** (0043). An image of this firmware is linked for one slot; the
+  package header names that slot (Table M-4 byte 52: 1 slot A, 2 slot B; 0 for an image that
+  runs in either slot). Because an update is staged in the other slot, `UPDATE_BEGIN` with an
+  image for the running slot MUST be refused with status 63 before anything is written. A host
+  reads the running slot from identification (Annex M, Table M-2 tag 23) and sends the
+  package for the other one; a release therefore ships one package per slot. A package carries
+  one image; a package with both is not defined in this version.
+- **No update during a trial boot** (0043). From the start of a trial boot until the image has
+  confirmed itself or has been rolled back, the update is still in progress: `UPDATE_BEGIN`
+  MUST be refused with status 58, because staging would erase the image a rollback returns to.
+- **Write failure** (0043). If writing the staging slot fails, the G7250 MUST discard the
+  transfer, answer the request that hit the failure with status 55, log the failure (A1.7) and
+  leave the running image and the boot record unchanged; the host starts again with
+  `UPDATE_BEGIN`.
 - Transfer in numbered blocks with a CRC-32 each, into the other image slot, which is the
   staging area; resumable; abandonable without effect on the running image (U-3). The foreign
   image of A1.8a item 3 is the exception: it has no staging area.
@@ -3240,6 +3255,7 @@ Table M-2 — `IDENTIFY` TLVs (A1.5 items I-1 to I-6)
 | 20 | 1 | TX calibrated: record `tx` bit 4 (I-7; A1.12) |
 | 21 | 36 | calibration set id (32 bytes, zeros if none) and date (u32) (I-7; A1.12) |
 | 22 | 1 | sectors written by the streaming installer (I-3; A1.8a item 3) |
+| 23 | 1 | running slot: 1 slot A, 2 slot B (I-2; A1.8; 0043) |
 
 Table M-3 — Configuration items (A1.6)
 
@@ -3273,6 +3289,7 @@ Table M-4 — Package header (A1.8), the payload of `UPDATE_BEGIN` after the fla
 | 14–17 | image length in bytes |
 | 18–49 | SHA-256 of the image (for a foreign image: the value the owner supplies) |
 | 50–51 | signature length, 0 in this version (A1.8, U-4) |
+| 52 | target slot: 0 either slot (or a foreign image), 1 slot A, 2 slot B (A1.8, slot-linked images; 0043) |
 
 Table M-5 — Calibration entries (A1.12)
 
@@ -3507,6 +3524,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-64 | A `SET_CONFIG` with the SWR limit (tag 9) or the PA temperature limit (tag 10) before the calibration set holds P-PWR-2 gets status 62; a P2 write of `LIMIT_SWR` or `LIMIT_PA_TEMP` gets write reject reason `NOT_CALIBRATED` (A1.12 item 4; 0039). |
 | T-A1-65 | A region other than 0 in `SET_CONFIG` (tag 6) gets status 48; with region 0 a DUC0 frequency at each edge of every range of Table A3-0 is inside, 1 Hz outside each edge is outside (reference model with a complete calibration set; A1.6 C-6; Table A3-0; 0039). |
 | T-A1-66 | With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041). |
+| T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
