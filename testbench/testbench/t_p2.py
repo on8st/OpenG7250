@@ -809,3 +809,7 @@ def t_b5_20(ctx):
     v = (st or {}).get("net_busy_pass_max_us")
     ctx.check("information (not judged): GET_STATS net_busy_pass_max_us after the bursts", True,
               f"{v} us" if v is not None else ("GET_STATS has no net_busy_pass_max_us" if st is not None else "no GET_STATS answer"))
+    # information, not judged: the whole GET_STATS answer after the last burst (every counter,
+    # the firmware's step_*_us pass timers included), name=value sorted by name
+    ctx.check("information (not judged): GET_STATS after the last burst, all counters", True,
+              ", ".join(f"{k}={st[k]}" for k in sorted(st)) if st else "no GET_STATS answer")
