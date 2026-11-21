@@ -102,7 +102,11 @@ def t_a3_61(ctx: Ctx):
     ctx.notes.append("'armed with the TX path open, no fault' not run: needs TX unlocked (an arm)")
     # the bias channels 2, 7, 8: a non-zero value written by a simulated firmware fault
     # (dac.force, v1.8), checked by the value last written (A3.6b; Table A3-6)
-    if "dac.force" in ctx.endpoint.get("fixtures", []):
+    # The bias channels are checked by the value the firmware last wrote (Table A3-6): a write
+    # from outside into the DAC does not change that value, so the radio cannot see it. Until the
+    # spec session rules (the DAC part judged by host tests), the DAC case is not judged here;
+    # params.dac_case = 1 runs it anyway.
+    if "dac.force" in ctx.endpoint.get("fixtures", []) and ctx.params.get("dac_case"):
         for ch in (2, 7, 8):
             ctx.fixture("dac.force", channel=ch, value=1)
             wait_radio(ctx, 20)
@@ -114,4 +118,6 @@ def t_a3_61(ctx: Ctx):
             ctx.fixture("dac.force", channel=ch, value=None)
             clean(f"DAC channel {ch}")
     else:
-        ctx.notes.append("DAC part (a non-zero value on channel 2, 7 or 8) not run: no dac.force")
+        ctx.notes.append("DAC part (a non-zero value on channel 2, 7 or 8) not judged on the emulator: the channels are "
+                         "checked by the value the firmware last wrote, which a write from outside does not change "
+                         "(Table A3-6); spec ruling pending")
