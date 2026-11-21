@@ -650,7 +650,8 @@
    ],
    "covers": [
     "UP-09"
-   ]
+   ],
+   "timeout_s": 700
   },
   {
    "id": "T-A1-35",
@@ -916,7 +917,8 @@
    ],
    "covers": [
     "UP-09 (after UPDATE_ABORT and after VERIFY without ACTIVATE)"
-   ]
+   ],
+   "timeout_s": 1400
   },
   {
    "id": "T-A1-47",
@@ -1382,7 +1384,7 @@
     "spec marks it reference model; emulator only with the fixtures",
     "DHCP fixtures of the emulator (format v1.4); the reference model has no DHCP"
    ],
-   "timeout_s": 300
+   "timeout_s": 400
   },
   {
    "id": "T-A1-67",
@@ -1438,7 +1440,8 @@
    "covers": [
     "UP-05 (network down: rollback after 60 s)",
     "UP-05a (reset before confirming)"
-   ]
+   ],
+   "timeout_s": 300
   },
   {
    "id": "T-A1-69",
@@ -1463,7 +1466,8 @@
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
     "from link up: the trace link event where offered, else counted from the power cycle (stricter)"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-70",
@@ -1567,7 +1571,8 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-75",
@@ -1614,7 +1619,8 @@
    "tx_part": false,
    "notes": [
     "MACRAW failing: macraw.fail where offered (proposed), else a runner without MACRAW; console line not checked"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-77",
@@ -1749,7 +1755,8 @@
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
     "minutes of radio time: time.advance (reference model now; emulator when it offers it)"
-   ]
+   ],
+   "timeout_s": 1500
   },
   {
    "id": "T-A1-83",
@@ -1769,7 +1776,8 @@
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 300
   },
   {
    "id": "T-A1-84",
@@ -1793,7 +1801,8 @@
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
     "minutes of radio time: time.advance (reference model now; emulator when it offers it)"
-   ]
+   ],
+   "timeout_s": 300
   },
   {
    "id": "T-A1-85",
@@ -1812,7 +1821,8 @@
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 300
   },
   {
    "id": "T-A1-86",
@@ -1832,7 +1842,8 @@
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 1800
   },
   {
    "id": "T-A1-87",
@@ -1854,7 +1865,8 @@
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 300
   },
   {
    "id": "T-A2-01",
@@ -3517,7 +3529,8 @@
    "tx_part": false,
    "notes": [
     "the pins of Table A3-6; the DAC part needs a fixture; the armed part needs TX unlocked"
-   ]
+   ],
+   "timeout_s": 300
   },
   {
    "id": "T-B3-01",
@@ -4880,7 +4893,8 @@
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
-   ]
+   ],
+   "timeout_s": 900
   },
   {
    "id": "T-B6-01",
@@ -10922,7 +10936,8 @@
     "host"
    ],
    "tx_part": false,
-   "pending": []
+   "pending": [],
+   "timeout_s": 120
   },
   {
    "id": "T-B6-L01",

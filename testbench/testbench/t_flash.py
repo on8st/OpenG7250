@@ -390,8 +390,9 @@ def t_a1_83(ctx: Ctx):
     with mg(ctx, s) as u:
         run, other, ver, lay = facts(ctx, u)
         img = image(2148, seed=831)
-        if u.full(img, pkg(img, newer(ver), other)) != (0, "verified"):
-            ctx.check("update transferred", False, "")
+        st, step = u.full(img, pkg(img, newer(ver), other))
+        if (st, step) != (0, "verified"):
+            ctx.check("update transferred", False, f"{step} answered {st}")
             return
         ctx.fixture("power.cut", after_flash_words=1)
         u.req("UPDATE_ACTIVATE", b"\x00")

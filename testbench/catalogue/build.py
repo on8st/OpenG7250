@@ -393,6 +393,15 @@ UNCOVERED = [
 ]
 
 
+# Tests that need more than the 30 s default (radio time; the emulator runner enforces it in
+# emulated time with a wall cap of 30 x timeout_s + 120 s).
+TIMEOUTS: dict[str, int] = {
+    "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 300, "T-A1-84": 300, "T-A1-83": 300,
+    "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-76": 120,
+    "T-B5-22": 900, "T-A1-85": 300, "T-A1-86": 1800, "T-A1-87": 300, "T-EMU-IDLE": 120,
+}
+
+
 def main() -> int:
     ni = SPEC / "network-interface.md"
     pc = SPEC / "part-c-tci-profile.md"
@@ -414,12 +423,15 @@ def main() -> int:
                 c[k] = v
         if t["id"] in COVERS:
             c["covers"] = COVERS[t["id"]]
+        if t["id"] in TIMEOUTS:
+            c["timeout_s"] = TIMEOUTS[t["id"]]
         tests.append({"id": t["id"], "origin": "spec", "part": t["part"],
                       "title": t["desc"], "reqs": reqs_of(t["id"], t["desc"]), **c})
     for tid, desc, reqs, needs in BENCH_TESTS:
         tests.append({"id": tid, "origin": "testbench", "part": "A-B", "title": desc,
                       "reqs": reqs, "needs": needs, "notes": ["TX frozen until the "
-                      "calibration set is complete (Annex P; 0035, 0036)"], **LOCK})
+                      "calibration set is complete (Annex P; 0035, 0036)"], **LOCK,
+                      **({"timeout_s": TIMEOUTS[tid]} if tid in TIMEOUTS else {})})
     src_hash = hashlib.sha256(ni.read_bytes() + pc.read_bytes()).hexdigest()
     doc = {"format": "g7250-catalogue", "version": 1,
            "spec": {"branch": "spec/draft", "commit": git("log", "-1", "--format=%h", "--",

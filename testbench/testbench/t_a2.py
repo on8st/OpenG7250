@@ -267,14 +267,16 @@ def t_a2_13(ctx):
             n_tick[0] += 1
             if n_tick[0] % 7 == 0:
                 b.keepalive()
-        got = recv_multi({"a": a, "dest": dest, "b": b}, 0.7, tick, 0.03)
+        # 1.5 s of host time: at least 0.45 s of radio time even on an emulator at 0.3 of real
+        # time, room for three answers and three notices at one per 100 ms
+        got = recv_multi({"a": a, "dest": dest, "b": b}, 1.5, tick, 0.03)
         at_src, at_dest = got["a"], got["dest"]
         no_owner = [d for p, d, _ in at_src
                     if p == PORT_REG and any(r == "NOT_OWNER" for _, _, r in write_status(parse_regs(d)))]
         nd = notices(at_dest)
         ctx.check("register writes from A: NOT_OWNER answers at A's source port (B8.5)", len(no_owner) >= 3,
-                  f"{len(no_owner)} answers at the source port in 0.6 s")
-        ctx.check("and notices at the register destination", len(nd) >= 3, f"{len(nd)} notices in 0.6 s")
+                  f"{len(no_owner)} answers at the source port in 1.5 s")
+        ctx.check("and notices at the register destination", len(nd) >= 3, f"{len(nd)} notices in 1.5 s")
         gaps = [nd[i + 1][0] - nd[i][0] for i in range(len(nd) - 1)]
         ctx.check("at most one notice per 100 ms", all(g >= NOTICE_MIN_S - 0.01 for g in gaps),
                   f"smallest gap {min(gaps) * 1000:.0f} ms" if gaps else "fewer than 2")

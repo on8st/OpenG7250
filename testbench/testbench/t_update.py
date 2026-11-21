@@ -525,16 +525,25 @@ def t_a1_82(ctx: Ctx):
 def activate_new(ctx, s, seed: int, net_down: bool = False):
     """A complete update into the other slot and its activation; (old slot, new slot, old
     version, new version) or None."""
+    ctx.__dict__["_upd_fail"] = ""
     with updating(ctx, s, restart_at_end=False) as u:
         run, other, ver, lay = facts(ctx, u)
         if net_down:
-            ctx.need("trial.sim")
-            ctx.fixture("trial.sim", network_down=True)
+            # the trial keeps its network down: trial.sim on the reference model; on an emulator a
+            # CH394 that stays silent for the next boot only (UP-05: "no CH394 answer")
+            if "trial.sim" in ctx.endpoint.get("fixtures", []):
+                ctx.fixture("trial.sim", network_down=True)
+            else:
+                ctx.need("ch394.silent")
+                ctx.fixture("ch394.silent", boots=1)
         img = image(SMALL, seed=seed)
-        if u.full(img, pkg(img, newer(ver), other)) != (0, "verified"):
+        st, step = u.full(img, pkg(img, newer(ver), other))
+        if (st, step) != (0, "verified"):
+            ctx.__dict__["_upd_fail"] = f"{step} answered {st}"
             return None
         r = u.req("UPDATE_ACTIVATE", b"\x00")
         if not r or r["status"] != 0:
+            ctx.__dict__["_upd_fail"] = f"UPDATE_ACTIVATE answered {r['status'] if r else None}"
             return None
     time.sleep(0.3)
     wait_reachable(ctx, "UPDATE_ACTIVATE")
@@ -550,7 +559,7 @@ def t_a1_68(ctx: Ctx):
     s = secret(ctx)
     # confirms itself after 10 s, without a host
     a = activate_new(ctx, s, 681)
-    if ctx.check("update activated (confirm case)", a is not None, "the update did not complete"):
+    if ctx.check("update activated (confirm case)", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
         with updating(ctx, s, restart_at_end=False) as u:
             advance(ctx, 8)
             ctx.eq("8 s after start: still a trial (tag 10 = 1)", u.identify().get(10), b"\x01")
@@ -559,7 +568,7 @@ def t_a1_68(ctx: Ctx):
             ctx.eq("after 10 s: confirmed (tag 10 = 0), the new slot runs", (t.get(10), t.get(23, b"")[:1]), (b"\x00", bytes([a[1]])))
     # keeps its network down: rolls back after 60 s
     a = activate_new(ctx, s, 682, net_down=True)
-    if ctx.check("update activated (network-down case)", a is not None, "the update did not complete"):
+    if ctx.check("update activated (network-down case)", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
         with updating(ctx, s, restart_at_end=False) as u:
             n0 = last_log_seq(u)
             advance(ctx, 55)
@@ -575,7 +584,7 @@ def t_a1_68(ctx: Ctx):
     if "trial.sim" in ctx.endpoint.get("fixtures", []):
         ctx.fixture("trial.sim", class2_fault=True)
         a = activate_new(ctx, s, 684)
-        if ctx.check("update activated (class 2 case)", a is not None, "the update did not complete"):
+        if ctx.check("update activated (class 2 case)", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
             with updating(ctx, s, restart_at_end=False) as u:
                 advance(ctx, 30)
                 ctx.eq("30 s after start with a class 2 fault: still not confirmed", u.identify().get(10), b"\x01")
@@ -587,7 +596,7 @@ def t_a1_68(ctx: Ctx):
     elif "gpio.force" in ctx.endpoint.get("fixtures", []):
         # a safe-state pin forced away from its HIS 85 level during the trial (PF4 held at 1)
         a = activate_new(ctx, s, 684)
-        if ctx.check("update activated (class 2 case)", a is not None, "the update did not complete"):
+        if ctx.check("update activated (class 2 case)", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
             with updating(ctx, s, restart_at_end=False) as u:
                 ctx.fixture("gpio.force", pin="PF4", level=0, target="idr")  # the pin level (A3.6b item 2; 0066)
                 try:
@@ -606,7 +615,7 @@ def t_a1_68(ctx: Ctx):
         ctx.notes.append("class 2 case not run: neither trial.sim nor gpio.force offered")
     # resets before confirming: the previous image at the next start
     a = activate_new(ctx, s, 683)
-    if ctx.check("update activated (reset case)", a is not None, "the update did not complete"):
+    if ctx.check("update activated (reset case)", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
         ctx.need("power.cycle")
         with updating(ctx, s, restart_at_end=False) as u:
             n0 = last_log_seq(u)
@@ -625,7 +634,7 @@ def t_a1_84(ctx: Ctx):
     need_clock(ctx)
     s = secret(ctx)
     a = activate_new(ctx, s, 841)  # so that the other slot holds a good image
-    if not ctx.check("an update installed (the other slot holds a good image)", a is not None, "the update did not complete"):
+    if not ctx.check("an update installed (the other slot holds a good image)", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
         return
     with updating(ctx, s, restart_at_end=False) as u:
         r = u.req("ROLLBACK")
