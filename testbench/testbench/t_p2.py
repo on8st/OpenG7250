@@ -675,7 +675,10 @@ def t_b5_20(ctx):
     """B2.3 "High Priority bursts" (0053, 0054): two packets back to back at wire speed with no
     third within 2 ms, and a sequence of 20 packets 1 ms apart, are all processed. Precondition
     (0055): no management write, store compaction or update in progress; the test sends none.
-    Waits and host spacing are in the radio's time: stretched by 1 / time_scale."""
+    Waits and host spacing are in the radio's time: stretched by 1 / time_scale.
+    What it can see: the stop and the last packet of each burst. A lost run packet among
+    identical ones changes nothing observable, so "none lost" for every packet needs the
+    runner's per-datagram drop log (or a received-packet counter the spec does not name)."""
     ts = time_scale(ctx)
 
     def W(sec: float) -> float:
