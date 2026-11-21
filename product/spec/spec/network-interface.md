@@ -1419,6 +1419,26 @@ reset starts (0022 §40).
 What the hardware does between reset and the moment the firmware drives these pins is
 HIS-13; if the PA can key from floating lines, M4 waits for a mitigation (0007).
 
+A3.6b **TX path check** (0066). While TX is not armed and not keyed, the TX path MUST be
+blocked as A3.6 sets it, and the firmware MUST check that it is, at least every 10 ms from the
+end of the safe-state set-up of the boot stage (0045). The check covers each TX-side output of
+A3.6 (TX path disable, SEND, TUNER trigger, PA bias channels; [HIS] HIS 85) and compares two
+things with the safe state:
+
+1. **the configuration the MCU holds**: the pin is an output of the kind A3.6 sets, not an
+   input or an alternate function, and its output register holds the safe level; for a bias
+   channel, the DAC value is 0;
+2. **the level at the pin**: the input register of each of those pins reads the safe level, so
+   that a line held at the other level from outside (a board fault) is seen as well; bias
+   channels have no such read and are checked by item 1 only.
+
+A mismatch found by two checks in a row (so within 20 ms of its start; one check alone may be
+a glitch) is drop event 13 (Table A3-1), fault code 16 `TX_PATH_NOT_BLOCKED`, class 2 (A3.5):
+TX stays locked until a reset, RX goes on, and the log names the pin and which comparison
+failed. The firmware does not try to correct the pin and then go on; it sets the safe state
+again and stays in the fault. While armed or keyed the check is not made, because the TX path
+is then meant to be open; the pins concerned are those of A3.6 that the arm opens (B10.9).
+
 A3.6a **TX settings at every session end and takeover** (0022 §64). The transmit settings that a
 level-1 host writes in General and DUC-specific packets belong to its session. At every session
 end and at every takeover, after the unkey and before the new owner's first packet is
@@ -3810,7 +3830,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-65 | A region other than 0 in `SET_CONFIG` (tag 6) gets status 48; with region 0 a DUC0 frequency at each edge of every range of Table A3-0 is inside, 1 Hz outside each edge is outside (reference model with a complete calibration set; A1.6 C-6; Table A3-0; 0039). |
 | T-A1-66 | With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041). |
 | T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
-| T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down, and one with a class 2 fault (a safe-state pin forced, `TX_PATH_NOT_BLOCKED`), is not confirmed and rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
+| T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down, and one with a class 2 fault (the level at a TX-side pin of A3.6b forced to the other level, `TX_PATH_NOT_BLOCKED`), is not confirmed and rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
 | T-A1-69 | From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 17 s, from the link-local address, after both announcements (reference model or emulator; A1.11 "Bound on start-up"; 0048, 0057). |
 | T-A1-70 | At start-up with no DHCP server: the radio sends the RFC 3927 probes for its chosen link-local address with the section 9 timing before it answers discovery; an ARP reply claiming that address during the probe makes it choose another and probe again (reference model or emulator; A1.11; 0049). |
 | T-A1-71 | After a successful probe the radio sends the RFC 3927 announcements, and only then answers discovery and `IDENTIFY` on the link-local address, within the start-up bound (A1.11; 0048, 0049). |
@@ -3907,6 +3927,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-58 | v1.0 (0030): with level 1 active, armed and unarmed, with and without hardware CW selected, toggling the local PTT input (PH6) and the KEY contacts (PH3, PH4) keys nothing, and High Priority status byte 4 bits [0]–[2] stay 0 (reference model with simulated inputs; [HIS] HIS 85). |
 | T-A3-59 | With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040). |
 | T-A3-60 | Needs the radio (P-SYS-9): after two `SWR_REPEATED` entries, a `RESTART` and then a processor watchdog reset leave the fault entry counter and `TRIP_COUNT` unchanged, so the third entry is class 2; a power cycle clears them. Before P-SYS-9 is set the arm is rejected with `NOT_CALIBRATED` (A3.5; Annex P; 0050). |
+| T-A3-61 | Not armed: forcing the level at each TX-side pin of A3.6b to the other level from outside (output register unchanged), and, separately, changing a pin's output register or making it an input (emulator memory write): each gives `FAULT_CODE` 16 `TX_PATH_NOT_BLOCKED`, class 2, within 20 ms; a pulse shorter than 10 ms gives no fault; RX goes on; the log names the pin and the comparison; after a `RESTART` with the force removed the fault is gone, with it kept it comes back at start-up; armed with the TX path open, no fault (emulator; A3.6b; 0066). |
 
 ### Discovery (B3)
 
