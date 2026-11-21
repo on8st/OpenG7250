@@ -21,6 +21,8 @@ pub struct DdcInputs {
     pub offered_384: bool,
     /// DDC0 I&Q is built in this firmware (step 4). Until then a valid set-up reports reason 2.
     pub ddc0_built: bool,
+    /// A firmware update is in progress (reason 10, A1.8).
+    pub update: bool,
 }
 
 /// Byte 39 values read as the offered format (Big-Endian, 3-byte): 0x00, and only bit [0]
@@ -33,13 +35,30 @@ pub fn rate_offered(ksps: u16, offered_384: bool) -> bool {
     matches!(ksps, 48 | 96 | 192) || (ksps == 384 && offered_384)
 }
 
-/// DDC0 byte of `STREAM_STATUS`.
-pub fn ddc0(i: &DdcInputs) -> u8 {
-    if !i.link_ok {
-        return 8;
+/// The radio-wide reasons, first in the order of Table B8-3 (0042 addendum): 10 update in
+/// progress, 9 run bit clear, 8 link below 100 Mbit/s.
+fn radio_wide(update: bool, running: bool, link_ok: bool) -> Option<u8> {
+    if update {
+        Some(10)
+    } else if !running {
+        Some(9)
+    } else if !link_ok {
+        Some(8)
+    } else {
+        None
     }
-    if !i.running {
-        return 9;
+}
+
+/// DDC0 byte of `STREAM_STATUS`, in the order of Table B8-3 (spec/draft 2469917): 10, 9, 8;
+/// 1; 13, 6, 11, 12, 5; 2, 14; 3, 4, 7.
+pub fn ddc0(i: &DdcInputs) -> u8 {
+    if let Some(r) = radio_wide(i.update, i.running, i.link_ok) {
+        return r;
+    }
+    // B5.2: without a DDC-specific packet DDC0 counts as not enabled.
+    let Some(d) = i.ddc else { return 1 };
+    if !d.enable {
+        return 1;
     }
     if let Some(g) = i.general {
         if !g.phase_word {
@@ -55,10 +74,6 @@ pub fn ddc0(i: &DdcInputs) -> u8 {
             return 5;
         }
     }
-    let Some(d) = i.ddc else { return 1 }; // B5.2: without a DDC-specific packet, not enabled
-    if !d.enable {
-        return 1;
-    }
     // Before P-RX-2 a DDC0 enable gets reason 2, whatever the rate and size (B6.1; 0042).
     if !i.ddc0_built {
         return 2;
@@ -72,8 +87,12 @@ pub fn ddc0(i: &DdcInputs) -> u8 {
     RUNNING
 }
 
-/// DUC0 byte: TX not calibrated (record `tx` bit 4 = 0) is reason 14 (0039).
-pub fn duc0(tx_calibrated: bool) -> u8 {
+/// DUC0 byte: the radio-wide reasons first, then 14 TX not calibrated (record `tx` bit 4 = 0,
+/// 0039).
+pub fn duc0(update: bool, running: bool, link_ok: bool, tx_calibrated: bool) -> u8 {
+    if let Some(r) = radio_wide(update, running, link_ok) {
+        return r;
+    }
     if tx_calibrated { 0 } else { 14 }
 }
 
@@ -95,6 +114,7 @@ mod tests {
             ddc: Some(Ddc { enable: true, rate_ksps: 192, size: 24 }),
             offered_384: false,
             ddc0_built: true,
+            update: false,
         }
     }
 
@@ -118,10 +138,26 @@ mod tests {
         let mut i = ok();
         i.ddc = None;
         assert_eq!(ddc0(&i), 1);
-        i.running = false;
-        assert_eq!(ddc0(&i), 9);
         i.link_ok = false;
         assert_eq!(ddc0(&i), 8);
+        // 9 before 8, 10 before both (Table B8-3 order, 0042 addendum).
+        i.running = false;
+        assert_eq!(ddc0(&i), 9);
+        i.update = true;
+        assert_eq!(ddc0(&i), 10);
+        // 1 comes before the General-packet refusals.
+        let mut i = ok();
+        i.ddc = Some(Ddc { enable: false, rate_ksps: 192, size: 24 });
+        i.general = Some(General { phase_word: true, format: 0x02, ..Default::default() });
+        assert_eq!(ddc0(&i), 1);
+        // Order among the General refusals: 13, 6, 11, 5.
+        i.ddc = Some(Ddc { enable: true, rate_ksps: 192, size: 24 });
+        i.general = Some(General { phase_word: false, timestamp: true, vna: true, format: 0x02, ..Default::default() });
+        assert_eq!(ddc0(&i), 13);
+        i.general = Some(General { phase_word: true, timestamp: true, vna: true, format: 0x02, ..Default::default() });
+        assert_eq!(ddc0(&i), 6);
+        i.general = Some(General { phase_word: true, vna: true, format: 0x02, ..Default::default() });
+        assert_eq!(ddc0(&i), 11);
         let mut i = ok();
         i.ddc0_built = false;
         assert_eq!(ddc0(&i), 2);
@@ -130,7 +166,9 @@ mod tests {
         assert_eq!(ddc0(&i), 2);
         i.general = Some(General { phase_word: true, format: 0x02, ..Default::default() });
         assert_eq!(ddc0(&i), 5);
-        assert_eq!(duc0(false), 14);
+        assert_eq!(duc0(false, true, true, false), 14);
+        assert_eq!(duc0(false, false, true, false), 9);
+        assert_eq!(duc0(true, true, true, false), 10);
         assert_eq!(register(9, 14), 0x0202_0E09);
     }
 }

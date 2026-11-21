@@ -48,6 +48,8 @@ pub struct P2 {
     pub dropped_not_owner: u64,
     pub duc_iq_ignored: u64,
     pub dropped_record: u64,
+    /// A firmware update is in progress (A1.8: STREAM_STATUS reason 10, register writes BUSY).
+    pub update_in_progress: bool,
 }
 
 /// At most one event per `min_ms` per source; a small table, the oldest entry reused.
@@ -69,7 +71,7 @@ pub type Chip = Ch394<crate::net::CsDevice<'static>>;
 impl P2 {
     pub fn new(tx: TxCore, mut regs: RegMap) -> Self {
         // Before any session: DDC0 9 (run bit clear), DUC0 14 (TX not calibrated), Table B8-3.
-        regs.stream_status = g7250_radio::stream::register(9, g7250_radio::stream::duc0(tx.calibrated()));
+        regs.stream_status = g7250_radio::stream::register(9, g7250_radio::stream::duc0(false, false, true, tx.calibrated()));
         P2 {
             session: Session::new(),
             regs,
@@ -88,6 +90,7 @@ impl P2 {
             dropped_not_owner: 0,
             duc_iq_ignored: 0,
             dropped_record: 0,
+            update_in_progress: false,
         }
     }
 
@@ -201,19 +204,27 @@ impl P2 {
         self.send_regs(chip, dest, &pairs);
     }
 
-    /// Recompute `STREAM_STATUS` and push it to the owner on change (B8.2; Table B8-3).
-    fn update_stream_status(&mut self, chip: &mut Chip) {
-        let i = g7250_radio::stream::DdcInputs {
+    /// `STREAM_STATUS` now (Table B8-3, with its reason order).
+    fn stream_status(&self) -> u32 {
+        use g7250_radio::stream;
+        let i = stream::DdcInputs {
             link_ok: self.link_ok,
             running: self.session.running(),
             general: self.session.general,
             ddc: self.session.ddc,
             offered_384: false,
             // DDC0 needs the FPGA bus, closed until its parameters are cleared (fpga_gate;
-            // coordinator 2026-11-21): reason 2 until then.
-            ddc0_built: false,
+            // P-RX-2, 0042): reason 2 until then.
+            ddc0_built: g7250_safety::fpga_gate::permit().is_some(),
+            update: self.update_in_progress,
         };
-        let v = g7250_radio::stream::register(g7250_radio::stream::ddc0(&i), g7250_radio::stream::duc0(self.tx.calibrated()));
+        let duc = stream::duc0(self.update_in_progress, self.session.running(), self.link_ok, self.tx.calibrated());
+        stream::register(stream::ddc0(&i), duc)
+    }
+
+    /// Recompute `STREAM_STATUS` and push it to the owner on change (B8.2; Table B8-3).
+    fn update_stream_status(&mut self, chip: &mut Chip) {
+        let v = self.stream_status();
         if v != self.regs.stream_status {
             self.regs.stream_status = v;
             if let Some(dest) = self.session.register_destination() {
@@ -227,15 +238,7 @@ impl P2 {
         let first_general = kind == CnC::General && self.session.owner() == Some(from);
         let ev = self.session.on_cnc(from, kind, p, now, self.link_ok);
         // The status of a new session is part of its start pushes; compute it first.
-        let i = g7250_radio::stream::DdcInputs {
-            link_ok: self.link_ok,
-            running: self.session.running(),
-            general: self.session.general,
-            ddc: self.session.ddc,
-            offered_384: false,
-            ddc0_built: false,
-        };
-        self.regs.stream_status = g7250_radio::stream::register(g7250_radio::stream::ddc0(&i), g7250_radio::stream::duc0(self.tx.calibrated()));
+        self.regs.stream_status = self.stream_status();
         self.events(chip, &ev, now);
         self.update_stream_status(chip);
         if first_general {
