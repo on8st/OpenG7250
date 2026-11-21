@@ -296,9 +296,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity) {
                             let want = if ip == [0; 4] {
                                 NetConfig::FACTORY
                             } else {
-                                // [P2] Set IP carries no netmask; keep the one in use if it fits.
-                                let mask = if netcfg::valid_host(ip, cfg.mask) { cfg.mask } else { [255, 255, 255, 0] };
-                                NetConfig { mode: Mode::Static, ip, mask, gateway: cfg.gateway }
+                                netcfg::after_set_ip(&cfg, ip)
                             };
                             let _ = chip.udp_close(SOCK_DISCOVERY);
                             let (c, s) = configure(&mut chip, mac, want).await;

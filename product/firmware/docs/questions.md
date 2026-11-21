@@ -20,7 +20,18 @@ each row, chosen to stay on the safe side.
 | F2-Q4 | Is INT# (PC13) pulled up on the board, or must the MCU pull it up (HIS 40: "needs a pull-up")? | Interrupt-driven receive. | INT# not used yet; the driver polls every 2 ms. |
 | F2-Q5 | Does the CH394 report the destination address of a received UDP datagram (unicast, directed broadcast, limited broadcast)? The W5500 UDP header carries only the source. | B3.9 / T-B3-32: Set IP from outside the subnet is accepted only to 255.255.255.255. | See SQ-F2-2. |
 
-## Spec questions
+## Spec answers (spec/draft 56197e4)
+
+| Id | Answer | Firmware |
+|---|---|---|
+| tx bit 1 | r1.0 reports tx bit 1 = 1 and bit 4 from the calibration set; an uncalibrated arm gets 12 `NOT_CALIBRATED`. Bit 1 = 0 with 11 only before M4 without a key path (B4.8, B10 intro, T-B4-18). | Now: `TX_IMPLEMENTED = false` (no key path yet). Switch to `true` with the P2 key path. |
+| SQ-F2-1 | DHCP default; while no lease, RFC 3927 link-local **and keep retrying DHCP**; renewals borrow the management socket; an address change at renewal is A1.11a. No renewal is not conformant for r1.0. | **Open work:** DHCP retry while link-local, and renewal. |
+| SQ-F2-2 | Without destination-address info every Set IP counts as unicast/directed: own subnet only, any source while link-local (B3.9; T-B3-32). | As implemented. |
+| SQ-F2-3 | Keep the netmask if the new address is in that subnet, else /24; keep the gateway if inside the resulting subnet, else clear it; 0.0.0.0 selects DHCP; log the values (B3.9; T-B3-34). | Implemented (`netcfg::after_set_ip`). |
+| SQ-F3-2 | A3.9b item 1: `BUSY`, `NOT_OWNER`, `BAD_VALUE`, `NOT_CALIBRATED`, `NOT_ARMED`. | As implemented. |
+| SQ-F3-3 | The boot counter lives in the non-volatile store with configuration and calibration; without that store tx bit 4 MUST stay 0. | Bit 4 = 0; store not built yet. |
+
+## Spec questions (as asked)
 
 | Id | Question | Interim in the firmware |
 |---|---|---|
