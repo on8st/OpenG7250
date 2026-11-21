@@ -334,6 +334,17 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   `UPDATE_ACTIVATE`: 10 min after the last update command other than `UPDATE_STATUS`, the
   G7250 restarts into the running image in the same way, the staging area discarded
   (0022 §77 item 1).
+  **What restarts the timer** (0063 addendum). "Update command" in the 10-minute rule means
+  an update command answered with status 0 or 1, other than `UPDATE_STATUS` and a second
+  `UPDATE_ABORT` (which changes nothing). A refused update command (any other status,
+  54 and 55 of "No transfer in progress" among them) and a repeat answered from the stored
+  reply (A1.4) neither restart nor extend any update timer, and change nothing else.
+  **After `UPDATE_ABORT`**: no transfer is in progress, but the update state above remains
+  until a restart (session ended, RX stopped, `BUSY`, reason 10); the 10-minute timer runs
+  from the reply to `UPDATE_ABORT` and ends in the restart into the running image unless a
+  `RESTART` (A1.9) comes first. Until then `UPDATE_BEGIN` and `ROLLBACK` get 58, `UPDATE_BLOCK`
+  gets 54, `UPDATE_VERIFY` and `UPDATE_ACTIVATE` get 55, a second `UPDATE_ABORT` gets 0 and
+  changes nothing (the timer included), and `UPDATE_STATUS` reports idle.
 - **Arm and update serialise** (0022 §61). The acceptance of an arm (B10.2 items 3–4; part C
   C5.5.4) and the acceptance of `UPDATE_BEGIN` MUST be one atomic decision of the safety
   core: whichever is processed first wins. If the arm wins, `UPDATE_BEGIN` gets status 50; if
@@ -3712,7 +3723,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-20 | Two hosts (same IP, different ports) each get their own challenge; a request authenticated with the other host's challenge fails with status 33; a challenge works once. |
 | T-A1-21 | A repeated request id within 5 s gets the cached reply; after 5 s a replayed authenticated request fails with status 33. |
 | T-A1-22 | `CHANGE_SECRET` carries the masked new secret; the captured datagram does not contain the new secret; the new secret works afterwards. |
-| T-A1-23 | After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART`. |
+| T-A1-23 | After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 "After `UPDATE_ABORT`"; 0063). |
 | T-A1-24 | During an unconfirmed trial boot RX works and an arm is rejected with `MAINTENANCE`; after confirmation it is accepted. |
 | T-A1-25 | A region change is refused with status 50 while armed or keyed on either level and with status 57 while a P2 session runs. |
 | T-A1-26 | More than 20 management requests per second from one source are answered at most 20 times per second; the excess is counted in `GET_STATS`. |
@@ -3771,6 +3782,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-79 | `IDENTIFY` tag 25 is present with length 6; slots A and B and the store do not overlap, lie within sectors 2–7 (never sector 0 or 1) and do not change across restarts and updates of this firmware; the slot named by tag 23 is the one the running image occupies; a reader skips the tag if it does not know it (A1.5; Annex M; 0062). |
 | T-A1-80 | With no transfer in progress (after a restart, after `UPDATE_ABORT`, and after an activation): `UPDATE_BLOCK` gets 54, also with a bad CRC; `UPDATE_VERIFY` and `UPDATE_ACTIVATE` get 55; nothing is written and `UPDATE_STATUS` stays idle; with a malformed payload the reply is 17 (reference model or emulator; A1.8 "No transfer in progress"; 0063). |
 | T-A1-81 | `UPDATE_BEGIN` with a wrong magic, or with header version 2, gets 17 and nothing changes; with a readable header and component 2 it gets 56; with component 2 and the wrong hardware id, 51 (order 51, 56, 63, 61, 52) (reference model or emulator; A1.8 "Unreadable or unsupported header"; 0063). |
+| T-A1-82 | After `UPDATE_ABORT`, a stray `UPDATE_BLOCK` (54), `UPDATE_VERIFY` (55), `UPDATE_ACTIVATE` (55), `UPDATE_BEGIN` (58), `ROLLBACK` (58) and a second `UPDATE_ABORT` (0) sent every 60 s do not delay the restart: the radio restarts into the running image 10 min (± 5 s) after the reply to the first `UPDATE_ABORT`, logs it, and RX works afterwards; the same with a `RESTART` after 2 min restarts at once. During a transfer, a block refused with 53 every 60 s does not delay the abandonment either (reference model or emulator; A1.8 "What restarts the timer", "After `UPDATE_ABORT`"; 0063). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
