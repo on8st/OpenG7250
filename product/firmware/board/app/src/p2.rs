@@ -25,11 +25,12 @@ fn duc<R>(f: impl FnOnce(&mut DucFifo<20>) -> R) -> R {
 
 /// Values of a DUC-specific packet used clamped are logged (A1.7) and counted in the key path.
 fn log_clamped(c: g7250_safety::cw::Clamped) {
-    if c.hang {
-        println!("p2: DUC-specific hang delay above 2000 ms used as 2000 ms (Table B10-1)");
+    // The texts of Table B10-1 and B10.5a item 1 (0046, SF-23), after the module prefix.
+    if let Some(ms) = c.hang {
+        println!("p2: CW hang delay {} clamped to 2000", ms);
     }
-    if c.speed {
-        println!("p2: DUC-specific keyer speed above 60 wpm used as 60 wpm (B10.5a item 1)");
+    if let Some(s) = c.speed {
+        println!("p2: CW speed {} used as 60", s);
     }
 }
 

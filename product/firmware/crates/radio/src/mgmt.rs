@@ -47,11 +47,15 @@ pub struct Stats {
     pub discovery_dropped_rate: u64,
     pub discovery_from_port_1024: u64,
     pub set_ip_ignored: u64,
+    /// DUC-specific packets with a hang delay above 2000 ms or a keyer speed above 60 wpm
+    /// (Table B10-1, B10.5a item 1; names fixed by 0046).
+    pub cw_hang_clamped: u64,
+    pub cw_speed_clamped: u64,
 }
 
 impl Stats {
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 11] = [
+        let items: [(&[u8], u64); 13] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
             (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
@@ -63,6 +67,8 @@ impl Stats {
             (b"discovery_dropped_rate", self.discovery_dropped_rate),
             (b"discovery_from_port_1024", self.discovery_from_port_1024),
             (b"set_ip_ignored", self.set_ip_ignored),
+            (b"cw_hang_clamped", self.cw_hang_clamped),
+            (b"cw_speed_clamped", self.cw_speed_clamped),
         ];
         let mut at = 0;
         for (n, v) in items {
@@ -177,6 +183,8 @@ impl Server {
                 discovery_dropped_rate: 0,
                 discovery_from_port_1024: 0,
                 set_ip_ignored: 0,
+                cw_hang_clamped: 0,
+                cw_speed_clamped: 0,
             },
             writer: None,
             reset_pending: false,

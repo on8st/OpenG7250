@@ -527,6 +527,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 if handled {
                     continue;
                 }
+                // Counters of the key path for GET_STATS (Table B10-1, B10.5a item 1).
+                server.stats.cw_hang_clamped = p2.key.cw_hang_clamped;
+                server.stats.cw_speed_clamped = p2.key.cw_speed_clamped;
                 // Management channel, socket 7 (not while lent to DHCP).
                 if dhcp_borrowed {
                     Timer::after_millis(2).await;

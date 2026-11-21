@@ -98,8 +98,8 @@ pub struct KeyPath {
     element_on: bool,
     /// Hang delays above 2000 ms and keyer speeds above 60 wpm clamped (Table B10-1, B10.5a
     /// item 1; `GET_STATS`).
-    pub hang_clamped: u32,
-    pub speed_clamped: u32,
+    pub cw_hang_clamped: u64,
+    pub cw_speed_clamped: u64,
 }
 
 impl Default for KeyPath {
@@ -128,8 +128,8 @@ impl KeyPath {
             pending: None,
             cw: CwKeyer::default(),
             element_on: false,
-            hang_clamped: 0,
-            speed_clamped: 0,
+            cw_hang_clamped: 0,
+            cw_speed_clamped: 0,
         }
     }
 
@@ -248,8 +248,8 @@ impl KeyPath {
     /// Settings from a DUC-specific packet already parsed (a set-up packet taken at the session
     /// start, B5.1a item 2), with the same deferral while keyed.
     pub fn set_duc(&mut self, s: DucSettings, clamped: Clamped) {
-        self.hang_clamped += clamped.hang as u32;
-        self.speed_clamped += clamped.speed as u32;
+        self.cw_hang_clamped += clamped.hang.is_some() as u64;
+        self.cw_speed_clamped += clamped.speed.is_some() as u64;
         if self.source.is_some() {
             self.pending = Some(s);
         } else {
@@ -383,9 +383,9 @@ impl KeyPath {
     /// Session end or takeover: request levels forgotten, PA enable cleared, DUC-specific
     /// settings back to their power-on values (A3.6a, Table A3-4).
     pub fn session_end(&mut self) {
-        let keep = (self.last_unkey, self.limit_id, self.hang_clamped, self.speed_clamped);
+        let keep = (self.last_unkey, self.limit_id, self.cw_hang_clamped, self.cw_speed_clamped);
         *self = KeyPath::new();
-        (self.last_unkey, self.limit_id, self.hang_clamped, self.speed_clamped) = keep;
+        (self.last_unkey, self.limit_id, self.cw_hang_clamped, self.cw_speed_clamped) = keep;
     }
 }
 
@@ -548,6 +548,12 @@ mod tests {
         assert!(k.keyed().is_none());
         k.on_high_priority(cwx(false, false), 10, &mut tx, &ctx(), &mut rf);
         k.on_duc_specific(&duc(BREAK_IN | IAMBIC, 20, 200));
+        // SF-22: a paddle edge while idle keys and starts the mark in the handling of that
+        // packet; what remains of the 5 ms is the board's loop pass.
+        let (mut tx2, mut k2, mut rf2) = path();
+        k2.on_duc_specific(&duc(BREAK_IN | IAMBIC, 20, 200));
+        k2.on_high_priority(cwx(true, false), 7, &mut tx2, &ctx(), &mut rf2);
+        assert_eq!(rf2.log, ["key", "on"]);
         // One dot (60 ms at 20 wpm), then 200 ms hang after its space.
         drive(&mut k, &mut tx, &mut rf, 20, 600, |t| cwx(t < 40, false));
         assert_eq!(rf.log, ["key", "on", "off", "unkey"]);
@@ -656,7 +662,7 @@ mod tests {
         k.on_duc_specific(&duc(BREAK_IN, 20, 5000));
         k.session_end();
         assert_eq!(*k.duc(), DucSettings::SESSION_START);
-        assert_eq!(k.hang_clamped, 1);
+        assert_eq!(k.cw_hang_clamped, 1);
     }
 
     #[test]

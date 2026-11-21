@@ -2,7 +2,7 @@
 // Copyright (C) 2026 ON8ST
 //! The DUC-specific settings that the key path uses (spec B10.6, Table B10-1) and the CW keyer
 //! for CWX (B10.5a "Keyer timing", decision 0046; B10.5b): unit, elements and spaces, weight,
-//! iambic mode A and B (Curtis) with one element of memory per paddle, strict character
+//! iambic mode A and B (Curtis; element memory in mode B only, SF-19), strict character
 //! spacing, and the straight-key reading with iambic clear.
 //!
 //! The keyer only decides when an element is on. The element's RF is the DUC CW waveform with
@@ -49,18 +49,20 @@ pub const HANG_MAX_MS: u16 = 2000;
 /// Highest keyer speed honoured; above it 60 is used, logged and counted (B10.5a item 1; 0046).
 pub const SPEED_MAX_WPM: u8 = 60;
 
-/// Values of a DUC-specific packet used clamped, each logged (A1.7) and counted (`GET_STATS`).
+/// Values of a DUC-specific packet used clamped, as received, each logged (A1.7) and counted
+/// (`GET_STATS` `cw_hang_clamped`, `cw_speed_clamped`) once per packet (Table B10-1, B10.5a
+/// item 1; 0046, SF-23).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Clamped {
-    /// Hang delay above 2000 ms (Table B10-1).
-    pub hang: bool,
-    /// Keyer speed above 60 wpm (B10.5a item 1).
-    pub speed: bool,
+    /// Hang delay above 2000 ms: the value received, ms.
+    pub hang: Option<u16>,
+    /// Keyer speed above 60 wpm: the value received.
+    pub speed: Option<u8>,
 }
 
 impl Clamped {
     pub fn any(&self) -> bool {
-        self.hang || self.speed
+        self.hang.is_some() || self.speed.is_some()
     }
 }
 
@@ -102,7 +104,7 @@ impl DucSettings {
             format_ok: matches!(rate, 0 | 192) && matches!(b(16), 0 | 24),
             ramp_ms: if (5..=10).contains(&ramp) { ramp } else { 8 },
         };
-        (s, Clamped { hang: hang > HANG_MAX_MS, speed: b(9) > SPEED_MAX_WPM })
+        (s, Clamped { hang: (hang > HANG_MAX_MS).then_some(hang), speed: (b(9) > SPEED_MAX_WPM).then_some(b(9)) })
     }
 
     /// A refusal of B10.6 stands: no PTT transmission keys (A3.1a).
@@ -179,23 +181,13 @@ impl Paddles {
             El::Dash => self.dash,
         }
     }
-    fn set(&mut self, e: El) {
-        match e {
-            El::Dot => self.dot = true,
-            El::Dash => self.dash = true,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct CwKeyer {
     phase: Phase,
-    /// One element of memory per paddle: pressed during the current element (item 4).
-    mem: Paddles,
-    /// The paddle of the current element was released during it (to see a new press).
-    released: bool,
-    /// Both paddles held at some time during the current element (mode B, item 4).
-    squeeze: bool,
+    /// Mode B: the opposite paddle was held during the current mark (item 4; SF-19, SF-20).
+    mem: bool,
     /// The paddles at the last step (which one was pressed first, item 4).
     prev: Paddles,
     /// End of the last mark and of its space, µs (strict spacing, item 5; hang delay).
@@ -205,7 +197,7 @@ pub struct CwKeyer {
 
 impl Default for CwKeyer {
     fn default() -> Self {
-        CwKeyer { phase: Phase::Idle, mem: Paddles::default(), released: false, squeeze: false, prev: Paddles::default(), last_mark_end: None, last_end: None }
+        CwKeyer { phase: Phase::Idle, mem: false, prev: Paddles::default(), last_mark_end: None, last_end: None }
     }
 }
 
@@ -274,18 +266,10 @@ impl CwKeyer {
                     self.start(el, now, &t);
                 }
                 Phase::On(el, until) => {
-                    if p.dot && p.dash {
-                        self.squeeze = true;
-                    }
-                    // Memory: the other paddle pressed during this element; one held from
-                    // before is not a new press (alternation while both are held is below).
-                    if p.get(el.other()) && !self.prev.get(el.other()) {
-                        self.mem.set(el.other());
-                    }
-                    if !p.get(el) {
-                        self.released = true;
-                    } else if self.released {
-                        self.mem.set(el);
+                    // Mode B memory: the opposite paddle held at any time during the mark,
+                    // even if released before its end (item 4; SF-19, SF-20: the mark only).
+                    if p.get(el.other()) {
+                        self.mem = true;
                     }
                     if now < until {
                         return true;
@@ -297,29 +281,19 @@ impl CwKeyer {
                     if now < until {
                         return false;
                     }
+                    // The decision point: the end of the 1 T space (item 4; SF-19). Mode A
+                    // counts only the paddles held now; mode B also its memory of the mark.
                     let o = el.other();
-                    let next = if !p.dot && !p.dash {
-                        // Both released. Mode A stops: its memory acts only while a paddle is
-                        // still held at the end of the space (SF-19, interim reading). Mode B:
-                        // after a squeeze the opposite element, else the memory of a paddle
-                        // pressed during the mark (item 4; SF-20: "during an element" = the mark).
-                        if !s.mode_b {
-                            None
-                        } else if self.squeeze {
-                            Some(o)
-                        } else if self.mem.get(o) {
-                            Some(o)
-                        } else if self.mem.get(el) {
-                            Some(el)
-                        } else {
-                            None
-                        }
-                    } else if self.mem.get(o) || (p.dot && p.dash) {
+                    let next = if s.mode_b && self.mem {
                         Some(o)
-                    } else if p.get(el) || self.mem.get(el) {
+                    } else if p.dot && p.dash {
+                        Some(o)
+                    } else if p.get(el) {
                         Some(el)
-                    } else {
+                    } else if p.get(o) {
                         Some(o)
+                    } else {
+                        None
                     };
                     match next {
                         Some(e) => self.start(e, until, &t),
@@ -335,9 +309,7 @@ impl CwKeyer {
     }
 
     fn start(&mut self, el: El, at: u64, t: &Timing) {
-        self.mem = Paddles::default();
-        self.released = false;
-        self.squeeze = false;
+        self.mem = false;
         self.phase = Phase::On(el, at + t.mark(el));
     }
 }
@@ -396,7 +368,7 @@ mod tests {
         let mut p = [0u8; 60];
         p[9] = 70;
         let (d, c) = DucSettings::parse(&p);
-        assert_eq!((d.speed_wpm, c), (60, Clamped { hang: false, speed: true }));
+        assert_eq!((d.speed_wpm, c), (60, Clamped { hang: None, speed: Some(70) }));
     }
 
     #[test]
@@ -429,43 +401,35 @@ mod tests {
         assert_eq!(run(&mut k, &s, 0, 500, p)[1].0, 60 + 180);
         let mut k = CwKeyer::default();
         assert_eq!(run(&mut k, &iambic(20, false), 0, 500, p)[1].0, 150, "clear: at once");
-        // SF-21 (interim): a paddle pressed and released before the 3 T starts nothing.
+        // Pressed at 1.5 T (150) and released at 2.5 T (210): nothing (SF-21).
         let mut k = CwKeyer::default();
-        assert_eq!(run(&mut k, &s, 0, 500, |t| (t < 10 || (150..200).contains(&t), false)), [(0, 60)]);
+        assert_eq!(run(&mut k, &s, 0, 500, |t| (t < 10 || (150..210).contains(&t), false)), [(0, 60)]);
     }
 
     #[test]
-    fn sf_19_mode_a_memory_acts_only_while_a_paddle_is_held_at_the_end_of_the_space() {
-        // Dash held 0-150 (released during the mark), dot tapped 40-60 during the mark: nothing
-        // held at the end of the space (240).
-        let p = |t: u64| ((40..60).contains(&t), t < 150);
-        let mut k = CwKeyer::default();
-        assert_eq!(run(&mut k, &iambic(20, false), 0, 600, p), [(0, 180)], "mode A stops");
-        let mut k = CwKeyer::default();
-        assert_eq!(run(&mut k, &iambic(20, true), 0, 600, p), [(0, 180), (240, 300)], "mode B sends the dot");
-        // Dash still held at 240: the remembered dot follows in mode A too.
-        let mut k = CwKeyer::default();
-        assert_eq!(run(&mut k, &iambic(20, false), 0, 600, |t| ((40..60).contains(&t), t < 250))[..2], [(0, 180), (240, 300)]);
-    }
-
-    #[test]
-    fn t_b10_46_iambic_a_and_b_and_memory() {
-        // Squeeze during a dash (dash 0-180), both released before its end.
-        let p = |t: u64| (40 <= t && t < 100, t < 100);
-        let mut k = CwKeyer::default();
-        assert_eq!(run(&mut k, &iambic(20, false), 0, 600, p), [(0, 180)], "mode A ends after the dash");
-        let mut k = CwKeyer::default();
-        assert_eq!(run(&mut k, &iambic(20, true), 0, 600, p), [(0, 180), (240, 300)], "mode B: one dot");
-        // A dot paddle pressed during a dash with the dash paddle held: a dot after the dash, in
-        // both modes.
-        let p = |t: u64| ((40..60).contains(&t), t < 250);
-        for b in [false, true] {
-            let mut k = CwKeyer::default();
-            assert_eq!(run(&mut k, &iambic(20, b), 0, 600, p)[..2], [(0, 180), (240, 300)], "mode B {b}");
+    fn t_b10_46_iambic_decision_point_and_mode_b_memory() {
+        let a = iambic(20, false);
+        let b = iambic(20, true);
+        // Dash 0-180 (mark), space to 240 = the decision point.
+        // (a) Dot also pressed during the dash mark, both released before its end.
+        let p = |t: u64| ((40..100).contains(&t), t < 100);
+        assert_eq!(run(&mut CwKeyer::default(), &a, 0, 800, p), [(0, 180)], "a: mode A ends after the dash");
+        assert_eq!(run(&mut CwKeyer::default(), &b, 0, 800, p), [(0, 180), (240, 300)], "a: mode B one dot, then stops");
+        // (b) Dot pressed and released during the mark, dash held throughout.
+        let p = |t: u64| ((40..60).contains(&t), true);
+        assert_eq!(&run(&mut CwKeyer::default(), &a, 0, 900, p)[..2], &[(0, 180), (240, 420)], "b: mode A another dash");
+        assert_eq!(&run(&mut CwKeyer::default(), &b, 0, 1100, p)[..3], &[(0, 180), (240, 300), (360, 540)], "b: mode B a dot, then dashes");
+        // (c) Dot pressed only in the space: no memory; the decision point sees what is held.
+        let p = |t: u64| ((200..230).contains(&t), true);
+        for k in [a, b] {
+            assert_eq!(&run(&mut CwKeyer::default(), &k, 0, 900, p)[..2], &[(0, 180), (240, 420)], "c: released before 240");
+        }
+        let p = |t: u64| ((200..260).contains(&t), true);
+        for k in [a, b] {
+            assert_eq!(&run(&mut CwKeyer::default(), &k, 0, 900, p)[..2], &[(0, 180), (240, 300)], "c: held at 240");
         }
         // Both held: alternate, starting with the paddle pressed first.
-        let mut k = CwKeyer::default();
-        let e = run(&mut k, &iambic(20, false), 0, 700, |t| (t >= 5, true));
+        let e = run(&mut CwKeyer::default(), &a, 0, 700, |t| (t >= 5, true));
         assert_eq!(&e[..3], &[(0, 180), (240, 300), (360, 540)]);
     }
 
@@ -489,7 +453,7 @@ mod tests {
         p[16] = 24;
         p[17] = 3;
         let (s, c) = DucSettings::parse(&p);
-        assert!(c.hang && !c.speed && s.hang_ms == 2000 && s.break_in && s.strict && s.mode_b && s.iambic && s.cw_select);
+        assert!(c.hang == Some(3000) && c.speed.is_none() && s.hang_ms == 2000 && s.break_in && s.strict && s.mode_b && s.iambic && s.cw_select);
         assert!(!s.refused() && s.ramp_ms == 8);
         p[16] = 16;
         assert!(DucSettings::parse(&p).0.refused());
