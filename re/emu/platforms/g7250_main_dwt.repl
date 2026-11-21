@@ -1,0 +1,4 @@
+// g7250_main_dwt.repl: own DWT (models/csharp/G7250Dwt.cs): CYCCNT at the core clock
+// the clock model gives (Renode's DWT runs at a fixed 250 MHz). Load after
+// `i @models/csharp/G7250Dwt.cs` and `sysbus Unregister sysbus.dwt`.
+dwt: Miscellaneous.G7250Dwt @ sysbus <0xE0001000, +0x1000>

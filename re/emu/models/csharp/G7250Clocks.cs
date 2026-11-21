@@ -136,6 +136,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             if(s6 != 0 && s6 != 3) this.Log(LogLevel.Warning, "not modelled: RCC/D3CCIPR SPI6SEL {0} (pclk4 used)", s6);
             Spi6KernelHz = s6 == 3 ? HsiHz() : pclk4;
             Set("sysbus.spi6", Spi6KernelHz);
+            // DWT CYCCNT counts core clock cycles (Arm v7-M); Renode's DWT has a fixed platform
+            // frequency (250 MHz in stm32h7.repl), so it follows the core clock here
+            Set("sysbus.dwt", CoreHz);
             foreach(var t in Apb1Timers) Set("sysbus." + t, Apb1TimerHz);
             foreach(var t in Apb2Timers) Set("sysbus." + t, Apb2TimerHz);
             foreach(var cpu in setCpuRate ? machine.SystemBus.GetCPUs() : new Antmicro.Renode.Peripherals.CPU.ICPU[0])

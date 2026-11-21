@@ -1048,6 +1048,8 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case "wdt": return WatchdogReset();
                     case "resets": return "resets " + resetCount;
                     case "keylog": return KeyLogCommand(w);
+                    case "peek":     // diagnostics: one 32-bit bus read
+                        return "ok 0x" + machine.SystemBus.ReadDoubleWord(ulong.Parse(w[1].Replace("0x", ""), NumberStyles.HexNumber)).ToString("X8");
                     case "consolelog": return "ok " + ConsoleLogRead(w.Length > 1 ? int.Parse(w[1], CultureInfo.InvariantCulture) : 0);
                     case "firstcheck":
                         return firstIdrPort == null ? "ok {}" : "ok {\"boot_t_us\": " + firstIdrBootUs + ", \"first_idr_read_us\": " + firstIdrReadUs

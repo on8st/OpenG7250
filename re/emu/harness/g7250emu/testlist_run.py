@@ -389,6 +389,18 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             bt.save_netlog()
         except Exception:  # noqa: BLE001
             pass
+        if os.environ.get("G7250_DUMP_FLASH_END") == "1":      # diagnostics: the flash as the test left it
+            try:
+                bt.agent.ask("flashdump " + os.path.join(tdir, "flash-end.bin"), timeout=60, internal=True)
+            except Exception:  # noqa: BLE001
+                pass
+        first_check = None
+        try:
+            fc = bt.agent.ask("firstcheck", timeout=10, internal=True)
+            if fc and fc.startswith("ok ") and fc[3:] != "{}":
+                first_check = json.loads(fc[3:])
+        except Exception:  # noqa: BLE001
+            pass
         if not per_list:
             bt.close()
         got = {e.get("id"): e for e in entries}
@@ -417,12 +429,8 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                 e["reason"] = ("not evidence: datagram delivery shifted by up to %d us in emulated time in the judged burst(s) %s "
                                "(> %d us); bench: %s %s" % (worst, ", ".join(bad), lim, e.get("status"), e.get("reason") or ""))
                 e["status"] = "error"
-        try:
-            fc = bt.agent.ask("firstcheck", timeout=10, internal=True) if not per_list else None
-            if fc and fc.startswith("ok ") and fc[3:] != "{}":
-                e.setdefault("emulator", {})["first_tx_port_read"] = json.loads(fc[3:])
-        except Exception:  # noqa: BLE001
-            pass
+        if first_check:
+            e.setdefault("emulator", {})["first_tx_port_read"] = first_check
         bursts = shift_bursts(tdir)
         if bursts:
             em = e.setdefault("emulator", {})

@@ -91,6 +91,10 @@ GENERIC = [
             "sysbus Unregister sysbus.timer5; sysbus Unregister sysbus.timer12; sysbus Unregister sysbus.timer13; "
             "sysbus Unregister sysbus.timer14"),
     ("repl", P("platforms", "g7250_main_tim.repl")),
+    # own DWT: CYCCNT at the core clock (Renode's runs at a fixed 250 MHz)
+    ("cs", P("models", "csharp", "G7250Dwt.cs")),
+    ("cmd", "sysbus Unregister sysbus.dwt"),
+    ("repl", P("platforms", "g7250_main_dwt.repl")),
     # clock tree from the RCC: timer kernel clocks, SysTick, CPU rate (docs/CLOCKS-model.md)
     ("cs", P("models", "csharp", "G7250Clocks.cs")),
     ("str", 'clocks: Miscellaneous.G7250Clocks @ sysbus <0x5FFF0100, +0x10>'),
@@ -309,7 +313,8 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
     ] + ['sysbus.spi1.agent ForceIdrAtBoot "%s" %d' % (p_, l_) for p_, l_ in (boot_forces or [])] + [
         'sysbus.watchdog PowerOnBoot',
         'sysbus.spi1.agent ArmBootHook',
-    ] + (['emulation SetGlobalAdvanceImmediately true'] if os.environ.get("G7250_ADVANCE_IMMEDIATELY") == "1" else []) + [
+    ] + (['sysbus LogPeripheralAccess sysbus.flashController true', 'logLevel 0 sysbus.flashController']
+         if os.environ.get("G7250_LOG_FLASHCTRL") == "1" else []) + (['emulation SetGlobalAdvanceImmediately true'] if os.environ.get("G7250_ADVANCE_IMMEDIATELY") == "1" else []) + [
         'start',
     ]
     return "\n".join(lines) + "\n"

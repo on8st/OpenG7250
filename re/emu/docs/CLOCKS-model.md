@@ -45,6 +45,20 @@ modelled: down and center-aligned counting, slave and trigger modes, input
 capture, PWM outputs on pins, DMA requests. Other timers (TIM1, 6–8, 15–17)
 stay Renode's, with their frequency set by the clock model.
 
+## DWT cycle counter
+
+`models/csharp/G7250Dwt.cs` (`platforms/g7250_main_dwt.repl`) replaces Renode's
+DWT in product runs. Renode's counts CYCCNT at a fixed platform frequency
+(250 MHz in stm32h7.repl), so firmware timing with CYCCNT at the 64 MHz reset
+clock ran 3.9 times fast (fw-6ca08d1 reported its first TX path check at 781 ms
+for about 0.20 s of emulated time). The own model: DWT_CTRL CYCCNTENA starts and
+stops the counter, CYCCNT counts core clock cycles from the clock model
+(`SetKernelClock`) in emulated time and is writable; DWT_LAR writes accepted; the
+other counters and comparators are stored only. Resolution: the machine's virtual
+time step (the time quantum), not single cycles; a busy-wait on CYCCNT sees time
+move in those steps. Checked on fw-cbe8687: CYCCNT / 64 equals the emulated time
+(8 905 347 us against 8 905 222 us).
+
 ## Not modelled
 
 Clock switching delays, HSI/CSI calibration, PLL2/PLL3, kernel clock
