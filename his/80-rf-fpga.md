@@ -26,12 +26,23 @@ The RF I/Q front end is an **FPGA reached over an 8-bit parallel bus on GPIOE**
 | Code | Function |
 | --- | --- |
 | 0x00 | loopback/test register: a written byte reads back |
-| 0x01 | 24-byte config frame: byte 0 status flags; three big-endian 32-bit NCO words at byte offsets 1, 5 and 19 (HIGH); bytes 9–18 other fields incl. per-rate calibration (meanings unknown); byte 23 most likely the rate index (MEDIUM). F4-Q2: the meaning of byte 0 and of bytes 9–18 and safe values for them are **not known**; the values the factory image writes are per-unit data and are not given here (needs a radio measurement or FPGA documentation) |
+| 0x01 | 24-byte config frame: byte 0 status flags; three big-endian 32-bit NCO words at byte offsets 1, 5 and 19 (HIGH); bytes 9–18 other fields incl. per-rate calibration (meanings unknown); byte 23 most likely the rate index (MEDIUM). F4-Q2: the meaning of byte 0 and of bytes 9–18 and safe values for them are **not known**; the values the factory image writes are per-unit data and are not given here |
 | 0x02 | status read (flag bits + three 16-bit values incl. ADC peak) |
 | 0x03 | TX I/Q write — two signed 24-bit values per sample |
 | 0x04 | RX I/Q read — two signed 24-bit values per sample, 8/4/2/1 per DRDY for rate index 0–3 |
 | 0x05/0x06, 0x09/0x0A | exist (two pulse commands); role unknown. **MUST NOT** be sent |
 | 0x08 | 3-byte FPGA version read |
+
+## 0x01 frame and DDC0 (F4-Q2)
+
+- **DDC0 cannot run until byte 0 and bytes 9–18 of the 0x01 frame are
+  understood.** Tuning DDC0 or setting its rate needs a full frame, and safe
+  values for those bytes are not known. The route is a measurement on the radio
+  (`90-needs-hardware.md`). Reusing the unit's factory calibration values would
+  be another route, but it needs a decision by ON8ST and is not open.
+- **Safety:** any 0x01 write while byte 0 is not understood happens only with
+  the RF section in the safe state of `85-rf-control.md`: byte 0 may hold a
+  transmit enable, which is not excluded.
 
 ## Bus cycle (F4-Q1, F4-Q4, F4-Q5)
 
@@ -59,15 +70,16 @@ given here (stock timing).
   so six strobes per sample (MEDIUM, same evidence). Which of the two values is
   I and which is Q is **not known**. Samples per DRDY: 8/4/2/1 for rate index
   0–3 (MEDIUM, as below).
-- **DRDY (F4-Q5):** the active edge is rising (HIGH: the factory image
-  configures EXTI10 for the rising edge only). What the FPGA does when a read
+- **DRDY (F4-Q5):** the active edge is most likely rising (MEDIUM: inferred
+  from the interrupt edge the factory image chose, EXTI10 rising only; not
+  measured). What the FPGA does when a read
   comes late (a missed or lost block, an overrun indication in the 0x02 status
   flags) is **not known**; the meaning of the 0x02 flag bits is not known.
 
 ## Timing / data
 - **NCO:** 32-bit phase words, f × 2³² / f_clk (formula VERIFIED), with
-  f_clk = 122.88 MHz (MEDIUM: half of a 245.76 MHz clock-generator output, not
-  measured). The words are given for the first Nyquist zone (0 to f_clk/2).
+  f_clk = 122.88 MHz as the phase-word scale (MEDIUM: inferred from the scale
+  the factory image uses; not measured). The words are given for the first Nyquist zone (0 to f_clk/2).
   Whether the 0x01 frame carries a spectral-inversion flag, and where, is **not
   known** (F4-Q2).
 - **Which NCO word is DDC0 (F4-Q3):** offsets 1 and 5 each set a receive-path
