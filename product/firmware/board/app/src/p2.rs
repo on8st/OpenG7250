@@ -227,6 +227,15 @@ impl P2 {
                 self.send_regs(chip, dest, &[(regmap::addr::TX_STATE, v)]);
             }
         }
+        // ATU_STATE is an event register (Table B8-2): pushed on every change.
+        self.regs.atu_tune = self.key.atu_tune_in_force();
+        let a = self.key.atu_state(&self.tx);
+        if a != self.regs.atu_state {
+            self.regs.atu_state = a;
+            if let Some(dest) = self.session.register_destination() {
+                self.send_regs(chip, dest, &[(regmap::addr::ATU_STATE, a)]);
+            }
+        }
     }
 
     /// Apply session events: drops (A3.2), session values (A3.6), pushes and counters (B2.7).
@@ -440,7 +449,8 @@ impl P2 {
         let mut rf = crate::BoardRf;
         let arm = self.arm_ctx();
         let class = self.regs.tx_mode_class;
-        let mut c = WriteCtx { from_owner: owner, busy: self.update_in_progress, tx: &mut self.tx, rf: &mut rf, arm, key: KeyContext::default() };
+        let kctx = self.key_ctx(&[]);
+        let mut c = WriteCtx { from_owner: owner, busy: self.update_in_progress, tx: &mut self.tx, rf: &mut rf, arm, key: kctx, path: &mut self.key, now };
         let ans = self.regs.handle(p, &mut c);
         // A mode class change while keyed unkeys first (A3.9c); a disarm under a key is reason 5.
         if self.regs.tx_mode_class != class {

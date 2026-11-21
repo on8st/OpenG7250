@@ -18,7 +18,7 @@
 //! RF-path checks of A3.9, the ATU tune cycle (A3.9b). KEY keys nothing in v1.0 (0030; [`crate::cw`]).
 
 use crate::cw::{Clamped, CwKeyer, DucSettings};
-use crate::tx::{ArmReject, KeyContext, KeyPermit, Refusal, RfActuator, Source, TxCore};
+use crate::tx::{ArmReject, ArmState, KeyContext, KeyPermit, Refusal, RfActuator, Source, TxCore, WriteReject};
 
 /// `TX_STATE` [23:16], last unkey reason (Table B8-2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +39,31 @@ pub enum UnkeyReason {
 pub const LIMIT_TX_TIME_ID: u8 = 7;
 /// Limit id `LIMIT_TX_FREQ` (Table B8-3).
 pub const LIMIT_TX_FREQ_ID: u8 = 1;
+/// Limit id `LIMIT_ATU_TIME` (Table B8-3).
+pub const LIMIT_ATU_TIME_ID: u8 = 8;
+/// A repeated `ATU_TUNE` = 1 within this time after a cycle ended is a no-op (A3.9b item 1).
+pub const ATU_REPEAT_MS: u64 = 2000;
+
+/// `ATU_STATE` (Table B8-2).
+pub const ATU_BYPASS: u8 = 0;
+pub const ATU_TUNING: u8 = 2;
+pub const ATU_TUNED: u8 = 3;
+pub const ATU_FAILED: u8 = 4;
+pub const ATU_UNKNOWN: u8 = 5;
+
+/// What an accepted `ATU_TUNE` write did (A3.9b item 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AtuWrite {
+    /// 1: a cycle started (TX source 4, `ATU_STATE` 2).
+    Started,
+    /// 1 while a cycle runs or within 2 s after the last: answered with the value in force and
+    /// `ATU_STATE`, no cycle starts.
+    NoOp,
+    /// 0 while a cycle runs: aborted, unkeyed, `ATU_STATE` 4.
+    Aborted,
+    /// 0 while none runs: no effect.
+    Nothing,
+}
 
 /// The transmit ranges of region 0 (Table A3-0), Hz, inclusive; the record's `tx_band` entries
 /// (B4.8) are the same ranges. Until the filter plan is known each entry is its own RF-path
@@ -80,6 +105,9 @@ pub const CWX_CAP_MS: u64 = 1000;
 pub trait Keyer: RfActuator {
     fn key(&mut self, permit: &KeyPermit<'_>) -> bool;
     fn cw_element(&mut self, on: bool);
+    /// One step of a running ATU tune cycle (A3.9b; HIS-08): `None` still tuning, `Some(true)`
+    /// tuned, `Some(false)` failed. Called only while a cycle holds the key.
+    fn atu_step(&mut self, now_ms: u64) -> Option<bool>;
 }
 
 /// The TX request bits of one High Priority packet from the owner ([P2] bytes 4, 5; B10.1).
@@ -133,6 +161,14 @@ pub struct KeyPath {
     pending: Option<DucSettings>,
     cw: CwKeyer,
     element_on: bool,
+    /// `ATU_STATE` once the ATU parameters are set (0 bypass, 2 tuning, 3 tuned, 4 failed).
+    atu_state: u8,
+    /// The running cycle ended tuned (set just before its unkey).
+    atu_tuned: bool,
+    atu_since: u64,
+    atu_last_end: Option<u64>,
+    /// The time of the last call, for the end of an ATU cycle.
+    now_ms: u64,
     /// Hang delays above 2000 ms and keyer speeds above 60 wpm clamped (Table B10-1, B10.5a
     /// item 1; `GET_STATS`).
     pub cw_hang_clamped: u64,
@@ -168,6 +204,11 @@ impl KeyPath {
             element_on: false,
             cw_hang_clamped: 0,
             cw_speed_clamped: 0,
+            atu_state: ATU_BYPASS,
+            atu_tuned: false,
+            atu_since: 0,
+            atu_last_end: None,
+            now_ms: 0,
         }
     }
 
@@ -246,7 +287,18 @@ impl KeyPath {
         }
     }
 
+    /// Every end of an ATU cycle: tuned or failed, and the 2 s no-op window starts (A3.9b
+    /// items 1, 6, 7). Nothing is stored here; where the ATU stores states is HIS-08.
+    fn atu_ended(&mut self) {
+        if self.source == Some(Source::Atu) {
+            self.atu_state = if self.atu_tuned { ATU_TUNED } else { ATU_FAILED };
+            self.atu_tuned = false;
+            self.atu_last_end = Some(self.now_ms);
+        }
+    }
+
     fn unkey(&mut self, why: UnkeyReason, tx: &mut TxCore, rf: &mut impl RfActuator) {
+        self.atu_ended();
         if self.source.take().is_some() {
             rf.unkey();
             tx.unkeyed();
@@ -327,6 +379,7 @@ impl KeyPath {
     /// A High Priority packet from the owner (B10.1, B10.5b). Returns true if `TX_STATE` changed.
     pub fn on_high_priority(&mut self, r: Requests, now: u64, tx: &mut TxCore, ctx: &KeyContext, rf: &mut impl Keyer) -> bool {
         let before = self.tx_state();
+        self.now_ms = now;
         self.last_hp_ms = now;
         self.dot_since = if r.dot { self.dot_since.or(Some(now)) } else { None };
         self.dash_since = if r.dash { self.dash_since.or(Some(now)) } else { None };
@@ -380,8 +433,10 @@ impl KeyPath {
     /// Table A3-2). Call at least every millisecond for the element timing; the unkey bounds
     /// allow 10 ms. Returns true if `TX_STATE` changed.
     pub fn tick(&mut self, now: u64, keyed_timeout_ms: u32, max_tx_ms: u32, tx: &mut TxCore, rf: &mut impl Keyer) -> bool {
+        self.now_ms = now;
         let Some(s) = self.source else { return false };
         self.run_keyer(now, rf);
+        let atu_over = tx.atu_params().is_some_and(|p| now.saturating_sub(self.atu_since) > p.time_limit_ms as u64);
         let held_over = |since: Option<u64>| since.is_some_and(|t| now.saturating_sub(t) > CWX_CAP_MS);
         if now.saturating_sub(self.last_hp_ms) > keyed_timeout_ms as u64 {
             // Also during the hang delay; it ends the hang delay (B10.5).
@@ -389,6 +444,13 @@ impl KeyPath {
         } else if self.cap_applies() && (held_over(self.dot_since) || held_over(self.dash_since)) {
             self.unkey(UnkeyReason::CwxCap, tx, rf);
             self.cwx_blocked = true;
+        } else if s == Source::Atu && atu_over {
+            // The ATU tune time (`LIMIT_ATU_TIME`), before the tuner's next step.
+            self.unkey_limit(LIMIT_ATU_TIME_ID, tx, rf);
+        } else if let (Source::Atu, Some(tuned)) = (s, if s == Source::Atu { rf.atu_step(now) } else { None }) {
+            // The cycle ends unkeyed in every case (A3.9b item 6); unkey reason 1.
+            self.atu_tuned = tuned;
+            self.unkey(UnkeyReason::Released, tx, rf);
         } else if now.saturating_sub(self.keyed_at) > max_tx_ms as u64 {
             self.unkey_limit(LIMIT_TX_TIME_ID, tx, rf);
         } else if s == Source::Cwx
@@ -423,6 +485,52 @@ impl KeyPath {
         false
     }
 
+    /// `ATU_STATE` (Table B8-2): 5 (unknown) until the ATU parameters are set (P-ATU-1; 0032).
+    pub fn atu_state(&self, tx: &TxCore) -> u32 {
+        if tx.atu_params().is_none() { ATU_UNKNOWN as u32 } else { self.atu_state as u32 }
+    }
+
+    /// `ATU_TUNE` in force: 1 while a cycle runs.
+    pub fn atu_tune_in_force(&self) -> u32 {
+        (self.source == Some(Source::Atu)) as u32
+    }
+
+    /// An owner's `ATU_TUNE` write (Table B8-2; A3.9b item 1). `BUSY`, `NOT_OWNER` come before
+    /// this; then `BAD_VALUE`, `NOT_CALIBRATED`, `NOT_ARMED`, the no-op, `KEYED`, `NOT_KEYABLE`.
+    /// None is latched. 0 is always accepted: it aborts a running cycle, else changes nothing.
+    pub fn atu_tune(&mut self, v: u32, now: u64, tx: &mut TxCore, ctx: &KeyContext, rf: &mut impl Keyer) -> Result<AtuWrite, WriteReject> {
+        self.now_ms = now;
+        match v {
+            0 if self.source == Some(Source::Atu) => {
+                self.unkey(UnkeyReason::Released, tx, rf);
+                Ok(AtuWrite::Aborted)
+            }
+            0 => Ok(AtuWrite::Nothing),
+            1 => {
+                if tx.atu_params().is_none() {
+                    return Err(WriteReject::NotCalibrated);
+                }
+                if tx.state() != ArmState::Armed {
+                    return Err(WriteReject::NotArmed);
+                }
+                if self.source == Some(Source::Atu) || self.atu_last_end.is_some_and(|e| now.saturating_sub(e) < ATU_REPEAT_MS) {
+                    return Ok(AtuWrite::NoOp);
+                }
+                if self.source.is_some() || ctx.keyed_by_other {
+                    return Err(WriteReject::Keyed);
+                }
+                if !self.try_key(Source::Atu, now, tx, ctx, rf) {
+                    return Err(WriteReject::NotKeyable);
+                }
+                self.atu_state = ATU_TUNING;
+                self.atu_tuned = false;
+                self.atu_since = now;
+                Ok(AtuWrite::Started)
+            }
+            _ => Err(WriteReject::BadValue),
+        }
+    }
+
     /// General byte 58 bit [0] (B10.10): clearing it while keyed unkeys; setting it never keys.
     pub fn pa_enable(&mut self, enabled: bool, tx: &mut TxCore, rf: &mut impl RfActuator) -> bool {
         let before = self.tx_state();
@@ -442,6 +550,7 @@ impl KeyPath {
 
     /// The arm was dropped (Table A3-1); [`TxCore::drop`] has already unkeyed.
     pub fn arm_dropped(&mut self) -> bool {
+        self.atu_ended();
         if self.source.take().is_some() {
             self.last_unkey = UnkeyReason::ArmDropped as u8;
             self.limit_id = 0;
@@ -455,8 +564,11 @@ impl KeyPath {
     /// settings back to their power-on values (A3.6a, Table A3-4).
     pub fn session_end(&mut self) {
         let keep = (self.last_unkey, self.limit_id, self.cw_hang_clamped, self.cw_speed_clamped);
+        let atu = (self.atu_state, self.atu_last_end, self.now_ms);
         *self = KeyPath::new();
         (self.last_unkey, self.limit_id, self.cw_hang_clamped, self.cw_speed_clamped) = keep;
+        // ATU_STATE is the radio's: it stays until the next cycle or an in/out change (A3.9b).
+        (self.atu_state, self.atu_last_end, self.now_ms) = atu;
     }
 }
 
@@ -468,6 +580,8 @@ mod tests {
     #[derive(Default)]
     struct Rf {
         log: std::vec::Vec<&'static str>,
+        /// The tuner's next answer (A3.9b).
+        atu: Option<bool>,
     }
     impl RfActuator for Rf {
         fn unkey(&mut self) {
@@ -481,6 +595,9 @@ mod tests {
         }
         fn cw_element(&mut self, on: bool) {
             self.log.push(if on { "on" } else { "off" });
+        }
+        fn atu_step(&mut self, _now: u64) -> Option<bool> {
+            self.atu.take()
         }
     }
 
@@ -783,6 +900,85 @@ mod tests {
     /// The phase word for a frequency (B3.8), rounded up so that it converts back exactly.
     fn word(hz: u64) -> u32 {
         ((hz << 32).div_ceil(DSP_CLOCK_HZ)) as u32
+    }
+
+    fn atu_path() -> (TxCore, KeyPath, Rf) {
+        let m = Measured { atu: Some(crate::tx::AtuParams { time_limit_ms: 1000 }), ..measured() };
+        let mut tx = TxCore::new(1, &m);
+        let v = tx.token() ^ ARM_MAGIC;
+        let a = ArmContext { run: true, watchdog_ok: true, level1_active: true, mode_class_declared: true, ..Default::default() };
+        assert_eq!(tx.write_tx_arm(v, &a, &mut Rf::default()), ArmOutcome::Armed);
+        let mut k = KeyPath::new();
+        let mut rf = Rf::default();
+        k.pa_enable(true, &mut tx, &mut rf);
+        (tx, k, rf)
+    }
+
+    #[test]
+    fn atu_tune_answer_order_and_the_closed_lock() {
+        // This build: 1 is NOT_CALIBRATED, ATU_STATE 5; 0 is accepted and does nothing.
+        let mut tx = TxCore::new(1, &MEASURED);
+        let mut k = KeyPath::new();
+        let mut rf = Rf::default();
+        assert_eq!(k.atu_tune(1, 0, &mut tx, &ctx(), &mut rf), Err(WriteReject::NotCalibrated));
+        assert_eq!(k.atu_tune(0, 0, &mut tx, &ctx(), &mut rf), Ok(AtuWrite::Nothing));
+        assert_eq!(k.atu_tune(2, 0, &mut tx, &ctx(), &mut rf), Err(WriteReject::BadValue));
+        assert_eq!(k.atu_state(&tx), 5);
+        assert!(rf.log.is_empty());
+        // With the ATU parameters but not armed: NOT_ARMED.
+        let m = Measured { atu: Some(crate::tx::AtuParams { time_limit_ms: 1000 }), ..measured() };
+        let mut tx = TxCore::new(1, &m);
+        assert_eq!(k.atu_tune(1, 0, &mut tx, &ctx(), &mut rf), Err(WriteReject::NotArmed));
+        assert_eq!(k.atu_state(&tx), 0);
+        // Keyed by PTT: KEYED; another key condition failing: NOT_KEYABLE.
+        let (mut tx, mut k, mut rf) = atu_path();
+        k.on_high_priority(ptt(true), 0, &mut tx, &ctx(), &mut rf);
+        assert_eq!(k.atu_tune(1, 10, &mut tx, &ctx(), &mut rf), Err(WriteReject::Keyed));
+        k.on_high_priority(ptt(false), 20, &mut tx, &ctx(), &mut rf);
+        let out = KeyContext { freq_in_range: false, ..ctx() };
+        assert_eq!(k.atu_tune(1, 30, &mut tx, &out, &mut rf), Err(WriteReject::NotKeyable));
+    }
+
+    #[test]
+    fn atu_cycle_owns_the_key_ends_unkeyed_and_repeats_are_no_ops() {
+        let (mut tx, mut k, mut rf) = atu_path();
+        assert_eq!(k.atu_tune(1, 0, &mut tx, &ctx(), &mut rf), Ok(AtuWrite::Started));
+        assert_eq!((k.atu_state(&tx), k.tx_state() & 0xF01, k.atu_tune_in_force()), (2, 0x401, 1));
+        // A PTT edge neither keys nor ends the tune; a repeated start is a no-op.
+        k.on_high_priority(ptt(true), 10, &mut tx, &ctx(), &mut rf);
+        assert_eq!(k.keyed(), Some(Source::Atu));
+        assert_eq!(k.atu_tune(1, 20, &mut tx, &ctx(), &mut rf), Ok(AtuWrite::NoOp));
+        // The tuner reports tuned: unkeyed, ATU_STATE 3; the held PTT does not key.
+        rf.atu = Some(true);
+        assert!(k.tick(100, 500, 300_000, &mut tx, &mut rf));
+        assert_eq!((k.keyed(), k.atu_state(&tx)), (None, 3));
+        k.on_high_priority(ptt(true), 110, &mut tx, &ctx(), &mut rf);
+        assert!(k.keyed().is_none());
+        k.on_high_priority(ptt(false), 120, &mut tx, &ctx(), &mut rf);
+        // Within 2 s of the end: no-op; after it a new cycle; 0 aborts it: ATU_STATE 4.
+        assert_eq!(k.atu_tune(1, 2099, &mut tx, &ctx(), &mut rf), Ok(AtuWrite::NoOp));
+        assert_eq!(k.atu_tune(1, 2100, &mut tx, &ctx(), &mut rf), Ok(AtuWrite::Started));
+        assert_eq!(k.atu_tune(0, 2200, &mut tx, &ctx(), &mut rf), Ok(AtuWrite::Aborted));
+        assert_eq!((k.keyed(), k.atu_state(&tx)), (None, 4));
+        // The tune time: unkey, reason 4 with LIMIT_ATU_TIME, failed.
+        assert_eq!(k.atu_tune(1, 4300, &mut tx, &ctx(), &mut rf), Ok(AtuWrite::Started));
+        let mut t = 4300;
+        while t < 5300 {
+            t += 50;
+            k.on_high_priority(ptt(false), t, &mut tx, &ctx(), &mut rf);
+            k.tick(t, 500, 300_000, &mut tx, &mut rf);
+        }
+        assert!(k.keyed().is_some());
+        k.tick(5301, 500, 300_000, &mut tx, &mut rf);
+        assert_eq!(k.tx_state() >> 16, (LIMIT_ATU_TIME_ID as u32) << 8 | UnkeyReason::Limit as u32);
+        assert_eq!(k.atu_state(&tx), 4);
+        // The keyed timeout ends a tune as failed; ATU_STATE stays over a session end.
+        assert_eq!(k.atu_tune(1, 7400, &mut tx, &ctx(), &mut rf), Ok(AtuWrite::Started));
+        assert!(k.tick(7901, 500, 300_000, &mut tx, &mut rf));
+        assert_eq!(k.tx_state() >> 16 & 0xFF, UnkeyReason::KeyedTimeout as u32);
+        k.session_end();
+        assert_eq!(k.atu_state(&tx), 4);
+        assert_eq!(rf.log.iter().filter(|e| **e == "key").count(), rf.log.iter().filter(|e| **e == "unkey").count());
     }
 
     #[test]

@@ -45,6 +45,11 @@ impl Keyer for BoardRf {
     /// The CW waveform goes through the DUC on the FPGA bus, which stays closed (fpga_gate):
     /// nothing to write. Never called, since `key` never reports keyed.
     fn cw_element(&mut self, _on: bool) {}
+    /// The ATU latches stay unwritten until P-ATU-1 (HIS 85, HIS-08): a cycle could not tune,
+    /// so it fails at once. Never called: no cycle can start in this build.
+    fn atu_step(&mut self, _now_ms: u64) -> Option<bool> {
+        Some(false)
+    }
 }
 
 #[cfg(not(feature = "slot-b"))]

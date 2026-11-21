@@ -4,7 +4,8 @@
 //! of B8.4 and B8.5, `CAP_REQUEST` (B4.4) and packet encoding (B8.1).
 
 use crate::record;
-use g7250_safety::tx::{self, ArmContext, KeyContext, RfActuator, TxCore, WriteReject};
+use g7250_safety::keypath::{AtuWrite, KeyPath, Keyer};
+use g7250_safety::tx::{self, ArmContext, KeyContext, TxCore, WriteReject};
 
 pub const PORT: u16 = 7250;
 /// Largest packet: 4 + 6 × 240 = 1444 bytes (B8.1).
@@ -87,10 +88,12 @@ pub struct Answer {
     pub not_owner: bool,
     /// The arm state changed: push `TX_ARM_TOKEN`/`TX_ARM_STATE` to the owner.
     pub arm_changed: bool,
+    /// An `ATU_TUNE` no-op: its answer also carries `ATU_STATE` (A3.9b item 1).
+    pub atu_noop: bool,
 }
 
 /// Who wrote, and what the session looks like at that moment.
-pub struct WriteCtx<'a, R: RfActuator> {
+pub struct WriteCtx<'a, R: Keyer> {
     pub from_owner: bool,
     /// A firmware update is in progress (`BUSY` first, B8.4).
     pub busy: bool,
@@ -98,6 +101,9 @@ pub struct WriteCtx<'a, R: RfActuator> {
     pub rf: &'a mut R,
     pub arm: ArmContext,
     pub key: KeyContext,
+    /// The key path, for `ATU_TUNE` (A3.9b), and the time of the packet.
+    pub path: &'a mut KeyPath,
+    pub now: u64,
 }
 
 /// Register state of the radio.
@@ -118,6 +124,9 @@ pub struct RegMap {
     pub limit_tx_time: u32,
     pub limit_fwd_power: u32,
     pub tx_state: u32,
+    /// `ATU_STATE` and `ATU_TUNE` in force, from the key path (A3.9b; 5 until P-ATU-1).
+    pub atu_state: u32,
+    pub atu_tune: u32,
 }
 
 impl RegMap {
@@ -137,6 +146,8 @@ impl RegMap {
             limit_tx_time: 0,
             limit_fwd_power: 0,
             tx_state: 0,
+            atu_state: ATU_STATE_UNKNOWN,
+            atu_tune: 0,
         }
     }
 
@@ -194,8 +205,8 @@ impl RegMap {
             LIMIT_SWR | LIMIT_PA_TEMP => 0,
             TLM_PA_TEMP0..=TLM_PA_TEMP3 | TLM_PA_CURRENT | TLM_SUPPLY_CURRENT | TLM_SWR => 0,
             SENSOR_VALID => 0, // no sensor valid until calibrated (P-SEN-1)
-            ATU_TUNE => 0,
-            ATU_STATE => ATU_STATE_UNKNOWN,
+            ATU_TUNE => self.atu_tune,
+            ATU_STATE => self.atu_state,
             ANT_STATE => 0, // unknown until P-ANT-1
             _ => return None,
         })
@@ -207,8 +218,8 @@ impl RegMap {
     }
 
     /// Handle one host packet (B8.4: pairs in order; answers carry the value in force).
-    pub fn handle<R: RfActuator>(&mut self, packet: &[u8], c: &mut WriteCtx<'_, R>) -> Answer {
-        let mut ans = Answer { pairs: heapless::Vec::new(), record_sent: false, not_owner: false, arm_changed: false };
+    pub fn handle<R: Keyer>(&mut self, packet: &[u8], c: &mut WriteCtx<'_, R>) -> Answer {
+        let mut ans = Answer { pairs: heapless::Vec::new(), record_sent: false, not_owner: false, arm_changed: false, atu_noop: false };
         for (a, v) in pairs(packet) {
             let push = |ans: &mut Answer, p: Pair| {
                 let _ = ans.pairs.push(p);
@@ -249,6 +260,10 @@ impl RegMap {
                     } else {
                         push(&mut ans, (a, value));
                     }
+                    if a == ATU_TUNE && ans.atu_noop {
+                        ans.atu_noop = false;
+                        push(&mut ans, (ATU_STATE, self.atu_state));
+                    }
                 }
                 Some(r) => {
                     self.reject(a, r);
@@ -261,7 +276,7 @@ impl RegMap {
     }
 
     /// An owner's write to a known address. `None` = accepted.
-    fn write<R: RfActuator>(&mut self, a: u16, v: u32, c: &mut WriteCtx<'_, R>, ans: &mut Answer) -> Option<WriteReject> {
+    fn write<R: Keyer>(&mut self, a: u16, v: u32, c: &mut WriteCtx<'_, R>, ans: &mut Answer) -> Option<WriteReject> {
         match a {
             TX_ARM => {
                 let before = c.tx.arm_state_reg();
@@ -315,10 +330,19 @@ impl RegMap {
             }
             // Checked against S2 / T3, which need the calibration set (P-PWR-2; A1.12; 0039).
             LIMIT_SWR | LIMIT_PA_TEMP => Some(WriteReject::NotCalibrated),
-            ATU_TUNE => match c.tx.write_atu_tune(v, &c.key) {
-                Ok(_) => None,
-                Err(e) => Some(e),
-            },
+            ATU_TUNE => {
+                let r = c.path.atu_tune(v, c.now, c.tx, &c.key, c.rf);
+                self.atu_state = c.path.atu_state(c.tx);
+                self.atu_tune = c.path.atu_tune_in_force();
+                match r {
+                    Ok(AtuWrite::NoOp) => {
+                        ans.atu_noop = true;
+                        None
+                    }
+                    Ok(_) => None,
+                    Err(e) => Some(e),
+                }
+            }
             _ => Some(WriteReject::ReadOnly),
         }
     }
@@ -335,7 +359,7 @@ impl RegMap {
             (LINK_STATUS, self.link_status),
             (SAFETY_STATE, 0),
             (SENSOR_VALID, 0),
-            (ATU_STATE, ATU_STATE_UNKNOWN),
+            (ATU_STATE, self.atu_state),
             (ANT_STATE, 0),
         ]
     }
@@ -347,8 +371,17 @@ mod tests {
     use g7250_safety::tx::MEASURED;
 
     struct Rf;
-    impl RfActuator for Rf {
+    impl g7250_safety::tx::RfActuator for Rf {
         fn unkey(&mut self) {}
+    }
+    impl Keyer for Rf {
+        fn key(&mut self, _p: &g7250_safety::tx::KeyPermit<'_>) -> bool {
+            false
+        }
+        fn cw_element(&mut self, _on: bool) {}
+        fn atu_step(&mut self, _now: u64) -> Option<bool> {
+            None
+        }
     }
 
     fn map() -> RegMap {
@@ -366,7 +399,8 @@ mod tests {
 
     fn run(m: &mut RegMap, tx: &mut TxCore, owner: bool, p: &[Pair]) -> Answer {
         let mut rf = Rf;
-        let mut c = WriteCtx { from_owner: owner, busy: false, tx, rf: &mut rf, arm: ArmContext { run: true, level1_active: true, ..Default::default() }, key: KeyContext::default() };
+        let mut path = KeyPath::new();
+        let mut c = WriteCtx { from_owner: owner, busy: false, tx, rf: &mut rf, arm: ArmContext { run: true, level1_active: true, ..Default::default() }, key: KeyContext::default(), path: &mut path, now: 0 };
         m.handle(&packet(p), &mut c)
     }
 
@@ -410,7 +444,8 @@ mod tests {
         let mut p = packet(&[(0xFFFF, 1), (0, 0), (KEYED_TIMEOUT, 300)]);
         p.extend_from_slice(&[0x02, 0x05, 0]);
         let mut rf = Rf;
-        let mut c = WriteCtx { from_owner: true, busy: false, tx: &mut tx, rf: &mut rf, arm: ArmContext::default(), key: KeyContext::default() };
+        let mut path = KeyPath::new();
+        let mut c = WriteCtx { from_owner: true, busy: false, tx: &mut tx, rf: &mut rf, arm: ArmContext::default(), key: KeyContext::default(), path: &mut path, now: 0 };
         let a = m.handle(&p, &mut c);
         assert_eq!(a.pairs.as_slice(), &[(KEYED_TIMEOUT, 300)]);
     }

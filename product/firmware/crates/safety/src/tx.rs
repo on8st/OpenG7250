@@ -109,7 +109,7 @@ pub struct Measured {
     /// DUC packet period, at most 500 ms; the check uses the lower of it and `KEYED_TIMEOUT`.
     pub underrun_ms: Option<u32>,
     /// ATU latch meanings, safe values, tune power and timing (0032 item 2; HIS-08).
-    pub atu: Option<()>,
+    pub atu: Option<AtuParams>,
 }
 
 impl Measured {
@@ -140,6 +140,15 @@ impl Measured {
     }
 }
 
+/// The ATU parameters of the pending-hardware list (P-ATU-1; 0032 item 2; HIS-08): what the
+/// cycle of A3.9b needs from them so far. Latch meanings, safe values, tune power and where
+/// states are stored come with the hardware facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AtuParams {
+    /// `LIMIT_ATU_TIME`: the longest tune cycle, ms (Table A3-2).
+    pub time_limit_ms: u32,
+}
+
 /// The measured values of this build. Empty until the spec holds them; then filled from the
 /// spec, never from the stock firmware or the EEPROM (clean room; [HIS] HIS 15 rule 3).
 pub const MEASURED: Measured = Measured::NONE;
@@ -148,7 +157,7 @@ pub const MEASURED: Measured = Measured::NONE;
 /// [`Calibration::from_measured`].
 #[derive(Debug)]
 pub struct Calibration {
-    atu: bool,
+    atu: Option<AtuParams>,
     underrun_ms: u32,
     _sealed: (),
 }
@@ -156,7 +165,7 @@ pub struct Calibration {
 impl Calibration {
     pub fn from_measured(m: &Measured) -> Option<Calibration> {
         match (m.complete_for_tx(), m.underrun_ms) {
-            (true, Some(u)) => Some(Calibration { atu: m.atu.is_some(), underrun_ms: u, _sealed: () }),
+            (true, Some(u)) => Some(Calibration { atu: m.atu, underrun_ms: u, _sealed: () }),
             _ => None,
         }
     }
@@ -309,6 +318,10 @@ impl TxCore {
     pub fn calibrated(&self) -> bool {
         self.cal.is_some()
     }
+    /// The ATU parameters of the calibration set (P-ATU-1); none in this build.
+    pub fn atu_params(&self) -> Option<AtuParams> {
+        self.cal.as_ref().and_then(|c| c.atu)
+    }
     /// The underrun time of the calibration set (B10.5; P-TIM-2); none in this build.
     pub fn underrun_ms(&self) -> Option<u32> {
         self.cal.as_ref().map(|c| c.underrun_ms)
@@ -405,7 +418,7 @@ impl TxCore {
         if !ctx.mode_class_declared {
             return Err(Refusal::Arm(ArmReject::NoModeClass));
         }
-        if source == Source::Atu && !cal.atu {
+        if source == Source::Atu && cal.atu.is_none() {
             return Err(Refusal::NotCalibrated);
         }
         self.keyed = Some(source);
@@ -415,28 +428,6 @@ impl TxCore {
     /// End of the current transmission (UNKEY-level actions keep the arm, Table A3-2).
     pub fn unkeyed(&mut self) {
         self.keyed = None;
-    }
-
-    /// A write to `ATU_TUNE` (Table B8-2). 1 before the ATU parameters are set is
-    /// `NOT_CALIBRATED` (0032 item 3); this check comes first because nothing else can make the
-    /// write succeed while it fails (spec question SQ-F3-2 on the order).
-    pub fn write_atu_tune(&mut self, value: u32, ctx: &KeyContext) -> Result<Option<KeyPermit<'_>>, WriteReject> {
-        match value {
-            0 => Ok(None),
-            1 => {
-                if !self.cal.as_ref().is_some_and(|c| c.atu) {
-                    return Err(WriteReject::NotCalibrated);
-                }
-                if self.state != ArmState::Armed {
-                    return Err(WriteReject::NotArmed);
-                }
-                if self.keyed.is_some() || ctx.keyed_by_other {
-                    return Err(WriteReject::Keyed);
-                }
-                self.tx_request(Source::Atu, ctx).map(Some).map_err(|_| WriteReject::NotKeyable)
-            }
-            _ => Err(WriteReject::BadValue),
-        }
     }
 
     /// A drop event of Table A3-1. While armed: unkey first, then disarm, then a new token and
@@ -511,7 +502,7 @@ mod tests {
             rf_off: Some(()),
             tr_timing: Some(()),
             underrun_ms: Some(50),
-            atu: if atu { Some(()) } else { None },
+            atu: if atu { Some(AtuParams { time_limit_ms: 10_000 }) } else { None },
         }
     }
 
@@ -547,7 +538,7 @@ mod tests {
         for s in [Source::Ptt, Source::Cwx, Source::Key, Source::Atu] {
             assert_eq!(c.tx_request(s, &key_ctx()).unwrap_err(), Refusal::NotCalibrated);
         }
-        assert_eq!(c.write_atu_tune(1, &key_ctx()).unwrap_err(), WriteReject::NotCalibrated);
+        assert!(c.atu_params().is_none());
         assert!(c.keyed().is_none());
         assert!(rf.log.is_empty());
     }
@@ -594,7 +585,7 @@ mod tests {
         assert_eq!(p.source, Source::Ptt);
         assert_eq!(c.keyed(), Some(Source::Ptt));
         // ATU parameters missing: ATU_TUNE still NOT_CALIBRATED even when armed.
-        assert_eq!(c.write_atu_tune(1, &key_ctx()).unwrap_err(), WriteReject::NotCalibrated);
+        assert!(c.atu_params().is_none());
         assert!(c.drop(DropReason::Takeover, &mut rf));
         assert_eq!(rf.log, ["unkey"]);
         assert_eq!(c.state(), ArmState::Disarmed);
