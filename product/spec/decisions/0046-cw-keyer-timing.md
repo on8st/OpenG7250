@@ -29,6 +29,19 @@ dit = 1200 / wpm ms and its own reading of the weight.
    ±2 ms or ±2 %; on the radio between the 50 % points of the RF envelope, on the reference model
    and the emulator between the key-on and key-off events.
 
+## Amendment after the testbench findings SF-19 to SF-23 (2026-11-21)
+
+- SF-19: the memory belongs to mode B only. Mode A decides from the paddles held at the
+  decision point (end of the space after an element); a squeeze released before the end of a
+  dash ends after the dash. "Memory in both modes" is withdrawn.
+- SF-20: the memory window of mode B is the mark only, not the space after it.
+- SF-21: strict spacing: at 3 *T* the next element starts only if a paddle is held then.
+- SF-22: latency from the High Priority packet with the paddle edge to key-on while the keyer is
+  idle: at most 5 ms (after the RF-path wait of A3.9a item 3 if one is needed).
+- SF-23: log text `CW speed <S> used as 60` and counter `cw_speed_clamped`; likewise
+  `CW hang delay <ms> clamped to 2000` and `cw_hang_clamped` for the hang delay.
+- T-B10-43, T-B10-45 and T-B10-46 rewritten accordingly.
+
 ## Consequences
 
 - Spec B10.5a "Keyer timing", Table B10-1 bytes 9–10; tests T-B10-43 to T-B10-46. The existing
