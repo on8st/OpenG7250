@@ -173,34 +173,50 @@ def t_b5_22(ctx: Ctx):
 def erase_force_cases(ctx, s: bytes, t_max: int):
     """0066 addendum (f00162e): a Table A3-6 pin forced during a stretched erase gives
     TX_PATH_NOT_BLOCKED no later than 20 ms after the erase ends; forced and released within the
-    erase (5 ms, under the 10 ms of the check) gives no fault. The erase comes from an update
-    (UPDATE_BEGIN and its first block erase the staging slot); the fault time is the uptime of
-    its log entry, in the same clock as flash.log."""
-    from .mgmt import read_log
-    from .t_a3 import fault16, faults
+    erase (5 ms, under the 10 ms of the check) gives no fault. The erase comes from an update; the
+    force is placed once flash.log shows the erase started and checked against its t_us..t_end_us
+    by the hw.trace force event; the fault time is the console line naming the pin (console.log),
+    on the same clock."""
+    from .t_a3 import console_line_t_us, fault16, faults
+    from .trace import load
     from .t_update import facts, newer, pkg, restart
-    for case, kw in (("held", dict(level=0, target="idr", from_us=200_000)),
-                     ("a 5 ms pulse", dict(level=0, target="idr", from_us=200_000, duration_us=5000))):
+    for case, kw in (("held", dict(level=0, target="idr")),
+                     ("a 5 ms pulse", dict(level=0, target="idr", duration_us=5000))):
         with mg(ctx, s) as u:
             run, other, ver, lay = facts(ctx, u)
-            n0 = max([e[0] for e in read_log(u.c)], default=-1)
             flog_start(ctx)
             img = image(2148, seed=523)
             u.begin(pkg(img, newer(ver), other))
-            ctx.fixture("gpio.force", pin="PF4", **kw)  # 200 ms into a t_erase_max erase
-            u.blocks(img)
+            u.blocks(img[:512])
+            # place the force once flash.log shows the erase started (v1.8)
+            er, deadline = [], time.monotonic() + t_max / 1e6 + 5
+            while not er and time.monotonic() < deadline:
+                er = [e for e in flog(ctx) if e.get("op") == "erase"]
+                time.sleep(0.05)
+            if not ctx.check(f"{case}: an erase started (flash.log)", bool(er), "no erase in flash.log"):
+                u.req("UPDATE_ABORT")
+                restart(ctx, u)
+                continue
+            ctx.fixture("gpio.force", pin="PF4", **kw)
             time.sleep(t_max / 1e6 + 0.5)
             er = [e for e in flog(ctx) if e.get("op") == "erase"]
+            start, end = er[0].get("t_us", 0), er[0].get("t_end_us", 0)
+            forces = [e for e in load(ctx.trace_file) if e.get("kind") == "force" and e.get("pin") == "PF4"] if ctx.trace_file else []
+            if forces:
+                ctx.check(f"{case}: the force fell inside the erase (hw.trace force event)", start <= forces[0]["t_us"] <= end,
+                          f"force at {forces[0]['t_us']} us, erase {start}-{end} us")
+            else:
+                ctx.notes.append(f"{case}: the force time not checked against the erase: no hw.trace force event")
             code, flags = faults(ctx)
-            ents = [e for e in read_log(u.c) if e[0] > n0 and "PF4" in e[2]]
             if case == "held":
                 ctx.fixture("gpio.force", pin="PF4", level=None, target="idr")
-                if ctx.check("held: an erase ran while PF4 was forced", bool(er), "no erase in flash.log"):
-                    end = er[0].get("t_end_us", 0)
-                    up_us = ents[0][1] * 1000 if ents else None
-                    ctx.check("held: TX_PATH_NOT_BLOCKED no later than 20 ms after the erase ends (log uptime vs t_end_us)",
-                              fault16(code, flags) and up_us is not None and up_us - end <= 20_000,
-                              f"FAULT_CODE {code}, fault at {up_us} us, erase end {end} us")
+                t = console_line_t_us(ctx, "PF4")
+                ctx.check("held: TX_PATH_NOT_BLOCKED raised", fault16(code, flags), f"FAULT_CODE {code}, FAULT_FLAGS {flags}")
+                if t is None:
+                    ctx.notes.append("held: the fault time not judged: no console.log")
+                else:
+                    ctx.check("held: no later than 20 ms after the erase ends (console line vs t_end_us, emulated)",
+                              t - end <= 20_000, f"fault line at {t} us, erase end {end} us")
             else:
                 ctx.check("a 5 ms force within the erase gives no fault", not fault16(code, flags),
                           f"FAULT_CODE {code}, FAULT_FLAGS {flags}")

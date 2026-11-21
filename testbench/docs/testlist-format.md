@@ -510,6 +510,12 @@ A test with target `emulator` is also run against the reference model. A test wi
    - `flash.ecc {address, type: "double"|"single"}`; each detection is a `flash.log` entry
      `{op: "ecc", type, address, boot}` (T-A1-87).
    - Every erase and program entry carries `fpga_bus: "idle"|"open"` at its start (T-B5-22).
+   - `console.log {action: "start"|"read"|"stop", from?}` → `{count, entries: [{t_us, line}]}`:
+     every debug-console line with its emulated `t_us` on the clock of `hw.trace`, `net.log` and
+     `flash.log` (from power-on). The bench times a fault from its console line; the image's log
+     uptime (A1.7) counts from the image's own start, about 0.2 s after power-on, and is not that
+     clock. `gpio.force` start and release are `hw.trace` events `{"kind": "force"|"release", pin,
+     target, value, t_us}`.
    - `dac.force {channel: 2|7|8, value: n|null}`: one write into the DAC output register (the
      image may overwrite it); `null` releases (the channel takes the word the image last wrote);
      the image's start-up safe state (PB14 low) and `power.cycle` clear it; traced
