@@ -30,7 +30,7 @@ def faults(ctx):
 
 def wait_radio(ctx, ms: float):
     if "time.wait" in ctx.endpoint.get("fixtures", []):
-        ctx.fixture("time.wait", us=int(ms * 1000))
+        ctx.fixture("time.wait", _timeout=ms / 1000 + 60, us=int(ms * 1000))  # radio time + 60 s
     else:
         time.sleep(ms / 1000)
 

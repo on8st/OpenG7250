@@ -414,11 +414,21 @@ def t_a1_81(ctx: Ctx):
 
 # ---------------- phase 2: the 10-minute rule and the trial rollback ----------------
 def advance(ctx, s: float):
-    """time.advance (the reference model's clock; the emulator's later): s seconds pass."""
-    # the bench sends nothing meanwhile; the answer comes when the advance is done (the emulator
-    # runs about 2.7 x real time, so allow the radio time itself plus a margin on the wall clock)
-    ctx.fixture("time.advance", _timeout=s + 60, us=int(s * 1e6))
+    """time.advance: s seconds of radio time pass; the bench sends nothing meanwhile and the
+    answer comes when they have passed. Wall time allowed: the radio time itself (no speed-up is
+    assumed: about 1x while the image is busy) plus 60 s, at least 120 s (a restart inside a short
+    step). Where hw.observe is offered, the emulated time before and after is read, and an answer
+    that came before s seconds of radio time passed is noted."""
+    obs = "hw.observe" in ctx.endpoint.get("fixtures", []) and "model" not in ctx.endpoint
+    t0 = (ctx.fixture("hw.observe") or {}).get("t_us") if obs else None
+    w0 = time.monotonic()
+    ctx.fixture("time.advance", _timeout=max(s + 60, 120), us=int(s * 1e6))
     time.sleep(0.05)  # a tick of the model at the new time
+    if t0 is not None:
+        t1 = (ctx.fixture("hw.observe") or {}).get("t_us")
+        if t1 is not None and t1 >= t0 and t1 - t0 < s * 1e6 - 1000:
+            ctx.notes.append(f"time.advance {s:g} s answered after {(t1 - t0) / 1e6:.3f} s of radio time "
+                             f"({time.monotonic() - w0:.1f} s wall)")
 
 
 def uptime_s(u: Updater) -> float | None:

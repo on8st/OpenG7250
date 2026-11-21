@@ -764,7 +764,7 @@ def t_b5_20(ctx):
     def wait(sec: float):
         """Radio time passes: time.wait where offered, else a host wait."""
         if inject:
-            ctx.fixture("time.wait", us=int(sec * 1e6))
+            ctx.fixture("time.wait", _timeout=sec + 60, us=int(sec * 1e6))  # radio time + 60 s
         else:
             time.sleep(W(sec))
 
