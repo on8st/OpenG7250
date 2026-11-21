@@ -45,7 +45,14 @@ pub struct General {
     pub format: u8,
     /// Byte 58 bit [0]: PA enable (B10.10).
     pub pa_enable: bool,
+    /// A G7250 local port in bytes 5-12, 15-22 or 29-30 that is neither zero nor its default:
+    /// not honoured, logged, `LINK_STATUS` bit 17 (B2.3, Table B7-1; 0020 §13).
+    pub foreign_port: bool,
 }
+
+/// The G7250 local port fields of the General packet and their defaults (Table B2-1, B7-1).
+pub const GENERAL_PORTS: [(usize, u16); 9] =
+    [(5, 1025), (7, 1026), (9, 1027), (11, 1025), (15, 1029), (17, 1035), (19, 1026), (21, 1027), (29, 7250)];
 
 impl General {
     pub fn parse(p: &[u8]) -> Self {
@@ -58,6 +65,10 @@ impl General {
             timer: p[38] & 0x01 != 0,
             format: p[39],
             pa_enable: p[58] & 0x01 != 0,
+            foreign_port: GENERAL_PORTS.iter().any(|&(at, def)| {
+                let v = u16::from_be_bytes([p[at], p[at + 1]]);
+                v != 0 && v != def
+            }),
         }
     }
 }
@@ -326,6 +337,29 @@ mod tests {
         p[38] = timer as u8;
         p[31..33].copy_from_slice(&reg_port.to_be_bytes());
         p
+    }
+
+    #[test]
+    fn a_non_default_radio_port_is_flagged_zero_and_the_default_are_not() {
+        // Zero everywhere, then every field at its default: honoured.
+        let mut p = general(false, 0);
+        assert!(!General::parse(&p).foreign_port);
+        for &(at, def) in GENERAL_PORTS.iter() {
+            p[at..at + 2].copy_from_slice(&def.to_be_bytes());
+        }
+        assert!(!General::parse(&p).foreign_port);
+        // Any one field moved: not honoured (B2.3; T-B7-03), the management port included.
+        for &(at, _) in GENERAL_PORTS.iter() {
+            for port in [1030u16, 7251] {
+                let mut q = general(false, 0);
+                q[at..at + 2].copy_from_slice(&port.to_be_bytes());
+                assert!(General::parse(&q).foreign_port, "byte {at} port {port}");
+            }
+        }
+        // Bytes 13-14 (DDC audio, ignored) and 31-32 (host destination port) are not radio ports.
+        let mut q = general(false, 50002);
+        q[13..15].copy_from_slice(&1234u16.to_be_bytes());
+        assert!(!General::parse(&q).foreign_port);
     }
 
     #[test]

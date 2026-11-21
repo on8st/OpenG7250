@@ -72,6 +72,9 @@ fn spaced(t: &mut [Option<(Addr, u64)>; 8], from: Addr, now: u64, min_ms: u64) -
 
 pub type Chip = Ch394<crate::net::CsDevice<'static>>;
 
+/// `LINK_STATUS` bit 17: a non-default P2 port was asked for and not honoured (Table B8-2).
+const LINK_PORT_NOT_HONOURED: u32 = 1 << 17;
+
 impl P2 {
     pub fn new(tx: TxCore, mut regs: RegMap) -> Self {
         // Before any session: DDC0 9 (run bit clear), DUC0 14 (TX not calibrated), Table B8-3.
@@ -108,11 +111,25 @@ impl P2 {
         Ok(())
     }
 
-    /// `LINK_STATUS` (Table B8-2): [15:0] speed, bit 16 full duplex, [31:24] refusal reason.
+    /// `LINK_STATUS` (Table B8-2): [15:0] speed, bit 16 full duplex, bit 17 kept (latched until
+    /// the next session), [31:24] refusal reason.
     pub fn set_link(&mut self, l: g7250_ch394::Link) {
         self.link_ok = l.up && l.mbit_100;
         let refusal = if l.up && !l.mbit_100 { 1u32 } else { 0 };
-        self.regs.link_status = l.speed() as u32 | ((l.full_duplex as u32) << 16) | (refusal << 24);
+        let kept = self.regs.link_status & LINK_PORT_NOT_HONOURED;
+        self.regs.link_status = l.speed() as u32 | ((l.full_duplex as u32) << 16) | kept | (refusal << 24);
+    }
+
+    /// A General packet of the session with a non-default G7250 port (B2.3, Table B7-1; 0020
+    /// §13): the default stays, the request is logged and `LINK_STATUS` bit 17 is set until the
+    /// next session. Returns true if the bit was newly set.
+    fn foreign_port(&mut self, g: Option<g7250_radio::session::General>) -> bool {
+        if !g.is_some_and(|g| g.foreign_port) || self.regs.link_status & LINK_PORT_NOT_HONOURED != 0 {
+            return false;
+        }
+        self.regs.link_status |= LINK_PORT_NOT_HONOURED;
+        println!("p2: General packet asks for a non-default port: not honoured, default ports kept (LINK_STATUS bit 17)");
+        true
     }
 
     fn send_regs(&mut self, chip: &mut Chip, to: Addr, pairs: &[Pair]) {
@@ -165,6 +182,10 @@ impl P2 {
                 }
                 Event::Started { owner, restart, takeover } => {
                     self.unasked_sent = false;
+                    // Bit 17 is latched until the next session (Table B8-2); the start pushes
+                    // below carry the value for this session's General packet.
+                    self.regs.link_status &= !LINK_PORT_NOT_HONOURED;
+                    self.foreign_port(self.session.general);
                     if !restart {
                         self.seq_status = 0;
                         self.seq_regs = 0;
@@ -274,6 +295,12 @@ impl P2 {
         self.regs.stream_status = self.stream_status();
         self.events(chip, &ev, now);
         self.update_stream_status(chip);
+        if kind == CnC::General && self.session.owner() == Some(from) && self.foreign_port(self.session.general) {
+            if let Some(dest) = self.session.register_destination() {
+                let p = [(regmap::addr::LINK_STATUS, self.regs.link_status)];
+                self.send_regs(chip, dest, &p);
+            }
+        }
         if first_general {
             if let Some(g) = self.session.general {
                 self.regs.watchdog_written = Some(g.timer);
