@@ -36,20 +36,24 @@ loaded at 0x08020000 with the vector table there.
   package must bond out those pins; check the ST datasheet pinout tables.
   Confirm part and package with DBGMCU_IDCODE and the marking
   (`90-needs-hardware.md`).
-- **HSE:** a 25 MHz crystal on OSC_IN/OSC_OUT, not an external clock (HIGH:
-  the factory image runs HSE on with HSEBYP clear and derives all PLLs from
-  25 MHz; a wrong HSE would put every UART and timer off by the ratio).
-- **Core supply (PWR_CR3):** the board is wired for the SMPS: the factory image
-  selects "SMPS 2.5 V output supplying external circuits and the LDO"
-  (PWR_CR3 = 0x2E: SMPSLEVEL 2.5 V, SMPSEXTHP, SMPSEN, LDOEN) (HIGH, firmware
-  analysis). PWR_CR3 can be written once per power-on (ST RM0468); a value that
-  does not match the board's supply wiring can stop the MCU. Whether the vendor
-  bootloader writes PWR_CR3 before the application runs is not known
-  (`90-needs-hardware.md`): read PWR_CR3 at application start.
+- **HSE:** frequency, and crystal or external clock, are not recorded until
+  read from the board (decision D1); see `90-needs-hardware.md`.
+- **Core supply:** the board is wired for the RM0468 supply configuration
+  *SMPS supplies the LDO, SMPS output 2.5 V also available to external
+  circuits* (MEDIUM: inferred from the configuration the factory image selects;
+  tied to the part, since only parts with an SMPS can be wired so). Whether any
+  board circuit uses the 2.5 V SMPS output is not known. The supply
+  configuration (PWR_CR3) can be written only once per power-on (RM0468, PWR
+  chapter, "Power supply configuration"); a configuration that does not match
+  the wiring can stop the MCU, so new firmware selects this configuration and
+  no other until the wiring is checked. Whether the vendor bootloader has
+  already written it is not known: read it at application start
+  (`90-needs-hardware.md`).
 - **AXI SRAM:** 320 KiB at 0x24000000 on the units as shipped (HIGH: the
   factory application's initial stack pointer is 0x24050000, the top of
   320 KiB, so the TCM/AXI sharing option bytes leave the full 320 KiB to the
-  AXI SRAM). Read-only check in step 2 of `90-needs-hardware.md`.
+  AXI SRAM). A unit whose option bytes were changed may differ; read them in
+  step 2 of `90-needs-hardware.md` (read only).
 
 ## State at application start (F1-Q4, open)
 

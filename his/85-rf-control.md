@@ -21,7 +21,7 @@ section, and return to it whenever it is not transmitting.
 | T/R lines | PF4, PF6, PC7, PH11 | RX levels: PF4 high; PF6, PC7, PH11 low | levels VERIFIED; function of each line HYPOTHESIS |
 | SPI1 chain A (TX low-pass bank + T/R) | latch PA11, output enable PA10 | output enable inactive (PA10 high) until a frame with bit 7 clear has been latched | HIGH |
 | SPI1 chain B (RX band-pass, preamp, attenuator) | latch PH12, output enable PH10 | output enable inactive (PH10 high) until a known frame has been latched | HIGH |
-| ATU latches | CS/latch PD13, PG2, PG5 | leave unwritten; no safe value is known | HIGH (pins); safe value unknown |
+| ATU latches | CS/latch PD13, PG2, PG5 | drive the strobes to the inactive level (high, MEDIUM) and never pulse them; no safe latch value is known | HIGH (pins); MEDIUM (inactive level); safe value unknown |
 | SPI2 PA DAC | RESET PB14 | PB14 low forces all outputs to VrefL; bias channels 2, 7, 8 at 0 whenever not transmitting | VERIFIED |
 | DAC1 OUT1 | PA4 | RF-gain control voltage; safe level unknown | VERIFIED (pin) |
 | PD12 | PD12 | unknown output (TIM4_CH1 capable); keep low | HIGH (pin); role unknown |
@@ -46,9 +46,10 @@ them is of the 74HC595 kind (HYPOTHESIS).
   meanings MEDIUM to HYPOTHESIS).
 - **ATU latches** (8 bit each, the CS line is the latch): PD13 (network style,
   bypass/enable), PG2 and PG5 (the two reactance banks) (HIGH).
-- **ATU strobe idle level (F1-Q5):** the strobes idle high (HIGH: the factory
-  image drives PD13, PG2 and PG5 push-pull high from its GPIO set-up). Whether
-  the board has pull resistors on them is **not known**; between reset and the
+- **ATU strobe polarity (F1-Q5):** the latch strobes (PD13, PG2, PG5) are
+  inactive high (MEDIUM: inferred from the level the factory image starts them
+  at; the latch part and its active edge are not identified). Whether the board
+  has pull resistors on them is **not known**; between reset and the
   firmware's GPIO set-up the MCU pins are high-impedance, so a floating strobe
   cannot be excluded (`90-needs-hardware.md`).
 
