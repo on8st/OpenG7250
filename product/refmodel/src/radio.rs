@@ -664,6 +664,11 @@ impl Radio {
             }
             port::DISCOVERY => self.on_1024(rx, &mut out),
             _ => {
+                if rx.local_port == port::HIGH_PRIORITY {
+                    // 0058: every High Priority packet read from port 1027, from any source,
+                    // before the subnet and owner checks
+                    self.count("hp_rx");
+                }
                 if !self.own_subnet(ip) {
                     self.count("drop.outside_subnet");
                     return out;

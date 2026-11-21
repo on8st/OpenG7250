@@ -691,13 +691,29 @@ def t_b5_20(ctx):
     if not netlog:
         ctx.notes.append("'no loss in the burst' not judged: no net.log (v1.6) to show drops")
 
+    from .mgmt import Mgmt, stats
+    mg = Mgmt(ctx.net)
+    hp_before = {}
+
+    def hp_rx():
+        st = stats(mg)
+        return None if st is None else st.get("hp_rx")
+
     def log_start():
+        hp_before["n"] = hp_rx()  # GET_STATS on port 7251: not a High Priority packet
         if netlog:
             ctx.fixture("net.log", action="start")
 
-    def no_loss(b: Burst):
-        """0054: no datagram to radio port 1027 dropped in the burst (net.log "dropped" entries
-        since log_start; no other High Priority packet was sent meanwhile)."""
+    def no_loss(b: Burst, n_sent: int):
+        """0054: no datagram to radio port 1027 lost in the burst: GET_STATS hp_rx rose by exactly
+        the number sent (0058; no other High Priority packet was sent since log_start), and no
+        net.log "dropped" entry where offered."""
+        a, z = hp_before.get("n"), hp_rx()
+        if a is None or z is None:
+            ctx.notes.append(f"hp_rx not judged for burst {b.name}: GET_STATS has no hp_rx")
+        else:
+            ctx.check(f"no loss in the burst: GET_STATS hp_rx +{n_sent} (0058) [burst {b.name}]", z - a == n_sent,
+                      f"hp_rx {a} -> {z} (+{z - a}), sent {n_sent} {b.tag()}")
         if not netlog:
             return
         entries, n = [], 0
@@ -733,7 +749,7 @@ def t_b5_20(ctx):
         h.recv(W(0.2))  # nothing sent for 200 ms: no third packet within 2 ms
         eq("run = 1 then run = 0 back to back: the session ends (discovery byte 4 for another host)", running_seen_by(obs, W(0.3)), 2, b1)
         eq("and no High Priority status packet follows", len(status_seqs(h, W(0.3))), 0, b1)
-        no_loss(b1)
+        no_loss(b1, 2)
         # idle, then run = 0 and run = 1 back to back: a session starts
         log_start()
         b2 = Burst("pair-2 run0-run1 idle")
@@ -742,7 +758,7 @@ def t_b5_20(ctx):
         h.running = True
         h.recv(W(0.1))
         eq("run = 0 then run = 1 back to back: a session runs", running_seen_by(obs, W(0.3)), 3, b2)
-        no_loss(b2)
+        no_loss(b2, 2)
         before = status_seqs(h, W(0.3))
         h.keepalive()
         before += status_seqs(h, W(0.2))
@@ -755,7 +771,7 @@ def t_b5_20(ctx):
         send(b3, high_priority(run=False))
         send(b3, high_priority(run=True))
         pair_after = status_seqs(h, W(0.2))
-        no_loss(b3)
+        no_loss(b3, 2)
         ctx.check(f"running, run = 0 then run = 1 back to back: the status sequence restarts (B2.7) [burst {b3.name}]",
                   bool(before) and bool(pair_after) and restarted(before[-1], pair_after),
                   f"before {before[-3:]}, after {pair_after[:3]} {b3.tag()}")
@@ -780,7 +796,7 @@ def t_b5_20(ctx):
         ctx.check(f"20 packets sent at least 1 ms apart (host side, radio time) [burst {b4.name}]", min(gaps) >= W(0.001),
                   f"gaps {min(gaps) * 1000:.2f}-{max(gaps) * 1000:.2f} ms wall {b4.tag()}")
         after = status_seqs(h, W(0.25))
-        no_loss(b4)
+        no_loss(b4, 20)
         h.keepalive()
         eq("20 packets 1 ms apart: the session runs at the end (the last packet processed)", running_seen_by(obs, W(0.3)), 3, b4)
         ctx.check(f"20 packets 1 ms apart: the stop inside them was processed (status sequence restarted, B2.7) [burst {b4.name}]",
@@ -788,8 +804,7 @@ def t_b5_20(ctx):
                   f"status sequence before {before[-3:]}, after {after[:3]} {b4.tag()}")
         h.stop()
     # information, not judged (the spec sets no figure): the firmware's longest busy-loop pass
-    from .mgmt import Mgmt, stats
-    with Mgmt(ctx.net) as c:
+    with mg as c:
         st = stats(c)
     v = (st or {}).get("net_busy_pass_max_us")
     ctx.check("information (not judged): GET_STATS net_busy_pass_max_us after the bursts", True,
