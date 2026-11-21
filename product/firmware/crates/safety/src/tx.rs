@@ -13,8 +13,9 @@
 //!
 //! Wire codes are those of Table B8-3 (spec at 0e075f2): arm reject 11 `TX_NOT_IMPLEMENTED`
 //! (record `tx` bit 1 clear) comes before 12 `NOT_CALIBRATED` (record `tx` bit 4 clear, Annex P
-//! parameters not set) in the order of B10.2 item 3. [`TX_IMPLEMENTED`] is false until the
-//! network key path (B5, B8, B10) is built.
+//! parameters not set) in the order of B10.2 item 3. This is r1.0 firmware, so
+//! [`TX_IMPLEMENTED`] is true (0036): an arm that meets every other condition gets 12 until the
+//! calibration set is complete; 11 is reachable only in a host-test core with bit 1 clear.
 
 /// `ARM_MAGIC` = 0x47375458, ASCII "G7TX" (Table B8-2 note; 0020 §7).
 pub const ARM_MAGIC: u32 = 0x4737_5458;
@@ -36,8 +37,9 @@ pub enum ArmReject {
     NotCalibrated = 12,
 }
 
-/// Record `tx` bit 1: TX implemented in this firmware (B4.8). False until the P2 key path exists.
-pub const TX_IMPLEMENTED: bool = false;
+/// Record `tx` bit 1: TX implemented in this firmware (B4.8). r1.0 implements transmit (0036);
+/// keying stays behind the calibration gate ([`Calibration`]).
+pub const TX_IMPLEMENTED: bool = true;
 
 /// Drop reasons, `TX_ARM_STATE` [23:16] (Table B8-3; Table A3-1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -286,10 +288,10 @@ impl TxCore {
         }
     }
 
-    /// For host tests of the later key path: a core that counts TX as implemented.
+    /// For host tests of the B10.2 order: a core as in a build before M4, record `tx` bit 1 = 0.
     #[cfg(test)]
-    fn implemented(mut self) -> Self {
-        self.implemented = true;
+    fn not_implemented(mut self) -> Self {
+        self.implemented = false;
         self
     }
 
@@ -314,12 +316,12 @@ impl TxCore {
 
     /// Record `tx` bit 1, "TX implemented in this firmware" (B4.8).
     pub fn record_tx_bit1(&self) -> bool {
-        TX_IMPLEMENTED
+        self.implemented
     }
 
     /// Record `tx` bit 4, the transmit parameters of Annex P set (B4.8; 0035, 0036).
     pub fn record_tx_bit4(&self) -> bool {
-        self.calibrated()
+        self.implemented && self.calibrated()
     }
 
     /// A write to `TX_ARM` from the owner (a non-owner gets `WRITE_STATUS` `NOT_OWNER` before
@@ -503,7 +505,7 @@ mod tests {
         assert!(Calibration::from_measured(&MEASURED).is_none());
         let c = TxCore::new(1, &MEASURED);
         assert!(!c.calibrated());
-        assert!(!c.record_tx_bit1());
+        assert!(c.record_tx_bit1()); // r1.0 (0036)
         assert!(!c.record_tx_bit4());
     }
 
@@ -512,14 +514,20 @@ mod tests {
         let mut c = TxCore::new(7, &MEASURED);
         let mut rf = Rf::default();
         let v = c.token() ^ ARM_MAGIC;
-        // All preconditions hold, the token is right: still refused, 11 before 12 (B10.2 item 3).
-        assert_eq!(c.write_tx_arm(v, &ok_ctx(), &mut rf), ArmOutcome::Rejected(Refusal::Arm(ArmReject::TxNotImplemented)));
-        assert_eq!(c.state(), ArmState::Disarmed);
-        assert_eq!((c.arm_state_reg() >> 8) & 0xFF, 11);
-        let mut c = TxCore::new(7, &MEASURED).implemented();
-        let v = c.token() ^ ARM_MAGIC;
+        // All preconditions hold, the token is right: this build refuses with 12 (T-B10-03).
         assert_eq!(c.write_tx_arm(v, &ok_ctx(), &mut rf), ArmOutcome::Rejected(Refusal::NotCalibrated));
+        assert_eq!(c.state(), ArmState::Disarmed);
         assert_eq!((c.arm_state_reg() >> 8) & 0xFF, 12);
+        // A precondition of B10.2 item 3 that fails comes before 12.
+        let mut x = ok_ctx();
+        x.mode_class_declared = false;
+        assert_eq!(c.write_tx_arm(v, &x, &mut rf), ArmOutcome::Rejected(Refusal::Arm(ArmReject::NoModeClass)));
+        // With bit 1 clear (a build before M4), 11 comes before 12, and bit 4 is 0.
+        let mut b = TxCore::new(7, &test_measured(false)).not_implemented();
+        let vb = b.token() ^ ARM_MAGIC;
+        assert_eq!(b.write_tx_arm(vb, &ok_ctx(), &mut rf), ArmOutcome::Rejected(Refusal::Arm(ArmReject::TxNotImplemented)));
+        assert_eq!((b.arm_state_reg() >> 8) & 0xFF, 11);
+        assert!(!b.record_tx_bit4());
         for s in [Source::Ptt, Source::Cwx, Source::Key, Source::Atu] {
             assert_eq!(c.tx_request(s, &key_ctx()).unwrap_err(), Refusal::NotCalibrated);
         }
@@ -539,7 +547,7 @@ mod tests {
 
     #[test]
     fn preconditions_in_order() {
-        let mut c = TxCore::new(1, &test_measured(false)).implemented();
+        let mut c = TxCore::new(1, &test_measured(false));
         let mut rf = Rf::default();
         let v = c.token() ^ ARM_MAGIC;
         let mut x = ok_ctx();
@@ -559,7 +567,7 @@ mod tests {
 
     #[test]
     fn calibrated_arm_key_and_drop_order() {
-        let mut c = TxCore::new(1, &test_measured(false)).implemented();
+        let mut c = TxCore::new(1, &test_measured(false));
         let mut rf = Rf::default();
         let t0 = c.token();
         assert_eq!(c.write_tx_arm(t0 ^ ARM_MAGIC, &ok_ctx(), &mut rf), ArmOutcome::Armed);
@@ -582,7 +590,7 @@ mod tests {
 
     #[test]
     fn drop_while_not_armed_changes_nothing() {
-        let mut c = TxCore::new(1, &test_measured(false)).implemented();
+        let mut c = TxCore::new(1, &test_measured(false));
         let mut rf = Rf::default();
         let before = (c.token(), c.arm_state_reg());
         assert!(!c.drop(DropReason::Watchdog, &mut rf));

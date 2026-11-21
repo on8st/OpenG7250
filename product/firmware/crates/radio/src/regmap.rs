@@ -456,9 +456,9 @@ mod tests {
         let v = tx.token() ^ tx::ARM_MAGIC;
         let a = run(&mut m, &mut tx, true, &[(TX_ARM, v)]);
         assert_eq!(a.pairs[0].0, TX_ARM_STATE);
-        // This build: TX not implemented yet, reason 11 in [15:8], disarmed.
+        // This build (r1.0, uncalibrated): NOT_CALIBRATED, reason 12 in [15:8], disarmed (T-B10-03).
         assert_eq!(a.pairs[0].1 & 0xF, 0);
-        assert_eq!((a.pairs[0].1 >> 8) & 0xFF, 11);
+        assert_eq!((a.pairs[0].1 >> 8) & 0xFF, 12);
         assert!(a.arm_changed);
     }
 

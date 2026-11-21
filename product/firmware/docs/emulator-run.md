@@ -11,7 +11,7 @@ The checksums of the delivered files are in `out/SHA256SUMS`.
 
 | Id | Check | Pass |
 |---|---|---|
-| F1-01 | Console after start | Lines in this order: `OpenG7250 boot …`, `boot: reset cause …`, three `boot: start …` lines (the state the previous stage left, HIS 90), one supply line (`boot: supply PWR_CR3 set to SMPS->LDO 2.5 V (was the power-on value)` when PWR_CR3 starts at its power-on value 0x00000006, `… already SMPS->LDO 2.5 V, not written` when it starts at 0x2E; any other value: see F1-10), `boot: safe state held, watchdog 2000 ms`, `boot: starting slot A at 0x08040000`, `OpenG7250 main firmware … slot A (G7250-P2, board type 200)`, `app: reset cause …`, `app: safe state held; TX NOT_CALIBRATED: every TX request is rejected (record tx bit 1 = 0, bit 4 = 0); ATU bypass; watchdog 2000 ms`. |
+| F1-01 | Console after start | Lines in this order: `OpenG7250 boot …`, `boot: reset cause …`, three `boot: start …` lines (the state the previous stage left, HIS 90), one supply line (`boot: supply PWR_CR3 set to SMPS->LDO 2.5 V (was the power-on value)` when PWR_CR3 starts at its power-on value 0x00000006, `… already SMPS->LDO 2.5 V, not written` when it starts at 0x2E; any other value: see F1-10), `boot: safe state held, watchdog 2000 ms`, `boot: starting slot A at 0x08040000`, `OpenG7250 main firmware … slot A (G7250-P2, board type 200)`, `app: reset cause …`, `app: safe state held; TX NOT_CALIBRATED: every TX request is rejected (record tx bit 1 = 1, bit 4 = 0); ATU bypass; watchdog 2000 ms`. |
 | F1-02 | Alive | `app: alive N s` every 10 s, N increasing, for at least 60 s. |
 | F1-03 | Watchdog refreshed | No reset during 60 s: no second `OpenG7250 boot` line (IWDG1 2 s, refreshed every 250 ms). |
 | F1-04 | Safe state before anything else | Within 20 us of the boot stage's first instruction at 0x08020000 (0045; T-A3-06), and before any RCC clock-tree change or RAM initialisation: GPIO clocks on (AHB4ENR), then one step per port in this order: port A (PA10 high), H (PH10 high, PH11 low, PH9 high), B (PB14 low, PB5 low, PB10 low), F (PF4 high, PF6 low), C (PC7 low), D (PD12 low, PD13 high, PD5 input with pull-up), G (PG2 high, PG5 high: ATU strobes inactive, never pulsed). Per port: one BSRR write with all levels, then OTYPER, PUPDR (port D only), MODER; so each pin's level is written before it becomes an output, and PD5's pull-up is on before it leaves its analog reset mode. Then the full per-pin safe state again in table order (also speed and pulls), with no level change. ([HIS] HIS 85 `d199d33`; 0029) |
@@ -76,9 +76,10 @@ every register of Table B8-2 readable by write, the write rules of B8.4/B8.5 (no
 from 1025) every 50 ms while running; all fields 0 except the sequence number.
 
 Not yet: DDC0 I&Q (B6; `STREAM_STATUS` DDC0 reason 1), DUC I&Q (ignored), ADC words in the
-status packet, the three-times notice to an old owner (sent once, and only when it was armed),
-`LINK_STATUS` bit 17. TX: arm refused with 11 `TX_NOT_IMPLEMENTED` (record `tx` bit 1 = 0), as
-agreed until the key path exists.
+status packet, the three-times notice to an old owner (sent once, and only when it was armed).
+`LINK_STATUS` bit 17 is set for a non-default radio port in a General packet (T-B7-03). TX:
+record `tx` bit 1 = 1 (r1.0, 0036), bit 4 = 0; an arm that meets every other condition is
+refused with 12 `NOT_CALIBRATED`, and no TX request keys (B10 intro).
 
 ## DHCP retry and renewal (A1.11, A1.11a)
 

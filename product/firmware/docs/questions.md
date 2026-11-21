@@ -65,7 +65,7 @@ undriven and DDC0 reports reason 2.
 
 | Id | Answer | Firmware |
 |---|---|---|
-| tx bit 1 | r1.0 reports tx bit 1 = 1 and bit 4 from the calibration set; an uncalibrated arm gets 12 `NOT_CALIBRATED`. Bit 1 = 0 with 11 only before M4 without a key path (B4.8, B10 intro, T-B4-18). | Now: `TX_IMPLEMENTED = false` (no key path yet). Switch to `true` with the P2 key path. |
+| tx bit 1 | r1.0 reports tx bit 1 = 1 and bit 4 from the calibration set; an uncalibrated arm gets 12 `NOT_CALIBRATED`. Bit 1 = 0 with 11 only before M4 without a key path (B4.8, B10 intro, T-B4-18). | Done: `TX_IMPLEMENTED = true`; an uncalibrated arm gets 12 (T-B4-18, T-B10-03, T-B10-41). |
 | SQ-F2-1 | DHCP default; while no lease, RFC 3927 link-local **and keep retrying DHCP**; renewals borrow the management socket; an address change at renewal is A1.11a. No renewal is not conformant for r1.0. | **Open work:** DHCP retry while link-local, and renewal. |
 | SQ-F2-2 | Without destination-address info every Set IP counts as unicast/directed: own subnet only, any source while link-local (B3.9; T-B3-32). | As implemented. |
 | SQ-F2-3 | Keep the netmask if the new address is in that subnet, else /24; keep the gateway if inside the resulting subnet, else clear it; 0.0.0.0 selects DHCP; log the values (B3.9; T-B3-34). | Implemented (`netcfg::after_set_ip`). |
@@ -79,6 +79,6 @@ undriven and DDC0 reports reason 2.
 | SQ-F2-1 | Factory default of C-1 (Table A1-4: "TBD (HIS-14)") and the fall-back when DHCP gets no lease; DHCP renewal (A1.11 is provisional). | DHCP at power-on on the management socket before the P2 sockets open (A1.11); no lease within 3 tries → RFC 3927 link-local address from the MAC; the lease is kept until restart (no renewal yet). |
 | SQ-F2-2 | B3.9 distinguishes Set IP to the limited broadcast (any source) from Set IP to the unicast or directed broadcast address (own subnet only). If the CH394 cannot tell the destination apart (F2-Q5), which rule applies? | Accept from inside the subnet, or from any source while on a link-local address; otherwise ignore and log. T-B3-32 (second half) fails with this rule. |
 | SQ-F2-3 | Set IP carries no netmask ([P2]). Which netmask applies after a Set IP? | Keep the netmask in use if the new address is a valid host in it, else 255.255.255.0. |
-| SQ-F3-1 | Arm reject reason for missing calibration. | **Answered** by the spec at 0e075f2: arm reject 12 `NOT_CALIBRATED`, record `tx` bit 4, checked after 11 `TX_NOT_IMPLEMENTED` (B10.2 item 3). This build: bit 1 = 0 (no P2 key path yet), so an arm gets 11; bit 4 = 0. |
+| SQ-F3-1 | Arm reject reason for missing calibration. | **Answered** by the spec at 0e075f2: arm reject 12 `NOT_CALIBRATED`, record `tx` bit 4, checked after 11 `TX_NOT_IMPLEMENTED` (B10.2 item 3). This build: bit 1 = 1 (r1.0, 0036), bit 4 = 0, so an arm gets 12. |
 | SQ-F3-2 | `ATU_TUNE` = 1 while not armed and not calibrated: `NOT_ARMED` (9) or `NOT_CALIBRATED` (11) first? | `NOT_CALIBRATED` first. |
 | SQ-F3-3 | B10.2 item 5 needs a boot counter in non-volatile memory for the token. The configuration store is not built yet. | Boot counter 0; harmless while TX cannot be armed; the store comes with the management channel. |

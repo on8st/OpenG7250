@@ -516,7 +516,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         match (sock, kind) {
                             (_, Some(k)) => p2.cnc(&mut chip, from, k, &rx[..d.len], now),
                             (crate::p2::S7250, None) => p2.register_packet(&mut chip, from, &rx[..d.len], now),
-                            _ => p2.duc_iq_ignored += 1, // no TX path yet (record tx bit 1 = 0)
+                            // DUC I&Q: discarded whole and counted while record tx bit 4 is 0, and
+                            // never enters a FIFO while not the owner's (B10.7; 0039).
+                            _ => p2.duc_iq_ignored += 1,
                         }
                         handled = true;
                     }
