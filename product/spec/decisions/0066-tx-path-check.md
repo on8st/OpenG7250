@@ -35,6 +35,21 @@ pin as the hardware sees it, nor how fast. The test bench and the firmware need 
      that a 5 ms pulse gives no fault, and the behaviour after a reset;
    - T-A1-68 uses the first stimulus.
 
+## Addendum: the pins (testbench finding SF-30, 2026-11-21)
+
+6. The check covers the HIS 85 TX-side lines with a known safe level, as Table A3-6b in A3.6b:
+   - PF4 high; PF6, PC7, PH11 low (T/R lines);
+   - PA10 high (chain A output enable);
+   - PB14 low (PA DAC reset);
+   - DAC channels 2, 7, 8 at 0, by the value last written only, since the DAC cannot be read
+     back.
+   This is the bench's list.
+7. "TX path disabled" in A3.6 means the T/R lines at RX levels and chain A disabled. The ATU
+   and antenna strobes, chain B, and the pins with unknown safe level (PA4, PA12, PD12) are
+   not checked.
+8. SEND and the TUNER trigger, while P-SYS-8 is pending: no pin, not driven, not offered, not
+   checked. When P-SYS-8 is set, their pins join Table A3-6b with their released level.
+
 ## Alternatives considered
 
 - Configuration only: misses a board fault that holds a line, which is the case that matters
@@ -45,7 +60,7 @@ pin as the hardware sees it, nor how fast. The test bench and the firmware need 
 
 ## Consequences
 
-- Spec A3.6b; tests T-A1-68 (wording), T-A3-61.
+- Spec A3.6b, Table A3-6b; tests T-A1-68 (wording), T-A3-61 (pins of Table A3-6b).
 
 ## Sources
 
