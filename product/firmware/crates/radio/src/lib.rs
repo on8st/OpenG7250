@@ -6,6 +6,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod ddc;
+pub mod dhcp_client;
 pub mod mgmt;
 pub mod record;
 pub mod regmap;

@@ -20,6 +20,7 @@ use g7250_proto::netcfg::{self, Ip, Mode, NetConfig, Source};
 use g7250_proto::ratelimit::RateLimit;
 use g7250_proto::dhcp;
 use g7250_proto::mgmt as m;
+use g7250_radio::dhcp_client::{Action as DhcpAction, Client as DhcpClient};
 use g7250_radio::mgmt::{Ctx, Server};
 
 // DMA rule for later (RM0468): SPI6 is in the D3 domain and can use only the BDMA, which reaches
@@ -189,7 +190,7 @@ async fn wait_link(chip: &mut Chip) -> g7250_ch394::Link {
 }
 
 /// DHCP at power-on (A1.11): DISCOVER, OFFER, REQUEST, ACK on socket 7 port 68.
-async fn dhcp(chip: &mut Chip, mac: [u8; 6], xid: u32) -> Option<(NetConfig, Option<u32>)> {
+async fn dhcp(chip: &mut Chip, mac: [u8; 6], xid: u32) -> Option<(NetConfig, Option<u32>, Ip)> {
     chip.set_ip([0; 4], [0; 4], [0; 4]).ok()?;
     chip.udp_open(SOCK_MGMT, dhcp::CLIENT_PORT).ok()?;
     let mut msg = [0u8; dhcp::MSG_LEN];
@@ -211,7 +212,8 @@ async fn dhcp(chip: &mut Chip, mac: [u8; 6], xid: u32) -> Option<(NetConfig, Opt
                     let mask = ack.mask.or(offer.mask).unwrap_or([255, 255, 255, 0]);
                     let gw = ack.router.or(offer.router).unwrap_or([0; 4]);
                     if netcfg::valid_host(ack.yiaddr, mask) {
-                        break 'outer Some((NetConfig { mode: Mode::Dhcp, ip: ack.yiaddr, mask, gateway: gw }, ack.lease_s));
+                        let server = if ack.server == [0; 4] { offer.server } else { ack.server };
+                        break 'outer Some((NetConfig { mode: Mode::Dhcp, ip: ack.yiaddr, mask, gateway: gw }, ack.lease_s, server));
                     }
                 }
                 None => continue,
@@ -242,23 +244,25 @@ async fn wait_reply(chip: &mut Chip, rx: &mut [u8], xid: u32, mac: [u8; 6], want
     None
 }
 
-async fn configure(chip: &mut Chip, mac: [u8; 6], want: NetConfig) -> (NetConfig, Source) {
+/// Bring up the address: static, or DHCP with link-local fall-back. In DHCP mode the returned
+/// client goes on in the main loop: renewal, rebinding, and retries while link-local (A1.11).
+async fn configure(chip: &mut Chip, mac: [u8; 6], want: NetConfig) -> (NetConfig, Source, Option<DhcpClient>) {
     if want.mode == Mode::Static && netcfg::valid_host(want.ip, want.mask) {
         let _ = chip.set_ip(want.ip, want.mask, want.gateway);
-        return (want, Source::Static);
+        return (want, Source::Static, None);
     }
     let xid = u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]) ^ Instant::now().as_ticks() as u32;
-    if let Some((c, lease)) = dhcp(chip, mac, xid).await {
-        let _ = chip.set_ip(c.ip, c.mask, c.gateway);
-        match lease {
-            Some(l) => println!("net: DHCP lease {} s (renewal not implemented yet)", l),
-            None => println!("net: DHCP lease without a lease time"),
-        }
-        return (c, Source::Dhcp);
-    }
     let ll = netcfg::link_local(mac, 0);
+    let now = Instant::now().as_millis();
+    if let Some((c, lease, server)) = dhcp(chip, mac, xid).await {
+        let _ = chip.set_ip(c.ip, c.mask, c.gateway);
+        let l = lease.unwrap_or(3600).max(60);
+        println!("net: DHCP lease {} s from {}; renewal at {} s", l, ip_str(server).as_str(), l / 2);
+        return (c, Source::Dhcp, Some(DhcpClient::new(mac, xid.wrapping_add(16), ll, Some((c, server, l)), now)));
+    }
     let _ = chip.set_ip(ll.ip, ll.mask, ll.gateway);
-    (ll, Source::LinkLocal)
+    println!("net: no DHCP lease; link-local, DHCP keeps trying (A1.11)");
+    (ll, Source::LinkLocal, Some(DhcpClient::new(mac, xid.wrapping_add(16), ll, None, now)))
 }
 
 fn print_cfg(c: &NetConfig, s: Source) {
@@ -295,7 +299,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let link = wait_link(&mut chip).await;
     println!("net: link {} Mbit/s {}", link.speed(), if link.full_duplex { "full duplex" } else { "half duplex" });
 
-    let (mut cfg, src) = configure(&mut chip, mac, NetConfig::FACTORY).await;
+    let (mut cfg, src, mut dhcpc) = configure(&mut chip, mac, NetConfig::FACTORY).await;
+    // Socket 7 lent to DHCP (port 68) for a running exchange (A1.11).
+    let mut dhcp_borrowed = false;
     print_cfg(&cfg, src);
 
     // All P2 sockets of Table B2-1 (1024-1027, 1029, 1035, 7250); 1028 is never opened (0017).
@@ -375,8 +381,10 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                             // SESSION_CHANGED, Table A3-1 event 9) and nothing is carried over.
                             p2.address_changed(&mut chip, now);
                             let _ = chip.udp_close(SOCK_DISCOVERY);
-                            let (c, s) = configure(&mut chip, mac, want).await;
+                            let (c, s, d) = configure(&mut chip, mac, want).await;
                             cfg = c;
+                            dhcpc = d;
+                            dhcp_borrowed = false;
                             print_cfg(&cfg, if s == Source::Static { Source::SetIp } else { s });
                             // DHCP may have borrowed socket 7 (A1.11): reopen everything.
                             if crate::p2::P2::open(&mut chip).is_err() || chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
@@ -418,7 +426,56 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 if handled {
                     continue;
                 }
-                // Management channel, socket 7.
+                // DHCP after the power-on exchange (A1.11): retries while link-local, renewal,
+                // rebinding. It borrows socket 7 only for an exchange.
+                if let Some(c) = dhcpc.as_mut() {
+                    let now = Instant::now().as_millis();
+                    let mut actions: heapless::Vec<DhcpAction, 2> = heapless::Vec::new();
+                    if dhcp_borrowed {
+                        if let Ok(Some(d)) = chip.udp_recv(SOCK_MGMT, &mut mrx) {
+                            let _ = actions.push(c.on_reply(&mrx[..d.len], now));
+                        }
+                    }
+                    let _ = actions.push(c.poll(now));
+                    for a in actions {
+                        match a {
+                            DhcpAction::None => {}
+                            DhcpAction::Send { to, msg } => {
+                                if !dhcp_borrowed {
+                                    let _ = chip.udp_close(SOCK_MGMT);
+                                    dhcp_borrowed = chip.udp_open(SOCK_MGMT, dhcp::CLIENT_PORT).is_ok();
+                                }
+                                let mut b = [0u8; dhcp::MSG_LEN];
+                                let n = msg.encode(c.xid, c.mac(), &mut b);
+                                let _ = chip.udp_send(SOCK_MGMT, to, dhcp::SERVER_PORT, &b[..n]);
+                            }
+                            DhcpAction::Use(new) => {
+                                if new.ip != cfg.ip || new.mask != cfg.mask {
+                                    // Another address: a C-1 change under A1.11a: the session ends
+                                    // (SESSION_CHANGED while armed), nothing is carried over.
+                                    p2.address_changed(&mut chip, now);
+                                    let _ = chip.set_ip(new.ip, new.mask, new.gateway);
+                                    print_cfg(&new, if new.ip[..2] == [169, 254] { Source::LinkLocal } else { Source::Dhcp });
+                                } else if new.gateway != cfg.gateway {
+                                    let _ = chip.set_ip(new.ip, new.mask, new.gateway);
+                                }
+                                cfg = new;
+                            }
+                        }
+                    }
+                    if dhcp_borrowed && !c.listening() {
+                        let _ = chip.udp_close(SOCK_MGMT);
+                        dhcp_borrowed = false;
+                        if chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
+                            println!("net: FAULT cannot give socket 7 back to the management port");
+                        }
+                    }
+                }
+                // Management channel, socket 7 (not while lent to DHCP).
+                if dhcp_borrowed {
+                    Timer::after_millis(2).await;
+                    continue;
+                }
                 if let Ok(Some(d)) = chip.udp_recv(SOCK_MGMT, &mut mrx) {
                     let now = Instant::now().as_millis();
                     let mut ident = mgmt.identify;

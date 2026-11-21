@@ -51,6 +51,17 @@ pub fn request(xid: u32, mac: [u8; 6], offered: Ip, server: Ip, buf: &mut [u8; M
     MSG_LEN
 }
 
+/// DHCPREQUEST in the RENEWING or REBINDING state (RFC 2131 sections 4.3.2, 4.4.5): `ciaddr` is
+/// the address in use; no options 50 and 54; no broadcast flag (the client has an address).
+pub fn renew(xid: u32, mac: [u8; 6], ciaddr: Ip, buf: &mut [u8; MSG_LEN]) -> usize {
+    base(xid, mac, buf);
+    buf[10] = 0;
+    buf[12..16].copy_from_slice(&ciaddr);
+    let o = [53, 1, REQUEST, 55, 2, 1, 3, 61, 7, 1, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], 255];
+    buf[240..240 + o.len()].copy_from_slice(&o);
+    MSG_LEN
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reply {
     pub msg_type: u8,

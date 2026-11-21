@@ -80,6 +80,20 @@ status packet, the three-times notice to an old owner (sent once, and only when 
 `LINK_STATUS` bit 17. TX: arm refused with 11 `TX_NOT_IMPLEMENTED` (record `tx` bit 1 = 0), as
 agreed until the key path exists.
 
+## DHCP retry and renewal (A1.11, A1.11a)
+
+Console: `net: DHCP lease L s from <server>; renewal at L/2 s`, or `net: no DHCP lease; link-local,
+DHCP keeps trying (A1.11)`; later `net: address … (Dhcp | LinkLocal)` when the address changes.
+
+| Id | Set-up | Pass |
+|---|---|---|
+| DH-01 | No DHCP server at power-on, one added after a minute | Link-local first; DISCOVER from 0.0.0.0:68 to 255.255.255.255:67 again after 4 s, then with back-off (8, 16, 32, 64 s; then every 64 s; each exchange waits 3 s); once the server answers, the radio takes the lease (an address change: a running session ends) |
+| DH-02 | Lease of 120 s | At 60 s a REQUEST with ciaddr = the address in use, unicast to the server, no options 50/54; ACK with the same address changes nothing (a session goes on) |
+| DH-03 | As DH-02, server silent at T1 | Retries after a pause (half the remaining time, at least 60 s); at T2 (105 s) the REQUEST is broadcast (rebinding) |
+| DH-04 | Server answers the renewal with DHCPNAK, or no answer until the lease ends | The radio stops using the address: link-local, the session ends, DHCP starts over at once |
+| DH-05 | Renewal ACK with another address | Address change under A1.11a: the session ends, the new address is used |
+| DH-06 | Management requests during an exchange | Socket 7 is DHCP (port 68) for up to 3 s per exchange; management requests in that window get no answer (the host retransmits, A1.2); P2 sockets and the session watchdog keep running |
+
 ## Store: watchdog- and power-loss-safe compaction
 
 Image: `out/test/g7250-compact.elf` (test build: compacts the store at every start; never for
