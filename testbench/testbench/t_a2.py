@@ -274,9 +274,25 @@ def t_a2_13(ctx):
         no_owner = [d for p, d, _ in at_src
                     if p == PORT_REG and any(r == "NOT_OWNER" for _, _, r in write_status(parse_regs(d)))]
         nd = notices(at_dest)
-        ctx.check("register writes from A: NOT_OWNER answers at A's source port (B8.5)", len(no_owner) >= 3,
-                  f"{len(no_owner)} answers at the source port in 1.5 s")
-        ctx.check("and notices at the register destination", len(nd) >= 3, f"{len(nd)} notices in 1.5 s")
+        log = netlog_read(ctx) if ctx.__dict__.get("_netlog") else None
+        if log:
+            # in radio time: the span of A's writes as the radio received them, and how many
+            # answers and notices that span allows at one per 100 ms each (both at their limit:
+            # neither consumes the other)
+            mine = lambda e, port: str(e.get("peer", "")).endswith(f":{port}")
+            w = [e["t_us"] for e in log if e.get("dir") == "to_radio" and e.get("radio_port") == PORT_REG and mine(e, a.port)]
+            span = (max(w) - min(w)) / 1e6 if len(w) > 1 else 0.0
+            want = max(1, int(span / 0.1))  # one per 100 ms, less one for the edges of the span
+            ans = [e for e in log if e.get("dir") == "from_radio" and e.get("radio_port") == PORT_REG and mine(e, a.port)]
+            nts = [e for e in log if e.get("dir") == "from_radio" and e.get("radio_port") == PORT_REG and mine(e, dest.port)]
+            ctx.check("register writes from A: NOT_OWNER answers at A's source port, one per 100 ms of radio time (B8.5; net.log)",
+                      len(ans) >= want, f"{len(ans)} answers over {span:.3f} s of writes, want >= {want}")
+            ctx.check("and notices at the register destination, one per 100 ms of radio time (net.log)", len(nts) >= want,
+                      f"{len(nts)} notices over {span:.3f} s of writes, want >= {want}")
+        else:
+            ctx.check("register writes from A: NOT_OWNER answers at A's source port (B8.5)", len(no_owner) >= 3,
+                      f"{len(no_owner)} answers at the source port in 1.5 s (host clock)")
+            ctx.check("and notices at the register destination", len(nd) >= 3, f"{len(nd)} notices in 1.5 s (host clock)")
         gaps = [nd[i + 1][0] - nd[i][0] for i in range(len(nd) - 1)]
         ctx.check("at most one notice per 100 ms", all(g >= NOTICE_MIN_S - 0.01 for g in gaps),
                   f"smallest gap {min(gaps) * 1000:.0f} ms" if gaps else "fewer than 2")
