@@ -316,6 +316,10 @@ namespace Antmicro.Renode.Peripherals.SPI
                     {
                         bool wasOn = (cr1 & SPE) != 0;
                         if((value & SPE) == 0 && wasOn) { rx.Clear(); rxReady.Clear(); done = 0; eotNs = -1; }
+                        // CSTART cannot be set while the SPI is disabled, and clearing SPE clears it
+                        // (RM0468 SPI_CR1); a write of CSTART with SPE = 0 leaves CSTART clear, so
+                        // the following write with SPE and CSTART is a start
+                        if((value & SPE) == 0) value &= ~CSTART;
                         bool start = (value & CSTART) != 0 && (cr1 & CSTART) == 0 && (value & SPE) != 0;
                         cr1 = value;
                         if(start) { done = 0; flags &= ~(EOT | TXTF | TXC); eotNs = -1; started = true; }
