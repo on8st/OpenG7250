@@ -185,6 +185,29 @@ def run_test(tid, ep):
         return [check("TIM2 period 50 ms (emulated)", p0 is not None and abs(p0 - 50) < 1.0, "median %s ms" % p0),
                 check("TIM5 compare period 50 ms (emulated)", p2 is not None and abs(p2 - 50) < 1.0, "median %s ms" % p2),
                 check("SysTick period 50 ms (emulated)", p1 is not None and abs(p1 - 50) < 1.0, "median %s ms" % p1)]
+    if tid == "T-EMU-16":
+        # boot event and the boot phase: a trace started after power-on begins with the
+        # last boot event and the pin changes of the first 10 ms (since_boot_us)
+        r1 = ctl.op("hw.trace", action="start")
+        f = (r1.get("value") or {}).get("file")
+        time.sleep(0.5)
+        ctl.op("hw.trace", action="stop")
+        evs = [json.loads(l) for l in open(f)] if f and os.path.isfile(f) else []
+        boots = [e for e in evs if e.get("kind") == "boot"]
+        watched = ["PF4", "PF6", "PC7", "PH11", "PA10", "PH10", "PB14", "PB10", "PD12", "PB5", "PD5", "PH9",
+                   "PA11", "PH12", "PD13", "PG2", "PG5"]
+        last = {}
+        for e in evs:
+            if e.get("kind") == "gpio" and "since_boot_us" in e:
+                last[e["pin"]] = e
+        lines = []
+        for p in watched:
+            e = last.get(p)
+            lines.append("%s %s" % (p, "since_boot_us %.3f level %s mode %s pull %s" % (
+                e["since_boot_us"], e["level"], e["mode"], e["pull"]) if e else "no change in the boot phase"))
+        return [check("trace starts with the boot event", bool(evs) and evs[0].get("kind") == "boot",
+                      str(boots[:1])),
+                check("boot phase per watched pin", True, "; ".join(lines))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

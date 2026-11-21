@@ -33,7 +33,8 @@ namespace Antmicro.Renode.Peripherals.SPI
     public class G7250BenchAgent : ISPIPeripheral, IGPIOReceiver
     {
         private static readonly string[] LatchPins = { "PA11", "PH12", "PD13", "PG2", "PG5" };
-        private static readonly string[] SafePins = { "PF4", "PF6", "PC7", "PH11", "PA10", "PH10", "PB14", "PB10", "PD12", "PB5", "PD5" };
+        // the HIS 85 safe pins, plus PH9 (held high in the firmware's safe state; added on request)
+        private static readonly string[] SafePins = { "PF4", "PF6", "PC7", "PH11", "PA10", "PH10", "PB14", "PB10", "PD12", "PB5", "PD5", "PH9" };
         private static readonly string[] InputPins = { "PH6", "PH3", "PH4" };
 
         private readonly IMachine machine;
@@ -67,6 +68,8 @@ namespace Antmicro.Renode.Peripherals.SPI
             sampler.LimitReached += Sample;
             if(agentPort > 0) new Thread(Serve) { IsBackground = true, Name = "bench-agent" }.Start();
             HookConsole();
+            ArmBootHook();
+            HookPorts();
             machine.MachineReset += _ => OnMachineReset();
         }
 
@@ -95,8 +98,8 @@ namespace Antmicro.Renode.Peripherals.SPI
                 if(tracing && transfer.Length > 0)
                     ev = Event("\"kind\": \"spi\", \"bus\": \"SPI1\", \"cs\": null, \"data\": \"" + transfer + "\"");
                 transfer.Clear();
+                if(ev != null) Send("ev " + ev);
             }
-            if(ev != null) Send("ev " + ev);
         }
 
         public void OnGPIO(int number, bool value)
@@ -107,7 +110,17 @@ namespace Antmicro.Renode.Peripherals.SPI
             {
                 bool rising = value && !latchLevel[number];
                 latchLevel[number] = value;
-                if(tracing) ev = GpioState(LatchPins[number]);
+                if(tracing)
+                {
+                    // the port write hook may have given this change already
+                    var st = State(LatchPins[number]);
+                    string key = st.Level + "/" + st.Mode + "/" + st.Pull, prev;
+                    if(!(lastState.TryGetValue(LatchPins[number], out prev) && prev == key))
+                    {
+                        lastState[LatchPins[number]] = key;
+                        ev = GpioState(LatchPins[number]);
+                    }
+                }
                 if(rising && shifted.Count > 0)
                 {
                     int n = number == 1 ? Math.Min(3, shifted.Count) : 1;
@@ -117,8 +130,8 @@ namespace Antmicro.Renode.Peripherals.SPI
                     else if(number == 1) chainB = sb.ToString();
                     else { atuWrites[number - 2]++; atuLast[number - 2] = shifted[shifted.Count - 1]; }
                 }
+                if(ev != null) Send("ev " + ev);
             }
-            if(ev != null) Send("ev " + ev);
         }
 
         // ---- pins ----
@@ -220,8 +233,8 @@ namespace Antmicro.Renode.Peripherals.SPI
                     lastState[pin] = key;
                     (evs = evs ?? new List<string>()).Add(GpioState(pin));
                 }
+                if(evs != null) foreach(var e in evs) Send("ev " + e);
             }
-            if(evs != null) foreach(var e in evs) Send("ev " + e);
         }
 
         private string DacWords(out string resetLevel)
@@ -256,6 +269,192 @@ namespace Antmicro.Renode.Peripherals.SPI
             }
         }
 
+        // ---- exact pin changes: write hooks on the GPIO ports ----
+        // Each write to MODER/OTYPER/PUPDR/ODR/BSRR of a port is applied to a shadow
+        // of that port, and every watched pin whose state changes gives a gpio event
+        // at that instant. "since_boot_us" is the time since the boot event from
+        // the executed instruction count at the core clock (one instruction a cycle:
+        // an estimate; flash wait states and dual issue are not modelled).
+        private readonly Dictionary<int, uint[]> shadow = new Dictionary<int, uint[]>();   // port -> MODER, OTYPER, PUPDR, ODR
+        private readonly List<string> bootPhase = new List<string>();   // events of the first 100 ms after a boot
+        private ulong bootInstr, bootUs;
+        // during the boot phase each instruction is its own translation block, so the
+        // executed-instruction count is exact at every port write (restored after 10 ms)
+        private Antmicro.Renode.Peripherals.Timers.LimitTimer bootPhaseEnd;
+        private object savedBlockSize;
+
+        private void SetBlockSize(object value)
+        {
+            foreach(var cpu in machine.SystemBus.GetCPUs())
+            {
+                var p = cpu.GetType().GetProperty("MaximumBlockSize");
+                if(p == null) continue;
+                if(value == null) { if(savedBlockSize == null) savedBlockSize = p.GetValue(cpu); p.SetValue(cpu, Convert.ChangeType(1, p.PropertyType)); }
+                else p.SetValue(cpu, value);
+            }
+        }
+
+        private void StartBootPhase()
+        {
+            SetBlockSize(null);
+            if(bootPhaseEnd == null)
+            {
+                bootPhaseEnd = new Antmicro.Renode.Peripherals.Timers.LimitTimer(machine.ClockSource, 1000000, this, "bootphase", 1UL << 40,
+                    enabled: false, workMode: Antmicro.Renode.Time.WorkMode.Periodic, eventEnabled: true);
+                bootPhaseEnd.LimitReached += () => { bootPhaseEnd.Enabled = false; if(savedBlockSize != null) SetBlockSize(savedBlockSize); };
+            }
+            bootPhaseEnd.Enabled = false;
+            bootPhaseEnd.Value = (1UL << 40) - 10000;
+            bootPhaseEnd.Enabled = true;
+        }
+        private bool portsHooked;
+
+        private void HookPorts()
+        {
+            if(portsHooked) return;
+            for(int port = 0; port < 11; port++)
+            {
+                IPeripheral gp;
+                string name = "sysbus.gpioPort" + (char)('A' + port);
+                if(!machine.TryGetByName(name, out gp) || !(gp is Antmicro.Renode.Peripherals.Bus.IBusPeripheral)) continue;
+                int pn = port;
+                ulong b = 0x58020000UL + 0x400UL * (ulong)port;
+                shadow[pn] = new uint[] { machine.SystemBus.ReadDoubleWord(b), machine.SystemBus.ReadDoubleWord(b + 4),
+                                          machine.SystemBus.ReadDoubleWord(b + 0x0C), machine.SystemBus.ReadDoubleWord(b + 0x14) };
+                machine.SystemBus.SetHookBeforePeripheralWrite<uint>((Antmicro.Renode.Peripherals.Bus.IBusPeripheral)gp,
+                    (value, offset) => { PortWrite(pn, offset, value); return value; });
+            }
+            portsHooked = true;
+        }
+
+        private string ShadowLevel(int port, int bit, out string mode, out string pull)
+        {
+            var s = shadow[port];
+            uint m = (s[0] >> (2 * bit)) & 3u, ot = (s[1] >> bit) & 1u, pu = (s[2] >> (2 * bit)) & 3u, od = (s[3] >> bit) & 1u;
+            mode = m == 0 ? "input" : m == 1 ? "output" : m == 2 ? "af" : "analog";
+            pull = pu == 1 ? "up" : pu == 2 ? "down" : "none";
+            string pin = "P" + (char)('A' + port) + bit;
+            int driven;
+            bool bench = drivenLevel.TryGetValue(pin, out driven);
+            if(m == 1) return (ot == 1 && od == 1) ? (pu == 1 ? "1" : pu == 2 ? "0" : (bench ? driven.ToString() : "\"z\"")) : od.ToString();
+            if(m == 0) return bench ? driven.ToString() : pu == 1 ? "1" : pu == 2 ? "0" : "\"z\"";
+            return m == 3 ? "\"z\"" : "null";
+        }
+
+        private ulong Instructions()
+        {
+            foreach(var cpu in machine.SystemBus.GetCPUs())
+            {
+                var p = cpu.GetType().GetProperty("ExecutedInstructions");
+                if(p != null) return Convert.ToUInt64(p.GetValue(cpu));
+            }
+            return 0;
+        }
+
+        private double CoreMhz()
+        {
+            foreach(var cpu in machine.SystemBus.GetCPUs())
+            {
+                var p = cpu.GetType().GetProperty("PerformanceInMips");
+                if(p != null) return Math.Max(1.0, Convert.ToDouble(p.GetValue(cpu)));
+            }
+            return 64.0;
+        }
+
+        private void PortWrite(int port, long offset, uint value)
+        {
+            var s = shadow[port];
+            var before = new Dictionary<int, string>();
+            for(int bit = 0; bit < 16; bit++) { string m, pl; before[bit] = ShadowLevel(port, bit, out m, out pl) + "/" + m + "/" + pl; }
+            switch(offset)
+            {
+                case 0x00: s[0] = value; break;
+                case 0x04: s[1] = value; break;
+                case 0x0C: s[2] = value; break;
+                case 0x14: s[3] = value & 0xFFFF; break;
+                case 0x18: s[3] = (s[3] & ~(value >> 16)) | (value & 0xFFFF); break;
+                default: return;
+            }
+            // instruction count since the boot event at the core clock: excludes time in
+            // WFI/WFE, so given only within 10 ms (emulated) of the boot event
+            double since = (Instructions() - bootInstr) / CoreMhz();
+            bool early = lastBoot != null && NowUs() - bootUs < 10000;
+            var evs = new List<string>();
+            lock(sync)
+            {
+                for(int bit = 0; bit < 16; bit++)
+                {
+                    string pin = "P" + (char)('A' + port) + bit;
+                    bool watched = Array.IndexOf(SafePins, pin) >= 0 || Array.IndexOf(tracePins, pin) >= 0 || Array.IndexOf(LatchPins, pin) >= 0;
+                    if(!watched) continue;
+                    string m, pl, lv = ShadowLevel(port, bit, out m, out pl);
+                    if(lv + "/" + m + "/" + pl == before[bit]) continue;
+                    lastState[pin] = lv + "/" + m + "/" + pl;
+                    string body = string.Format(CultureInfo.InvariantCulture,
+                        "\"t_us\": {0}, " + (early ? "\"since_boot_us\": {1:F3}, " : "") + "\"kind\": \"gpio\", \"pin\": \"{2}\", \"level\": {3}, \"mode\": \"{4}\", \"pull\": \"{5}\"",
+                        NowUs(), since, pin, lv, m, pl);
+                    if(early && bootPhase.Count < 512) bootPhase.Add(body);
+                    if(tracing) evs.Add("{\"seq\": " + (seq++) + ", " + body + "}");
+                }
+                foreach(var e in evs) Send("ev " + e);
+            }
+        }
+
+        // ---- boot event (spec 0045): the core executes its first instruction ----
+        private string lastBoot;           // the last boot event body, re-emitted at every trace start
+        private ulong bootHookPc;
+
+        private uint BootAddress()
+        {
+            IPeripheral wd;
+            if(machine.TryGetByName("sysbus.watchdog", out wd))
+            {
+                var f = wd.GetType().GetField("bootAddress", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if(f != null) return (uint)f.GetValue(wd);
+            }
+            return 0x08020000;
+        }
+
+        // the runner calls it after the image is loaded (sysbus.spi1.agent ArmBootHook)
+        public void ArmBootHook()
+        {
+            uint vt = BootAddress();
+            uint pc = machine.SystemBus.ReadDoubleWord(vt + 4) & ~1u;
+            if(pc == 0 || pc == 0xFFFFFFFE) return;
+            foreach(var cpu in machine.SystemBus.GetCPUs())
+            {
+                var add = cpu.GetType().GetMethod("AddHook");
+                var remove = cpu.GetType().GetMethod("RemoveHooksAt");
+                if(add == null) continue;
+                if(bootHookPc != 0 && remove != null) remove.Invoke(cpu, new object[] { bootHookPc });
+                bootHookPc = pc;
+                var dt = add.GetParameters()[1].ParameterType;
+                var mi = GetType().GetMethod("OnBootFetch", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                var del = Delegate.CreateDelegate(dt, this, mi);
+                add.Invoke(cpu, new object[] { (ulong)pc, del });
+            }
+        }
+
+        private void OnBootFetch(Antmicro.Renode.Peripherals.CPU.ICpuSupportingGdb cpu, ulong pc)
+        {
+            string ev;
+            lock(sync)
+            {
+                bootInstr = Instructions();
+                bootUs = NowUs();
+                StartBootPhase();
+                bootPhase.Clear();
+                lastBoot = string.Format(CultureInfo.InvariantCulture,
+                    "\"t_us\": {0}, \"kind\": \"boot\", \"at\": \"0x{1:X8}\", \"pc\": \"0x{2:X8}\"", NowUs(), BootAddress(), pc);
+                ev = tracing ? "{\"seq\": " + (seq++) + ", " + lastBoot + "}" : null;
+                if(ev != null) Send("ev " + ev);
+            }
+            // only the first instruction after a reset: remove until the next reset
+            var remove = cpu.GetType().GetMethod("RemoveHooksAt");
+            if(remove != null) remove.Invoke(cpu, new object[] { pc });
+            bootHookPc = 0;
+        }
+
         // a reset of the MCU while the emulator keeps running (watchdog, software)
         private void OnMachineReset()
         {
@@ -271,8 +470,24 @@ namespace Antmicro.Renode.Peripherals.SPI
             {
                 drivenLevel.Clear();
                 if(tracing) { ev = Event("\"kind\": \"reset\", \"cause\": \"" + cause + "\""); lastState.Clear(); }
+                if(ev != null) Send("ev " + ev);
             }
-            if(ev != null) Send("ev " + ev);
+            // after the reset event: port shadows back to the reset values, boot hook re-armed
+            try
+            {
+                lock(sync)
+                {
+                    for(int port = 0; port < 11; port++)
+                    {
+                        if(!shadow.ContainsKey(port)) continue;
+                        ulong b = 0x58020000UL + 0x400UL * (ulong)port;
+                        shadow[port] = new uint[] { machine.SystemBus.ReadDoubleWord(b), machine.SystemBus.ReadDoubleWord(b + 4),
+                                                    machine.SystemBus.ReadDoubleWord(b + 0x0C), machine.SystemBus.ReadDoubleWord(b + 0x14) };
+                    }
+                }
+                ArmBootHook();
+            }
+            catch(Exception e) { this.Log(LogLevel.Warning, "agent: boot hook after reset: {0}", e.Message); }
         }
 
         // power.cut: at emulated time t_us the core stops at once (supply gone);
@@ -451,6 +666,8 @@ namespace Antmicro.Renode.Peripherals.SPI
                                 }
                                 tracePins = pins.ToArray();
                                 lastState.Clear(); seq = first; tracing = true;
+                                if(lastBoot != null) Send("ev {\"seq\": " + (seq++) + ", " + lastBoot + "}");
+                                foreach(var b in bootPhase) Send("ev {\"seq\": " + (seq++) + ", " + b + "}");
                                 Array.Clear(atuWrites, 0, 3);
                             }
                             sampler.Enabled = true;

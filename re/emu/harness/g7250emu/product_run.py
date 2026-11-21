@@ -303,6 +303,7 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
         ('sysbus LoadBinary @%s 0x08000000' % flash_image) if flash_image else ('sysbus LoadELF @%s' % elf),
     ] + ['sysbus LoadBinary @%s 0x%08X' % (f, a) for a, f in (flash_preload if not flash_image else ())] + [
         'sysbus.watchdog PowerOnBoot',
+        'sysbus.spi1.agent ArmBootHook',
         'start',
     ]
     return "\n".join(lines) + "\n"
@@ -350,6 +351,8 @@ def main():
                     help="sector erase duration in us (0 = instant; the datasheet value is not set yet)")
     ap.add_argument("--flash-preload", action="append", default=[],
                     help="ADDR=FILE: load FILE into flash at ADDR before the first boot (e.g. a pre-filled store sector)")
+    ap.add_argument("--dhcp-on", action="store_true",
+                    help="the emulated LAN's DHCP server answers from power-on (default: off)")
     ap.add_argument("--no-address", action="store_true",
                     help="do not wait for the image to configure a network address (fault-path runs)")
     ap.add_argument("--boot", choices=sorted(BOOT_MODES), default="standin",
@@ -365,7 +368,7 @@ def main():
         sys.exit(testlist_run.run(sys.modules[__name__], os.path.abspath(args.elf), os.path.abspath(args.tests),
                                   run_id, scope=args.scope, out_path=args.output, boot=args.boot,
                                   pwr_cr3=args.pwr_cr3, no_address=args.no_address,
-                                  flash_erase_us=args.flash_erase_us,
+                                  flash_erase_us=args.flash_erase_us, dhcp_on=args.dhcp_on,
                                   flash_preload=[(int(x.split("=", 1)[0], 0), os.path.abspath(x.split("=", 1)[1])) for x in args.flash_preload]))
     if not args.selftest:
         sys.exit("unknown test list format (expected g7250-testlist, or --selftest for own programs)")

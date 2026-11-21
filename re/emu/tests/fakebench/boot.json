@@ -1,0 +1,7 @@
+{
+  "format": "g7250-testlist", "version": 1, "minor": 3,
+  "defaults": { "timeout_s": 30 },
+  "tests": [
+    { "id": "T-EMU-16", "title": "boot event and boot-phase pin changes at trace start", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["hw.trace"] }
+  ]
+}

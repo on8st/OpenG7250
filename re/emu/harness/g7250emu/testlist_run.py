@@ -71,7 +71,8 @@ def testbench_commit(tbdir, repo):
 class Boot:
     """One emulator process with its bridge, agent and fixture server."""
 
-    def __init__(self, pr, elf, out, boot="standin", pwr_cr3=None, no_address=False, flash_erase_us=0, flash_preload=()):
+    def __init__(self, pr, elf, out, boot="standin", pwr_cr3=None, no_address=False, flash_erase_us=0, flash_preload=(),
+                 dhcp_on=False):
         self.pr, self.elf, self.out, self.boot = pr, elf, out, boot
         self.pwr_cr3, self.no_address = pwr_cr3, no_address
         self.flash_erase_us, self.flash_preload = flash_erase_us, list(flash_preload)
@@ -86,6 +87,8 @@ class Boot:
         self.flash = None
         self.cycle_lock = threading.Lock()
         self.agent.on_cut = lambda: self.power_cycle(cut=True)
+        if dhcp_on:
+            self.bridge.dhcp.running = True     # the LAN's DHCP server answers from power-on
         self.start()
 
     def start(self):
@@ -203,7 +206,7 @@ def run_bench(tbdir, endpoint_path, test, agent, wall_cap):
 
 
 def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin", pwr_cr3=None, no_address=False,
-        flash_erase_us=0, flash_preload=()):
+        flash_erase_us=0, flash_preload=(), dhcp_on=False):
     spec = json.load(open(tests_path))
     tbdir = testbench_dir(pr.REPO)
     root = os.path.join(pr.OUT_ROOT, run_id)
@@ -234,7 +237,8 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             continue
         tdir = os.path.join(root, t["id"]) if not per_list else os.path.join(root, "list")
         try:
-            bt = shared if per_list and shared else Boot(pr, elf, tdir, boot, pwr_cr3, no_address, flash_erase_us, flash_preload)
+            bt = shared if per_list and shared else Boot(pr, elf, tdir, boot, pwr_cr3, no_address, flash_erase_us, flash_preload,
+                                                         dhcp_on)
         except Exception as ex:  # noqa: BLE001
             results.append({"id": t["id"], "status": "error", "reason": "runner: %s" % ex})
             continue
@@ -302,6 +306,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         "environment": dict({"boot": pr.BOOT_MODES[boot][1]},
                             **({"pwr_cr3_at_power_on": "0x%08X locked" % pwr_cr3} if pwr_cr3 is not None else {}),
                             **({"flash_erase_us": flash_erase_us} if flash_erase_us else {}),
+                            **({"dhcp_server_at_power_on": True} if dhcp_on else {}),
                             **({"flash_preload": ["0x%08X" % a for a, _ in flash_preload]} if flash_preload else {})),
         "started": started,
         "finished": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

@@ -101,6 +101,28 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
 - Every datagram in both directions is written to `network.pcapng`
   (Ethernet/IPv4/UDP, wall-clock time stamps).
 
+## Boot event and exact pin changes (spec 0045)
+
+- `{"kind": "boot", "at": "0x08020000", "pc": "<reset handler>", "t_us": T}`:
+  the core executes its first instruction after a reset (power-on, power cycle,
+  power cut, watchdog or software reset). `at` is the vector table the core boots
+  from (0x08020000 under the stand-in), `pc` the reset handler from it. The runner
+  arms it after the image is loaded (`sysbus.spi1.agent ArmBootHook`); later resets
+  re-arm it.
+- Pin changes of the watched pins (HIS 85 safe pins, latch pins, the traced pins)
+  are taken from write hooks on the GPIO ports (MODER, OTYPER, PUPDR, ODR, BSRR),
+  at the instant of the write; the 50 us sampler stays for changes the hooks do
+  not see (16-bit writes, inputs).
+- Within 10 ms (emulated) of a boot event a gpio event also carries
+  `since_boot_us`: executed instructions since the boot event / core MHz. In that
+  phase each instruction is its own translation block, so the count is exact; it
+  assumes one instruction per core cycle (flash wait states, bus latencies and
+  dual issue are not modelled) and excludes time in WFI/WFE. It is a lower bound
+  for the hardware, not a worst case.
+- A trace started after a boot begins with the last boot event and the boot-phase
+  gpio events, with their original `t_us` (before the start time).
+- Self-test: `tests/fakebench/boot.json` (T-EMU-16, trace starts with the boot event).
+
 ## Fixtures (format section 4)
 
 Offered now: `hw.observe`, `hw.trace`, `hw.input`, `power.cycle`, `power.cut`,
