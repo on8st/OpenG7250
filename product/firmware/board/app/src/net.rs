@@ -316,6 +316,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         tx_implemented: g7250_safety::tx::TX_IMPLEMENTED,
         tx_calibrated: tx.calibrated(),
         rate_384: false, // P-NET-1: offered only once >= 50 MHz SPI is shown
+        // DDC0 offered only with the FPGA receive parameters (P-RX-2, through the bus gate).
+        rx_offered: g7250_safety::fpga_gate::permit().is_some(),
     });
     let mut p2 = crate::p2::P2::new(tx, g7250_radio::regmap::RegMap::new(rec));
     p2.set_link(link);

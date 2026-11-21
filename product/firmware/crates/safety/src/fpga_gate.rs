@@ -8,6 +8,16 @@
 //! 2026-11-21: the image must not drive PE0-PE7 or any FPGA bus strobe unless the bus parameters
 //! are set from a cleared HIS; until then the pins stay undriven and DDC0 reports reason 2.
 //!
+//! HIS 80 at `5292ba8` (gate review 8) answers part of it: STB and CMD are active-high pulses;
+//! the MCU drives D0-D7 for commands and writes, switches them to inputs for reads, the FPGA
+//! drives while STB is high, and the MCU may drive again only after STB is low; samples are
+//! big-endian 24-bit, one strobe per byte, six per sample; DRDY most likely rising; f_clk
+//! 122.88 MHz as the word scale (all MEDIUM). Still not known: set-up, strobe width and turnaround
+//! times, I/Q order, which tuning word is DDC0, and the meaning and safe values of 0x01 byte 0 and
+//! bytes 9-18. The spec names the frame P-RX-2 (0042). So the parameter set stays incomplete and
+//! the gate stays closed. Safety rule of HIS 80: any 0x01 write while byte 0 is not understood
+//! only with the RF section in the HIS 85 safe state (byte 0 may hold a TX enable).
+//!
 //! The gate is in the types: every bus access takes a [`BusPermit`], and the only way to get
 //! one is [`permit`], which needs a complete [`BusParams`] set from [`CLEARED`] (the radio) or,
 //! with the build feature `emulator-fpga-bus`, from [`EMULATOR`] (emulator runs only; values

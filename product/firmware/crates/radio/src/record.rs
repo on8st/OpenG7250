@@ -32,6 +32,8 @@ pub struct Params {
     pub tx_calibrated: bool,
     /// 384 ksps offered (only once the SPI link to the CH394 is shown fast enough, P-NET-1).
     pub rate_384: bool,
+    /// DDC0 offered: the FPGA receive parameters are set (P-RX-2; B6.1; 0042).
+    pub rx_offered: bool,
 }
 
 const fn ascii4(s: &[u8; 4]) -> u32 {
@@ -50,7 +52,8 @@ pub fn build(p: &Params) -> [u32; LEN] {
     r[0x09] = 44; // p2_version
     r[0x0A] = 0; // hw_revision: not identified (HIS-18)
     r[0x0B] = 0x01 | (1 << 4); // level 1 present; active level 1
-    r[0x0C] = 1 | ((p.tx_implemented as u32) << 1); // RX IQ; TX IQ per tx bit 1; no audio, mic, wideband
+    // RX IQ only once P-RX-2 is set (0042); TX IQ per tx bit 1; no audio, mic, wideband.
+    r[0x0C] = (p.rx_offered as u32) | ((p.tx_implemented as u32) << 1);
     r[0x0D] = 1; // num_adc
     r[0x0E] = 1; // num_ddc (0004)
     r[0x0F] = 1; // num_duc
@@ -94,7 +97,7 @@ mod tests {
     use super::*;
 
     fn rec() -> [u32; LEN] {
-        build(&Params { fw_version: 0x0001_0007, tx_implemented: false, tx_calibrated: false, rate_384: false })
+        build(&Params { fw_version: 0x0001_0007, tx_implemented: false, tx_calibrated: false, rate_384: false, rx_offered: false })
     }
 
     #[test]
@@ -109,6 +112,10 @@ mod tests {
         assert_eq!(r[0x12], 122_880_000);
         assert_eq!(r[0x52], 0x1C53_0001);
         assert_eq!(r[0x54], 100);
+        // DDC0 not offered before P-RX-2 (T-B6-27).
+        assert_eq!(r[0x0C] & 1, 0);
+        let r = build(&Params { fw_version: 0, tx_implemented: false, tx_calibrated: false, rate_384: false, rx_offered: true });
+        assert_eq!(r[0x0C] & 1, 1);
     }
 
     #[test]
@@ -116,10 +123,10 @@ mod tests {
         let r = rec();
         assert_eq!(r[0x20], 0b0_1101); // present, arm required, mode class required; not implemented, not calibrated
         assert_eq!(r[0x0C] & 2, 0);
-        let r = build(&Params { fw_version: 0, tx_implemented: true, tx_calibrated: false, rate_384: false });
+        let r = build(&Params { fw_version: 0, tx_implemented: true, tx_calibrated: false, rate_384: false, rx_offered: false });
         assert_eq!(r[0x20], 0b0_1111);
         // Bit 4 is never set while bit 1 is 0 (0039).
-        let r = build(&Params { fw_version: 0, tx_implemented: false, tx_calibrated: true, rate_384: false });
+        let r = build(&Params { fw_version: 0, tx_implemented: false, tx_calibrated: true, rate_384: false, rx_offered: false });
         assert_eq!(r[0x20] & 0x10, 0);
     }
 

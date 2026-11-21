@@ -35,6 +35,16 @@ undriven and DDC0 reports reason 2.
 | F4-Q4 | 0x04 RX I&Q read: byte order of the two signed 24-bit values, I before Q?, number of samples per DRDY per rate index (8/4/2/1, MEDIUM), and how many strobes one read takes. | Packing DDC0 (B6.3). |
 | F4-Q5 | DRDY (PE10): active edge (rising, HIS 80) and what happens if a read is late (overrun flag in 0x02?). | Pacing and the DDC FIFO overflow bit (B9.2 byte 30). |
 
+### Answers (cleared HIS `5292ba8`, gate review 8)
+
+| Id | Answer | Firmware |
+|---|---|---|
+| F4-Q1 | STB, CMD active-high pulses (MEDIUM); MCU drives D0–D7 for commands and writes, inputs for reads, FPGA drives while STB is high, MCU drives again only after STB is low. Set-up, strobe width, turnaround: not known (radio). | Matches `fpga.rs` (release before a read, drive again only after STB low). Times still missing: gate closed. |
+| F4-Q2 | Byte 0 and bytes 9–18: not known; DDC0 cannot run until understood; any 0x01 write only with the RF section in the HIS 85 safe state. Spec: P-RX-2 (0042). | Gate closed; record `streams` bit 0 = 0; DDC0 reason 2. |
+| F4-Q3 | Which word (offset 1 or 5) is DDC0: not known; f_clk 122.88 MHz as the scale (MEDIUM). | Waits for the capture (HIS 90). |
+| F4-Q4 | Big-endian 24-bit, one strobe per byte, six per sample (MEDIUM); I/Q order not known. | Waits. |
+| F4-Q5 | DRDY most likely rising (MEDIUM); late-read behaviour not known. | Waits. |
+
 ## HIS answers (cleared HIS `d199d33`, gate review 6)
 
 | Id | Answer | Firmware change |

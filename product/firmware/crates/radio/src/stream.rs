@@ -59,14 +59,15 @@ pub fn ddc0(i: &DdcInputs) -> u8 {
     if !d.enable {
         return 1;
     }
+    // Before P-RX-2 a DDC0 enable gets reason 2, whatever the rate and size (B6.1; 0042).
+    if !i.ddc0_built {
+        return 2;
+    }
     if !rate_offered(d.rate_ksps, i.offered_384) {
         return 3;
     }
     if !(d.size == 24 || d.size == 0) {
         return 4;
-    }
-    if !i.ddc0_built {
-        return 2;
     }
     RUNNING
 }
@@ -124,6 +125,11 @@ mod tests {
         let mut i = ok();
         i.ddc0_built = false;
         assert_eq!(ddc0(&i), 2);
+        // Not offered beats rate and size (T-B6-27); the General checks still come first.
+        i.ddc = Some(Ddc { enable: true, rate_ksps: 768, size: 16 });
+        assert_eq!(ddc0(&i), 2);
+        i.general = Some(General { phase_word: true, format: 0x02, ..Default::default() });
+        assert_eq!(ddc0(&i), 5);
         assert_eq!(duc0(false), 14);
         assert_eq!(register(9, 14), 0x0202_0E09);
     }
