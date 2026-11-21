@@ -3,7 +3,7 @@
 //! (testbench/docs/testlist-format.md section 4) on TCP.
 //!
 //!   g7250-refmodel [--ip 127.0.0.1] [--netmask 255.0.0.0] [--mac 02:00:00:00:72:50]
-//!                  [--tx locked|unlocked] [--lock-reason spec|not-calibrated]
+//!                  [--tx locked|unlocked]
 //!                  [--control 127.0.0.1:7290] [--endpoint-file PATH]
 
 use std::io::{BufRead, BufReader, Write};
@@ -11,7 +11,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, UdpSocket};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use g7250_refmodel::codes::{arm, port};
+use g7250_refmodel::codes::port;
 use g7250_refmodel::json::{self, J};
 use g7250_refmodel::radio::{Config, Radio, Rx, MS};
 
@@ -40,10 +40,9 @@ fn main() {
             "--ip" => cfg.ip = v.parse().expect("ip"),
             "--netmask" => cfg.netmask = v.parse().expect("netmask"),
             "--mac" => cfg.mac = parse_mac(&v),
-            "--tx" => cfg.tx_locked = v != "unlocked",
-            "--lock-reason" => {
-                cfg.lock_reason = if v == "not-calibrated" { arm::PROPOSED_NOT_CALIBRATED } else { arm::TX_NOT_IMPLEMENTED }
-            }
+            // locked: no calibration set (r1.0 before measurement); unlocked: a complete simulated
+            // calibration set at start (Annex P "Tests")
+            "--tx" => cfg.calibrated = v == "unlocked",
             "--control" => control = v,
             "--endpoint-file" => endpoint_file = Some(v),
             "-h" | "--help" => {
@@ -83,7 +82,7 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "state.dump"];
+    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "state.dump"];
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -98,13 +97,12 @@ fn main() {
         ("control", J::obj(vec![("transport", J::Str("tcp".into())), ("address", J::Str(control.clone()))])),
         ("fixtures", J::Arr(fixtures.iter().map(|f| J::Str(f.to_string())).collect())),
         ("time_scale", J::Num(1.0)),
-        ("model", J::obj(vec![("tx", J::Str(if cfg.tx_locked { "locked" } else { "unlocked" }.into())),
-                             ("lock_reason", J::Num(cfg.lock_reason as f64))])),
+        ("model", J::obj(vec![("tx", J::Str(if cfg.calibrated { "unlocked" } else { "locked" }.into()))])),
     ]);
     if let Some(p) = &endpoint_file {
         std::fs::write(p, ep.dump() + "\n").expect("endpoint file");
     }
-    eprintln!("g7250-refmodel on {} (tx {}), control {}", cfg.ip, if cfg.tx_locked { "locked" } else { "unlocked" }, control);
+    eprintln!("g7250-refmodel on {} (tx {}), control {}", cfg.ip, if cfg.calibrated { "unlocked" } else { "locked" }, control);
 
     let t0 = Instant::now();
     let now = || t0.elapsed().as_micros() as u64;
@@ -178,6 +176,16 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 ("PD12", J::Num(0.0)),
                 ("model_note", J::Str("notional state of the reference model, not pins".into())),
             ]))
+        }
+        "hw.trace" => {
+            // start: the latched "ever" flags count from now (the model has no raw event list;
+            // stop returns an empty list)
+            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("start");
+            if action == "start" {
+                r.hw.chain_a_bit7_ever = r.hw.tx_levels;
+                r.hw.bias_nonzero_ever = r.hw.tx_levels;
+            }
+            ok(J::Arr(vec![]))
         }
         "power.cycle" => {
             r.reset("power-on");

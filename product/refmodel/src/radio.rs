@@ -28,15 +28,13 @@ pub struct Config {
     pub mac: [u8; 6],
     pub fw: (u8, u8, u16),
     pub beta: bool,
-    /// TX locked until calibrated (r1.0, ON8ST 2026-11-20): record `tx` bit 1 = 0.
-    pub tx_locked: bool,
-    /// Arm reject reason while locked: spec as written (11 TX_NOT_IMPLEMENTED) or the proposal
-    /// of finding SF-01 (12).
-    pub lock_reason: u8,
+    /// Start with a complete simulated calibration set (Annex P, A1.12): record `tx` bit 4 = 1.
+    /// The default is the r1.0 state before calibration: `tx` bit 4 = 0, TX frozen (0035, 0036).
+    pub calibrated: bool,
+    /// Offered DDC0 rates: 48, 96, 192 ksps until P-NET-1 shows 50 MHz SPI (Annex P).
     pub ddc_rates: u32,
-    pub atu_group: bool,
-    /// Persistent limits (C-3). Built-in values per Table B8-2; SWR S2 and PA T3 are TBD in the
-    /// spec (HIS-11, HIS-12): PLACEHOLDER values.
+    /// Persistent limits (C-3). Built-in values per Table B8-2. SWR S2 and PA T3 are pending
+    /// hardware (P-PWR-2): SIMULATED values, used only while a calibration set holds them.
     pub builtin_tx_time_ms: u32,
     pub builtin_fwd_power_mw: u32,
     pub builtin_swr_s2: u32,
@@ -52,10 +50,8 @@ impl Default for Config {
             mac: [0x02, 0x00, 0x00, 0x00, 0x72, 0x50],
             fw: (0, 1, 1),
             beta: true,
-            tx_locked: true,
-            lock_reason: arm::TX_NOT_IMPLEMENTED,
-            ddc_rates: 0x0F,
-            atu_group: true,
+            calibrated: false,
+            ddc_rates: 0x07,
             builtin_tx_time_ms: 300_000,
             builtin_fwd_power_mw: 100_000,
             builtin_swr_s2: 3_000,
@@ -202,6 +198,48 @@ pub struct Radio {
     last_unasked: HashMap<Host, u64>,
     pub mgmt: Mgmt,
     pub resets: u64,
+    /// The stored calibration set (A1.12); kept by FACTORY_RESET, lost only with the model.
+    pub cal: Option<Calibration>,
+}
+
+/// Calibration set (A1.12, Annex M Table M-5).
+#[derive(Debug, Clone)]
+pub struct Calibration {
+    pub id: [u8; 32],
+    pub date: u32,
+    pub source: String,
+    pub entries: Vec<(String, Vec<u8>)>,
+}
+
+/// Parameters the freeze rule of Annex P names: groups P-RF, P-PWR, P-SEN, P-TIM, and P-TX-1,
+/// P-ATU-1, P-ANT-1 (Table P-1).
+pub const FREEZE_SET: [&str; 19] = [
+    "P-RF-1", "P-RF-2", "P-RF-3", "P-RF-4", "P-RF-5", "P-PWR-1", "P-PWR-2", "P-PWR-3", "P-PWR-4",
+    "P-PWR-5", "P-SEN-1", "P-SEN-2", "P-SEN-3", "P-SEN-4", "P-SEN-5", "P-TIM-1", "P-TIM-2",
+    "P-TX-1", "P-ATU-1",
+];
+/// Every parameter id of Table P-1.
+pub const ALL_PARAMS: [&str; 34] = [
+    "P-RF-1", "P-RF-2", "P-RF-3", "P-RF-4", "P-RF-5", "P-ANT-1", "P-ATU-1", "P-PWR-1", "P-PWR-2",
+    "P-PWR-3", "P-PWR-4", "P-PWR-5", "P-SEN-1", "P-SEN-2", "P-SEN-3", "P-SEN-4", "P-SEN-5",
+    "P-TIM-1", "P-TIM-2", "P-NET-1", "P-NET-2", "P-SYS-1", "P-SYS-2", "P-SYS-3", "P-SYS-4",
+    "P-SYS-5", "P-SYS-6", "P-SYS-7", "P-SYS-8", "P-RX-1", "P-TX-1", "P-L2-1", "P-L2-2", "P-L2-3",
+];
+
+impl Calibration {
+    pub fn has(&self, id: &str) -> bool {
+        self.entries.iter().any(|(k, _)| k == id)
+    }
+    /// Complete for the freeze rule (Annex P): every FREEZE_SET parameter and P-ANT-1.
+    pub fn complete(&self) -> bool {
+        FREEZE_SET.iter().all(|p| self.has(p)) && self.has("P-ANT-1")
+    }
+    /// A simulated complete set, for `--tx unlocked` (Annex P "Tests": simulated values).
+    pub fn simulated() -> Self {
+        let mut entries: Vec<(String, Vec<u8>)> = FREEZE_SET.iter().map(|p| (p.to_string(), vec![1])).collect();
+        entries.push(("P-ANT-1".into(), vec![1]));
+        Calibration { id: [0x5A; 32], date: 0, source: "refmodel simulated".into(), entries }
+    }
 }
 
 pub fn phase_to_hz(p: u32) -> f64 {
@@ -210,7 +248,8 @@ pub fn phase_to_hz(p: u32) -> f64 {
 
 impl Radio {
     pub fn new(cfg: Config, now: u64) -> Self {
-        let record = cap::build(&cfg);
+        let cal = if cfg.calibrated { Some(Calibration::simulated()) } else { None };
+        let record = cap::build(&cfg, cal.as_ref().map_or(false, |c| c.complete()));
         let persistent = [cfg.builtin_tx_time_ms, cfg.builtin_fwd_power_mw, cfg.builtin_swr_s2,
                           cfg.builtin_pa_temp_t3_mc];
         let mut r = Radio {
@@ -248,6 +287,7 @@ impl Radio {
             last_unasked: HashMap::new(),
             mgmt: Mgmt::new(now),
             resets: 0,
+            cal,
         };
         r.new_token();
         r.logf("power-on reset");
@@ -255,6 +295,19 @@ impl Radio {
     }
 
     // ---------- helpers ----------
+    /// Record `tx` bit 4 as published in the record (constant within a session, B4.7).
+    pub fn tx_calibrated(&self) -> bool {
+        self.record[0x20] & (1 << 4) != 0
+    }
+    /// Values that need the calibration set (A1.12 item 4): S2 and T3 are part of P-PWR-2.
+    pub fn has_param(&self, id: &str) -> bool {
+        self.cal.as_ref().map_or(false, |c| c.has(id))
+    }
+    /// Rebuild the record after a calibration change; only while no session runs (A1.12 item 1).
+    pub fn rebuild_record(&mut self) {
+        let complete = self.cal.as_ref().map_or(false, |c| c.complete());
+        self.record = cap::build(&self.cfg, complete);
+    }
     pub fn count(&mut self, what: &str) {
         *self.stats.entry(what.to_string()).or_insert(0) += 1;
     }
@@ -299,9 +352,11 @@ impl Radio {
     }
     pub fn watchdog_state(&self) -> u32 {
         let g = self.session.as_ref().and_then(|s| s.s.general.as_ref());
-        let written = g.map_or(true, |g| g.wd_bit());
+        // 0039: bit 0 reads 0 and bit 1 reads 1 while bit 2 (no General packet yet) is set.
         let none = g.is_none();
-        (written as u32) | ((written || self.armed()) as u32) << 1 | (none as u32) << 2
+        let written = g.map_or(false, |g| g.wd_bit());
+        let effective = none || written || self.armed();
+        (written as u32) | (effective as u32) << 1 | (none as u32) << 2
     }
     fn reg_dest(&self) -> Option<Host> {
         let s = self.session.as_ref()?;
@@ -329,7 +384,7 @@ impl Radio {
             0 => 0x80,
             r => r as u32,
         };
-        let duc = if self.cfg.tx_locked { sr::NOT_OFFERED as u32 } else { 0 };
+        let duc = if !self.tx_calibrated() { sr::TX_NOT_CALIBRATED as u32 } else { 0 };
         let mic = sr::NOT_OFFERED as u32;
         let wb = sr::NOT_OFFERED as u32;
         ddc | duc << 8 | mic << 16 | wb << 24
@@ -801,13 +856,13 @@ impl Radio {
     /// The key rule of A3.1a, as far as modelled.
     fn try_key(&mut self, out: &mut Vec<Tx>) {
         let Some(s) = self.session.as_ref() else { return };
-        let freq = phase_to_hz(s.s.hp.duc0_phase) as u32;
+        let freq = phase_to_hz(s.s.hp.duc0_phase).round() as u32; // within the phase-word resolution
         let inside = cap::TX_BANDS.iter().any(|(lo, hi)| freq >= *lo && freq <= *hi);
         self.tx.outside = !inside;
         let pa = s.s.general.as_ref().map_or(false, |g| g.pa_enable());
         let enc_ok = s.s.general.as_ref().map_or(true, |g| g.b(37) & 0b1000 != 0);
         let eer = s.s.duc.as_ref().map_or(false, |d| d[5] & 1 != 0);
-        let ok = !self.cfg.tx_locked && self.arm.state == 1 && s.arm_confirmed_at.is_some()
+        let ok = self.tx_calibrated() && self.arm.state == 1 && s.arm_confirmed_at.is_some()
             && inside && pa && enc_ok && !eer && self.mode_class != 0 && !self.tx.keyed
             && !self.update_in_progress;
         if ok {
@@ -833,8 +888,9 @@ impl Radio {
             self.count("drop.short.duc_iq");
             return;
         }
-        if self.cfg.tx_locked {
-            self.count("drop.duc_iq.tx_locked");
+        if !self.tx_calibrated() {
+            // B10.7: while TX is not calibrated the owner's DUC I&Q is discarded and counted.
+            self.count("drop.duc_iq.tx_not_calibrated");
         }
     }
 
@@ -947,10 +1003,20 @@ impl Radio {
             reg::SAFETY_STATE | reg::FAULT_CODE | reg::FAULT_FLAGS | reg::FAULT_CLASS => 0,
             reg::TRIP_COUNT | reg::FAULT_CLEAR | reg::LIMIT_STATUS | reg::LIMIT_INHIBIT => 0,
             reg::LIMIT_TX_TIME..=reg::LIMIT_PA_TEMP => self.limit_in_force((a - reg::LIMIT_TX_TIME) as usize),
+            // group 3: the HIS 85 sensors exist; values stay invalid (SENSOR_VALID 0) until the
+            // calibration set holds P-SEN-1 (record telemetry, 0039). No separate supply current
+            // input (telemetry bit 4 = 0), so 0x0305 has no register.
+            0x0300..=0x0304 | 0x0306 | reg::SENSOR_VALID => 0,
             reg::ATU_TUNE => 0,
-            reg::ATU_STATE => 0,
+            reg::ATU_STATE => self.atu_state(),
+            reg::ANT_STATE => 0, // unknown until P-ANT-1 (Annex P)
             _ => return None,
         })
+    }
+
+    /// 5 unknown while the ATU latches are unwritten (P-ATU-1 not set; Annex P, 0032).
+    pub fn atu_state(&self) -> u32 {
+        if self.has_param("P-ATU-1") { 0 } else { 5 }
     }
 
     fn limit_in_force(&self, i: usize) -> u32 {
@@ -1001,6 +1067,10 @@ impl Radio {
             }
             reg::LIMIT_TX_TIME..=reg::LIMIT_PA_TEMP => {
                 let i = (a - reg::LIMIT_TX_TIME) as usize;
+                // A1.12 item 4: S2 and T3 (P-PWR-2) are refused until the set holds them.
+                if (a == reg::LIMIT_SWR || a == reg::LIMIT_PA_TEMP) && !self.has_param("P-PWR-2") {
+                    return W::Reject(cur, wr::NOT_CALIBRATED);
+                }
                 if v == 0 {
                     self.session_limits[i] = 0;
                 } else if v > self.persistent_limits[i] {
@@ -1011,10 +1081,13 @@ impl Radio {
                 W::Answer(vec![(a, self.limit_in_force(i))])
             }
             reg::ATU_TUNE => match v {
-                // A3.9b / 0032: until the ATU parameters are set, a start is NOT_CALIBRATED.
-                // Order (BUSY, NOT_OWNER, BAD_VALUE, NOT_CALIBRATED, NOT_ARMED, ...): SF-03.
-                0 => W::Answer(vec![(a, 0), (reg::ATU_STATE, 0)]),
-                1 => W::Reject(0, wr::NOT_CALIBRATED),
+                // A3.9b item 1 order: BUSY, NOT_OWNER, BAD_VALUE, NOT_CALIBRATED, NOT_ARMED, no-op,
+                // KEYED, NOT_KEYABLE. The tune cycle itself is not modelled: once calibrated and
+                // armed, a start is answered as the no-op with ATU_STATE (model gap).
+                0 => W::Answer(vec![(a, 0), (reg::ATU_STATE, self.atu_state())]),
+                1 if !self.has_param("P-ATU-1") => W::Reject(0, wr::NOT_CALIBRATED),
+                1 if !self.armed() => W::Reject(0, wr::NOT_ARMED),
+                1 => W::Answer(vec![(a, 0), (reg::ATU_STATE, self.atu_state())]),
                 _ => W::Reject(cur, wr::BAD_VALUE),
             },
             _ => W::Reject(cur, wr::READ_ONLY),
@@ -1038,10 +1111,10 @@ impl Radio {
         }
         let s = self.session.as_ref().unwrap();
         let wd_written = s.s.general.as_ref().map_or(false, |g| g.wd_bit());
-        // The order of the checks is the order of B10.2 item 3; the spec gives no precedence
-        // (finding SF-02). NOT_RUNNING cannot arise here: without RUN there is no session and
-        // the write is NOT_OWNER (B8.5; finding SF-06). Fault, inhibit and level are not
-        // modelled (always pass).
+        // B10.2 item 3 order: BAD_TOKEN (above), NOT_RUNNING, WATCHDOG_DISABLED, IN_FAULT,
+        // INHIBITED, PTT_ACTIVE, LEVEL_NOT_ACTIVE, MAINTENANCE, NO_MODE_CLASS,
+        // TX_NOT_IMPLEMENTED, NOT_CALIBRATED. NOT_RUNNING is not set over P2 (Table B8-3);
+        // fault, inhibit and level are not modelled (always pass); TX is implemented (0036).
         let reason = if !(wd_written && s.s.wd_general_seen) {
             arm::WATCHDOG_DISABLED
         } else if s.s.hp.ptt {
@@ -1050,8 +1123,8 @@ impl Radio {
             arm::MAINTENANCE
         } else if self.mode_class == 0 {
             arm::NO_MODE_CLASS
-        } else if self.cfg.tx_locked {
-            self.cfg.lock_reason
+        } else if !self.tx_calibrated() {
+            arm::NOT_CALIBRATED
         } else {
             arm::NONE
         };

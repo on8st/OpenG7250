@@ -86,7 +86,7 @@ fn record_on_request_b4() {
     assert_eq!(p.len(), 1 + 207);
     assert_eq!(p[1], (0, 0x4737_3235));
     assert_eq!(p[1 + 0x52], (0x52, 0x1C53_0001));
-    assert_eq!(p[1 + 0x20].1 & 0b10, 0, "tx bit 1 = 0 while locked");
+    assert_eq!(p[1 + 0x20].1 & 0b1_0010, 0b10, "tx bit 1 = 1 (0036), bit 4 = 0 until calibrated");
     // B4.4 item 3: rate limit 1/s per non-owner source
     assert!(r.on_datagram(200 * MS, &rx(host(40000), port::REGMAP, &regw(&[(reg::CAP_REQUEST, 1)]))).is_empty());
     assert_eq!(r.on_datagram(1100 * MS, &rx(host(40000), port::REGMAP, &regw(&[(reg::CAP_REQUEST, 1)]))).len(), 1);
@@ -103,7 +103,7 @@ fn locked_arm_rejected_and_atu_not_calibrated() {
     let out = r.on_datagram(2 * MS, &rx(a, port::REGMAP, &regw(&[(reg::TX_ARM, tok ^ ARM_MAGIC)])));
     let st = find(&out, reg::TX_ARM_STATE).unwrap();
     assert_eq!(st & 0xF, 0, "not armed");
-    assert_eq!((st >> 8) & 0xFF, arm::TX_NOT_IMPLEMENTED as u32);
+    assert_eq!((st >> 8) & 0xFF, arm::NOT_CALIBRATED as u32);
     // PTT edge does not key
     let out = r.on_datagram(30 * MS, &rx(a, port::HIGH_PRIORITY, &hp(true, true, 14.1e6)));
     assert_eq!(find(&out, reg::TX_STATE).unwrap_or(0) & 1, 0);
@@ -117,7 +117,7 @@ fn locked_arm_rejected_and_atu_not_calibrated() {
 
 #[test]
 fn unlocked_arm_and_key() {
-    let cfg = Config { tx_locked: false, ..Config::default() };
+    let cfg = Config { calibrated: true, ..Config::default() };
     let mut r = Radio::new(cfg, 0);
     let a = host(50000);
     session(&mut r, a, 0);
@@ -182,7 +182,9 @@ fn register_rejections_b8_4() {
     let reason = |out: &[Tx]| find(out, reg::WRITE_STATUS).map(|v| v & 0xFF);
     assert_eq!(reason(&w(&mut r, MS, &[(0x0001, 5)])), Some(wr::READ_ONLY as u32));
     assert_eq!(reason(&w(&mut r, MS, &[(0x00D0, 5)])), Some(wr::UNKNOWN_ADDRESS as u32));
-    assert_eq!(reason(&w(&mut r, MS, &[(0x0300, 5)])), Some(wr::UNKNOWN_ADDRESS as u32), "group 3 absent");
+    assert_eq!(reason(&w(&mut r, MS, &[(0x0300, 5)])), Some(wr::READ_ONLY as u32), "group 3 present (0035)");
+    assert_eq!(reason(&w(&mut r, MS, &[(0x0305, 5)])), Some(wr::UNKNOWN_ADDRESS as u32), "no separate supply current");
+    assert_eq!(reason(&w(&mut r, MS, &[(0x0600, 5)])), Some(wr::UNKNOWN_ADDRESS as u32), "group 6 absent");
     assert_eq!(reason(&w(&mut r, MS, &[(reg::KEYED_TIMEOUT, 99)])), Some(wr::BAD_VALUE as u32));
     assert_eq!(reason(&w(&mut r, MS, &[(reg::LIMIT_TX_TIME, 400_000)])), Some(wr::LOOSER_LIMIT as u32));
     let out = w(&mut r, MS, &[(reg::LIMIT_TX_TIME, 10_000)]);
@@ -198,4 +200,43 @@ fn register_rejections_b8_4() {
     assert!(r.on_datagram(3 * MS, &rx(b, port::REGMAP, &regw(&[(reg::KEYED_TIMEOUT, 200)]))).is_empty());
     // non-owner from source port 7250: nothing
     assert!(r.on_datagram(300 * MS, &rx(host(7250), port::REGMAP, &regw(&[(reg::CAP_REQUEST, 1)]))).is_empty());
+}
+
+#[test]
+fn freeze_rule_annex_p() {
+    // tx bit 4 = 0: arm NOT_CALIBRATED (last in the B10.2 order), DUC0 reason 14,
+    // LIMIT_SWR NOT_CALIBRATED, ATU_STATE 5 (T-B10-41, T-B10-42, T-A1-64)
+    let mut r = Radio::new(Config::default(), 0);
+    let a = host(50000);
+    session(&mut r, a, 0);
+    let tok = r.token;
+    let out = r.on_datagram(MS, &rx(a, port::REGMAP, &regw(&[(reg::TX_ARM, tok ^ ARM_MAGIC)])));
+    assert_eq!((find(&out, reg::TX_ARM_STATE).unwrap() >> 8) & 0xFF, arm::NO_MODE_CLASS as u32, "order");
+    r.on_datagram(2 * MS, &rx(a, port::REGMAP, &regw(&[(reg::TX_MODE_CLASS, 2)])));
+    let out = r.on_datagram(3 * MS, &rx(a, port::REGMAP, &regw(&[(reg::TX_ARM, tok ^ ARM_MAGIC)])));
+    assert_eq!((find(&out, reg::TX_ARM_STATE).unwrap() >> 8) & 0xFF, arm::NOT_CALIBRATED as u32);
+    let out = r.on_datagram(4 * MS, &rx(a, port::REGMAP, &regw(&[(reg::STREAM_STATUS, 0), (reg::ATU_STATE, 0)])));
+    assert_eq!((find(&out, reg::STREAM_STATUS).unwrap() >> 8) & 0x7F, sr::TX_NOT_CALIBRATED as u32);
+    assert_eq!(find(&out, reg::ATU_STATE), Some(5));
+    let out = r.on_datagram(5 * MS, &rx(a, port::REGMAP, &regw(&[(reg::LIMIT_SWR, 2000)])));
+    assert_eq!(find(&out, reg::WRITE_STATUS).unwrap() & 0xFF, wr::NOT_CALIBRATED as u32);
+    // with a complete set the arm is accepted (T-B10-41, reference model)
+    let mut r = Radio::new(Config { calibrated: true, ..Config::default() }, 0);
+    session(&mut r, a, 0);
+    r.on_datagram(MS, &rx(a, port::REGMAP, &regw(&[(reg::TX_MODE_CLASS, 2)])));
+    let tok = r.token;
+    let out = r.on_datagram(2 * MS, &rx(a, port::REGMAP, &regw(&[(reg::TX_ARM, tok ^ ARM_MAGIC)])));
+    assert_eq!(find(&out, reg::TX_ARM_STATE).unwrap() & 0xF, 1);
+    assert_eq!(r.record[0x20] >> 4 & 1, 1);
+}
+
+#[test]
+fn record_table_a3_0_and_groups() {
+    let r = Radio::new(Config::default(), 0);
+    assert_eq!(r.record[0x21], 10);
+    assert_eq!((r.record[0x22], r.record[0x23]), (1_800_000, 2_000_000));
+    assert_eq!((r.record[0x22 + 27], r.record[0x23 + 27]), (50_000_000, 54_000_000));
+    assert_eq!(r.record[0x53], 0x3F);
+    assert_eq!(r.record[0x10], 0x07, "192 ksps maximum until P-NET-1");
+    assert_eq!(r.record[0x57] & 0x1F, 0, "cal_info bits 0-4 = 0 uncalibrated");
 }

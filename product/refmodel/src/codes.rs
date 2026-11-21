@@ -81,9 +81,8 @@ pub mod arm {
     pub const NO_MODE_CLASS: u8 = 9;
     pub const BAD_TOKEN: u8 = 10;
     pub const TX_NOT_IMPLEMENTED: u8 = 11;
-    /// Not in the spec: the code proposed by spec finding SF-01 for "TX not calibrated".
-    /// Used only with `--lock-reason not-calibrated`.
-    pub const PROPOSED_NOT_CALIBRATED: u8 = 12;
+    /// Transmit parameters of Annex P not set (record `tx` bit 4 = 0; 0035, 0036).
+    pub const NOT_CALIBRATED: u8 = 12;
 }
 
 /// Drop reasons, `TX_ARM_STATE` [23:16] (Table B8-3, Table A3-1).
@@ -126,6 +125,7 @@ pub mod sr {
     pub const VNA: u8 = 11;
     pub const EER: u8 = 12;
     pub const FREQ_ENCODING: u8 = 13;
+    pub const TX_NOT_CALIBRATED: u8 = 14;
 }
 
 pub mod mgmt {
@@ -149,6 +149,9 @@ pub mod mgmt {
     pub const ROLLBACK: u16 = 0x0046;
     pub const RETURN_TO_STOCK: u16 = 0x0050;
     pub const ENTER_VENDOR_RECOVERY: u16 = 0x0051;
+    pub const GET_CALIBRATION: u16 = 0x0060;
+    pub const SET_CALIBRATION: u16 = 0x0061;
+    pub const CLEAR_CALIBRATION: u16 = 0x0062;
 
     pub mod st {
         pub const OK: u16 = 0;
@@ -163,6 +166,9 @@ pub mod mgmt {
         pub const BUSY: u16 = 35;
         pub const WINDOW_CLOSED: u16 = 36;
         pub const INVALID_CONFIG: u16 = 48;
+        pub const NOT_ALLOWED: u16 = 49;
+        pub const TOO_LARGE_IMAGE: u16 = 61;
+        pub const NEEDS_CALIBRATION: u16 = 62;
         pub const NOT_SUPPORTED: u16 = 56;
         pub const SESSION_RUNS: u16 = 57;
         pub const UPDATE_IN_PROGRESS: u16 = 58;

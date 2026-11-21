@@ -1,19 +1,19 @@
 //! Management channel, UDP 7251 (spec A1.4–A1.10). Framing, status precedence, challenge and
 //! response, write session, stored replies, rate limits and the first-secret window follow the
 //! spec. Payload layouts are not fixed by the spec yet ("fixed with the reference model before
-//! M5", A1 intro); the layouts here are PROVISIONAL and documented in docs/mgmt-payloads.md.
+//! payload layouts are those of the spec's Annex M (0039).
 //!
-//! Model gaps in T1 (answered with status 56): GET_CONFIG, SET_CONFIG, UPDATE_BEGIN …
-//! UPDATE_ACTIVATE, UPDATE_ABORT, ROLLBACK.
+//! Model gaps (answered with status 56): UPDATE_BEGIN … UPDATE_ACTIVATE, UPDATE_ABORT, ROLLBACK.
+//! The network items of SET_CONFIG (C-1) are stored and reported but not applied to the sockets.
 
 use std::net::Ipv4Addr;
 
 use crate::codes::mgmt::{st, *};
 use crate::crypto::{ct_eq, hmac_sha256, sha256};
-use crate::radio::{Radio, Rx, Tx, MS, S};
+use crate::radio::{Calibration, Radio, Rx, Tx, ALL_PARAMS, MS, S};
 use crate::util::*;
 
-pub const CHALLENGE_LEN: usize = 16; // PROVISIONAL (finding SF-08)
+pub const CHALLENGE_LEN: usize = 16; // Annex M
 const WINDOW_US: u64 = 300 * S;
 
 #[derive(Debug, Clone)]
@@ -38,6 +38,7 @@ pub struct Mgmt {
     lim_ident: Limiter<u8>,
     lim_outside: Limiter<u8>,
     rng: u64,
+    pub conf: Conf,
 }
 
 fn header(req: &[u8], status: u16, payload: &[u8]) -> Vec<u8> {
@@ -60,12 +61,43 @@ fn header(req: &[u8], status: u16, payload: &[u8]) -> Vec<u8> {
 
 fn needs_auth(cmd: u16) -> bool {
     matches!(cmd, CHANGE_SECRET | END_WRITE_SESSION | SET_CONFIG | FACTORY_RESET | SWITCH_LEVEL
-        | RESTART | CLEAR_LOG | 0x0040..=0x0044 | ROLLBACK | RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY)
+        | RESTART | CLEAR_LOG | 0x0040..=0x0044 | ROLLBACK | RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY
+        | SET_CALIBRATION | CLEAR_CALIBRATION)
 }
 fn known(cmd: u16) -> bool {
     matches!(cmd, IDENTIFY | GET_STATS | GET_CHALLENGE | SET_FIRST_SECRET | CHANGE_SECRET
         | END_WRITE_SESSION | GET_CONFIG | SET_CONFIG | FACTORY_RESET | SWITCH_LEVEL | RESTART
-        | READ_LOG | CLEAR_LOG | 0x0040..=0x0046 | RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY)
+        | READ_LOG | CLEAR_LOG | 0x0040..=0x0046 | RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY
+        | GET_CALIBRATION | SET_CALIBRATION | CLEAR_CALIBRATION)
+}
+fn is_cal_write(cmd: u16) -> bool {
+    cmd == SET_CALIBRATION || cmd == CLEAR_CALIBRATION
+}
+
+/// Configuration items of Table M-3 that the model keeps (A1.6). C-3 limits live in
+/// `Radio::persistent_limits` (TX time, S2, T3) and `band_limits` here.
+#[derive(Debug, Clone)]
+pub struct Conf {
+    pub addr_mode: u8,
+    pub addr: [u8; 4],
+    pub mask: [u8; 4],
+    pub gw: [u8; 4],
+    pub default_level: u8,
+    pub region: u8,
+    pub band_limits: [u16; 10],
+    pub allow: Vec<([u8; 4], u8)>,
+}
+impl Conf {
+    fn factory() -> Self {
+        Conf { addr_mode: 0, addr: [0; 4], mask: [0; 4], gw: [0; 4], default_level: 1, region: 0,
+               band_limits: band_builtin(), allow: Vec::new() }
+    }
+}
+/// Built-in power per `tx_band`, 0.1 W (Table A3-0; range 10 SIMULATED, P-PWR-2).
+fn band_builtin() -> [u16; 10] {
+    let mut b = [1000u16; 10];
+    b[9] = 900;
+    b
 }
 fn is_update(cmd: u16) -> bool {
     (0x0040..=0x0046).contains(&cmd) && cmd != UPDATE_STATUS
@@ -86,6 +118,7 @@ impl Mgmt {
             lim_ident: Limiter::new(S, 50, 50),
             lim_outside: Limiter::new(S, 10, 10),
             rng: 0x9E37_79B9_7F4A_7C15 ^ now,
+            conf: Conf::factory(),
         }
     }
 
@@ -245,7 +278,15 @@ impl Mgmt {
         {
             return self.send(r, rx, st::UPDATE_IN_PROGRESS, &[], true, cmd, out);
         }
-        if (is_update(cmd) || cmd == RETURN_TO_STOCK || cmd == ENTER_VENDOR_RECOVERY) && armed_or_keyed {
+        if is_cal_write(cmd) && r.update_in_progress {
+            return self.send(r, rx, st::UPDATE_IN_PROGRESS, &[], true, cmd, out);
+        }
+        if is_cal_write(cmd) && r.session.is_some() {
+            return self.send(r, rx, st::SESSION_RUNS, &[], true, cmd, out);
+        }
+        if (is_update(cmd) || cmd == RETURN_TO_STOCK || cmd == ENTER_VENDOR_RECOVERY || is_cal_write(cmd))
+            && armed_or_keyed
+        {
             return self.send(r, rx, st::ARMED, &[], true, cmd, out);
         }
         let (status, reply_payload, after): (u16, Vec<u8>, Option<&str>) = match cmd {
@@ -323,7 +364,40 @@ impl Mgmt {
                 r.logf(&format!("log cleared by {}", rx.src));
                 (st::OK, vec![], None)
             }
-            UPDATE_STATUS => (st::OK, vec![if r.update_in_progress { 1 } else { 0 }], None),
+            // Annex M: state (u8), blocks received (u32), block count (u32), sectors written (u8)
+            UPDATE_STATUS => {
+                let mut v = vec![if r.update_in_progress { 1 } else { 0 }];
+                v.extend_from_slice(&[0u8; 9]);
+                (st::OK, v, None)
+            }
+            GET_CALIBRATION => (st::OK, cal_payload(r), None),
+            SET_CALIBRATION => match parse_cal(payload) {
+                Some(c) => {
+                    let complete = c.complete();
+                    let id = c.id;
+                    r.logf(&format!("calibration set by {} ({} entries, complete {complete})", rx.src, c.entries.len()));
+                    r.cal = Some(c);
+                    r.rebuild_record();
+                    let mut v = id.to_vec();
+                    v.push(complete as u8);
+                    (st::OK, v, None)
+                }
+                None => (st::INVALID_CONFIG, vec![], None),
+            },
+            CLEAR_CALIBRATION => {
+                r.cal = None;
+                r.rebuild_record();
+                r.logf(&format!("calibration cleared by {}", rx.src));
+                (st::OK, vec![], None)
+            }
+            GET_CONFIG => (st::OK, self.conf_payload(r), None),
+            SET_CONFIG => {
+                let mut tmp = Vec::new();
+                let s = self.set_config(r, payload, &mut tmp);
+                out.extend(tmp);
+                let p = if s == st::OK { self.conf_payload(r) } else { vec![] };
+                (s, p, None)
+            }
             RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY => (st::NOT_SUPPORTED, vec![], None),
             _ => (st::NOT_SUPPORTED, vec![], None), // model gap in T1
         };
@@ -425,9 +499,200 @@ impl Mgmt {
         tlv(17, &[0]);
         tlv(18, &[VERSION.0, VERSION.1, crate::codes::P2_VERSION, 1, 1]);
         tlv(19, &[0]); // controller state unknown (HIS-17)
-        tlv(20, &[(!r.cfg.tx_locked) as u8]); // TX calibrated (proposal SF-05)
+        tlv(20, &[r.tx_calibrated() as u8]); // I-7: record tx bit 4
+        let mut c = vec![0u8; 36];
+        if let Some(cal) = &r.cal {
+            c[..32].copy_from_slice(&cal.id);
+            c[32..].copy_from_slice(&cal.date.to_be_bytes());
+        }
+        tlv(21, &c);
+        tlv(22, &[0]); // sectors written by the streaming installer (none in the model)
         v
     }
+}
+
+impl Mgmt {
+    /// GET_CONFIG / SET_CONFIG reply: every item of Table M-3.
+    fn conf_payload(&self, r: &Radio) -> Vec<u8> {
+        let c = &self.conf;
+        let mut v = Vec::new();
+        let mut tlv = |t: u8, val: &[u8]| {
+            v.push(t);
+            v.push(val.len() as u8);
+            v.extend_from_slice(val);
+        };
+        tlv(1, &[c.addr_mode]);
+        tlv(2, &c.addr);
+        tlv(3, &c.mask);
+        tlv(4, &c.gw);
+        tlv(5, &[c.default_level]);
+        tlv(6, &[c.region]);
+        tlv(7, &r.persistent_limits[0].to_be_bytes());
+        for (i, l) in c.band_limits.iter().enumerate() {
+            let b = l.to_be_bytes();
+            tlv(8, &[i as u8, b[0], b[1]]);
+        }
+        // S2 (x100) and T3 (0.1 degC): 0 while the calibration set does not hold P-PWR-2
+        let (s2, t3) = if r.has_param("P-PWR-2") {
+            ((r.persistent_limits[2] / 10) as u16, (r.persistent_limits[3] / 100) as u16)
+        } else {
+            (0, 0)
+        };
+        tlv(9, &s2.to_be_bytes());
+        tlv(10, &t3.to_be_bytes());
+        let mut a = Vec::new();
+        for (ip, pl) in &c.allow {
+            a.extend_from_slice(ip);
+            a.push(*pl);
+        }
+        tlv(11, &a);
+        v
+    }
+
+    /// SET_CONFIG (A1.6): validated as a whole; order of the command-specific codes 48, 49, 62
+    /// (Table A1-3). Returns the status.
+    fn set_config(&mut self, r: &mut Radio, p: &[u8], out: &mut Vec<Tx>) -> u16 {
+        let mut c = self.conf.clone();
+        let mut limits = r.persistent_limits;
+        let (mut bad, mut looser, mut needs_cal, mut c3) = (false, false, false, false);
+        let mut i = 0;
+        while i < p.len() {
+            if i + 2 > p.len() || i + 2 + p[i + 1] as usize > p.len() {
+                bad = true;
+                break;
+            }
+            let (tag, val) = (p[i], &p[i + 2..i + 2 + p[i + 1] as usize]);
+            i += 2 + val.len();
+            let n = val.len();
+            match (tag, n) {
+                (1, 1) if val[0] <= 1 => c.addr_mode = val[0],
+                (2, 4) => c.addr.copy_from_slice(val),
+                (3, 4) => c.mask.copy_from_slice(val),
+                (4, 4) => c.gw.copy_from_slice(val),
+                (5, 1) if val[0] == 1 => c.default_level = 1,
+                (6, 1) if val[0] == 0 => c.region = 0, // one region in this version (Table A3-0)
+                (7, 4) => {
+                    let ms = be32(val, 0);
+                    if ms == 0 {
+                        bad = true;
+                    } else if ms > r.cfg.builtin_tx_time_ms {
+                        looser = true;
+                    } else {
+                        limits[0] = ms;
+                        c3 = true;
+                    }
+                }
+                (8, 3) if (val[0] as usize) < 10 => {
+                    let w = be16(val, 1);
+                    if w == 0 {
+                        bad = true;
+                    } else if w > band_builtin()[val[0] as usize] {
+                        looser = true;
+                    } else {
+                        c.band_limits[val[0] as usize] = w;
+                        c3 = true;
+                    }
+                }
+                (9, 2) | (10, 2) => {
+                    if !r.has_param("P-PWR-2") {
+                        needs_cal = true;
+                    } else {
+                        let x = be16(val, 0) as u32;
+                        let (idx, scaled, builtin) = if tag == 9 {
+                            (2, x * 10, r.cfg.builtin_swr_s2)
+                        } else {
+                            (3, x * 100, r.cfg.builtin_pa_temp_t3_mc)
+                        };
+                        if x == 0 {
+                            bad = true;
+                        } else if scaled > builtin {
+                            looser = true;
+                        } else {
+                            limits[idx] = scaled;
+                            c3 = true;
+                        }
+                    }
+                }
+                (11, n) if n % 5 == 0 && n / 5 <= 8 => {
+                    let mut a = Vec::new();
+                    for e in val.chunks(5) {
+                        if e[4] > 32 {
+                            bad = true;
+                        }
+                        a.push(([e[0], e[1], e[2], e[3]], e[4]));
+                    }
+                    c.allow = a;
+                }
+                _ => bad = true,
+            }
+        }
+        if bad {
+            return st::INVALID_CONFIG;
+        }
+        if looser {
+            return st::NOT_ALLOWED;
+        }
+        if needs_cal {
+            return st::NEEDS_CALIBRATION;
+        }
+        if c3 && r.armed() {
+            r.drop_arm(crate::codes::drop::MAINTENANCE, out); // A1.9: unkey, drop, apply, reply
+        }
+        for k in 0..4 {
+            if limits[k] != r.persistent_limits[k] {
+                r.logf(&format!("C-3 limit {k}: {} -> {} by {}", r.persistent_limits[k], limits[k], "management"));
+            }
+        }
+        r.persistent_limits = limits;
+        self.conf = c;
+        r.logf("configuration changed");
+        st::OK
+    }
+}
+
+fn cal_payload(r: &Radio) -> Vec<u8> {
+    let mut v = vec![0u8; 32];
+    let Some(c) = &r.cal else {
+        v.extend_from_slice(&0u32.to_be_bytes());
+        v.push(0);
+        return v;
+    };
+    v[..32].copy_from_slice(&c.id);
+    v.extend_from_slice(&c.date.to_be_bytes());
+    v.push(c.source.len() as u8);
+    v.extend_from_slice(c.source.as_bytes());
+    for (id, val) in &c.entries {
+        v.push(id.len() as u8);
+        v.extend_from_slice(id.as_bytes());
+        v.extend_from_slice(&(val.len() as u16).to_be_bytes());
+        v.extend_from_slice(val);
+    }
+    v
+}
+
+/// SET_CALIBRATION payload (Annex M Table M-1, M-5); None = status 48.
+fn parse_cal(p: &[u8]) -> Option<Calibration> {
+    if p.len() < 5 {
+        return None;
+    }
+    let date = be32(p, 0);
+    let sl = p[4] as usize;
+    let source = std::str::from_utf8(p.get(5..5 + sl)?).ok()?.to_string();
+    let mut i = 5 + sl;
+    let mut entries = Vec::new();
+    while i < p.len() {
+        let il = *p.get(i)? as usize;
+        let id = std::str::from_utf8(p.get(i + 1..i + 1 + il)?).ok()?.to_string();
+        i += 1 + il;
+        let vl = be16(p.get(i..i + 2)?, 0) as usize;
+        let val = p.get(i + 2..i + 2 + vl)?.to_vec();
+        i += 2 + vl;
+        if !ALL_PARAMS.contains(&id.as_str()) || val.is_empty() || entries.iter().any(|(k, _): &(String, Vec<u8>)| *k == id) {
+            return None;
+        }
+        entries.push((id, val));
+    }
+    Some(Calibration { id: sha256(p), date, source, entries })
 }
 
 fn stats_payload(r: &Radio) -> Vec<u8> {
