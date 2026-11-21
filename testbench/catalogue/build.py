@@ -258,6 +258,10 @@ BENCH_TESTS = [
      "(unknown) with `READ_ONLY` (B8.4a); a start (1) is rejected with `NOT_CALIBRATED` and not "
      "latched; from a non-owner `NOT_OWNER` (A3.9b item 1; 0032; Annex P).",
      ["A3.9b", "B8.4", "B8.4a", "Annex P"], []),
+    ("T-B10-L13", "TX frozen: `TX_STATE` bit 4 (PA disabled by the host) reads 1 while General "
+     "byte 58 bit [0] is 0 and 0 once the owner sets it; a takeover clears it again (A3.6a, "
+     "Table A3-4); bit 0 and the source [11:8] stay 0, also under a PTT edge (B10, B10.10; "
+     "Table B8-2).", ["A3.6a", "B10", "B10.10", "Table B8-2"], []),
     ("T-B10-L09", "TX frozen: `TX_MODE_CLASS`, `KEYED_TIMEOUT`, `LIMIT_TX_TIME` and "
      "`LIMIT_FWD_POWER` writes are answered as in Table B8-2 (accepted values, `BAD_VALUE`, "
      "`LOOSER_LIMIT`, 0 = back to the persistent value) and are reset at the session end; none "

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import time
 
-from .core import Ctx, test
+from .core import Ctx, Skip, test
 from .p2 import *  # noqa: F401,F403
 
 NOT_CALIBRATED_ARM = 12  # Table B8-3 arm reject reason
@@ -226,6 +226,51 @@ def t_l07(ctx):
         ans = other.write([(ATU_TUNE, 0)])
         ctx.check("from a non-owner NOT_OWNER", any(r == "NOT_OWNER" for _, _, r in write_status(ans)), f"WRITE_STATUS seen: {write_status(ans)}")
         h.stop()
+
+
+@test("T-B10-L13")
+def t_l13(ctx):
+    """TX frozen: TX_STATE bit 4 (PA disabled by the host) follows General byte 58 bit [0]: 1
+    while it is 0, 0 once the owner sets it; cleared again at a takeover (A3.6a, Table A3-4).
+    Bit 0 and the source [11:8] stay 0, also under a PTT edge (B10; Table B8-2)."""
+    def tx_state(h, label):
+        ts = value(h.write([(TX_STATE, 0)]), TX_STATE)
+        if not ctx.check(f"{label}: TX_STATE read (READ_ONLY answer)", ts is not None,
+                         "no TX_STATE in the answer" if ts is None else f"{ts:#010x}"):
+            return None
+        ctx.eq(f"{label}: bit 0 keyed", ts & 1, 0)
+        ctx.eq(f"{label}: source [11:8]", (ts >> 8) & 0xF, 0)
+        return ts
+
+    with host(ctx) as a, host(ctx) as b:
+        a.start(pa=False)
+        a.drain(0.1)
+        ts = tx_state(a, "byte 58 bit 0 = 0")
+        if ts is not None:
+            ctx.eq("byte 58 bit 0 = 0: bit 4 PA disabled = 1", (ts >> 4) & 1, 1)
+        a.send(PORT_DISC, general(pa=True))
+        a.keepalive()
+        a.drain(0.05)
+        ts = tx_state(a, "byte 58 bit 0 = 1")
+        if ts is not None:
+            ctx.eq("byte 58 bit 0 = 1: bit 4 = 0", (ts >> 4) & 1, 0)
+        a.keepalive(ptt=True)
+        a.drain(0.1)
+        tx_state(a, "PTT held")
+        a.keepalive(ptt=False)
+        try:
+            ctx.need("net.hosts")
+        except Skip:
+            ctx.notes.append("takeover part not run: fixture net.hosts not offered")
+            a.stop()
+            return
+        b.keepalive()  # takeover with a High Priority packet only: no General from b
+        time.sleep(0.05)
+        b.drain(0.05)
+        ts = tx_state(b, "after takeover")
+        if ts is not None:
+            ctx.eq("after takeover: bit 4 = 1 (PA enable cleared, A3.6a)", (ts >> 4) & 1, 1)
+        b.stop()
 
 
 @test("T-B10-L09", "T-B10-08", "T-B10-19")

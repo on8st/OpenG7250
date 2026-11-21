@@ -9909,6 +9909,29 @@
    "pending": []
   },
   {
+   "id": "T-B10-L13",
+   "origin": "testbench",
+   "part": "A-B",
+   "title": "TX frozen: `TX_STATE` bit 4 (PA disabled by the host) reads 1 while General byte 58 bit [0] is 0 and 0 once the owner sets it; a takeover clears it again (A3.6a, Table A3-4); bit 0 and the source [11:8] stay 0, also under a PTT edge (B10, B10.10; Table B8-2).",
+   "reqs": [
+    "A3.6a",
+    "B10",
+    "B10.10",
+    "Table B8-2"
+   ],
+   "needs": [],
+   "notes": [
+    "TX frozen until the calibration set is complete (Annex P; 0035, 0036)"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "tx_part": false,
+   "pending": []
+  },
+  {
    "id": "T-B10-L09",
    "origin": "testbench",
    "part": "A-B",
