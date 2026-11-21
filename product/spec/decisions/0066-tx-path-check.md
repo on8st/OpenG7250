@@ -63,6 +63,19 @@ pin as the hardware sees it, nor how fast. The test bench and the firmware need 
     T-A3-61 is judged by host tests of the check until a DAC driver exists, then also on the
     emulator. No test hook goes into the product image.
 
+## Addendum: the check during flash work (firmware question, 2026-11-21)
+
+11. Option (a), as the firmware advised. During a sector erase or program the 5 ms period does
+    not apply: the operation cannot be split and runs with interrupts masked.
+    - The firmware SHOULD sample the Table A3-6b pins in its wait loop, where it already
+      services the watchdog. A register read costs nothing there, and a sample counts as a
+      check.
+    - It MUST run a check at once when the operation ends.
+    - A mismatch present at the end counts from the start of flash work, or from its first
+      sample, so it gives the fault no later than 20 ms after the end.
+    This is safe because flash work never overlaps an arm (0055), and no code writes the RF
+    pins during it (0065 item 1). Test T-B5-22 (flash work on the emulator).
+
 ## Alternatives considered
 
 - Configuration only: misses a board fault that holds a line, which is the case that matters
