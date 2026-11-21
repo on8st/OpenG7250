@@ -797,32 +797,38 @@ def t_a1_88(ctx: Ctx):
     with updating(ctx, s) as u:
         run, other, ver, lay = facts(ctx, u)
     nv = newer(ver)
-    cases = [("no image record", image(SMALL, seed=881), None)]
+    # (case, image, header or None, the check words the log may name: A1.8 "Log names")
+    cases = [("no image record", image(SMALL, seed=881), None, {"no-record"})]
     if "model" in ctx.endpoint:
         # the model's own record (0067 leaves the layout to the firmware)
         mi = lambda **kw: model_image(SMALL, other, nv, seed=882, **kw)
         base_run = 0x08000000 + {1: 2, 2: 4}[run] * 128 * 1024
-        cases += [("a record for other hardware", mi(hw=HW_ID + 1), None),
-                  ("a record of the boot stage", mi(kind=2), None),
-                  ("linked for the running slot", mi(rslot=run), pkg(mi(rslot=run), nv, 0)),
-                  ("a failing integrity check", flip(mi()), None),
-                  ("an entry point outside the slot", mi(entry=base_run + 0x201), None),
-                  ("the record's version differs from the header", mi(), pkg(mi(), newer(nv), other)),
-                  ("the record's length differs from the header", mi(rlen=SMALL - 4), None)]
+        cases += [("a record for other hardware", mi(hw=HW_ID + 1), None, {"hardware"}),
+                  ("a record of the boot stage", mi(kind=2), None, {"kind"}),
+                  ("linked for the running slot", mi(rslot=run), pkg(mi(rslot=run), nv, 0), {"slot"}),
+                  ("a failing integrity check", flip(mi()), None, {"integrity"}),
+                  ("an entry point outside the slot", mi(entry=base_run + 0x201), None, {"vectors"}),
+                  ("the record's version differs from the header", mi(), pkg(mi(), newer(nv), other), {"header"}),
+                  ("the record's length differs from the header", mi(rlen=SMALL - 4), None, {"header"})]
     else:
         real, run_real = real_package(ctx, other), real_package(ctx, run)
         if real:
             h, img, f = real
-            cases += [("a failing integrity check", flip(img), reheader(h, flip(img), slot=other)),
-                      ("the record's version differs from the header", img, reheader(h, img, version=newer(f["version"]), slot=other)),
-                      ("the record's length differs from the header", img + b"\xff" * 32, reheader(h, img + b"\xff" * 32, slot=other))]
+            # 32 bytes appended: the record's length differs from the header ("header"); a
+            # firmware whose integrity check covers what it received may name "integrity"
+            cases += [("a failing integrity check", flip(img), reheader(h, flip(img), slot=other), {"integrity"}),
+                      ("the record's version differs from the header", img, reheader(h, img, version=newer(f["version"]), slot=other),
+                       {"header"}),
+                      ("the record's length differs from the header", img + b"\xff" * 32, reheader(h, img + b"\xff" * 32, slot=other),
+                       {"header", "integrity"})]
         if run_real:
             h, img, f = run_real
-            cases.append(("linked for the running slot", img, reheader(h, img, slot=0)))
+            cases.append(("linked for the running slot", img, reheader(h, img, slot=0), {"slot"}))
         ctx.notes.append("not run off the reference model: a record for other hardware or for the boot stage, an entry point "
                          "outside the slot (the record's layout is the firmware's; needs packages built so on the firmware side)"
                          + ("" if real and run_real else "; the cases built from real packages need params.package_slot_a and _b"))
-    for name, img, hdr in cases:
+    import re
+    for name, img, hdr, words in cases:
         with updating(ctx, s) as u:
             t0 = u.identify()
             st = stage(u, img, hdr or pkg(img, nv, other))
@@ -831,7 +837,9 @@ def t_a1_88(ctx: Ctx):
             n0 = last_log_seq(u)
             r = u.req("UPDATE_VERIFY")
             ctx.eq(f"{name}: UPDATE_VERIFY 55", r["status"] if r else None, 55)
-            ctx.check(f"{name}: the failed check logged (text not fixed)", bool(logs_since(u, n0)), "no new log entry")
+            texts = logs_since(u, n0)
+            ctx.check(f"{name}: the failed check named in the log ({' or '.join(sorted(words))})",
+                      any(re.search(rf"\b{re.escape(w)}\b", x) for x in texts for w in words), f"{texts[-3:]}")
             r = u.req("UPDATE_ACTIVATE", b"\x00")
             ctx.eq(f"{name}: UPDATE_ACTIVATE 55", r["status"] if r else None, 55)
             t = u.identify()
@@ -853,8 +861,19 @@ def t_a1_88(ctx: Ctx):
             ctx.eq("UPDATE_VERIFY again: 0", r["status"] if r else None, 0)
             ctx.eq("tag 9 for the staging slot 1 after the good verify", tag9(u.identify()), b"\x01")
             st, _ = u.blocks(gimg[:bs], bs)
+            ctx.eq("block 0 sent again alone (a new request id): accepted", st, 0)
             r = u.req("UPDATE_ACTIVATE", b"\x00")
             ctx.eq("a block after the good verify cancels it: UPDATE_ACTIVATE 55", r["status"] if r else None, 55)
+            stt = u.status() or {}
+            rec, cnt = stt.get("received"), stt.get("count")
+            ctx.check("UPDATE_STATUS: blocks received at most the count", rec is not None and cnt and rec <= cnt, f"{stt}")
+            r = u.req("UPDATE_VERIFY")
+            if rec is not None and cnt and rec < cnt:
+                ctx.notes.append(f"the radio counts {cnt - rec} blocks as not received again after one block was sent again")
+                ctx.eq("with blocks counted as not received again: UPDATE_VERIFY 55", r["status"] if r else None, 55)
+                st, _ = u.blocks(gimg, bs)
+                r = u.req("UPDATE_VERIFY")
+            ctx.eq("the last data per block verifies: UPDATE_VERIFY 0", r["status"] if r else None, 0)
 
 
 def corrupt(ctx, slot: int, release: bool = False, length: int | None = None):
@@ -930,6 +949,30 @@ def t_a1_89(ctx: Ctx):
                    (55, bytes([a[1]])))
     finally:
         corrupt(ctx, a[0], release=True)
+    # a trial that failed to confirm itself: its slot keeps 1, and ROLLBACK to it starts it as a
+    # trial again (0067; 0064 item 3.1)
+    if not ({"trial.sim", "ch394.silent"} & set(ctx.endpoint.get("fixtures", []))):
+        raise PartSkip("failed-trial part: needs trial.sim or ch394.silent (a trial that cannot confirm itself)")
+    b = activate_new(ctx, s, 895, net_down=True)
+    if not ctx.check("an update installed for a trial that fails", b is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
+        return
+    with updating(ctx, s, restart_at_end=False) as u:
+        advance(ctx, 65)
+    wait_reachable(ctx, "trial rollback")
+    with updating(ctx, s, restart_at_end=False) as u:
+        t = u.identify()
+        ctx.eq("the failed trial rolled back (tag 23 the previous slot, tag 10 = 2)", (t.get(23, b"")[:1], t.get(10)),
+               (bytes([b[0]]), b"\x02"))
+        ctx.eq("the failed trial's slot keeps tag 9 = 1", tag9(t), b"\x01")
+        r = u.req("ROLLBACK")
+        ctx.eq("ROLLBACK to it: accepted", r["status"] if r else None, 0)
+    time.sleep(0.3)
+    wait_reachable(ctx, "ROLLBACK to the failed trial's slot")
+    with updating(ctx, s, restart_at_end=False) as u:
+        t = u.identify()
+        ctx.eq("it starts as a trial (tag 23 its slot, tag 10 = 1)", (t.get(23, b"")[:1], t.get(10)), (bytes([b[1]]), b"\x01"))
+        advance(ctx, 11)
+        ctx.eq("with the network up it confirms itself", u.identify().get(10), b"\x00")
 
 
 @test("T-A1-90")
@@ -954,8 +997,8 @@ def t_a1_90(ctx: Ctx):
             t = u.identify()
             ctx.eq("the trial slot refused: the previous image starts, tag 10 = 2", (t.get(23, b"")[:1], t.get(10)), (bytes([run]), b"\x02"))
             texts = logs_since(u, n0)
-            ctx.check("the refusal and the rollback logged ('boot: slot <n> refused: <check>')",
-                      any("refused" in x for x in texts), f"{texts[-3:]}")
+            want = f"boot: slot {'AB'[other - 1]} refused: integrity"
+            ctx.check(f"logged: '{want}'", any(want in x for x in texts), f"{texts[-3:]}")
     finally:
         corrupt(ctx, other, release=True)
     # 2: the confirmed active image changed, the other slot good: the other starts without a trial
@@ -974,7 +1017,9 @@ def t_a1_90(ctx: Ctx):
             t = u.identify()
             ctx.eq("the active slot refused: the other slot starts without a trial (tag 23, tag 10 = 2)",
                    (t.get(23, b"")[:1], t.get(10)), (bytes([a[0]]), b"\x02"))
-            ctx.check("the change logged", bool(logs_since(u, n0)), "no new log entry")
+            texts = logs_since(u, n0)
+            want = f"boot: slot {'AB'[a[1] - 1]} refused: integrity"
+            ctx.check(f"the change logged: '{want}'", any(want in x for x in texts), f"{texts[-3:]}")
     finally:
         corrupt(ctx, a[1], release=True)
     # 3: both slots changed: safe state, no answer (an emulator; the model does not model it)

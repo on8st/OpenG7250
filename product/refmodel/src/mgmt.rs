@@ -490,13 +490,13 @@ impl Mgmt {
                     // against the header; 55 at the first that fails, named in the log
                     let h = sha256(&u.data);
                     let res = if h != u.sha {
-                        Err("SHA-256 of the staged image differs from the header")
+                        Err("hash")
                     } else {
                         match image_check(&u.data, u.slot) {
                             Err(e) => Err(e),
-                            Ok(rec) if rec.len != u.len => Err("image record length differs from the header"),
-                            Ok(rec) if rec.version != u.version => Err("image record version differs from the header"),
-                            Ok(rec) if u.target != 0 && rec.slot != u.target => Err("image record slot differs from the header"),
+                            Ok(rec) if rec.len != u.len => Err("header"),
+                            Ok(rec) if rec.version != u.version => Err("header"),
+                            Ok(rec) if u.target != 0 && rec.slot != u.target => Err("header"),
                             Ok(_) => Ok(()),
                         }
                     };
@@ -569,7 +569,7 @@ impl Mgmt {
             Some("ACTIVATE") => {
                 // atomic switch, then the trial boot of the new image (A1.8 U-5, U-6)
                 if let Some(u) = self.upd.take() {
-                    r.logf(&format!("update activated: slot {} on trial", u.slot));
+                    r.logf(&format!("update activated: slot {} on trial", slot_name(u.slot)));
                     let net_down = r.fw.sim_net_down;
                     r.fw.sim_net_down = false;
                     r.reset("UPDATE_ACTIVATE");

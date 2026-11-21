@@ -54,34 +54,34 @@ pub struct Record {
 pub fn image_check(d: &[u8], slot: u8) -> Result<Record, &'static str> {
     let be32 = |o: usize| u32::from_be_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]);
     if d.len() < 28 || &d[0..4] != b"G7RM" {
-        return Err("no image record");
+        return Err("no-record");
     }
     if u16::from_be_bytes([d[4], d[5]]) != 0x00C8 {
-        return Err("image record for other hardware");
+        return Err("hardware");
     }
     if d[6] != 1 {
-        return Err("image record not of kind application");
+        return Err("kind");
     }
     let len = be32(12);
     if len > Firmware::slot_size(slot) || len as usize > d.len() || len < 28 {
-        return Err("recorded length does not fit the slot");
+        return Err("length");
     }
     if d[7] != slot {
-        return Err("image linked for the other slot");
+        return Err("slot");
     }
     let mut c = d[..len as usize].to_vec();
     c[24..28].copy_from_slice(&[0; 4]);
     if crate::crypto::crc32(&c) != be32(24) {
-        return Err("integrity check fails");
+        return Err("integrity");
     }
     let sp = be32(16);
     if !((0x2000_0000..=0x2002_0000).contains(&sp) || (0x2400_0000..=0x2408_0000).contains(&sp)) {
-        return Err("stack pointer outside RAM");
+        return Err("vectors");
     }
     let base = 0x0800_0000 + LAYOUT[(slot - 1) as usize].0 as u32 * SECTOR_BYTES;
     let e = be32(20) & !1;
     if !(base..base + Firmware::slot_size(slot)).contains(&e) {
-        return Err("entry point outside the slot");
+        return Err("vectors");
     }
     Ok(Record { version: (d[8], d[9], u16::from_be_bytes([d[10], d[11]])), len, slot: d[7] })
 }
@@ -498,7 +498,7 @@ impl Radio {
             self.fw.trial = None;
             self.fw.running = self.fw.other();
             self.fw.rolled_back = true;
-            self.logf(&format!("trial image not confirmed before reset ({cause}): rolled back to slot {}", self.fw.running));
+            self.logf(&format!("trial image not confirmed before reset ({cause}): rolled back to slot {}", if self.fw.running == 1 { "A" } else { "B" }));
         }
         let name = |s: u8| if s == 1 { "A" } else { "B" };
         let run = self.fw.running;
@@ -511,8 +511,8 @@ impl Radio {
             if other_good {
                 self.fw.running = self.fw.other();
                 self.fw.rolled_back = true;
-                self.logf(&format!("boot: slot {} refused: integrity check fails; slot {} started without a trial (rolled back)",
-                                   name(run), name(self.fw.running)));
+                self.logf(&format!("boot: slot {} refused: integrity", name(run)));
+                self.logf(&format!("boot: slot {} started without a trial (rolled back)", name(self.fw.running)));
             } else {
                 // neither slot passes: the safe state, no network (not modelled further; T-A1-90
                 // runs on an emulator)
@@ -536,7 +536,8 @@ impl Radio {
             self.fw.trial = None;
             self.fw.running = self.fw.other();
             self.fw.rolled_back = true;
-            self.logf(&format!("boot: slot {} refused: integrity check fails; rolled back to slot {}", name(s), name(self.fw.running)));
+            self.logf(&format!("boot: slot {} refused: integrity", name(s)));
+            self.logf(&format!("boot: rolled back to slot {}", name(self.fw.running)));
             return true;
         }
         false
