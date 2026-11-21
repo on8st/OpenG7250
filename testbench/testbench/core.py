@@ -36,6 +36,7 @@ class Ctx:
     params: dict = field(default_factory=dict)
     checks: list = field(default_factory=list)
     notes: list = field(default_factory=list)
+    trace_file: str | None = None  # v1.3: the live trace file of this test, from hw.trace start
 
     @property
     def net(self):
@@ -92,7 +93,8 @@ def run_one(tid: str, ctx: Ctx) -> dict:
     t0 = time.monotonic()
     if fn is not None and "hw.trace" in ctx.endpoint.get("fixtures", []):
         try:  # safe-state checks count from the start of each test (format v1.1 section 4)
-            ctx.fixture("hw.trace", action="start")
+            rep = ctx.fixture("hw.trace", action="start")
+            ctx.trace_file = (rep or {}).get("file") if isinstance(rep, dict) else None
         except Skip:
             pass
     res: dict = {"id": tid}
@@ -111,6 +113,15 @@ def run_one(tid: str, ctx: Ctx) -> dict:
         res.update(status="blocked", reason=str(e))
     except Exception as e:  # noqa: BLE001 - a broken test is an error result
         res.update(status="error", reason=f"{type(e).__name__}: {e}")
+    if ctx.trace_file:
+        try:  # v1.3: dropped events make the trace checks incomplete
+            rep = ctx.fixture("hw.trace", action="stop") or {}
+            if rep.get("dropped"):
+                ctx.checks.append({"name": "hw.trace: no events dropped", "ok": False, "detail": str(rep)})
+                if res.get("status") == "pass":
+                    res["status"] = "fail"
+        except Skip:
+            pass
     if ctx.notes:
         res["reason"] = "; ".join(filter(None, [res.get("reason", ""), *ctx.notes]))
     res["duration_s"] = round(time.monotonic() - t0, 3)

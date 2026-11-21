@@ -187,7 +187,7 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 return ok(J::Null);
             }
             // stop: v1.2 shape; the model has no raw events and writes no trace file
-            ok(J::obj(vec![("events", J::Num(0.0)), ("dropped", J::Num(0.0))]))
+            ok(J::obj(vec![("count", J::Num(0.0)), ("dropped", J::Num(0.0))]))
         }
         "hw.input" => {
             // local PTT (PH6) and KEY contacts (PH3, PH4): not used in v1.0 (0030), so the model

@@ -1,12 +1,14 @@
-# Test list and result format (v1.2)
+# Test list and result format (v1.3)
 
-- Status: **v1.2**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
+- Status: **v1.3**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
   the first answers of the emulator side (openg7250-emu, relayed by openg7250): the address
   mapping of section 3, the fixture plan of section 4, and its four proposals (emulated-time
-  timeouts, boot per test, artifacts, "not modelled" errors), all accepted. v1.2 folds in its
+  timeouts, boot per test, artifacts, "not modelled" errors), all accepted. v1.2 folded in its
   answers to the open points of v1.1: the mapping confirmed, the `hw.trace` event schema, and
-  `hw.input`. Changes are marked **(v1.1)** and **(v1.2)**. Each version only adds fields, so a
-  reader of an earlier version stays valid.
+  `hw.input`. v1.3 takes over the emulator's live trace file and its field names (`count`, not
+  `events`). Changes are marked **(v1.1)**, **(v1.2)** and **(v1.3)**. Each version only adds
+  fields, apart from that one rename of a count nobody reads, so a reader of an earlier version
+  stays valid.
 - Purpose: the file that `product_run.py <elf> <tests> -o <result>` reads (`<tests>`), and the file
   it writes (`<result>`). The test bench uses the same two formats against the reference model
   and against the radio, so that results from all three compare per test id.
@@ -46,7 +48,7 @@ hand-written subset.
 ```json
 {
   "format": "g7250-testlist",
-  "version": 1, "minor": 2,
+  "version": 1, "minor": 3,
   "spec":  { "branch": "spec/draft", "commit": "0e075f2" },
   "his":   { "commit": "9d10e72" },
   "catalogue": { "commit": "<tb/main commit>", "sha256": "<of catalogue.json>" },
@@ -90,7 +92,7 @@ hand-written subset.
 
 ```json
 {
-  "format": "g7250-endpoint", "version": 1, "minor": 2,
+  "format": "g7250-endpoint", "version": 1, "minor": 3,
   "kind": "emulator",
   "radio": { "ip": "192.168.73.10", "netmask": "255.255.255.0", "mac": "02:00:00:00:72:50",
              "connect": { "1024": "127.0.0.1:41024", "1025": "127.0.0.1:41025",
@@ -150,7 +152,7 @@ delivery is given in the last column; the reference model offers the ones marked
 | Fixture | Ops | Used for | Plan |
 |---|---|---|---|
 | `hw.observe` | `hw.observe {}` → snapshot of the HIS 85 safe-state items (below) | safe state under every TX request (T-B10-41, T-B10-42, L09, L11) | emulator first; model |
-| `hw.trace` | `hw.trace {action: "start", pins: [...]}`; `hw.trace {action: "stop"}` → `{events, dropped, file}` | the bench starts a trace at the beginning of every test, so latched observations count from the test start, and checks every event against HIS 85 | emulator first (raw events); model (start, and stop with zero events) |
+| `hw.trace` | `hw.trace {action: "start", pins: [...]}`; `hw.trace {action: "stop"}` → `{count, dropped, file}` | the bench starts a trace at the beginning of every test, so latched observations count from the test start, and checks every event against HIS 85 | emulator first (raw events); model (start, and stop with zero events) |
 | `power.cycle` | `power.cycle {}` | token after power cycle, counters, T-B3-09, T-A3-38, L11 | emulator first; model |
 | `reset.wdt` | `reset.wdt {}` (processor watchdog reset) | A3.5 `WDT_RESET_AT_START`, T-A3-15, T-A3-38 | emulator first; model |
 | `ctrl.set` | `ctrl.set {state: "absent"\|"silent"}` | 0023 item 4, T-A1-57, T-A1-58 | emulator first |
@@ -201,12 +203,15 @@ bench checks: T/R lines at RX levels, chain A bit 7 clear in every latched frame
 - `kind` `reset`: `cause` `power`, `wdt` or `software`.
 - A reader MUST ignore an unknown `kind`.
 - Pins: the HIS 85 safe-state items, plus any pin named in `start {pins: [...]}`.
-- `stop` returns `{"events": n, "dropped": n}`. The events go to `trace.jsonl` in the run
-  artifacts. **(v1.2, proposal)** `stop` also returns `"file"`, the path of that trace's events
-  readable by the bench process (absolute, or relative to the bench's working directory), so the
-  bench can check them during the test.
+- **(v1.3)** `start` returns `{"file": "<path>"}`; `stop` returns `{"count": n, "dropped": n,
+  "file": "<path>"}`. `file` is the absolute path of that trace's JSON Lines file in the run
+  directory, one file per `start` (`trace-<n>.jsonl`), written live (flushed per event), so the
+  bench may read it at any checkpoint. The files are also listed under the test's `artifacts`.
 
-The bench (`testbench/testbench/trace.py`) checks every event since the trace start:
+The bench starts a trace at the beginning of every test, keeps the `file` from `start`, and at
+each safe-state checkpoint of the test reads that file. At the end of the test it calls `stop`;
+`dropped` > 0 makes the test `fail`, because its trace checks are then incomplete. The bench
+(`testbench/testbench/trace.py`) checks every event since the trace start:
 - no T/R line leaves its RX level;
 - chain A bit 7 is clear in every frame latched into chain A (the last 1-byte SPI1 transfer
   before an edge of latch PA11);
@@ -226,7 +231,7 @@ a real input.
 
 ```json
 {
-  "format": "g7250-testresult", "version": 1, "minor": 2,
+  "format": "g7250-testresult", "version": 1, "minor": 3,
   "testlist": { "sha256": "…" },
   "subject":  { "kind": "emulator", "elf_sha256": "…", "fw_version": "0.1.0+12" },
   "runner":   { "name": "product_run.py", "version": "…", "emulator_commit": "…" },
@@ -268,10 +273,7 @@ Runner exit code: 0 if there is no `fail` and no `error`, 1 if there is a `fail`
 A test with target `emulator` is also run against the reference model. A test with target
 `host` is not sent to `product_run.py`.
 
-## 7. Open points for the emulator side (v1.2)
+## 7. Open points for the emulator side (v1.3)
 
-1. Settled in v1.2: the address mapping (section 3), the `hw.trace` schema and `hw.input`
-   (section 4).
-2. Open: the `file` field of `hw.trace {stop}` (section 4), so that the bench can check the
-   events of a running test. Without it the bench checks the snapshot only, and the events
-   are checked after the run from `trace.jsonl` in the artifacts.
+None. Settled: the address mapping (section 3, v1.2), the `hw.trace` schema and `hw.input`
+(section 4, v1.2), and the live trace file with `count`, `dropped` and `file` (section 4, v1.3).

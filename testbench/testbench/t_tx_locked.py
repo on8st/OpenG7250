@@ -56,15 +56,13 @@ def safe(ctx: Ctx, label: str):
     ctx.check(f"{label}: PA bias channels 2, 7, 8 at 0 or never written", bias_ok, str(dac))
     ctx.check(f"{label}: ATU latches never written (0032)", all(v == 0 for v in o["atu_latch_writes"].values()))
     if "hw.trace" in ctx.endpoint.get("fixtures", []):
-        # v1.2: stop returns the counts and (proposed) the trace file; check every event since
-        # the trace start, then start a new trace for the rest of the test
-        rep = ctx.fixture("hw.trace", action="stop") or {}
-        ctx.check(f"{label}: no trace events dropped", not rep.get("dropped"), str(rep))
-        if rep.get("file"):
+        # v1.3: hw.trace start returns the live trace file (flushed per event); read it at
+        # this checkpoint, all events since the test start. Without a file (the reference
+        # model) the snapshot checks above are all there is.
+        if ctx.trace_file:
             from .trace import check_safe, load
-            for name, ok, detail in check_safe(load(rep["file"])):
+            for name, ok, detail in check_safe(load(ctx.trace_file)):
                 ctx.check(f"{label} (trace): {name}", ok, detail)
-        ctx.fixture("hw.trace", action="start")
 
 
 def record(h: Host) -> dict:
