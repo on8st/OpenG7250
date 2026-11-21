@@ -9,3 +9,4 @@ pub mod mgmt;
 pub mod record;
 pub mod regmap;
 pub mod session;
+pub mod stream;

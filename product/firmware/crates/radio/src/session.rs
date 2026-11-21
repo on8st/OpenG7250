@@ -35,6 +35,10 @@ pub struct General {
     pub reg_port: u16,
     /// Byte 37 bit [3]: phase word (B3.8).
     pub phase_word: bool,
+    /// Byte 37 bits [0], [1]: time stamp, VITA-49 requested (B6.6); bit [2]: VNA mode (Table B7-1).
+    pub timestamp: bool,
+    pub vita: bool,
+    pub vna: bool,
     /// Byte 38 bit [0]: hardware timer (B5.6).
     pub timer: bool,
     /// Byte 39: data format; only 0 (Big-Endian, 3-byte I&Q) is offered (B3.7).
@@ -48,10 +52,30 @@ impl General {
         General {
             reg_port: u16::from_be_bytes([p[31], p[32]]),
             phase_word: p[37] & 0x08 != 0,
+            timestamp: p[37] & 0x01 != 0,
+            vita: p[37] & 0x02 != 0,
+            vna: p[37] & 0x04 != 0,
             timer: p[38] & 0x01 != 0,
             format: p[39],
             pa_enable: p[58] & 0x01 != 0,
         }
+    }
+}
+
+/// The DDC-specific packet fields for DDC0 (Table B6-2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ddc {
+    /// Byte 7 bit [0].
+    pub enable: bool,
+    /// Bytes 18-19, ksps.
+    pub rate_ksps: u16,
+    /// Byte 22, bits per sample; 0 is read as 24.
+    pub size: u8,
+}
+
+impl Ddc {
+    pub fn parse(p: &[u8]) -> Self {
+        Ddc { enable: p[7] & 1 != 0, rate_ksps: u16::from_be_bytes([p[18], p[19]]), size: p[22] }
     }
 }
 
@@ -86,7 +110,7 @@ struct Kept {
     from: Addr,
     heard_ms: u64,
     general: Option<General>,
-    ddc: bool,
+    ddc: Option<Ddc>,
     duc: bool,
 }
 
@@ -100,9 +124,13 @@ pub struct Session {
     kept: [Option<Kept>; KEPT],
     /// The last owner whose session ended by stop, watchdog or link loss, with its General
     /// fields (restart, B5.4 item 1). Cleared by a reset or a change of address.
-    last_owner: Option<(Addr, Option<General>)>,
+    last_owner: Option<(Addr, Option<General>, Option<Ddc>)>,
     /// General fields in force for the current session.
     pub general: Option<General>,
+    /// DDC0 fields in force for the current session; `None` = no DDC-specific packet (B5.2).
+    pub ddc: Option<Ddc>,
+    /// The owner's High Priority byte 4 bit [1] (PTT) as last received (B10.2 item 3).
+    pub ptt: bool,
     /// Count of C&C packets discarded as short (B11.3).
     pub short_discarded: u64,
 }
@@ -115,7 +143,7 @@ impl Default for Session {
 
 impl Session {
     pub const fn new() -> Self {
-        Session { owner: None, last_cnc_ms: 0, kept: [None; KEPT], last_owner: None, general: None, short_discarded: 0 }
+        Session { owner: None, last_cnc_ms: 0, kept: [None; KEPT], last_owner: None, general: None, ddc: None, ptt: false, short_discarded: 0 }
     }
 
     pub fn owner(&self) -> Option<Addr> {
@@ -150,12 +178,12 @@ impl Session {
         });
         let mut k = match self.kept[i] {
             Some(k) if k.from == from => k,
-            _ => Kept { from, heard_ms: now, general: None, ddc: false, duc: false },
+            _ => Kept { from, heard_ms: now, general: None, ddc: None, duc: false },
         };
         k.heard_ms = now;
         match kind {
             CnC::General => k.general = Some(General::parse(p)),
-            CnC::DdcSpecific => k.ddc = true,
+            CnC::DdcSpecific => k.ddc = Some(Ddc::parse(p)),
             CnC::DucSpecific => k.duc = true,
             CnC::HighPriority => {}
         }
@@ -183,9 +211,11 @@ impl Session {
                 self.last_cnc_ms = now;
                 match kind {
                     CnC::General => self.general = Some(General::parse(p)),
+                    CnC::DdcSpecific => self.ddc = Some(Ddc::parse(p)),
                     CnC::HighPriority if !run => {
                         self.end(EndReason::Stop, &mut ev);
                     }
+                    CnC::HighPriority => self.ptt = p[4] & 0x02 != 0,
                     _ => {}
                 }
             }
@@ -201,7 +231,7 @@ impl Session {
                         let _ = ev.push(Event::Refused { from });
                         return ev;
                     }
-                    let restart = self.last_owner.is_some_and(|(a, _)| a == from);
+                    let restart = self.last_owner.is_some_and(|(a, _, _)| a == from);
                     self.start(from, kind, p, now, restart, false, &mut ev);
                 } else {
                     // Set-up phase (B5.1a).
@@ -218,20 +248,29 @@ impl Session {
         // Carried over from the same host's ended session (B5.4 item 1), except byte 38 bit [0]
         // and byte 58 bit [0]; then the kept set-up packets on top (B5.1a item 2).
         let mut general = None;
+        let mut ddc = None;
         if restart {
-            if let Some((_, Some(g))) = self.last_owner {
-                general = Some(General { timer: false, pa_enable: false, ..g });
+            if let Some((_, g, d)) = self.last_owner {
+                general = g.map(|g| General { timer: false, pa_enable: false, ..g });
+                ddc = d;
             }
         }
         if let Some(k) = kept {
             if let Some(g) = k.general {
                 general = Some(g);
             }
+            if let Some(d) = k.ddc {
+                ddc = Some(d);
+            }
         }
-        if kind == CnC::General {
-            general = Some(General::parse(p));
+        match kind {
+            CnC::General => general = Some(General::parse(p)),
+            CnC::DdcSpecific => ddc = Some(Ddc::parse(p)),
+            _ => {}
         }
         self.general = general;
+        self.ddc = ddc;
+        self.ptt = kind == CnC::HighPriority && p[4] & 0x02 != 0;
         self.owner = Some(from);
         self.last_cnc_ms = now;
         let _ = ev.push(Event::Started { owner: from, restart, takeover });
@@ -240,10 +279,12 @@ impl Session {
     fn end(&mut self, reason: EndReason, ev: &mut heapless::Vec<Event, 2>) {
         if let Some(o) = self.owner.take() {
             self.last_owner = match reason {
-                EndReason::Stop | EndReason::Watchdog | EndReason::LinkDown => Some((o, self.general)),
+                EndReason::Stop | EndReason::Watchdog | EndReason::LinkDown => Some((o, self.general, self.ddc)),
                 EndReason::Takeover => None,
             };
             self.general = None;
+            self.ddc = None;
+            self.ptt = false;
             let _ = ev.push(Event::Ended { owner: o, reason });
         }
     }
