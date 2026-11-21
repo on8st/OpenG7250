@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "c602628",
-  "sha256_of_inputs": "a202508adb0724f3d71404f915b99648dcdf1ed2b0bb051ca857e7ba6e16aacf"
+  "commit": "c245f5e",
+  "sha256_of_inputs": "7666cae76424baa5e83bf917f254beb9e5d2e613a06892351c2d368c2399d737"
  },
  "his": {
   "commit": "72591aa"
@@ -1414,9 +1414,10 @@
    "id": "T-A1-68",
    "origin": "spec",
    "part": "A-B",
-   "title": "A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down, and one with a class 2 fault (a safe-state pin forced, `TX_PATH_NOT_BLOCKED`), is not confirmed and rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044).",
+   "title": "A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down, and one with a class 2 fault (the level at a TX-side pin of A3.6b forced to the other level, `TX_PATH_NOT_BLOCKED`), is not confirmed and rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044).",
    "reqs": [
     "A1",
+    "A3.6b",
     "A1.8"
    ],
    "scope": "v1.0",
@@ -3495,6 +3496,27 @@
    ],
    "tx_part": true,
    "notes": []
+  },
+  {
+   "id": "T-A3-61",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Not armed: forcing the level at each TX-side pin of A3.6b to the other level from outside (output register unchanged), and, separately, changing a pin's output register or making it an input (emulator memory write): each held for 20 ms or more gives `FAULT_CODE` 16 `TX_PATH_NOT_BLOCKED`, class 2, within 20 ms of its start; a pulse of 5 ms gives no fault; RX goes on; the log names the pin and the comparison; after a `RESTART` with the force removed the fault is gone, with it kept it comes back at start-up; armed with the TX path open, no fault (emulator; A3.6b; 0066).",
+   "reqs": [
+    "A3",
+    "A3.6b"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "gpio.force"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "pins: the HIS 85 TX-side lines until A3.6b names them (SF-30); the armed part needs TX unlocked"
+   ]
   },
   {
    "id": "T-B3-01",

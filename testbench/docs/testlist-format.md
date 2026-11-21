@@ -510,8 +510,11 @@ A test with target `emulator` is also run against the reference model. A test wi
    - `flash.ecc {address, type: "double"|"single"}`; each detection is a `flash.log` entry
      `{op: "ecc", type, address, boot}` (T-A1-87).
    - Every erase and program entry carries `fpga_bus: "idle"|"open"` at its start (T-B5-22).
-   - `gpio.force {pin, level: 0|1|null, from_us?}` → `{pin, level, t_us}`: the pin reads `level`
-     whatever the image drives; `null` releases; a `hw.trace` event `{"kind": "force", ...}`;
+   - `gpio.force {pin, level: 0|1|null, target?: "idr"|"odr"|"moder", mode?, from_us?}` →
+     `{pin, level, t_us}`: with `target` `idr` (the default) the pin reads `level` whatever the
+     image drives; with `odr` the output register is written to `level`, with `moder` the pin
+     made `mode` (e.g. `"input"`), both as an emulator memory write (A3.6b items 2 and 1; 0066);
+     `null` releases; a `hw.trace` event `{"kind": "force", ...}`;
      `hw.observe` `pins` shows `forced`; kept across `reset.wdt`, released by `power.cycle`. The
      bench forces a safe-state pin away from its HIS 85 level for the class 2 case of T-A1-68
      (PF4 low); what "a safe-state pin forced" means (the pin level, an output register) is a

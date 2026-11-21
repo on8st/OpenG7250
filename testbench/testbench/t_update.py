@@ -587,7 +587,7 @@ def t_a1_68(ctx: Ctx):
         a = activate_new(ctx, s, 684)
         if ctx.check("update activated (class 2 case)", a is not None, "the update did not complete"):
             with updating(ctx, s, restart_at_end=False) as u:
-                ctx.fixture("gpio.force", pin="PF4", level=0)
+                ctx.fixture("gpio.force", pin="PF4", level=0, target="idr")  # the pin level (A3.6b item 2; 0066)
                 try:
                     advance(ctx, 30)
                     ctx.eq("30 s after start with PF4 forced low: still not confirmed", u.identify().get(10), b"\x01")
@@ -597,7 +597,7 @@ def t_a1_68(ctx: Ctx):
                     ctx.eq("after 60 s: rolled back to the previous slot and version", (t.get(10), t.get(23, b"")[:1], version_of(t)),
                            (b"\x02", bytes([a[0]]), a[2]))
                 finally:
-                    ctx.fixture("gpio.force", pin="PF4", level=None)
+                    ctx.fixture("gpio.force", pin="PF4", level=None, target="idr")
         ctx.notes.append("the class 2 fault code (FAULT_CODE 16) is not judged here: A3.5 tests; what 'a safe-state pin forced' "
                          "means (pin level or output register) is asked of the spec session (SF-29)")
     else:
