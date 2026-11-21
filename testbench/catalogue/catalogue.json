@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "0375d94",
-  "sha256_of_inputs": "4a50e70bac60e73dea83db98aa4daead93125fc360d19388fcfedbb51bf62c5b"
+  "commit": "0e4fcd8",
+  "sha256_of_inputs": "71f360d13742266b1d0ed08b46959a314468d398e9d9aa979f3e5e995308b3bb"
  },
  "his": {
   "commit": "72591aa"
@@ -1519,6 +1519,28 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-75",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "While armed and during a P2 session: `SET_FIRST_SECRET` with a 31-byte payload and `SET_CALIBRATION` with a TLV that runs past the end get 17, not 50 or 57; `SET_CALIBRATION` with a well-formed payload and an unknown parameter id gets 57 during the session and, outside it while armed, 50; unarmed and outside a session, 48 (A1.4 \"Malformed payload\", Table A1-3; 0056).",
+   "reqs": [
+    "A1",
+    "A1.4",
+    "Table A1-3"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": true,
+   "notes": [
+    "the armed part needs TX unlocked; 'outside a session while armed' is not reachable over P2"
    ]
   },
   {

@@ -609,3 +609,45 @@ def t_b5_21(ctx):
         d = h.recv(0.05, PORT_DISC, until=lambda g: bool(g))
         ctx.check("right after the SET_CONFIG reply the radio answers discovery within 50 ms (its flash write "
                   "ended before the reply)", bool(d), f"{(d[0][2] - t0) * 1000:.1f} ms" if d else "no reply within 50 ms")
+
+
+# ---------------- malformed payload (A1.4; 0056) ----------------
+@test("T-A1-75")
+def t_a1_75(ctx):
+    """A payload without the structure of Annex M is 17 before every state check; a well-formed
+    one with a disallowed value keeps its command-specific code after them."""
+    s = secret_of(ctx)
+    past_end = struct.pack(">IB", 0, 2) + b"tb" + struct.pack(">B", 6) + b"P-RF-1" + struct.pack(">H", 10) + b"\x01"
+    unknown = calibration_payload({"P-XX-9": b"\x01"})
+    with m(ctx) as c:
+        _t_a1_75(ctx, c, s, past_end, unknown)
+
+
+def _t_a1_75(ctx, c, s, past_end, unknown):
+    with Host(ctx.net) as h:
+        armed = False
+        if tx_bit4(h) == 1:
+            st = arm_once(ctx, h)
+            armed = ctx.eq("armed during the session", None if st is None else st & 0xF, 1)
+        else:
+            h.start()
+            ctx.notes.append("armed part not run: TX locked (record tx bit 4 = 0); the session part ran")
+        where = "armed and in a P2 session" if armed else "in a P2 session"
+        h.keepalive()
+        r = c.req("SET_FIRST_SECRET", os.urandom(31))
+        ctx.eq(f"{where}: SET_FIRST_SECRET with 31 bytes gets 17 (not 36, 57 or 50)", r["status"] if r else None, 17)
+        h.keepalive()
+        r = c.authed("SET_CALIBRATION", s, past_end)
+        ctx.eq(f"{where}: SET_CALIBRATION with a TLV past the end gets 17", r["status"] if r else None, 17)
+        h.keepalive()
+        r = c.authed("SET_CALIBRATION", s, unknown)
+        ctx.eq(f"{where}: well-formed SET_CALIBRATION with an unknown id gets 57", r["status"] if r else None, 57)
+        h.stop()
+    ctx.notes.append("'outside a session while armed, 50' not reachable over P2: an arm ends with its session "
+                     "(Table A3-1); it needs another level")
+    time.sleep(0.1)
+    # the same management socket: it holds the write session (A1.10)
+    r = c.authed("SET_CALIBRATION", s, unknown)
+    ctx.eq("unarmed, no session: the unknown id gets 48 (command-specific, after the state checks)",
+           r["status"] if r else None, 48)
+    c.authed("END_WRITE_SESSION", s)

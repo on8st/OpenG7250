@@ -217,6 +217,11 @@ impl Mgmt {
         }
         let n = be16(d, 16) as usize;
         let payload = &d[18..18 + n];
+        // 0056: a payload without the size or structure of Annex M is 17, in the framing group,
+        // before authentication and every state check
+        if payload_malformed(cmd, payload) {
+            return self.send(r, rx, st::MALFORMED, &[], false, cmd, out);
+        }
         let hash = sha256(payload);
         let id = be32(d, 8);
         // repeated request (A1.4): stored reply, not executed again
@@ -673,6 +678,52 @@ fn cal_payload(r: &Radio) -> Vec<u8> {
 }
 
 /// SET_CALIBRATION payload (Annex M Table M-1, M-5); None = status 48.
+/// A payload that cannot be read by the structure of Annex M (0056): wrong fixed length, a
+/// TLV that runs past the end, a missing fixed field. Values are not judged here.
+fn payload_malformed(cmd: u16, p: &[u8]) -> bool {
+    match cmd {
+        SET_FIRST_SECRET | CHANGE_SECRET => p.len() != 32,
+        SWITCH_LEVEL => p.len() != 1,
+        SET_CALIBRATION => !cal_structure_ok(p),
+        SET_CONFIG => {
+            let mut i = 0;
+            while i < p.len() {
+                if i + 2 > p.len() || i + 2 + p[i + 1] as usize > p.len() {
+                    return true;
+                }
+                i += 2 + p[i + 1] as usize;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Table M-5 structure only: date, source, then entries of id length, id, value length, value.
+fn cal_structure_ok(p: &[u8]) -> bool {
+    if p.len() < 5 {
+        return false;
+    }
+    let sl = p[4] as usize;
+    let mut i = 5 + sl;
+    if i > p.len() {
+        return false;
+    }
+    while i < p.len() {
+        let il = p[i] as usize;
+        if i + 1 + il + 2 > p.len() {
+            return false;
+        }
+        let vl = be16(p, i + 1 + il) as usize;
+        i += 1 + il + 2;
+        if i + vl > p.len() {
+            return false;
+        }
+        i += vl;
+    }
+    true
+}
+
 fn parse_cal(p: &[u8]) -> Option<Calibration> {
     if p.len() < 5 {
         return None;
