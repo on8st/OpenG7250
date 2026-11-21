@@ -83,6 +83,14 @@ the source has been found but not checked.
 
 ## Datasheets
 
+### [STM32H72x] STMicroelectronics STM32H725/H735 datasheet and reference manual RM0468
+
+- What: the MCU of the main unit ([HIS] HIS 10). Cited only to name `t_erase_max`, the maximum
+  128 KiB sector erase time in its flash characteristics (B2.3 "Flash work"; 0065).
+- Where: st.com.
+- Read: not read by the spec session; the value is taken from it by the firmware and the
+  emulator, not repeated in the spec.
+
 ### [CH394] WCH CH394 manual 1 (以太网协议栈芯片 CH394 手册 1), version 1.2
 
 - What: datasheet of the WCH CH394 Ethernet protocol-stack chip (10/100 MAC+PHY, built-in

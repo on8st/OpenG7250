@@ -279,6 +279,7 @@ upstream through the RFC (0038).
   (`sources.md`).
 - **Decisions.** 0001–0059 and 0061 are accepted (0033–0035 and 0037–0059 on
   2026-11-21); 0060 (DDC0 frame values from the factory calibration), the 0061 addendum , 0062
-  (flash layout in `IDENTIFY`) and 0063 (update status codes) are proposed
+  (flash layout in `IDENTIFY`) , 0063 (update status codes), 0064 (rollback) and 0065
+  (flash work) are proposed
   (`product-handover.md`). What remains for the product are the values of Annex P, which
   need the radio.
