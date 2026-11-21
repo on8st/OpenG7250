@@ -2829,6 +2829,37 @@ edge (A3.1a). Tolerance as B10.5: not before 1000 ms, unkeyed by 1010 ms. The sa
 to a TCI `KEYER` key-down (part C C8.2). The KEY input (hardware CW, HIS-17) is not capped.
 Annex X1, D26.
 
+**Keyer timing** (0046). For CWX with iambic set, and for the hardware keyer once it is used
+(0030), the keyer MUST form its elements as follows ([P2] DUC specific packet bytes 9, 10 and
+byte 5 bits [3], [5], [6]; element ratios of ITU-R M.1677-1 [ITU-M1677], with words per minute counted on the 50-unit word
+PARIS).
+
+1. **Unit.** With keyer speed *S* wpm (DUC-specific byte 9), the unit is *T* = 1200 / *S* ms.
+   *S* is honoured from 1 to 60 ([P2]: "0 to 60 WPM"); 0 keeps CWX from keying (Table B10-1);
+   a value above 60 is used as 60, logged (A1.7) and counted (`GET_STATS`).
+2. **Elements and spaces.** A dot is 1 *T* of mark, a dash 3 *T*, the space between the
+   elements of one character 1 *T*.
+3. **Weight.** With weight *W* (byte 10; [P2]: "33 to 66, nominal is 50"), every mark is
+   lengthened by Δ = *T* × (*W* − 50) / 50 and the space after it shortened by the same Δ, so
+   that a dot plus its space stays 2 *T* and a dash plus its space 4 *T*. *W* = 50 is neutral.
+   A value below 33 is used as 33, above 66 as 66; 0 is read as 50.
+4. **Iambic mode A and B** (byte 5 bit [5]; the Curtis definitions). While one paddle is
+   held, the keyer repeats its element; while both are held it alternates, starting with the
+   element of the paddle pressed first. In mode A, when both paddles are released, the keyer
+   completes the element it is sending and stops. In mode B, if both paddles were held at any
+   time during an element, the keyer completes that element and then sends one more element,
+   the opposite one, before it stops. A paddle pressed during an element is remembered and
+   its element follows after the space (one element of memory per paddle), in both modes.
+5. **Strict character spacing** (byte 5 bit [6]). Set: when no paddle is held at the end of the
+   1 *T* space after an element, the character has ended, and the next element MUST NOT start
+   before 3 *T* of space have passed since the end of the last mark. Clear: the next element
+   starts as soon as a paddle is held after the 1 *T* space.
+6. **Tolerance.** Each mark and each space MUST be within ±1 ms or ±2 % of its nominal length,
+   whichever is larger, and the length of a whole character within ±2 ms or ±2 %. On the radio
+   it is measured between the 50 % points of the RF envelope (the ramp of byte 17 is
+   symmetric); on the reference model and the emulator between the key-on and key-off events of
+   the keyed state. Tests: T-B10-43 to T-B10-46.
+
 Host note (0022 §61). The cap counts how long a paddle bit stays at 1, not how long one
 element lasts. A host that holds a paddle bit at 1 for an iambic string or a run of dots
 longer than 1 s has the string cut at 1 s. A host SHOULD release the paddle bits between
@@ -2916,7 +2947,7 @@ Table B10-1 — DUC-specific packet ([P2] DUC specific packet)
 | 5 [7] | Break-in | honoured: set, KEY and CWX key by themselves, with the hang delay of bytes 11–12, and PTT and CW never share a transmission; clear, KEY and CWX form RF only inside the owner's PTT transmission, which T/R relay and SEND follow, with no hang delay and, with CW selected, no DUC I&Q and no underrun check; a change while keyed is deferred to the unkey (B10.5b) | [P2] byte 5; 0007 Decision 6; 0022 §85 |
 | 5 [0] | EER | set: refused (EER not offered): DUC I&Q not accepted and transmit refused until cleared; `STREAM_STATUS` reason 12 | [P2] byte 5, DUC I&Q NOTE; 0004 point 7; 0020 §22 |
 | 6–8 | Sidetone level, frequency | ignored (no audio, 0031; HIS-17) | [P2] bytes 6–8 |
-| 9, 10 | Keyer speed, weight | honoured; speed 0 (also the value after a session end, A3.6a): the keyer forms no element and CWX does not key, the request is not latched (A3.1a) | [P2] bytes 9–10; 0007 Decision 6; 0022 §64 |
+| 9, 10 | Keyer speed, weight | honoured as B10.5a "Keyer timing" (unit 1200 / *S* ms, *S* 1–60; weight 33–66, 50 neutral; 0046); speed 0 (also the value after a session end, A3.6a): the keyer forms no element and CWX does not key, the request is not latched (A3.1a) | [P2] bytes 9–10; 0007 Decision 6; 0022 §64 |
 | 11–12 | Hang delay, ms | used with break-in set only (B10.5b); honoured up to 2000 ms; a larger value is clamped to 2000 ms, logged (A1.7) and counted (`GET_STATS`); the keyed timeout ends a hang delay (B10.5) | [P2] bytes 11–12; 0007 Decision 6; 0022 §83 item 1 |
 | 13 | RF delay, ms | honoured; SEND asserted before RF | [P2] byte 13; 0007 Decision 6 |
 | 14–15 | DUC0 sampling rate | 192 honoured; any other value refused: DUC I&Q not accepted and transmit refused (PA off) until a valid packet; 0 read as 192 | [P2] bytes 14–15; 0004 points 2, 7; 0020 §18 |
@@ -3817,6 +3848,10 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B10-40 | With break-in clear, CW selected and no element, a PTT bit held by High Priority packets every 50 ms with no DUC I&Q is not unkeyed by the underrun check and is unkeyed by the maximum continuous TX time (set stricter, 10 s), counted from the key of A3.1a, not from the end of the RF delay (B10.5, A3.4d; 0022 §88 items 2, 4). |
 | T-B10-41 | With record `tx` bit 1 = 1 and bit 4 = 0 (transmit parameters of Annex P not set), an arm that meets every other condition of B10.2 item 3 is rejected with `NOT_CALIBRATED`, and `ATU_TUNE` = 1 with write reject reason `NOT_CALIBRATED`; with bit 4 = 1 (reference model, simulated values) the arm is accepted (Annex P; 0035, 0036). |
 | T-B10-42 | With record `tx` bit 4 = 0, DUC I&Q from the owner is discarded and counted, `STREAM_STATUS` DUC0 reads not running with reason 14, and PTT and CWX key nothing and are not latched (B10, B10.7; 0039). |
+| T-B10-43 | With CWX, iambic set, *S* = 20 wpm and *W* = 50: a held dot paddle gives marks of 60 ms and spaces of 60 ms, a held dash paddle marks of 180 ms and spaces of 60 ms, within the tolerance of B10.5a item 6; with *S* = 60 the unit is 20 ms; *S* = 70 is used as 60 and logged (reference model with a complete calibration set, or emulator; B10.5a; 0046). |
+| T-B10-44 | Weight: at *S* = 20 wpm, *W* = 66 gives dot marks of 79.2 ms with spaces of 40.8 ms and *W* = 33 dot marks of 39.6 ms with spaces of 80.4 ms, a dot plus space staying 120 ms; *W* = 80 is used as 66, *W* = 0 as 50 (B10.5a item 3; 0046). |
+| T-B10-45 | Strict character spacing: with bit [6] set, a paddle pressed 1.5 *T* after the end of a mark starts its element 3 *T* after that end; with bit [6] clear it starts at once (B10.5a item 5; 0046). |
+| T-B10-46 | Iambic: both paddles squeezed during a dash and released before its end: mode A ends after the dash, mode B sends one dot after it; a dot paddle pressed during a dash (dash paddle held) gives a dot after the dash in both modes (B10.5a item 4; 0046). |
 
 ### Error handling (B11)
 
