@@ -120,8 +120,9 @@ class Ctx:
             return
         raise Skip(f"fixture:{fixture}")
 
-    def fixture(self, op: str, **args):
-        """Call a fixture on the control socket (section 4)."""
+    def fixture(self, op: str, _timeout: float = 30.0, **args):
+        """Call a fixture on the control socket (section 4). `_timeout`: the wall time the answer
+        may take (30 s; a blocking fixture such as time.advance passes more)."""
         self.need(op)
         addr = self.endpoint["control"]["address"]
         host, port = addr.rsplit(":", 1)
@@ -130,7 +131,7 @@ class Ctx:
         deadline = time.monotonic() + NOT_READY_RETRY_S
         while True:
             try:
-                with socket.create_connection((host, int(port)), timeout=30) as s:
+                with socket.create_connection((host, int(port)), timeout=_timeout) as s:
                     s.sendall((json.dumps({"op": op, "args": args}) + "\n").encode())
                     line = s.makefile().readline()
                 rep = json.loads(line)

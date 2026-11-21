@@ -375,7 +375,9 @@ def t_a1_81(ctx: Ctx):
 # ---------------- phase 2: the 10-minute rule and the trial rollback ----------------
 def advance(ctx, s: float):
     """time.advance (the reference model's clock; the emulator's later): s seconds pass."""
-    ctx.fixture("time.advance", us=int(s * 1e6))  # the bench sends nothing meanwhile
+    # the bench sends nothing meanwhile; the answer comes when the advance is done (the emulator
+    # runs about 2.7 x real time, so allow the radio time itself plus a margin on the wall clock)
+    ctx.fixture("time.advance", _timeout=s + 60, us=int(s * 1e6))
     time.sleep(0.05)  # a tick of the model at the new time
 
 

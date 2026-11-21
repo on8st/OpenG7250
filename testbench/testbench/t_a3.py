@@ -101,4 +101,16 @@ def t_a3_61(ctx: Ctx):
         ctx.fixture("gpio.force", pin="PF4", level=None, target="idr")
     clean("final")
     ctx.notes.append("'armed with the TX path open, no fault' not run: needs TX unlocked (an arm)")
-    ctx.notes.append("DAC part (a non-zero value written to channel 2, 7 or 8) not run: no fixture for it yet")
+    # the bias channels 2, 7, 8: a non-zero value written by a simulated firmware fault
+    # (dac.force, v1.8), checked by the value last written (A3.6b; Table A3-6)
+    if "dac.force" in ctx.endpoint.get("fixtures", []):
+        for ch in (2, 7, 8):
+            ctx.fixture("dac.force", channel=ch, value=1)
+            wait_radio(ctx, 20)
+            code, flags = faults(ctx)
+            ctx.check(f"DAC channel {ch} set non-zero: FAULT_CODE 16 within 20 ms", fault16(code, flags),
+                      f"FAULT_CODE {code}, FAULT_FLAGS {flags}")
+            ctx.fixture("dac.force", channel=ch, value=0)
+            clean(f"DAC channel {ch}")
+    else:
+        ctx.notes.append("DAC part (a non-zero value on channel 2, 7 or 8) not run: no dac.force")
