@@ -63,6 +63,11 @@ PLL, VTOR, PRIMASK, caches, peripherals or interrupts left on, whether the IWDG
 already runs) is **not known**. New firmware must not assume reset values; the
 facts can only come from the radio (`90-needs-hardware.md`).
 
+- **AXI SRAM over a reset without power loss:** whether the content of AXI SRAM
+  at 0x2401FFE0–0x2401FFFF survives a reset without power loss (software reset,
+  watchdog reset), i.e. through the stage that runs before 0x08020000, is
+  **UNKNOWN**. Measurement in `90-needs-hardware.md`.
+
 ## Image placement (platform constraint)
 - The bootloader occupies 0x08000000–0x0801FFFF and is not part of the
   application image.
