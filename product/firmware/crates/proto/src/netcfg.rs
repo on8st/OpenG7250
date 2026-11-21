@@ -75,6 +75,17 @@ pub fn valid_host(ip: Ip, mask: Ip) -> bool {
     host != 0 && host != !u32_of(mask) && first != 0 && first != 127 && first < 224
 }
 
+/// The configuration after a Set IP to a non-zero address (B3.9, spec 56197e4; T-B3-34): keep
+/// the netmask if the new address lies in the current subnet, else 255.255.255.0; keep the
+/// gateway if it lies inside the resulting subnet, else clear it. (0.0.0.0 selects DHCP and is
+/// handled by the caller.)
+pub fn after_set_ip(current: &NetConfig, ip: Ip) -> NetConfig {
+    let same_subnet = valid_mask(current.mask) && in_subnet(current.ip, current.mask, ip) && valid_host(ip, current.mask);
+    let mask = if same_subnet { current.mask } else { [255, 255, 255, 0] };
+    let gateway = if current.gateway != [0; 4] && in_subnet(ip, mask, current.gateway) { current.gateway } else { [0; 4] };
+    NetConfig { mode: Mode::Static, ip, mask, gateway }
+}
+
 /// RFC 3927 link-local address 169.254.1.0-169.254.254.255 from the MAC (section 2.1: a
 /// pseudo-random number generator seeded from the MAC), mask 255.255.0.0. `attempt` selects the
 /// next candidate after a conflict.
@@ -110,6 +121,21 @@ mod tests {
         assert!(!valid_host([192, 168, 1, 0], [255, 255, 255, 0]));
         assert!(!valid_host([192, 168, 1, 255], [255, 255, 255, 0]));
         assert!(!valid_host([127, 0, 0, 1], [255, 0, 0, 0]));
+    }
+
+    #[test]
+    fn set_ip_netmask_and_gateway_b3_9() {
+        let cur = NetConfig { mode: Mode::Dhcp, ip: [192, 168, 1, 20], mask: [255, 255, 255, 0], gateway: [192, 168, 1, 1] };
+        // Same subnet: netmask and gateway kept.
+        let c = after_set_ip(&cur, [192, 168, 1, 50]);
+        assert_eq!((c.mode, c.mask, c.gateway), (Mode::Static, [255, 255, 255, 0], [192, 168, 1, 1]));
+        // Other subnet: /24 kept as fall-back mask, gateway outside it cleared.
+        let c = after_set_ip(&cur, [10, 0, 0, 5]);
+        assert_eq!((c.mask, c.gateway), ([255, 255, 255, 0], [0; 4]));
+        // From link-local /16 to an address outside 169.254/16: /24, no gateway.
+        let ll = link_local([2, 1, 2, 3, 4, 5], 0);
+        let c = after_set_ip(&ll, [192, 168, 7, 9]);
+        assert_eq!((c.mask, c.gateway), ([255, 255, 255, 0], [0; 4]));
     }
 
     #[test]
