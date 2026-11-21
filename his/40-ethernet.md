@@ -27,10 +27,12 @@ not hardware evidence.
   gives a window of 12–19 ms after RST# goes high in which the chip must not be
   accessed (VERIFIED, datasheet). The minimum RST# low time is open: to be
   taken from CH394DS1 (`90-needs-hardware.md`).
-- **SCK:** the CH394 SPI device interface runs at up to 62 MHz in SPI mode 0
-  or 3 (WCH CH394 manual CH394DS1 V1.2, features list; VERIFIED, datasheet).
-  About 17 MHz is the upper value seen in use on the board link, not a
-  datasheet limit (MEDIUM).
+- **SCK:** 62 MHz in SPI mode 0 or 3 is the chip's limit only (WCH CH394
+  manual CH394DS1 V1.2, chapter 1, features list: "SPI device interface up to
+  62 MHz"; the page number is not checked here; VERIFIED, datasheet). The board
+  link (traces, connector, MCU pins) is not measured, so the safe bound is the
+  lower value: about 17 MHz, the upper value seen in use on the board link
+  (MEDIUM), until the link is measured.
 - **Version register (F2-Q2):** CHIPV at 0x0039, read-only (CH394DS1 V1.2,
   table 6-1 and §7.1.16; VERIFIED). Its value on the radio is **not known**
   (W5500 VERSIONR reads 0x04; do not rely on it). The documented software reset
