@@ -216,6 +216,10 @@ async fn main(spawner: Spawner) {
     let pins = net::NetPins { spi: p.SPI6, sck: p.PG13, mosi: p.PG14, miso: p.PG12, cs: p.PG15, rst: p.PB5 };
     let mgmt = mgmt_init::MgmtInit::new(store, tx.arm_state_reg(), SLOT);
     spawner.spawn(net::run(pins, id, mgmt, tx).unwrap());
+    // From here the console no longer blocks: lines go into a ring that the net loop and this
+    // task pump into the USART FIFO (0054: a blocking line costs about 5 ms).
+    console::set_buffered(true);
+    spawner.spawn(console_pump().unwrap());
 
     let mut n: u64 = 0;
     loop {
@@ -267,10 +271,20 @@ pub fn safe_reset(mgmt: &mut mgmt_init::MgmtInit, factory: bool) -> ! {
     cortex_m::peripheral::SCB::sys_reset()
 }
 
+/// Moves buffered console output into the USART FIFO when the net loop does not (idle times).
+#[embassy_executor::task]
+async fn console_pump() {
+    loop {
+        console::pump();
+        Timer::after_millis(1).await;
+    }
+}
+
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     cortex_m::interrupt::disable();
     safe::apply();
+    console::set_buffered(false); // what is buffered first, then the panic, blocking
     println!("app: PANIC {}", info);
     // No refresh: the watchdog resets the MCU, and the reset brings the safe state back.
     loop {

@@ -6,6 +6,29 @@
 //! same pins after `embassy_stm32::init`.
 //!
 //! Only PB6 is configured; PB7 (RX) is left untouched until a console input exists.
+//!
+//! Blocking by default (boot stage, fault holds, panic). The application switches it to buffered
+//! ([`set_buffered`]): a line then goes into a RAM ring and [`pump`] moves it into the USART's
+//! 16-byte transmit FIFO without waiting, so console output never stalls the net loop (at
+//! 115200 baud a 60-character line takes about 5 ms; 0054). A full ring drops bytes and counts
+//! them ([`DROPPED`]). [`flush`] and [`set_buffered`]`(false)` empty the ring, blocking.
+
+use core::cell::RefCell;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use cortex_m::interrupt::Mutex;
+
+const RING: usize = 2048;
+
+struct Ring {
+    buf: [u8; RING],
+    head: usize,
+    len: usize,
+}
+
+static OUT: Mutex<RefCell<Ring>> = Mutex::new(RefCell::new(Ring { buf: [0; RING], head: 0, len: 0 }));
+static BUFFERED: AtomicBool = AtomicBool::new(false);
+/// Console bytes dropped because the ring was full.
+pub static DROPPED: AtomicU32 = AtomicU32::new(0);
 
 use crate::pac;
 use crate::pac::gpio::vals::{Moder, Ospeedr, Ot, Pupdr};
@@ -63,7 +86,10 @@ pub fn init() {
     let u = pac::USART1;
     u.cr1().write(|w| w.set_ue(false));
     u.brr().write_value(pac::usart::regs::Brr((HSI_HZ + BAUD / 2) / BAUD));
+    // The 16-byte transmit FIFO (RM0468, USART FIFO mode; set while UE = 0): TXE then reads as
+    // "TX FIFO not full", so the blocking writer is unchanged and the pump can fill it.
     u.cr1().write(|w| {
+        w.set_fifoen(true);
         w.set_te(true);
         w.set_ue(true);
     });
@@ -85,7 +111,7 @@ pub fn wait_100ms() {
     syst.disable_counter();
 }
 
-pub fn write_bytes(b: &[u8]) {
+fn write_blocking(b: &[u8]) {
     let u = pac::USART1;
     for &c in b {
         while !u.isr().read().txe() {
@@ -95,8 +121,63 @@ pub fn write_bytes(b: &[u8]) {
     }
 }
 
-/// Wait until the last byte has left the shift register.
+pub fn write_bytes(b: &[u8]) {
+    if !BUFFERED.load(Ordering::Relaxed) {
+        write_blocking(b);
+        return;
+    }
+    cortex_m::interrupt::free(|cs| {
+        let mut r = OUT.borrow(cs).borrow_mut();
+        for &c in b {
+            if r.len == RING {
+                DROPPED.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            let at = (r.head + r.len) % RING;
+            r.buf[at] = c;
+            r.len += 1;
+        }
+    });
+    pump();
+}
+
+/// Move buffered bytes into the transmit FIFO while it has room; never waits.
+pub fn pump() {
+    let u = pac::USART1;
+    cortex_m::interrupt::free(|cs| {
+        let mut r = OUT.borrow(cs).borrow_mut();
+        while r.len > 0 && u.isr().read().txe() {
+            let c = r.buf[r.head];
+            u.tdr().write_value(pac::usart::regs::Dr(c as u32));
+            r.head = (r.head + 1) % RING;
+            r.len -= 1;
+        }
+    });
+}
+
+/// Buffered (the application, once running) or blocking. Switching off empties the ring first,
+/// blocking, so nothing written before is lost (panic, resets).
+pub fn set_buffered(on: bool) {
+    if !on {
+        drain();
+    }
+    BUFFERED.store(on, Ordering::Relaxed);
+}
+
+fn drain() {
+    loop {
+        let more = cortex_m::interrupt::free(|cs| OUT.borrow(cs).borrow().len > 0);
+        if !more {
+            break;
+        }
+        pump();
+        crate::wdg::refresh();
+    }
+}
+
+/// Empty the ring (blocking) and wait until the last byte has left the shift register.
 pub fn flush() {
+    drain();
     while !pac::USART1.isr().read().tc() {}
 }
 

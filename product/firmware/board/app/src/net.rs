@@ -593,6 +593,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let mut unprobed_logged: u32 = 0;
     loop {
         let pass_start = Instant::now();
+        // Console bytes into the USART FIFO (never waits): the loop may not yield for a while.
+        g7250_board::console::pump();
         // Session watchdog and status first, on every pass, so that no branch below can delay
         // the standby beyond B5.6's 1100 ms (T-B5-10).
         p2.tick(&mut chip, Instant::now().as_millis());
@@ -739,6 +741,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 server.stats.net_busy_pass_max_us = busy_pass_max_us;
                 let unprobed = UNPROBED_CLAIMS.load(core::sync::atomic::Ordering::Relaxed);
                 server.stats.ll_unprobed = unprobed as u64;
+                server.stats.console_dropped = g7250_board::console::DROPPED.load(core::sync::atomic::Ordering::Relaxed) as u64;
                 if unprobed != unprobed_logged {
                     unprobed_logged = unprobed;
                     server.log.push(Instant::now().as_millis(), format_args!("link-local {} used without a complete RFC 3927 probe ({} times)", ip_str(cfg.ip).as_str(), unprobed));

@@ -60,11 +60,13 @@ pub struct Stats {
     pub net_send_dropped: u64,
     /// Link-local addresses used without a complete RFC 3927 probe (A1.11; 0057).
     pub ll_unprobed: u64,
+    /// Console bytes dropped because the console's ring was full (the console never blocks).
+    pub console_dropped: u64,
 }
 
 impl Stats {
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 17] = [
+        let items: [(&[u8], u64); 18] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
             (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
@@ -82,6 +84,7 @@ impl Stats {
             (b"net_busy_pass_max_us", self.net_busy_pass_max_us),
             (b"net_send_dropped", self.net_send_dropped),
             (b"ll_unprobed", self.ll_unprobed),
+            (b"console_dropped", self.console_dropped),
         ];
         let mut at = 0;
         for (n, v) in items {
@@ -202,6 +205,7 @@ impl Server {
                 net_busy_pass_max_us: 0,
                 net_send_dropped: 0,
                 ll_unprobed: 0,
+                console_dropped: 0,
             },
             writer: None,
             reset_pending: false,
