@@ -676,10 +676,14 @@ change under A1.11a (0035).
 - **DHCP messages while link-local** (0052). The CH394's source IP address is chip-wide
   ([CH394]), and the P2 sockets keep using the link-local address during a borrow, so the
   G7250 sends its DHCPDISCOVER and DHCPREQUEST with the link-local address as IP source while
-  it holds one; [RFC3927] section 1.9 lets a host with a link-local address go on with DHCP. To
-  stay within [RFC2131] section 4.1 in every other respect, these messages MUST carry `ciaddr`
-  = 0.0.0.0 and the BROADCAST flag set, so that the server or relay answers by broadcast and
-  never relies on the source address. Before any address is held (the first exchange at
+  it holds one. [RFC3927] section 2.11 requires the DHCP client to keep trying while a
+  link-local address is configured, and section 1.9 that the host not alter its use of DHCP
+  because of that address; [RFC2131] section 4.1 asks for source 0.0.0.0 "prior to that client
+  obtaining its IP address". Sending 0.0.0.0 would mean clearing the chip-wide address and
+  closing every socket for each retry, so this is a deliberate reading forced by the chip, kept
+  as close to [RFC2131] as it allows: these messages MUST carry `ciaddr` = 0.0.0.0 and the
+  BROADCAST flag set, so that the server or relay answers by broadcast and identifies the
+  client by `chaddr` and option 61, never by the source address. Before any address is held (the first exchange at
   power-on), the source is 0.0.0.0 as [RFC2131] section 4.1 says.
 - **Conflict on a DHCP or static address** (0049). A conflict on a leased address: the G7250
   sends DHCPDECLINE ([RFC2131] section 3.1 item 5), uses a link-local address and starts DHCP
@@ -1701,7 +1705,29 @@ Table B2-1 — Local UDP ports of the G7250 (level 1)
   SHOULD send zero in bytes 5–30 (0020 §13).
 - **Socket budget.** Table B2-1 uses all 8 CH394Q sockets: 7 for G7250-P2, one for the
   management channel (0008, Socket budget; 0017; [CH394]). The division of the 16 + 16 KB
-  socket buffers is the split of 0004, Consequences, "CH394Q buffer split" (0035; HIS-14).
+  socket buffers MUST be that of Table B2-2, set at bring-up (0053; [CH394] sections
+  7.2.12–7.2.13: 0–16 KB per socket in 1 KB steps). Every buffer size MUST be 0 or a power of
+  two (1, 2, 4, 8 or 16 KB): the socket pointers are 16-bit and wrap at 65536, and how a
+  buffer of another size handles that wrap is not documented ([CH394]). Reason: in UDP mode the CH394 has no flow
+  control ([CH394] section 12.2.4), so a socket drops a datagram that does not fit; the default
+  2 KB holds one 1444-byte packet, and a stop followed at once by a run, or any burst of High
+  Priority packets, must not lose the stop.
+
+Table B2-2 — Socket buffers (0053)
+
+| Local port | Receive (KB) | Holds | Transmit (KB) | Holds |
+|---|---|---|---|---|
+| 1024 | 1 | 16 discovery, General or Set IP packets (60 bytes) | 1 | discovery replies |
+| 1025 | 2 | one DDC-specific packet (1444 bytes); a host that sends a second at once may have to resend it | 1 | High Priority status (60 bytes) |
+| 1026 | 1 | DUC-specific packets (60 bytes) | 0 | no microphone stream in this version (B6.11; 0031) |
+| 1027 | 4 | two High Priority packets (1444 bytes each, 1452 with the receive header) | 2 | one wideband packet (1028 bytes); the processor keeps the frame and hands packets on as space frees (B6.10) |
+| 1029 | 4 | two DUC0 I&Q packets; at 192 ksps a packet arrives every 1.24 ms, so the firmware reads the socket at least every 2.5 ms (its own FIFO, B10.7, B11.7) | 0 | — |
+| 1035 | 0 | — | 8 | five DDC0 I&Q packets |
+| 7250 | 2 | one register-map packet of up to 1444 bytes | 2 | one register push or answer of up to 1444 bytes |
+| 7251 | 2 | management requests (at most 1000 bytes each, A1.4) | 2 | one reply (at most 1400 bytes) |
+| total | 16 | | 16 | |
+
+Nothing is sent from ports 1026 and 1029, and nothing is received on 1035.
 
 B2.4 **Remote endpoint.** The G7250 MUST reply to the discovery from local port 1024 to the
 IP address and source port of the host's discovery packet ([P2] "Detailed operation";
@@ -3798,6 +3824,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-17 | Host A streams DDC0 at 192 ksps on 7.1 MHz with PA enable and CW select set; its C&C is cut for 1.5 s (watchdog standby), after which it continues its High Priority keepalive with run = 1 unchanged: the first packet restarts the session without a run 0→1 edge, DDC0 resumes at 192 ksps on 7.1 MHz with sequence numbers continuing from before the standby, PA enable and CW select read cleared (Table A3-4), and an arm is rejected with `WATCHDOG_DISABLED` until A sends a General packet with byte 38 bit [0] set, then accepted (A2.3, B5.4, B2.7). The same after a link loss and return to 100 Mbit/s; after a stop and run the counters start at 0. |
 | T-B5-18 | After host A's session ends by a watchdog standby, a run bit alone from host B gives DDC0 `STREAM_STATUS` reason 1 and counters starting at 0; A's RX settings are not used for B (B5.4 item 3, B2.7). |
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
+| T-B5-20 | Two High Priority packets sent back to back on port 1027, run = 1 then run = 0, and the reverse: the radio processes both, so the session ends (or starts) as the last one says; with ten in a burst none is lost while the firmware reads the socket within the time two packets take to arrive (emulator; B2.3, Table B2-2; 0053). |
 
 ### Streams (B6)
 
