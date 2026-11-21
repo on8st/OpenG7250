@@ -461,6 +461,20 @@ A test with target `emulator` is also run against the reference model. A test wi
 4. Proposed (v1.6): `macraw.fail {on: true|false}` makes socket 0 fail to open in MACRAW, for
    T-A1-76 (0057) once the emulator has MACRAW; until then a runner without MACRAW takes the
    same path, and the bench judges by `IDENTIFY` tag 24.
-5. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
+5. Proposed by the emulator side (v1.7), accepted by the bench: judged bursts scheduled in
+   emulated time, exactly at any emulation speed.
+   - `net.inject {host: i, from_port, to_port, at_us: [...], payloads: [hex, ...]}` →
+     `{"t_us": [...]}`: each datagram placed in the CH394 receive buffer of `to_port` at its
+     emulated offset from now, as if sent by `hosts[i]` from `from_port` (a port the bench has
+     bound, so that answers reach its socket as usual); the answer lists the emulated placing
+     time of each. Injected datagrams appear in `net.log` as `to_radio` entries (with
+     `"injected": true`), and one that does not fit is a `dropped` entry as any other.
+   - `time.wait {us}` → `{"t_us"}`: returns when emulated time has advanced by `us`.
+   - The bench uses them where offered, for T-B5-20 (the pairs at wire speed: offsets 0 and
+     121 us, a 1444-byte packet's time on a 100 Mbit/s link with its Ethernet framing; the 20
+     packets at k × 1000 us) and later for the CW paddle schedules (T-B10-33, -43 to -46);
+     where not offered, host pacing stays, with its guards. `time_scale` is then not needed
+     for these tests.
+6. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
    runs, the 0x04 reads are six strobes per sample; such a trace is meant for a short test
    only, and the runner may drop events (which fails the test) if it cannot keep up.
