@@ -736,6 +736,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let mut hp_rx: u64 = 0;
     // Unprobed link-local claims already written to the log.
     let mut unprobed_logged: u32 = 0;
+    // When the loop last woke from a sleep (idle wakes, GET_STATS).
+    let mut woke = Instant::now();
     loop {
         let pass_start = Instant::now();
         // Console bytes into the USART FIFO (never waits): the loop may not yield for a while.
@@ -929,6 +931,10 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 server.stats.ll_unprobed = unprobed as u64;
                 server.stats.console_dropped = g7250_board::console::DROPPED.load(core::sync::atomic::Ordering::Relaxed) as u64;
                 server.stats.hp_rx = hp_rx;
+                for (i, (w, b)) in crate::wakes::rates().iter().enumerate() {
+                    server.stats.wakes_per_s[i] = *w as u64;
+                    server.stats.busy_us_per_s[i] = *b as u64;
+                }
                 let k = g7250_board::persist::get();
                 server.stats.fault_entries = k.entries.map(|v| v as u64);
                 server.stats.resets = k.resets.map(|v| v as u64);
@@ -953,7 +959,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                     continue;
                 }
                 if dhcp_borrowed {
+                    crate::wakes::note(crate::wakes::Task::Net, woke.elapsed().as_micros());
                     Timer::after_millis(2).await;
+                    woke = Instant::now();
                     continue;
                 }
                 if let Ok(Some(d)) = chip.udp_recv(SOCK_MGMT, &mut mrx) {
@@ -1143,7 +1151,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         let d = dhcpc.as_ref().map_or(u64::MAX, |d| d.next_due());
                         d.clamp(now + 1, now + IDLE_MAX_MS)
                     };
+                    crate::wakes::note(crate::wakes::Task::Net, woke.elapsed().as_micros());
                     let _ = embassy_futures::select::select3(int.wait_for_low(), Timer::at(embassy_time::Instant::from_millis(due)), crate::fault::WAKE.wait()).await;
+                    woke = Instant::now();
                 }
             }
             Err(e) => {

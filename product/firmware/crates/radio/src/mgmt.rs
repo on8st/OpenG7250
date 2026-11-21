@@ -68,6 +68,10 @@ pub struct Stats {
     /// low-power).
     pub fault_entries: [u64; 3],
     pub resets: [u64; 5],
+    /// The last whole second, per task (net, tx_path, watchdog, console, main): wakes and busy
+    /// microseconds (idle analysis; emulator time.advance).
+    pub wakes_per_s: [u64; 5],
+    pub busy_us_per_s: [u64; 5],
     /// Console bytes dropped because the console's ring was full (the console never blocks).
     pub console_dropped: u64,
     /// High Priority packets read from port 1027, from any source, before the owner check
@@ -97,7 +101,7 @@ pub const STEP_NAMES: [&[u8]; STEPS] = [
 
 impl Stats {
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 28] = [
+        let items: [(&[u8], u64); 38] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
             (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
@@ -124,6 +128,16 @@ impl Stats {
             (b"resets_independent_watchdog", self.resets[2]),
             (b"resets_window_watchdog", self.resets[3]),
             (b"resets_low_power", self.resets[4]),
+            (b"wakes_net_per_s", self.wakes_per_s[0]),
+            (b"wakes_tx_path_per_s", self.wakes_per_s[1]),
+            (b"wakes_watchdog_per_s", self.wakes_per_s[2]),
+            (b"wakes_console_per_s", self.wakes_per_s[3]),
+            (b"wakes_main_per_s", self.wakes_per_s[4]),
+            (b"busy_net_us_per_s", self.busy_us_per_s[0]),
+            (b"busy_tx_path_us_per_s", self.busy_us_per_s[1]),
+            (b"busy_watchdog_us_per_s", self.busy_us_per_s[2]),
+            (b"busy_console_us_per_s", self.busy_us_per_s[3]),
+            (b"busy_main_us_per_s", self.busy_us_per_s[4]),
             (b"console_dropped", self.console_dropped),
             (b"hp_rx", self.hp_rx),
         ];
@@ -252,6 +266,8 @@ impl Server {
                 tx_check_first_us: 0,
                 fault_entries: [0; 3],
                 resets: [0; 5],
+                wakes_per_s: [0; 5],
+                busy_us_per_s: [0; 5],
                 console_dropped: 0,
                 hp_rx: 0,
                 steps: [0; STEPS],

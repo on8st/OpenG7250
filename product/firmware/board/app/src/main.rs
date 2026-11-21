@@ -8,6 +8,7 @@
 #![no_main]
 
 mod fault;
+mod wakes;
 mod fpga;
 mod net;
 mod p2;
@@ -72,6 +73,7 @@ const WDG_PET: Duration = Duration::from_millis(250);
 async fn watchdog(mut wd: IndependentWatchdog<'static, embassy_stm32::peripherals::IWDG1>) {
     let mut t = Ticker::every(WDG_PET);
     loop {
+        let t0 = Instant::now();
         // Not transmitting (TX is never armed in this build): the safe state must hold. If it
         // does not, put it back; the fault path comes with the safety core (F3).
         // The TX-side pins are the TX path check's (tx_path task, A3.6b); the other safety pins
@@ -85,6 +87,7 @@ async fn watchdog(mut wd: IndependentWatchdog<'static, embassy_stm32::peripheral
         }
         wd.pet();
         update::watchdog_petted(Instant::now().as_millis());
+        wakes::note(wakes::Task::Watchdog, t0.elapsed().as_micros());
         t.next().await;
     }
 }
@@ -267,8 +270,11 @@ async fn main(spawner: Spawner) {
     spawner.spawn(console_pump().unwrap());
 
     let mut n: u64 = 0;
+    let mut tick = Ticker::every(Duration::from_secs(1));
     loop {
-        Timer::after_secs(1).await;
+        tick.next().await;
+        let t0 = Instant::now();
+        wakes::roll();
         n += 1;
         // A trial not confirmed 60 s after its start: commanded reset, the boot stage starts the
         // previous image (A1.8 U-6; 0044). Here, not in the network task, so that it also holds
@@ -282,6 +288,7 @@ async fn main(spawner: Spawner) {
         if n % 10 == 0 {
             println!("app: alive {} s", Instant::now().as_secs());
         }
+        wakes::note(wakes::Task::Main, t0.elapsed().as_micros());
     }
 }
 
@@ -347,7 +354,8 @@ async fn tx_path() {
     g7250_board::flash::on_operation_end(|| FLASH_ENDED.signal(()));
     loop {
         let open = fault::TX_OPEN.load(core::sync::atomic::Ordering::Relaxed);
-        let now = Instant::now().as_millis();
+        let t0 = Instant::now();
+        let now = t0.as_millis();
         // The wait-loop samples of flash work since the last check: a mismatch they saw for
         // 10 ms is the fault now; one open at the end counts from its first sample.
         let mut held = None;
@@ -370,6 +378,7 @@ async fn tx_path() {
                 println!("app: FAULT TX path not blocked: P{:?}{} {:?}", m.port, m.pin, m.what);
             }
         }
+        wakes::note(wakes::Task::TxPath, t0.elapsed().as_micros());
         let _ = embassy_futures::select::select(t.next(), FLASH_ENDED.wait()).await;
     }
 }
@@ -387,7 +396,9 @@ async fn console_pump() {
         if !console::pending() {
             CONSOLE_OUT.wait().await;
         }
+        let t0 = Instant::now();
         console::pump();
+        wakes::note(wakes::Task::Console, t0.elapsed().as_micros());
         if console::pending() {
             Timer::after_millis(1).await;
         }
