@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "6c91683",
-  "sha256_of_inputs": "126136edb116c91c84ba493eb1f6e7b5e6974ce6bd60f40d9a21037ca7b580cb"
+  "commit": "0375d94",
+  "sha256_of_inputs": "4a50e70bac60e73dea83db98aa4daead93125fc360d19388fcfedbb51bf62c5b"
  },
  "his": {
   "commit": "72591aa"
