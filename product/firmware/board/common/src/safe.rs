@@ -4,7 +4,7 @@
 
 use crate::pac;
 use crate::pac::gpio::vals::{Moder, Ot, Ospeedr, Pupdr};
-use g7250_safety::safe_state::{Action, Port, SAFE_STATE};
+use g7250_safety::safe_state::{Action, Port, RESET_PLAN, RESET_PORTS, SAFE_STATE};
 
 fn gpio(p: Port) -> pac::gpio::Gpio {
     match p {
@@ -56,6 +56,45 @@ pub fn input_pull_up(port: Port, pin: u8) {
     g.bsrr().write(|w| w.set_bs(n, true));
     g.pupdr().modify(|w| w.set_pupdr(n, Pupdr::PULL_UP));
     g.moder().modify(|w| w.set_moder(n, Moder::INPUT));
+}
+
+/// The safe state at reset (0045; A3.6): called from the boot stage's `__pre_init`, before the
+/// RAM is initialised and before any clock, peripheral or console set-up. GPIO clocks on, then
+/// one step per port from [`RESET_PLAN`], unrolled, so the code is straight-line with constant
+/// masks: about 17 register reads and 23 writes. It uses only the stack and flash constants (no
+/// static: `.data` and `.bss` are not set up yet). `board/check-safe-margin.py` checks the
+/// bound of 20 us on the built boot stage. [`apply`] follows in `early_init` and sets the rest.
+/// Inlined into `__pre_init`, so that the path has no call frame of its own.
+#[inline(always)]
+pub fn apply_at_reset() {
+    // GPIOA-GPIOH clock enables, AHB4ENR bits 0-7 (RM0468); read back before the first access.
+    pac::RCC.ahb4enr().modify(|w| w.0 |= 0xFF);
+    let _ = pac::RCC.ahb4enr().read();
+    reset_step::<0>();
+    reset_step::<1>();
+    reset_step::<2>();
+    reset_step::<3>();
+    reset_step::<4>();
+    reset_step::<5>();
+    reset_step::<6>();
+    reset_step::<7>();
+}
+
+#[inline(always)]
+fn reset_step<const I: usize>() {
+    if I >= RESET_PORTS {
+        return;
+    }
+    let s = RESET_PLAN[I];
+    let g = gpio(s.port);
+    g.bsrr().write_value(pac::gpio::regs::Bsrr(s.bsrr));
+    if s.otyper_clear != 0 {
+        g.otyper().modify(|w| w.0 &= !s.otyper_clear);
+    }
+    if s.pupdr_clear != 0 {
+        g.pupdr().modify(|w| w.0 = (w.0 & !s.pupdr_clear) | s.pupdr_set);
+    }
+    g.moder().modify(|w| w.0 = (w.0 & !s.moder_clear) | s.moder_set);
 }
 
 /// Apply the whole safe state, in table order.

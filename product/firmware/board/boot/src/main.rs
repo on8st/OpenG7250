@@ -3,8 +3,8 @@
 //! Boot stage of the G7250 main firmware (0028 Decision 3).
 //!
 //! Runs from 0x08020000, where the vendor bootloader starts an application ([HIS] HIS 10).
-//! Order: safe state first ([HIS] HIS 85), then clocks on HSI, console, watchdog, then the slot
-//! choice. It writes only the boot record in the store (sectors 6-7), through the flash guard as
+//! Order: safe state first ([HIS] HIS 85; 0045: within 20 us of the first instruction at
+//! 0x08020000, from `__pre_init`), then clocks on HSI, console, watchdog, then the slot choice. It writes only the boot record in the store (sectors 6-7), through the flash guard as
 //! `Writer::BootStage`: a trial attempt before a trial start, a rollback (A1.8 U-6;
 //! `g7250_update::boot`). Never sector 0, the option bytes, the EEPROM or the Backup SRAM
 //! ([HIS] HIS 15). It is never updated over the network (0008 U-7).
@@ -37,6 +37,15 @@ fn slot_name(s: Slot) -> &'static str {
         Slot::A => "A",
         Slot::B => "B",
     }
+}
+
+/// The first code after the reset handler's stack pointer and vector table set-up, before the
+/// RAM initialisation (cortex-m-rt): the RF control pins of HIS 85 at their safe levels within
+/// 20 us of the first instruction (A3.6; 0045), before any other initialisation.
+/// `board/check-safe-margin.py` checks this path in the built ELF.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __pre_init() {
+    safe::apply_at_reset();
 }
 
 #[entry]

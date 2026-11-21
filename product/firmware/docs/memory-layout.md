@@ -117,7 +117,15 @@ length and CRC zero; `g7250-imgtool seal` fills them after the link.
 
 1. The vendor bootloader starts our boot stage at 0x08020000 (HIS 10). Whether it does so for an
    image it did not write is HIS-19, proven only by the F1 drill (HIS 90).
-2. Boot stage: mask interrupts; **safe state** (HIS 85, with PH9 high, 0029); clear every NVIC
+2. Boot stage: **safe state at reset** from `__pre_init`, right after the reset handler has set
+   the stack pointer and the vector table and before the RAM initialisation (A3.6; 0045: within
+   20 us of the first instruction at 0x08020000, before any other initialisation): GPIO clocks
+   on, then one straight-line step per port with masks computed at build time
+   (`g7250_safety::safe_state::RESET_PLAN`). `board/check-safe-margin.py` (run by `build.sh`)
+   checks the path in the built ELF and bounds it with a worst-case model (64 MHz, 16 cycles per
+   flash word fetched and per load or store): 17.6 us today. Then, in `main`: the start state
+   the previous stage left; mask interrupts; the full safe state (HIS 85, with PH9 high, 0029;
+   also output speed and pulls); clear every NVIC
    enable and pending bit and SysTick that a previous stage left; refresh the IWDG; clocks on HSI
    64 MHz with all prescalers /1; console on USART1 (PB6, 115200 8N1); start the IWDG (2 s);
    banner and reset cause; self-check of the safe state.

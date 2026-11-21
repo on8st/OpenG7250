@@ -135,6 +135,70 @@ pub fn rule(port: Port, pin: u8) -> Option<&'static PinRule> {
     SAFE_STATE.iter().find(|r| r.port == port && r.pin == pin)
 }
 
+/// One GPIO port's part of the safe state at reset, as register masks (RM0468 GPIO: MODER and
+/// PUPDR 2 bits per pin, OTYPER 1 bit, BSRR set bits 0-15 and reset bits 16-31).
+///
+/// Applied in this order: BSRR (levels), OTYPER (push-pull), PUPDR (pull-ups), MODER (output or
+/// input). So a pin becomes an output only after its level is written, and an input only after
+/// its pull-up is on, as in the per-pin order of [`Action`]. Pins outside the table, and those
+/// marked [`Action::LeaveUntouched`], keep every bit (read-modify-write). The output speed and the
+/// floating pull of driven pins do not change a level; the full per-pin apply right after sets
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PortStep {
+    pub port: Port,
+    pub bsrr: u32,
+    pub otyper_clear: u32,
+    pub pupdr_clear: u32,
+    pub pupdr_set: u32,
+    pub moder_clear: u32,
+    pub moder_set: u32,
+}
+
+const fn port_index(p: Port) -> usize {
+    p as usize
+}
+
+const fn reset_plan(t: &[PinRule]) -> ([PortStep; 8], usize) {
+    let empty = PortStep { port: Port::A, bsrr: 0, otyper_clear: 0, pupdr_clear: 0, pupdr_set: 0, moder_clear: 0, moder_set: 0 };
+    let mut plan = [empty; 8];
+    // Ports in the order of their first rule that acts: the output enables (PA10, PH10) first.
+    let mut slot_of = [usize::MAX; 8];
+    let mut n = 0;
+    let mut i = 0;
+    while i < t.len() {
+        let r = t[i];
+        i += 1;
+        let (bsrr, ot, pu_clear, pu_set, mo_set) = match r.action {
+            Action::DriveHigh => (1u32 << r.pin, 1u32 << r.pin, 0u32, 0u32, 1u32),
+            Action::DriveLow => (1u32 << (r.pin + 16), 1u32 << r.pin, 0, 0, 1),
+            Action::InputPullUp => (1u32 << r.pin, 0, 3u32 << (2 * r.pin), 1u32 << (2 * r.pin), 0),
+            Action::LeaveUntouched => continue,
+        };
+        let k = port_index(r.port);
+        if slot_of[k] == usize::MAX {
+            slot_of[k] = n;
+            plan[n].port = r.port;
+            n += 1;
+        }
+        let s = &mut plan[slot_of[k]];
+        s.bsrr |= bsrr;
+        s.otyper_clear |= ot;
+        s.pupdr_clear |= pu_clear;
+        s.pupdr_set |= pu_set;
+        s.moder_clear |= 3u32 << (2 * r.pin);
+        s.moder_set |= mo_set << (2 * r.pin);
+    }
+    (plan, n)
+}
+
+const PLAN: ([PortStep; 8], usize) = reset_plan(SAFE_STATE);
+/// The safe state at reset, one step per port ([`PortStep`]); the first [`RESET_PORTS`] are used.
+/// Computed at build time, so the board applies it as straight-line code (0045: within 20 us of
+/// the boot stage's first instruction).
+pub const RESET_PLAN: [PortStep; 8] = PLAN.0;
+pub const RESET_PORTS: usize = PLAN.1;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +282,67 @@ mod tests {
                 assert!(!(a.port == b.port && a.pin == b.pin), "P{:?}{} twice", a.port, a.pin);
             }
         }
+    }
+
+    /// GPIO registers of one port.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Regs {
+        moder: u32,
+        otyper: u32,
+        pupdr: u32,
+        odr: u32,
+    }
+
+    fn field(v: u32, pin: u8, bits: u32) -> u32 {
+        (v >> (bits * pin as u32)) & ((1 << bits) - 1)
+    }
+
+    #[test]
+    fn reset_plan_gives_the_table_and_touches_nothing_else() {
+        // Arbitrary start values (whatever the vendor bootloader left), several patterns.
+        for seed in [0u32, 0xFFFF_FFFF, 0xA5A5_5A5A, 0x1234_5678, 0xDEAD_BEEF] {
+            let mut regs = [Regs { moder: seed, otyper: seed.rotate_left(7), pupdr: seed.rotate_left(13), odr: seed.rotate_left(3) }; 8];
+            let before = regs;
+            let mut order = vec![];
+            for st in &RESET_PLAN[..RESET_PORTS] {
+                let g = &mut regs[st.port as usize];
+                order.push(st.port);
+                // BSRR: set bits win over reset bits (RM0468); the plan never sets both.
+                assert_eq!(st.bsrr & (st.bsrr >> 16) & 0xFFFF, 0);
+                g.odr = (g.odr | (st.bsrr & 0xFFFF)) & !(st.bsrr >> 16);
+                g.otyper &= !st.otyper_clear;
+                g.pupdr = (g.pupdr & !st.pupdr_clear) | st.pupdr_set;
+                // Before MODER changes: every pin that becomes an output already has its level.
+                g.moder = (g.moder & !st.moder_clear) | st.moder_set;
+            }
+            assert_eq!(&order[..3], &[A, H, B], "output enables, then the PA DAC reset");
+            for p in [A, B, C, D, E, F, G, H] {
+                let (g, b) = (regs[p as usize], before[p as usize]);
+                for pin in 0..16u8 {
+                    match rule(p, pin).map(|r| r.action) {
+                        Some(DriveHigh) | Some(DriveLow) => {
+                            let high = rule(p, pin).unwrap().action == DriveHigh;
+                            assert_eq!(field(g.moder, pin, 2), 1, "P{p:?}{pin} output");
+                            assert_eq!(field(g.otyper, pin, 1), 0, "P{p:?}{pin} push-pull");
+                            assert_eq!(field(g.odr, pin, 1), high as u32, "P{p:?}{pin} level");
+                            assert_eq!(field(g.pupdr, pin, 2), field(b.pupdr, pin, 2));
+                        }
+                        Some(InputPullUp) => {
+                            assert_eq!(field(g.moder, pin, 2), 0, "P{p:?}{pin} input");
+                            assert_eq!(field(g.pupdr, pin, 2), 1, "P{p:?}{pin} pull-up");
+                            assert_eq!(field(g.odr, pin, 1), 1, "P{p:?}{pin} output register high");
+                            assert_eq!(field(g.otyper, pin, 1), field(b.otyper, pin, 1));
+                        }
+                        Some(LeaveUntouched) | None => {
+                            for (x, y, bits) in [(g.moder, b.moder, 2), (g.pupdr, b.pupdr, 2), (g.otyper, b.otyper, 1), (g.odr, b.odr, 1)] {
+                                assert_eq!(field(x, pin, bits), field(y, pin, bits), "P{p:?}{pin} touched");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Port E (FPGA bus) has no step at all.
+        assert!(!RESET_PLAN[..RESET_PORTS].iter().any(|s| s.port == E));
     }
 }
