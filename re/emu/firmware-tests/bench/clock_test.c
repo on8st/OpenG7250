@@ -19,7 +19,16 @@
 #define SYST_RVR REG(0xE000E014u)
 #define SYST_CVR REG(0xE000E018u)
 
+#define TIM5 0x40000C00u
+#define T5(o) REG(TIM5 + (o))
 static volatile uint32_t ticks;
+
+/* TIM5 compare channel 1: a compare interrupt every 50 ms toggles PB2 (the way
+ * a tick-less time driver uses a timer) */
+void TIM5_IRQHandler(void)
+{
+    if(T5(0x10) & 2u) { T5(0x10) = ~2u; T5(0x34) += 50000; REG(0x58020414u) ^= 1u << 2; }
+}
 
 void TIM2_IRQHandler(void)
 {
@@ -37,7 +46,11 @@ int main(void)
     puts_("bench clock_test\r\n");
     RCC_AHB4ENR |= 1u << 1;                       /* GPIOBEN */
     RCC_APB1LENR |= 1u << 0;                      /* TIM2EN */
-    B_MODER = (B_MODER & ~0xFu) | 0x5u;           /* PB0, PB1 outputs */
+    B_MODER = (B_MODER & ~0x3Fu) | 0x15u;         /* PB0, PB1, PB2 outputs */
+    RCC_APB1LENR |= 1u << 3;                      /* TIM5EN */
+    T5(0x28) = 63; T5(0x2C) = 0xFFFFFFFFu; T5(0x14) = 1; T5(0x10) = 0;
+    T5(0x34) = 50000; T5(0x0C) = 2u; nvic_enable(50);
+    T5(0x00) = 1;
     T_PSC = 63; T_ARR = 49999; T_EGR = 1; T_SR = 0;
     T_DIER = 1; nvic_enable(28);
     T_CR1 = 1;

@@ -1,0 +1,27 @@
+// g7250_main_tim.repl: own general-purpose timers (models/csharp/G7250Tim.cs,
+// docs/CLOCKS-model.md) in place of Renode's STM32_Timer for TIM2-5 and
+// TIM12-14; interrupt lines from the RM0468 vector table. Load after
+// `i @models/csharp/G7250Tim.cs` and `sysbus Unregister sysbus.timerN` for each.
+timer2: Timers.G7250Tim @ sysbus <0x40000000, +0x400>
+    wide: true
+    timName: "TIM2"
+    IRQ -> nvic@28
+timer3: Timers.G7250Tim @ sysbus <0x40000400, +0x400>
+    timName: "TIM3"
+    IRQ -> nvic@29
+timer4: Timers.G7250Tim @ sysbus <0x40000800, +0x400>
+    timName: "TIM4"
+    IRQ -> nvic@30
+timer5: Timers.G7250Tim @ sysbus <0x40000C00, +0x400>
+    wide: true
+    timName: "TIM5"
+    IRQ -> nvic@50
+timer12: Timers.G7250Tim @ sysbus <0x40001800, +0x400>
+    timName: "TIM12"
+    IRQ -> nvic@43
+timer13: Timers.G7250Tim @ sysbus <0x40001C00, +0x400>
+    timName: "TIM13"
+    IRQ -> nvic@44
+timer14: Timers.G7250Tim @ sysbus <0x40002000, +0x400>
+    timName: "TIM14"
+    IRQ -> nvic@45

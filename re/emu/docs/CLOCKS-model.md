@@ -29,6 +29,22 @@ Follows every RCC write (through the RCC hook of the watchdog model):
   twice it; TIMPRE = 1: hclk if the prescaler is 1, 2 or 4, else four times the
   APB clock) for TIM2–7, 12–14 (APB1) and TIM1, 8, 15–17 (APB2).
 
+## Own general-purpose timers (TIM2–5, TIM12–14)
+
+`models/csharp/G7250Tim.cs` with `platforms/g7250_main_tim.repl` replaces
+Renode's `STM32_Timer` for these instances in product and stock runs. Renode's
+timer keeps internal counters per compare channel created with the platform
+frequency, and a peripheral reset through the RCC restores that frequency; the
+first product images used TIM12's compare channel and ran 3.9 times fast even
+with the clock model. The own model per RM0468: CR1 (CEN, UDIS, URS, OPM, ARPE),
+DIER, SR, EGR (UG, CCxG), CNT, PSC (preloaded, active from the next update
+event), ARR (preloaded with ARPE), CCR1–4 with compare interrupts, update
+interrupt, one-pulse mode, 16 or 32 bit; counting in emulated time at the
+kernel clock the clock model gives (`SetKernelClock`) / (PSC + 1). Not
+modelled: down and center-aligned counting, slave and trigger modes, input
+capture, PWM outputs on pins, DMA requests. Other timers (TIM1, 6–8, 15–17)
+stay Renode's, with their frequency set by the clock model.
+
 ## Not modelled
 
 Clock switching delays, HSI/CSI calibration, PLL2/PLL3, kernel clock
@@ -38,5 +54,7 @@ selections other than the timers', LSE/LSI accuracy.
 
 `firmware-tests/bench/clock_test.c` (product-style at 0x08020000, main loop in
 WFI): TIM2 at a 1 MHz count toggles PB0 every 50 ms, SysTick at 1 ms toggles
-PB1 every 50 ticks; the runner trace measures both: 50.0 ms each in emulated
-time (without the model: TIM2 12.8 ms). `m1_smoke.sh` step [8].
+PB1 every 50 ticks, TIM5's compare channel 1 toggles PB2 every 50 ms; the
+runner trace measures all three: 50.0 ms each in emulated time (without the
+model: TIM2 12.8 ms). With a product image (fw-dffed29) the image's own
+"alive" lines come at 10.19 s for 10 s (boot about 0.2 s). `m1_smoke.sh` [8].

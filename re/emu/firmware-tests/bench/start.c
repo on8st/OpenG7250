@@ -17,6 +17,7 @@ void USART2_IRQHandler(void) WEAK;
 void MDMA_IRQHandler(void) WEAK;
 void EXTI15_10_IRQHandler(void) WEAK;
 void TIM2_IRQHandler(void) WEAK;
+void TIM5_IRQHandler(void) WEAK;
 void SysTick_Handler(void) WEAK;
 
 void reset_handler(void)
@@ -46,6 +47,7 @@ void (*const vectors[16 + 163])(void) = {
     [16 + 38] = USART2_IRQHandler,
     [15] = SysTick_Handler,
     [16 + 28] = TIM2_IRQHandler,
+    [16 + 50] = TIM5_IRQHandler,
     [16 + 40] = EXTI15_10_IRQHandler,
     [16 + 122] = MDMA_IRQHandler,
 };

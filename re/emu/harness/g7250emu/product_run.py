@@ -81,6 +81,12 @@ GENERIC = [
     # flash timing, lock and power-loss layer on Renode's flash controller (docs/FLASH-model.md)
     ("cs", P("models", "csharp", "G7250FlashTiming.cs")),
     ("str", 'flashtiming: Miscellaneous.G7250FlashTiming @ sysbus <0x5FFF0000, +0x10>'),
+    # own general-purpose timers TIM2-5, TIM12-14 (docs/CLOCKS-model.md)
+    ("cs", P("models", "csharp", "G7250Tim.cs")),
+    ("cmd", "sysbus Unregister sysbus.timer2; sysbus Unregister sysbus.timer3; sysbus Unregister sysbus.timer4; "
+            "sysbus Unregister sysbus.timer5; sysbus Unregister sysbus.timer12; sysbus Unregister sysbus.timer13; "
+            "sysbus Unregister sysbus.timer14"),
+    ("repl", P("platforms", "g7250_main_tim.repl")),
     # clock tree from the RCC: timer kernel clocks, SysTick, CPU rate (docs/CLOCKS-model.md)
     ("cs", P("models", "csharp", "G7250Clocks.cs")),
     ("str", 'clocks: Miscellaneous.G7250Clocks @ sysbus <0x5FFF0100, +0x10>'),

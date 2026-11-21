@@ -172,7 +172,7 @@ def run_test(tid, ep):
                 check("modes", True, json.dumps(sorted({(e["pin"], e.get("mode"), str(e.get("level"))) for e in pe})[:11]))]
     if tid == "T-EMU-15":
         # clock check: TIM2 toggles PB0 and SysTick toggles PB1 every 50 ms of the image's clock
-        r1 = ctl.op("hw.trace", action="start", pins=["PB0", "PB1"])
+        r1 = ctl.op("hw.trace", action="start", pins=["PB0", "PB1", "PB2"])
         f = (r1.get("value") or {}).get("file")
         time.sleep(3.0)
         ctl.op("hw.trace", action="stop")
@@ -181,8 +181,9 @@ def run_test(tid, ep):
             t = [e["t_us"] for e in evs if e.get("kind") == "gpio" and e.get("pin") == pin and e.get("level") in (0, 1)]
             d = sorted(b - a for a, b in zip(t[1:], t[2:]))
             return d[len(d) // 2] / 1000.0 if d else None
-        p0, p1 = periods("PB0"), periods("PB1")
+        p0, p1, p2 = periods("PB0"), periods("PB1"), periods("PB2")
         return [check("TIM2 period 50 ms (emulated)", p0 is not None and abs(p0 - 50) < 1.0, "median %s ms" % p0),
+                check("TIM5 compare period 50 ms (emulated)", p2 is not None and abs(p2 - 50) < 1.0, "median %s ms" % p2),
                 check("SysTick period 50 ms (emulated)", p1 is not None and abs(p1 - 50) < 1.0, "median %s ms" % p1)]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)

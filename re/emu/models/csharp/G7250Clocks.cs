@@ -69,8 +69,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         // called by the RCC write hook (G7250Iwdg) for every RCC write
         public void RccWrite(long offset, uint value)
         {
-            if(!reg.ContainsKey(offset)) return;
-            reg[offset] = value;
+            if(reg.ContainsKey(offset)) reg[offset] = value;
+            // every RCC write: a peripheral reset (APBxRSTR) resets Renode's timer
+            // to its platform frequency, so the clocks are applied again each time
             Apply();
         }
 
@@ -131,7 +132,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 var pm = cpu.GetType().GetProperty("PerformanceInMips");
                 if(pm != null) pm.SetValue(cpu, Convert.ChangeType(Math.Max(1L, CoreHz / 1000000), pm.PropertyType));
             }
-            this.Log(LogLevel.Info, "clocks: sys {0} Hz, core {1} Hz, hclk {2} Hz, APB1 timers {3} Hz, APB2 timers {4} Hz",
+            this.Log(LogLevel.Debug, "clocks: sys {0} Hz, core {1} Hz, hclk {2} Hz, APB1 timers {3} Hz, APB2 timers {4} Hz",
                      SysHz, CoreHz, HclkHz, Apb1TimerHz, Apb2TimerHz);
         }
 
@@ -146,10 +147,13 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             IPeripheral p;
             if(!machine.TryGetByName(name, out p)) return;
+            var k = p.GetType().GetMethod("SetKernelClock");      // own timer model (G7250Tim)
+            if(k != null) { k.Invoke(p, new object[] { hz }); return; }
             var f = p.GetType().GetProperty("Frequency");
             if(f == null || !f.CanWrite) return;
             try { f.SetValue(p, Convert.ChangeType(hz, f.PropertyType)); }
             catch(Exception e) { this.Log(LogLevel.Warning, "clocks: cannot set {0}: {1}", name, e.Message); }
+
         }
     }
 }

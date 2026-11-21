@@ -34,6 +34,8 @@ REPL_MDMA = os.path.join(REPO, "platforms", "g7250_main_mdma.repl")
 CS_PA = os.path.join(REPO, "models", "csharp", "G7250PaPlant.cs")
 CS_DMA = os.path.join(REPO, "models", "csharp", "G7250Dma.cs")
 REPL_DMA = os.path.join(REPO, "platforms", "g7250_main_dma.repl")
+CS_TIM = os.path.join(REPO, "models", "csharp", "G7250Tim.cs")
+REPL_TIM = os.path.join(REPO, "platforms", "g7250_main_tim.repl")
 CS_CLOCKS = os.path.join(REPO, "models", "csharp", "G7250Clocks.cs")
 CS_PWR = os.path.join(REPO, "models", "csharp", "G7250Pwr.cs")
 CS_IWDG = os.path.join(REPO, "models", "csharp", "G7250Iwdg.cs")
@@ -100,6 +102,12 @@ def build_resc(image_path, log_path, fpga=False):
         'i @%s' % CS_PWR,
         'sysbus Unregister sysbus.pwr',
         'machine LoadPlatformDescriptionFromString "pwr: Miscellaneous.G7250Pwr @ sysbus <0x58024800, +0x400>"',
+        # own general-purpose timers TIM2-5, TIM12-14 (docs/CLOCKS-model.md)
+        'i @%s' % CS_TIM,
+        'sysbus Unregister sysbus.timer2', 'sysbus Unregister sysbus.timer3', 'sysbus Unregister sysbus.timer4',
+        'sysbus Unregister sysbus.timer5', 'sysbus Unregister sysbus.timer12', 'sysbus Unregister sysbus.timer13',
+        'sysbus Unregister sysbus.timer14',
+        'machine LoadPlatformDescription @%s' % REPL_TIM,
         # clock tree from the RCC (docs/CLOCKS-model.md): timer kernel clocks, SysTick, CPU rate
         'i @%s' % CS_CLOCKS,
         # stock runs keep Renode's instruction rate (host speed for the logged boot)
