@@ -7,7 +7,22 @@ MEMORY
      128 bytes (0x2401FF80) are the application's persist block (board/common persist.rs),
      kept over a reset: the boot stage's data, bss and stack stay below it. */
   RAM   : ORIGIN = 0x24000000, LENGTH = 128K - 128
+  /* The persist block: the boot stage writes only its TX path check handover there
+     (persist.rs write_handover, A3.6b), just before the jump. */
+  PERSIST : ORIGIN = 0x2401FF80, LENGTH = 128
 }
+
+/* Not initialised by the start code: the application reads it (persist.rs). */
+SECTIONS
+{
+  .persist (NOLOAD) : ALIGN(8)
+  {
+    KEEP(*(.persist .persist.*));
+  } > PERSIST
+} INSERT AFTER .uninit;
+/* Keep the stack limit and heap start in RAM, not after .persist (cortex-m-rt takes `.`). */
+_stack_end = ALIGN(__euninit, 4);
+__sheap = _stack_end;
 
 /* Image header at offset 0x400, after the vector table (g7250-layout HEADER_OFFSET). */
 _stext = ORIGIN(FLASH) + 0x440;

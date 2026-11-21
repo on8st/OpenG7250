@@ -151,6 +151,94 @@ fn is_tx_path(port: Port, pin: u8) -> bool {
     g7250_safety::txpath::PINS.iter().any(|p| p.0 == port && p.1 == pin)
 }
 
+/// The boot stage's TX path check (A3.6b; 0066 addendum: from at most 100 ms after the boot
+/// stage's first instruction, every 5 ms): polled from the boot stage's long loops (console
+/// waits, flash reads, the image CRC, the store scan) through [`boot_poll`]; a no-op in the
+/// application, whose check runs on its own executor.
+struct BootCheck {
+    on: bool,
+    check: g7250_safety::txpath::Check,
+    last_cyc: u32,
+    first_us: Option<u32>,
+    fault: Option<u8>,
+    seen: Option<u8>,
+}
+
+static BOOT: cortex_m::interrupt::Mutex<core::cell::RefCell<BootCheck>> =
+    cortex_m::interrupt::Mutex::new(core::cell::RefCell::new(BootCheck { on: false, check: g7250_safety::txpath::Check::new(), last_cyc: 0, first_us: None, fault: None, seen: None }));
+
+fn cyc() -> u32 {
+    // SAFETY: a read of DWT CYCCNT.
+    unsafe { core::ptr::read_volatile(0xE000_1004 as *const u32) }
+}
+
+fn pin_index(m: &g7250_safety::txpath::Mismatch) -> u8 {
+    let k = g7250_safety::txpath::PINS.iter().position(|p| p.0 == m.port && p.1 == m.pin).unwrap_or(0) as u8;
+    if matches!(m.what, g7250_safety::txpath::Comparison::PinLevel) { k } else { k | 0x80 }
+}
+
+/// The boot stage starts its TX path check (after [`start_cycle_count`]) and makes the first.
+pub fn boot_check_start() {
+    cortex_m::interrupt::free(|cs| BOOT.borrow(cs).borrow_mut().on = true);
+    boot_check_now();
+}
+
+/// A check of the boot stage if 5 ms have passed since the last one (cheap otherwise).
+#[inline]
+pub fn boot_poll() {
+    let due = cortex_m::interrupt::free(|cs| {
+        let b = BOOT.borrow(cs).borrow();
+        b.on && cyc().wrapping_sub(b.last_cyc) >= (g7250_safety::txpath::PERIOD_MS as u32 - 1) * (crate::console::HSI_HZ / 1000)
+    });
+    if due {
+        boot_check_now();
+    }
+}
+
+fn boot_check_now() {
+    let now_cyc = cyc();
+    let now_ms = (now_cyc / (crate::console::HSI_HZ / 1000)) as u64;
+    let seen = tx_path_mismatch();
+    let hit = cortex_m::interrupt::free(|cs| {
+        let mut b = BOOT.borrow(cs).borrow_mut();
+        if !b.on {
+            return None;
+        }
+        b.last_cyc = now_cyc;
+        if b.first_us.is_none() {
+            b.first_us = Some(now_cyc / (crate::console::HSI_HZ / 1_000_000));
+        }
+        b.seen = seen.as_ref().map(pin_index);
+        let r = b.check.observe(now_ms, false, seen);
+        if let Some(m) = r {
+            if b.fault.is_none() {
+                b.fault = Some(pin_index(&m));
+            }
+        }
+        r
+    });
+    if hit.is_some() {
+        // The fault: the safe state again (the application reports TX_PATH_NOT_BLOCKED).
+        reassert();
+    }
+}
+
+/// The boot stage, just before the jump: the check ends here and its state goes to the
+/// application (persist::write_handover).
+pub fn boot_check_handover() {
+    boot_check_now();
+    let h = cortex_m::interrupt::free(|cs| {
+        let mut b = BOOT.borrow(cs).borrow_mut();
+        b.on = false;
+        crate::persist::Handover {
+            first_check_us: b.first_us.unwrap_or(0),
+            fault: b.fault,
+            open: b.check.run_since().and_then(|s| b.seen.map(|i| (i, s as u32))),
+        }
+    });
+    crate::persist::write_handover(&h);
+}
+
 /// Start the DWT cycle counter at 0: the boot stage's first step, so that the application can
 /// measure the time from the boot stage's start to its first TX path check (A3.6b: at most
 /// 100 ms; 0066 addendum). SYSCLK is HSI 64 MHz in both stages.

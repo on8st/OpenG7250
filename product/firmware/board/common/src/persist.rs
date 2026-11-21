@@ -29,6 +29,59 @@ use g7250_safety::counters::{Counters, SLOT_WORDS};
 static mut BLOCK: core::mem::MaybeUninit<[[u64; SLOT_WORDS]; 2]> = core::mem::MaybeUninit::uninit();
 const _: () = assert!(core::mem::size_of::<[[u64; SLOT_WORDS]; 2]>() <= 128);
 
+/// The boot stage's TX path check, handed to the application (A3.6b; 0066 addendum): written by
+/// the boot stage just before the jump (whole 64-bit words, so read only what was written this
+/// start), taken and cleared by the application.
+#[unsafe(link_section = ".persist")]
+static mut HANDOVER: core::mem::MaybeUninit<[u64; 2]> = core::mem::MaybeUninit::uninit();
+const _: () = assert!(core::mem::size_of::<[[u64; SLOT_WORDS]; 2]>() + 16 <= 128);
+const HANDOVER_MAGIC: u32 = 0x4737_4842; // "G7HB"
+
+/// What the boot stage's TX path check found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Handover {
+    /// Microseconds from the boot stage's start to its first check.
+    pub first_check_us: u32,
+    /// A fault it found: index into the Table A3-6 pins, bit 7 the configuration (else the level).
+    pub fault: Option<u8>,
+    /// A mismatch run still open at the jump: pin index and its start, ms since the boot stage
+    /// start (the DWT cycle counter runs on into the application).
+    pub open: Option<(u8, u32)>,
+}
+
+fn handover_ptr() -> *mut u64 {
+    addr_of_mut!(HANDOVER) as *mut u64
+}
+
+/// The boot stage, just before the jump.
+pub fn write_handover(h: &Handover) {
+    let f = h.fault.unwrap_or(0xFF) as u64;
+    let (oi, os) = h.open.map_or((0xFFu64, 0u64), |(i, s)| (i as u64, s as u64));
+    // SAFETY: the `.persist` block, 8-aligned; volatile; the magic word last.
+    unsafe {
+        write_volatile(handover_ptr().add(1), f | oi << 8 | os << 32);
+        write_volatile(handover_ptr(), HANDOVER_MAGIC as u64 | (h.first_check_us as u64) << 32);
+    }
+}
+
+/// The application, at start: the boot stage's handover of this start, then cleared.
+pub fn take_handover() -> Option<Handover> {
+    // SAFETY: as `write_handover`; the boot stage wrote both words before the jump.
+    let (w0, w1) = unsafe { (read_volatile(handover_ptr()), read_volatile(handover_ptr().add(1))) };
+    unsafe {
+        write_volatile(handover_ptr(), 0);
+    }
+    if w0 as u32 != HANDOVER_MAGIC {
+        return None;
+    }
+    let b = |v: u64| (v != 0xFF).then_some(v as u8);
+    Some(Handover {
+        first_check_us: (w0 >> 32) as u32,
+        fault: b(w1 & 0xFF),
+        open: b((w1 >> 8) & 0xFF).map(|i| (i, (w1 >> 32) as u32)),
+    })
+}
+
 fn slot(i: usize) -> *mut u64 {
     // SAFETY: a static of this module; only raw pointers, read and written volatile.
     unsafe { (addr_of_mut!(BLOCK) as *mut [u64; SLOT_WORDS]).add(i) as *mut u64 }

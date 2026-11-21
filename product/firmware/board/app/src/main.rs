@@ -348,8 +348,31 @@ async fn tx_path() {
     use g7250_safety::txpath::{Check, PERIOD_MS};
     let mut c = Check::new();
     let mut t = Ticker::every(Duration::from_millis(PERIOD_MS));
-    // When the first check runs, from the boot stage's start (0066 addendum: at most 100 ms).
-    TX_CHECK_FIRST_US.store(safe::us_since_boot_stage(), core::sync::atomic::Ordering::Relaxed);
+    // The boot stage's check (A3.6b; 0066 addendum): its first time, a fault it found, a
+    // mismatch run still open at the jump (counted on from its start).
+    let first = safe::us_since_boot_stage();
+    match g7250_board::persist::take_handover() {
+        Some(h) => {
+            TX_CHECK_FIRST_US.store(h.first_check_us, core::sync::atomic::Ordering::Relaxed);
+            let pin = |i: u8| {
+                let (port, pin, _) = g7250_safety::txpath::PINS[(i & 0x7F) as usize];
+                let what = if i & 0x80 != 0 { g7250_safety::txpath::Comparison::Configuration } else { g7250_safety::txpath::Comparison::PinLevel };
+                g7250_safety::txpath::Mismatch { port, pin, what }
+            };
+            if let Some(i) = h.fault {
+                safe::reassert();
+                fault::set_detail(pin(i));
+                fault::raise(g7250_safety::fault::code::TX_PATH_NOT_BLOCKED);
+                println!("app: FAULT TX path not blocked (seen by the boot stage)");
+            } else if let Some((_, since_ms)) = h.open {
+                let now_boot_ms = (first / 1000) as u64;
+                let open_ms = now_boot_ms.saturating_sub(since_ms as u64);
+                let _ = c.after_flash(Instant::now().as_millis(), false, Some(open_ms));
+            }
+        }
+        // No boot stage handover (a start without it): the time of this first check.
+        None => TX_CHECK_FIRST_US.store(first, core::sync::atomic::Ordering::Relaxed),
+    }
     // A check when a flash operation ends (0066 addendum (a)), besides the 5 ms period.
     g7250_board::flash::on_operation_end(|| FLASH_ENDED.signal(()));
     loop {

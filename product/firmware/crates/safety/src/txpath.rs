@@ -98,6 +98,11 @@ impl Check {
         Check { since: None }
     }
 
+    /// Start of the current mismatch run, if any (handed from the boot stage to the application).
+    pub fn run_since(&self) -> Option<u64> {
+        self.since
+    }
+
     /// After a flash operation (0066 addendum (a)), before the check that runs when it ends: a
     /// mismatch the wait-loop samples saw for [`HOLD_MS`] is the fault at once (`Some(true)`);
     /// one still present at the end counts from its first sample (`open_ms` before `now_ms`), so

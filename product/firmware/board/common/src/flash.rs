@@ -253,6 +253,7 @@ pub fn probe(start: u32, end: u32) -> Result<(), u32> {
     let mut a = start & !(FLASH_WORD - 1);
     let mut b = [0u8; 1];
     while a < end {
+        crate::safe::boot_poll();
         if read_tolerant(a, &mut b).is_err() {
             return Err(a);
         }
@@ -347,6 +348,7 @@ impl FlashIo for RawFlash {
     type Error = FlashError;
 
     fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), FlashError> {
+        crate::safe::boot_poll();
         read_tolerant(addr, buf).map_err(|_| FlashError::Ecc)
     }
 

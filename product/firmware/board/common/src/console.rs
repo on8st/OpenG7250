@@ -120,7 +120,9 @@ pub fn wait_100ms() {
     syst.clear_current();
     syst.disable_interrupt();
     syst.enable_counter();
-    while !syst.has_wrapped() {}
+    while !syst.has_wrapped() {
+        crate::safe::boot_poll();
+    }
     syst.disable_counter();
 }
 
@@ -129,6 +131,7 @@ fn write_blocking(b: &[u8]) {
     for &c in b {
         while !u.isr().read().txe() {
             crate::wdg::refresh();
+            crate::safe::boot_poll();
         }
         u.tdr().write_value(pac::usart::regs::Dr(c as u32));
     }
@@ -197,7 +200,9 @@ fn drain() {
 /// Empty the ring (blocking) and wait until the last byte has left the shift register.
 pub fn flush() {
     drain();
-    while !pac::USART1.isr().read().tc() {}
+    while !pac::USART1.isr().read().tc() {
+        crate::safe::boot_poll();
+    }
 }
 
 pub struct Console;

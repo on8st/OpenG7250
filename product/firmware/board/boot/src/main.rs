@@ -48,6 +48,8 @@ fn main() -> ! {
     // The time base for the first TX path check (A3.6b: within 100 ms of the boot stage's start;
     // __pre_init's safe-state set-up, some us, comes before it).
     safe::start_cycle_count();
+    // The TX path check from here to the jump (A3.6b; 0066 addendum), polled from the long loops.
+    safe::boot_check_start();
     // What the vendor bootloader left, before anything is changed ([HIS] HIS 90, F1-Q3/F1-Q4).
     let start = g7250_board::start_state::capture();
     early_init();
@@ -94,7 +96,7 @@ fn main() -> ! {
                 return false;
             }
         };
-        match header::validate(image, Kind::Application, r, APP_RAM) {
+        match header::validate_polled(image, Kind::Application, r, APP_RAM, &mut safe::boot_poll) {
             Ok(_) => true,
             Err(e) => {
                 println!("boot: slot {} not bootable: {:?}", slot_name(s), e);
@@ -135,6 +137,8 @@ fn main() -> ! {
             let trial = if matches!(choice, Choice::Trial(_)) { " as a trial" } else { "" };
             println!("boot: starting slot {}{} at {:#010x}", slot_name(s), trial, s.range().start);
             console::flush();
+            // The TX path check goes on in the application, with what this one saw.
+            safe::boot_check_handover();
             // SAFETY: the slot holds a sealed application linked for this address, checked above.
             unsafe { jump(s.range().start) }
         }
