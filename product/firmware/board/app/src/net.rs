@@ -329,6 +329,21 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let mut server = Server::new();
     server.network_up(Instant::now().as_millis());
     mgmt.identify.mac = mac;
+    // Boot record at start (A1.8 U-6): a rollback is logged; a trial cannot arm until confirmed.
+    let slot_name = if mgmt.update.run.slot == g7250_layout::Slot::A { "A" } else { "B" };
+    match mgmt.update.state {
+        g7250_update::boot::UpdateState::RolledBack => {
+            server.log.push(Instant::now().as_millis(), format_args!("rollback: the trial image was not confirmed; running slot {}", slot_name));
+            println!("net: running slot {} after a rollback (trial not confirmed)", slot_name);
+        }
+        g7250_update::boot::UpdateState::Trial => {
+            server.log.push(Instant::now().as_millis(), format_args!("trial boot of slot {}", slot_name));
+            println!("net: trial boot of slot {}: arm refused (MAINTENANCE) until confirmed", slot_name);
+        }
+        g7250_update::boot::UpdateState::Normal => {}
+    }
+    p2.trial = mgmt.update.run.trial;
+    let loop_start = Instant::now().as_millis();
     println!("net: management listening on UDP {} (protocol {}.{})", m::PORT, m::VERSION_MAJOR, m::VERSION_MINOR);
     let mut mrx = [0u8; 1100];
     let mut mtx = [0u8; m::MAX_REPLY];
@@ -343,6 +358,29 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         // Session watchdog and status first, on every pass, so that no branch below can delay
         // the standby beyond B5.6's 1100 ms (T-B5-10).
         p2.tick(&mut chip, Instant::now().as_millis());
+        // Trial boot (U-6): confirm once the loop has run CONFIRM_AFTER_MS with the network up;
+        // if that fails, a commanded reset before 60 s lets the boot stage roll back.
+        if mgmt.update.run.trial {
+            let now = Instant::now().as_millis();
+            if now.saturating_sub(loop_start) >= crate::update::CONFIRM_AFTER_MS && mgmt.update.confirm(mgmt.store.as_mut()) {
+                p2.trial = false;
+                mgmt.identify.update_state = 0;
+                server.log.push(now, format_args!("trial image confirmed itself"));
+                println!("net: trial image confirmed (slot {})", slot_name);
+            } else if now >= crate::update::TRIAL_LIMIT_MS {
+                server.log.push(now, format_args!("trial image could not confirm itself; restart for rollback"));
+                println!("net: FAULT trial not confirmed within 60 s; restarting for the rollback");
+                crate::safe_reset(&mut mgmt, false);
+            }
+        }
+        // An update without an update command for 10 min is abandoned (A1.8; T-A1-34, T-A1-46):
+        // staging discarded, logged, restart into the running image (no RF in this build).
+        if mgmt.update.stager.abandoned(Instant::now().as_millis()) {
+            mgmt.update.stager.abort(Instant::now().as_millis());
+            server.log.push(Instant::now().as_millis(), format_args!("update abandoned after 10 min; restart into the running image"));
+            println!("net: update abandoned (10 min); restarting into the running image");
+            crate::safe_reset(&mut mgmt, false);
+        }
         match chip.udp_recv(SOCK_DISCOVERY, &mut rx) {
             // General packet on 1024: byte 4 = 0x00 (B11.4; Table B11-1).
             Ok(Some(d)) if d.len >= 5 && rx[4] == 0x00 && d.src_port != discovery::PORT => {
@@ -499,6 +537,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         secret: mgmt.secret.as_ref(),
                         p2_session: p2.session.running(),
                         armed: p2.tx.state() != g7250_safety::tx::ArmState::Disarmed,
+                        update: &mut crate::update::Port { u: &mut mgmt.update, store: mgmt.store.as_mut() },
                     };
                     // A datagram longer than the buffer arrives cut off; the header still decides
                     // (A1.4: 19 for a declared length above 1000, else 17 for the length mismatch).
@@ -544,6 +583,11 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                                 let factory = e == g7250_radio::mgmt::Effect::FactoryReset;
                                 Timer::after_millis(20).await; // let the reply leave the CH394
                                 crate::safe_reset(&mut mgmt, factory);
+                            }
+                            g7250_radio::mgmt::Effect::UpdateStarted => {
+                                // A1.8: the session ends, streams stop, arms get MAINTENANCE,
+                                // until a restart.
+                                p2.enter_update(Instant::now().as_millis());
                             }
                             _ => {}
                         }

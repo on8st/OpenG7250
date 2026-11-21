@@ -50,6 +50,10 @@ pub struct P2 {
     pub dropped_record: u64,
     /// A firmware update is in progress (A1.8: STREAM_STATUS reason 10, register writes BUSY).
     pub update_in_progress: bool,
+    /// The running image is an unconfirmed trial: arms get `MAINTENANCE` (A1.8; T-A1-24).
+    pub trial: bool,
+    /// Last reason-10 answer to a run request during an update (at most one per 100 ms).
+    last_update_answer: Option<u64>,
 }
 
 /// At most one event per `min_ms` per source; a small table, the oldest entry reused.
@@ -91,6 +95,8 @@ impl P2 {
             duc_iq_ignored: 0,
             dropped_record: 0,
             update_in_progress: false,
+            trial: false,
+            last_update_answer: None,
         }
     }
 
@@ -126,7 +132,7 @@ impl P2 {
             inhibit: false,
             ptt_bit: self.session.ptt,
             level1_active: true,
-            maintenance: false,
+            maintenance: self.update_in_progress || self.trial,
             mode_class_declared: self.regs.tx_mode_class != 0,
         }
     }
@@ -233,8 +239,35 @@ impl P2 {
         }
     }
 
+    /// `UPDATE_BEGIN` accepted (A1.8; 0022 §10): the session ends (an arm drops with
+    /// `MAINTENANCE`), streams stop, and from now on until a restart no session starts.
+    pub fn enter_update(&mut self, now: u64) {
+        let mut rf = crate::BoardRf;
+        let _ = self.tx.drop(DropReason::Maintenance, &mut rf);
+        if let Some(owner) = self.session.owner() {
+            self.tx.session_end(&mut rf);
+            self.regs.session_end();
+            self.regs.armed = false;
+            println!("p2: session of {}:{} ended (firmware update)", crate::net::ip_str(owner.0).as_str(), owner.1);
+        }
+        self.session = Session::new();
+        self.update_in_progress = true;
+        self.regs.stream_status = self.stream_status();
+        let _ = now;
+    }
+
     /// A C&C packet on 1024 (General), 1025, 1026 or 1027.
     pub fn cnc(&mut self, chip: &mut Chip, from: Addr, kind: CnC, p: &[u8], now: u64) {
+        if self.update_in_progress {
+            // No session during an update; a run request is answered with STREAM_STATUS
+            // reason 10, at most once per 100 ms (A1.8; T-A1-23).
+            if kind == CnC::HighPriority && p.len() > 4 && p[4] & 0x01 != 0 && self.last_update_answer.is_none_or(|t| now.saturating_sub(t) >= 100) {
+                self.last_update_answer = Some(now);
+                let pairs = [(regmap::addr::STREAM_STATUS, self.stream_status())];
+                self.send_regs(chip, from, &pairs);
+            }
+            return;
+        }
         let first_general = kind == CnC::General && self.session.owner() == Some(from);
         let ev = self.session.on_cnc(from, kind, p, now, self.link_ok);
         // The status of a new session is part of its start pushes; compute it first.
@@ -265,7 +298,7 @@ impl P2 {
         }
         let mut rf = crate::BoardRf;
         let arm = self.arm_ctx();
-        let mut c = WriteCtx { from_owner: owner, busy: false, tx: &mut self.tx, rf: &mut rf, arm, key: KeyContext::default() };
+        let mut c = WriteCtx { from_owner: owner, busy: self.update_in_progress, tx: &mut self.tx, rf: &mut rf, arm, key: KeyContext::default() };
         let ans = self.regs.handle(p, &mut c);
         if ans.pairs.is_empty() {
             return;

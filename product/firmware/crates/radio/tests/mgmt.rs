@@ -1,7 +1,80 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Radio end of the management channel, step 2 (A1.4, A1.10, Annex M).
 use g7250_proto::mgmt::{self, payload::Identify, Command, Status};
-use g7250_radio::mgmt::{Ctx, Server, FIRST_SECRET_WINDOW_MS};
+use g7250_proto::mgmt::payload::Package;
+use g7250_radio::mgmt::{Ctx, Effect, Server, Updater, FIRST_SECRET_WINDOW_MS};
+
+/// A model of the update side: counts blocks, verifies once complete.
+#[derive(Default)]
+struct Model {
+    began: bool,
+    received: u32,
+    count: u32,
+    verified: bool,
+    activated: bool,
+    fail_writes: bool,
+    trial: bool,
+}
+
+impl Updater for Model {
+    fn begin(&mut self, foreign: bool, _d: bool, pkg: &Package, _: u64) -> Result<u32, Status> {
+        if self.trial {
+            return Err(Status::UpdateInProgress);
+        }
+        if foreign {
+            return Err(Status::NotSupported);
+        }
+        if pkg.target_slot == 1 {
+            return Err(Status::RunningSlot); // running in slot A
+        }
+        self.began = true;
+        self.count = pkg.length.div_ceil(512);
+        self.received = 0;
+        Ok(self.count)
+    }
+    fn block(&mut self, n: u32, crc_ok: bool, _: &[u8], _: u64) -> Result<u32, Status> {
+        if !crc_ok {
+            return Err(Status::BadBlockCrc);
+        }
+        if n != self.received {
+            return Err(Status::BlockOutOfOrder);
+        }
+        if self.fail_writes {
+            self.received = 0;
+            return Err(Status::VerificationFailed);
+        }
+        self.received += 1;
+        Ok(self.received)
+    }
+    fn verify(&mut self, _: u64) -> Result<[u8; 32], Status> {
+        if self.received != self.count {
+            return Err(Status::VerificationFailed);
+        }
+        self.verified = true;
+        Ok([0x5A; 32])
+    }
+    fn activate(&mut self, _: u64) -> Result<(), Status> {
+        if !self.verified {
+            return Err(Status::VerificationFailed);
+        }
+        self.activated = true;
+        Ok(())
+    }
+    fn abort(&mut self, _: u64) {
+        self.received = 0;
+        self.count = 0;
+        self.verified = false;
+    }
+    fn status(&self) -> (u8, u32, u32) {
+        (if self.verified { 2 } else if self.began { 1 } else { 0 }, self.received, self.count)
+    }
+    fn rollback(&mut self, _: u64) -> Result<(), Status> {
+        Ok(())
+    }
+    fn in_progress(&self) -> bool {
+        self.began || self.trial
+    }
+}
 
 const OWN: [u8; 4] = [192, 168, 1, 20];
 const MASK: [u8; 4] = [255, 255, 255, 0];
@@ -12,11 +85,13 @@ struct World {
     n: u8,
     secret: Option<[u8; 32]>,
     p2: bool,
+    armed: bool,
+    up: Model,
 }
 
 impl World {
     fn new() -> Self {
-        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false }
+        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false, armed: false, up: Model::default() }
     }
     fn call(&mut self, srv: &mut Server, src: ([u8; 4], u16), d: &[u8], now: u64) -> Option<(u32, Status, Vec<u8>)> {
         let mut n = self.n;
@@ -35,7 +110,8 @@ impl World {
             rng: &mut rng,
             secret: self.secret.as_ref(),
             p2_session: self.p2,
-            armed: false,
+            armed: self.armed,
+            update: &mut self.up,
         };
         let mut out = [0u8; mgmt::MAX_REPLY];
         let r = srv.handle(src, d, &mut ctx, &mut out).map(|len| {
@@ -295,4 +371,86 @@ fn calibration_refused_during_a_p2_session() {
     assert_eq!((st, p.len(), p[32]), (Status::Ok, 33, 0));
     // Return to stock and vendor recovery: always 56.
     assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::ReturnToStock, &[], 20).0, Status::NotSupported);
+}
+
+fn package(len: u32, slot: u8) -> Vec<u8> {
+    let pkg = Package {
+        header_version: 1,
+        component: 1,
+        hardware_id: 0x00C8,
+        min_hw_revision: 0,
+        version: mgmt::payload::Version { major: 0, minor: 1, build: 2 },
+        length: len,
+        sha256: [0x5A; 32],
+        signature_len: 0,
+        target_slot: slot,
+    };
+    mgmt::payload::update_begin(0, &pkg).to_vec()
+}
+
+fn block(n: u32, data: &[u8]) -> Vec<u8> {
+    let mut b = [0u8; 600];
+    let k = mgmt::payload::Block::encode(n, data, &mut b).unwrap();
+    b[..k].to_vec()
+}
+
+#[test]
+fn update_commands_through_the_updater() {
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    // UPDATE_STATUS is a read: idle.
+    let (_, st, p) = w.call(&mut s, HOST, &req(1, Command::UpdateStatus, &[]), 0).unwrap();
+    assert_eq!((st, p[0]), (Status::Ok, 0));
+    // Armed: every update command 50 (T-A1-33), ROLLBACK too (T-A1-27).
+    w.armed = true;
+    assert_eq!(authed(&mut w, &mut s, HOST, 100, Command::UpdateBegin, &package(1300, 2), 10000).0, Status::Armed);
+    assert_eq!(authed(&mut w, &mut s, HOST, 110, Command::Rollback, &[], 11000).0, Status::Armed);
+    assert_eq!(w.call(&mut s, HOST, &req(125, Command::UpdateStatus, &[]), 12_500).unwrap().1, Status::Ok);
+    w.armed = false;
+    // An image for the running slot: 63, nothing begun (T-A1-67).
+    assert_eq!(authed(&mut w, &mut s, HOST, 200, Command::UpdateBegin, &package(1300, 1), 20000).0, Status::RunningSlot);
+    assert!(!w.up.began);
+    let (st, p) = authed(&mut w, &mut s, HOST, 210, Command::UpdateBegin, &package(1300, 2), 21000);
+    assert_eq!((st, &p[..]), (Status::Ok, &[2, 0, 0, 0, 0, 3, 0][..]));
+    assert_eq!(s.take_effects().as_slice(), &[Effect::UpdateStarted]);
+    // Blocks; a bad CRC is 53.
+    let mut bad = block(0, &[1; 512]);
+    bad[4] ^= 1;
+    assert_eq!(authed(&mut w, &mut s, HOST, 300, Command::UpdateBlock, &bad, 30000).0, Status::BadBlockCrc);
+    for n in 0..3u32 {
+        let len = if n == 2 { 276 } else { 512 };
+        let (st, p) = authed(&mut w, &mut s, HOST, 310 + 10 * n, Command::UpdateBlock, &block(n, &vec![n as u8; len]), 31_000 + 1000 * n as u64);
+        assert_eq!((st, &p[4..8]), (Status::Ok, &(n + 1).to_be_bytes()[..]));
+    }
+    // SWITCH_LEVEL during an update: 58 (T-A1-31).
+    assert_eq!(authed(&mut w, &mut s, HOST, 400, Command::SwitchLevel, &[1], 40000).0, Status::UpdateInProgress);
+    let (st, p) = authed(&mut w, &mut s, HOST, 410, Command::UpdateVerify, &[], 41000);
+    assert_eq!((st, p), (Status::Ok, vec![0x5A; 32]));
+    let (st, p) = authed(&mut w, &mut s, HOST, 420, Command::UpdateActivate, &[0], 42000);
+    assert_eq!((st, p), (Status::Ok, vec![0]));
+    assert_eq!(s.take_effects().as_slice(), &[Effect::Restart]);
+    assert!(w.up.activated);
+    // One commanded reset at a time.
+    assert_eq!(authed(&mut w, &mut s, HOST, 430, Command::Rollback, &[], 43000).0, Status::Busy);
+}
+
+#[test]
+fn update_write_failure_is_55_and_logged_and_begin_in_trial_is_58() {
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    w.up.trial = true;
+    assert_eq!(authed(&mut w, &mut s, HOST, 100, Command::UpdateBegin, &package(1300, 2), 10000).0, Status::UpdateInProgress);
+    w.up.trial = false;
+    assert_eq!(authed(&mut w, &mut s, HOST, 110, Command::UpdateBegin, &package(1300, 2), 11000).0, Status::Ok);
+    w.up.fail_writes = true;
+    assert_eq!(authed(&mut w, &mut s, HOST, 120, Command::UpdateBlock, &block(0, &[0; 512]), 12000).0, Status::VerificationFailed);
+    let (st, p) = authed(&mut w, &mut s, HOST, 130, Command::ReadLog, &[0, 0, 0, 0], 13000);
+    assert_eq!(st, Status::Ok);
+    let text = String::from_utf8_lossy(&p);
+    assert!(text.contains("write of block 0 to the staging slot failed"), "{text}");
+    // Abort says a restart is needed.
+    let (st, p) = authed(&mut w, &mut s, HOST, 140, Command::UpdateAbort, &[], 14000);
+    assert_eq!((st, p), (Status::Ok, vec![1]));
 }

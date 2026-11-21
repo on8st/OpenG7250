@@ -146,6 +146,8 @@ pub enum Status {
     OneWayInProgress = 60,
     ImageTooLarge = 61,
     NeedsCalibration = 62,
+    /// Image linked for the running slot (A1.8; 0043).
+    RunningSlot = 63,
 }
 
 impl Status {
@@ -155,7 +157,7 @@ impl Status {
             Ok, InProgress, UnknownCommand, Malformed, UnsupportedVersion, TooLarge, AuthRequired, AuthFailed,
             RateLimited, Busy, FirstSecretClosed, InvalidConfig, NotAllowed, Armed, WrongHardware, OlderImage,
             BadBlockCrc, BlockOutOfOrder, VerificationFailed, NotSupported, P2SessionRuns, UpdateInProgress,
-            RfPresent, OneWayInProgress, ImageTooLarge, NeedsCalibration,
+            RfPresent, OneWayInProgress, ImageTooLarge, NeedsCalibration, RunningSlot,
         ]
         .into_iter()
         .find(|s| *s as u16 == v)

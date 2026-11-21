@@ -9,3 +9,5 @@ publish.workspace = true
 
 [dependencies]
 g7250-layout = { workspace = true }
+g7250-proto = { path = "../../crates/proto" }
+sha2 = "0.11.1"

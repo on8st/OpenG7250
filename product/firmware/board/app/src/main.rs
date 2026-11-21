@@ -12,6 +12,7 @@ mod net;
 mod p2;
 mod mgmt_init;
 mod nv;
+mod update;
 
 use embassy_executor::Spawner;
 use embassy_stm32::wdg::IndependentWatchdog;

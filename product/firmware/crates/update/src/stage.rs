@@ -3,7 +3,8 @@
 //! Transfer of a new image into the other slot (A1.8, U-2 to U-5, U-8; Table M-1, M-4).
 //!
 //! The package carries one image: a sealed application image linked for the slot it is staged
-//! in (the other slot; `IDENTIFY` tells the host which slot runs). `UPDATE_VERIFY` checks the
+//! in (the other slot; `IDENTIFY` tag 23 tells the host which slot runs). Table M-4 byte 52
+//! names that slot; a package for the running slot gets 63 at `UPDATE_BEGIN` (0043). `UPDATE_VERIFY` checks the
 //! SHA-256 of the package header and then the image header (load address = the other slot,
 //! length, image CRC, version = the package's, vectors) in one pass over the staged bytes, so
 //! that an image linked for the wrong slot is refused before activation.
@@ -41,6 +42,8 @@ pub enum Refusal {
     /// During an unconfirmed trial boot: staging would erase the image to return to.
     UpdateInProgress = 58,
     TooLarge = 61,
+    /// The package's image is linked for the running slot (0043).
+    RunningSlot = 63,
 }
 
 /// `UPDATE_BEGIN` (flags and Table M-4), as plain values.
@@ -57,6 +60,16 @@ pub struct Offer {
     pub length: u32,
     pub sha256: [u8; 32],
     pub signature_len: u16,
+    /// Table M-4 byte 52: 0 either slot, 1 slot A, 2 slot B (0043).
+    pub target_slot: u8,
+}
+
+/// Table M-4 byte 52 for a slot.
+pub const fn slot_code(s: Slot) -> u8 {
+    match s {
+        Slot::A => 1,
+        Slot::B => 2,
+    }
 }
 
 /// What the running firmware is.
@@ -137,7 +150,7 @@ impl Stager {
         if run.trial {
             return Err(Refusal::UpdateInProgress);
         }
-        if o.header_version != PACKAGE_VERSION || o.component != COMPONENT_MAIN || o.signature_len != 0 || o.length == 0 {
+        if o.header_version != PACKAGE_VERSION || o.component != COMPONENT_MAIN || o.signature_len != 0 || o.length == 0 || o.target_slot > 2 {
             return Err(Refusal::Malformed);
         }
         if o.hardware_id != HARDWARE_ID || (o.min_hw_revision != 0 && o.min_hw_revision > run.hw_revision) {
@@ -152,6 +165,11 @@ impl Stager {
         }
         if o.version < run.version && !o.downgrade {
             return Err(Refusal::Older);
+        }
+        // An image for the running slot cannot be staged (0043; T-A1-67). 0 ("either slot")
+        // passes here; UPDATE_VERIFY still checks the image's load address.
+        if o.target_slot == slot_code(run.slot) {
+            return Err(Refusal::RunningSlot);
         }
         self.last_ms = now;
         let count = o.length.div_ceil(BLOCK);

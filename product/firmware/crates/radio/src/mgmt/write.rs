@@ -5,7 +5,8 @@
 //! The server decides and answers; what touches the hardware it returns as [`Effect`]s, which
 //! the board carries out: store writes before the reply is sent, network changes and resets after
 //! it (A1.6: "a network change is applied after the reply is sent"; A1.9 commanded reset, step 3
-//! before step 5). The update path (`UPDATE_*`, `ROLLBACK`) is not built yet: status 56.
+//! before step 5). The update commands (`UPDATE_*`, `ROLLBACK`, A1.8) go to the context's
+//! [`Updater`](super::Updater).
 
 use super::{Addr, Ctx, Server};
 use g7250_proto::mgmt::payload::{self, Config};
@@ -36,6 +37,9 @@ pub enum Effect {
     Restart,
     /// Factory reset (Table A1-4) between steps 4 and 5 of the commanded reset, then the reset.
     FactoryReset,
+    /// `UPDATE_BEGIN` accepted: the P2 session ends, streams stop, arms are refused with
+    /// `MAINTENANCE` until a restart (A1.8; 0022 §10).
+    UpdateStarted,
 }
 
 const LOG_ENTRIES: usize = 64;
@@ -174,6 +178,7 @@ impl Server {
                 self.log.push(now, format_args!("FACTORY_RESET by {a}.{b}.{c}.{d}:{}", src.1));
                 (Status::Ok, 0)
             }
+            Command::SwitchLevel if ctx.update.in_progress() => (Status::UpdateInProgress, 0), // T-A1-31
             Command::SwitchLevel => match payload::parse_switch_level(req.payload) {
                 Ok(1) => (Status::Ok, 0),
                 Ok(_) => (Status::NotSupported, 0), // level 2 only after G6 (0011)
@@ -215,10 +220,111 @@ impl Server {
                 if ctx.armed {
                     return (Status::Armed, 0);
                 }
-                // RETURN_TO_STOCK, ENTER_VENDOR_RECOVERY: always 56 (A1.8a items 2, 4). The update
-                // path is not built yet.
-                (Status::NotSupported, 0)
+                self.update_command(src, cmd, req.payload, ctx, p)
             }
+            _ => (Status::NotSupported, 0),
+        }
+    }
+
+    /// The update commands (A1.8; Table M-1), unarmed.
+    fn update_command(&mut self, src: Addr, cmd: Command, payload: &[u8], ctx: &mut Ctx<'_>, p: &mut [u8]) -> (Status, usize) {
+        let now = ctx.now_ms;
+        let (a, b, c, d) = ip(src.0);
+        match cmd {
+            Command::UpdateBegin => {
+                let Ok((flags, pkg)) = payload::parse_update_begin(payload) else { return (Status::Malformed, 0) };
+                let foreign = flags & payload::BEGIN_FOREIGN != 0;
+                let downgrade = flags & payload::BEGIN_DOWNGRADE != 0;
+                match ctx.update.begin(foreign, downgrade, &pkg, now) {
+                    Ok(count) => {
+                        let _ = self.effects.push(Effect::UpdateStarted);
+                        let v = pkg.version;
+                        self.log.push(
+                            now,
+                            format_args!(
+                                "update begun by {a}.{b}.{c}.{d}:{}: version {}.{}.{}{}, slot {}",
+                                src.1,
+                                v.major,
+                                v.minor,
+                                v.build,
+                                if downgrade { " (downgrade)" } else { "" },
+                                pkg.target_slot
+                            ),
+                        );
+                        let r = payload::BeginReply { block_size: mgmt::BLOCK_DATA as u16, block_count: count, one_way: false };
+                        p[..7].copy_from_slice(&r.encode());
+                        (Status::Ok, 7)
+                    }
+                    Err(s) => (s, 0),
+                }
+            }
+            Command::UpdateBlock => {
+                let Ok(blk) = payload::Block::decode(payload) else { return (Status::Malformed, 0) };
+                match ctx.update.block(blk.number, blk.crc_ok(), blk.data, now) {
+                    Ok(received) => {
+                        p[..8].copy_from_slice(&payload::block_reply(blk.number, received));
+                        (Status::Ok, 8)
+                    }
+                    Err(Status::VerificationFailed) => {
+                        // 0043: a write failure discards the transfer and is logged.
+                        self.log.push(now, format_args!("update: write of block {} to the staging slot failed; transfer discarded", blk.number));
+                        (Status::VerificationFailed, 0)
+                    }
+                    Err(s) => (s, 0),
+                }
+            }
+            Command::UpdateVerify => {
+                if !payload.is_empty() {
+                    return (Status::Malformed, 0);
+                }
+                match ctx.update.verify(now) {
+                    Ok(h) => {
+                        p[..32].copy_from_slice(&h);
+                        (Status::Ok, 32)
+                    }
+                    Err(s) => (s, 0),
+                }
+            }
+            Command::UpdateActivate => {
+                // Flags: bit 0 foreign image; a normal image has none (A1.8a item 3).
+                if payload != [0] {
+                    return (Status::Malformed, 0);
+                }
+                match ctx.update.activate(now) {
+                    Ok(()) => {
+                        self.reset_pending = true;
+                        let _ = self.effects.push(Effect::Restart);
+                        self.log.push(now, format_args!("update activated by {a}.{b}.{c}.{d}:{}: trial boot follows", src.1));
+                        p[0] = 0; // not permanent: a trial boot (A1.8a item 5)
+                        (Status::Ok, 1)
+                    }
+                    Err(s) => (s, 0),
+                }
+            }
+            Command::UpdateAbort => {
+                if !payload.is_empty() {
+                    return (Status::Malformed, 0);
+                }
+                ctx.update.abort(now);
+                self.log.push(now, format_args!("update aborted by {a}.{b}.{c}.{d}:{}", src.1));
+                p[0] = 1; // a RESTART is needed to leave the update state (A1.8)
+                (Status::Ok, 1)
+            }
+            Command::Rollback => {
+                if !payload.is_empty() {
+                    return (Status::Malformed, 0);
+                }
+                match ctx.update.rollback(now) {
+                    Ok(()) => {
+                        self.reset_pending = true;
+                        let _ = self.effects.push(Effect::Restart);
+                        self.log.push(now, format_args!("ROLLBACK by {a}.{b}.{c}.{d}:{}", src.1));
+                        (Status::Ok, 0)
+                    }
+                    Err(s) => (s, 0),
+                }
+            }
+            // RETURN_TO_STOCK, ENTER_VENDOR_RECOVERY: always 56 (A1.8a items 2, 4).
             _ => (Status::NotSupported, 0),
         }
     }

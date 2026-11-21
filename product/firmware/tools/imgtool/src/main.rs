@@ -118,7 +118,7 @@ pub fn seal_elf(file: &mut Vec<u8>, kind: Kind, region: Range) -> Result<Vec<u8>
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let usage = "usage: g7250-imgtool <seal|check> <boot|app-a|app-b> <elf> [--bin <out>] | merge <out> <elf>...";
+    let usage = "usage: g7250-imgtool <seal|check> <boot|app-a|app-b> <elf> [--bin <out>] | merge <out> <elf>... | package <app-a|app-b> <bin> <out>";
     if let [c, out, ins @ ..] = args {
         if c == "merge" {
             let files: Vec<Vec<u8>> =
@@ -146,6 +146,33 @@ fn run(args: &[String]) -> Result<(), String> {
                 "{path}: ok, {} bytes at {:#010x}, crc {:#010x}, version {:#010x}",
                 hdr.length, region.start, hdr.crc, hdr.fw_version
             );
+        }
+        "package" => {
+            // Update package (A1.8; 0043): the Table M-4 header (the UPDATE_BEGIN payload after
+            // the flags byte, 53 bytes) followed by the sealed image of one slot.
+            let [_, _, _, out] = args else { return Err(usage.into()) };
+            if kind != Kind::Application {
+                return Err("a package carries an application image".into());
+            }
+            let hdr = header::validate(&file, kind, region, RAM).map_err(|e| format!("{path}: {e:?}"))?;
+            let image = &file[..hdr.length as usize];
+            use sha2::Digest;
+            let v = hdr.fw_version;
+            let pkg = g7250_proto::mgmt::payload::Package {
+                header_version: 1,
+                component: g7250_proto::mgmt::payload::COMPONENT_MAIN,
+                hardware_id: g7250_proto::mgmt::payload::HARDWARE_ID_G7250,
+                min_hw_revision: 0,
+                version: g7250_proto::mgmt::payload::Version { major: (v >> 24) as u8, minor: (v >> 16) as u8, build: v as u16 },
+                length: hdr.length,
+                sha256: sha2::Sha256::digest(image).into(),
+                signature_len: 0,
+                target_slot: if region == SLOT_A { 1 } else { 2 },
+            };
+            let mut b = pkg.encode().to_vec();
+            b.extend_from_slice(image);
+            std::fs::write(out, &b).map_err(|e| format!("{out}: {e}"))?;
+            println!("{out}: package for slot {}, {} image bytes, version {:#010x}", pkg.target_slot, hdr.length, v);
         }
         "seal" => {
             let bytes = seal_elf(&mut file, kind, region)?;

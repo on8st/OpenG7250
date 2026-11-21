@@ -20,6 +20,8 @@ pub struct MgmtInit {
     /// `GET_CALIBRATION` reply payload: set id (SHA-256 of the stored set), then the set.
     pub calibration: heapless::Vec<u8, 1100>,
     pub identify: Identify<'static>,
+    /// The update path and the trial state (A1.8).
+    pub update: crate::update::BoardUpdate,
 }
 
 fn version_of(v: u32) -> Version {
@@ -127,8 +129,13 @@ impl MgmtInit {
             calibration_id: cal_id,
             calibration_date: cal_date,
             sectors_written: 0,
+            running_slot: 0, // set below
         };
-        MgmtInit { store, secret, config, calibration, identify }
+        let update = crate::update::BoardUpdate::new(store.as_mut(), slot);
+        let mut identify = identify;
+        identify.update_state = update.state as u8;
+        identify.running_slot = g7250_update::stage::slot_code(slot);
+        MgmtInit { store, secret, config, calibration, identify, update }
     }
 }
 
@@ -171,7 +178,7 @@ pub fn apply_stored(m: &mut MgmtInit, e: g7250_radio::mgmt::Effect) -> Result<Op
             m.identify.calibration_date = 0;
             Ok(None)
         }
-        later @ (Effect::ApplyNetwork | Effect::Restart | Effect::FactoryReset) => Ok(Some(later)),
+        later @ (Effect::ApplyNetwork | Effect::Restart | Effect::FactoryReset | Effect::UpdateStarted) => Ok(Some(later)),
     }
 }
 

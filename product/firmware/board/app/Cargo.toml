@@ -34,5 +34,6 @@ heapless = { workspace = true }
 g7250-proto = { workspace = true }
 g7250-ch394 = { workspace = true }
 g7250-store = { workspace = true }
+g7250-update = { workspace = true }
 g7250-radio = { workspace = true }
 embedded-hal = { workspace = true }

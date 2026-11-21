@@ -604,6 +604,7 @@ dependencies = [
  "g7250-radio",
  "g7250-safety",
  "g7250-store",
+ "g7250-update",
  "heapless",
 ]
 

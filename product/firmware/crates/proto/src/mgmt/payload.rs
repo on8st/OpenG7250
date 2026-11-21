@@ -72,6 +72,8 @@ pub struct Identify<'a> {
     pub calibration_id: [u8; 32],
     pub calibration_date: u32,
     pub sectors_written: u8,
+    /// Running slot: 1 slot A, 2 slot B (tag 23; 0043).
+    pub running_slot: u8,
 }
 
 impl<'a> Identify<'a> {
@@ -99,7 +101,7 @@ impl<'a> Identify<'a> {
         let mut c = [0u8; 36];
         c[..32].copy_from_slice(&self.calibration_id);
         c[32..].copy_from_slice(&self.calibration_date.to_be_bytes());
-        w.put(21, &c).u8(22, self.sectors_written);
+        w.put(21, &c).u8(22, self.sectors_written).u8(23, self.running_slot);
         w.finish()
     }
 
@@ -141,6 +143,7 @@ impl<'a> Identify<'a> {
                     r.calibration_date = u32::from_be_bytes([a[32], a[33], a[34], a[35]]);
                 }
                 22 => r.sectors_written = arr::<1>(v)?[0],
+                23 => r.running_slot = arr::<1>(v)?[0],
                 _ => {}
             }
         }
@@ -282,10 +285,12 @@ pub struct Package {
     pub length: u32,
     pub sha256: [u8; 32],
     pub signature_len: u16,
+    /// Target slot: 0 either slot (or a foreign image), 1 slot A, 2 slot B (byte 52; 0043).
+    pub target_slot: u8,
 }
 
 pub const PACKAGE_MAGIC: u32 = 0x4737_504B; // "G7PK"
-pub const PACKAGE_LEN: usize = 52;
+pub const PACKAGE_LEN: usize = 53;
 /// Target hardware id of the G7250 (Table M-4 bytes 6-7).
 pub const HARDWARE_ID_G7250: u16 = 0x00C8;
 pub const COMPONENT_MAIN: u8 = 1;
@@ -302,6 +307,7 @@ impl Package {
         b[14..18].copy_from_slice(&self.length.to_be_bytes());
         b[18..50].copy_from_slice(&self.sha256);
         b[50..52].copy_from_slice(&self.signature_len.to_be_bytes());
+        b[52] = self.target_slot;
         b
     }
 
@@ -318,6 +324,7 @@ impl Package {
             length: u32_at(b, 14)?,
             sha256: arr(&b[18..50])?,
             signature_len: u16_at(b, 50)?,
+            target_slot: b[52],
         })
     }
 }
@@ -620,8 +627,11 @@ mod tests {
             length: 36_000,
             sha256: [0xAB; 32],
             signature_len: 0,
+            target_slot: 2,
         };
         let b = p.encode();
+        assert_eq!(b.len(), 53);
+        assert_eq!(b[52], 2); // 0043: target slot B
         assert_eq!(&b[0..4], b"G7PK");
         assert_eq!(&b[4..8], &[1, 1, 0x00, 0xC8]);
         assert_eq!(&b[10..14], &[0, 2, 0, 7]);

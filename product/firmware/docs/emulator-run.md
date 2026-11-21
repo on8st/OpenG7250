@@ -114,6 +114,28 @@ What the emulator should force, and what passes:
 "Every value present" can be read over the management channel once step 4 exists; until then
 the console boot counter (monotonic, never back to 1) is the visible check.
 
+## Update path (A1.8; 0043)
+
+Files: `out/g7250-update-a.pkg`, `out/g7250-update-b.pkg`: the Table M-4 header (53 bytes, the
+`UPDATE_BEGIN` payload after the flags byte) followed by the sealed image for that slot. The
+running image is in slot A (`IDENTIFY` tag 23 = 1), so the B package is the one to send; both
+have the running version (accepted: not older). Console lines: `boot: record active … trial …`,
+`boot: starting slot B as a trial`, `net: trial boot of slot B: arm refused (MAINTENANCE) until
+confirmed`, `net: trial image confirmed (slot B)`, `boot: trial not confirmed: rolled back (U-6)`.
+
+| Id | Do | Pass |
+|---|---|---|
+| UP-01 | `UPDATE_BEGIN` with the A package | 63, nothing written (slot B unchanged), no update state (T-A1-67) |
+| UP-02 | `UPDATE_BEGIN` (B package), all blocks, `UPDATE_VERIFY`, `UPDATE_ACTIVATE` [0] | 0 each; verify returns the package's SHA-256; activate replies [0]; reset; boot stage starts slot B as a trial; confirmation after about 10 s; next start: slot B, no trial |
+| UP-03 | After `UPDATE_BEGIN`: P2 run request; a register write; `CAP_REQUEST`; an arm | session ended; `STREAM_STATUS` reason 10 at most every 100 ms; write `BUSY`; record answered; arm `MAINTENANCE` (T-A1-23) |
+| UP-04 | During the trial (before confirmation): RX session and an arm | RX works; arm `MAINTENANCE` (T-A1-24); `UPDATE_BEGIN` 58 |
+| UP-05 | Trial image that never reaches the main loop (or stop the emulator's network so it cannot confirm) | reset by 60 s; boot stage rolls back to slot A and says so; `READ_LOG` after the start shows the rollback (T-A1-09) |
+| UP-06 | Power cut at any flash word or erase during blocks, verify or activate | next start: slot A, unchanged; a new update completes |
+| UP-07 | Power cut during the boot stage's trial-attempt write or the confirmation | next start: trial again (attempt not recorded), slot A rolled back (attempt used, not confirmed), or slot B (confirmed) |
+| UP-08 | Flash program error (FLASH_SR1 error flag) during a block | 55, logged, transfer discarded; slot A and the boot record unchanged (0043) |
+| UP-09 | `UPDATE_BEGIN`, then only `UPDATE_STATUS` for 10 min | logged, restart into slot A (T-A1-34); the same after `UPDATE_ABORT` and after a verify without activate (T-A1-46) |
+| UP-10 | `ROLLBACK` after UP-02 (running B, A valid) | reply, reset, slot A starts, not a trial |
+
 ## F3 status (transmit gate)
 
 No network path to TX exists yet (no High Priority packet, no register map). What the image

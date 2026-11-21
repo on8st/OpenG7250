@@ -121,7 +121,8 @@ length and CRC zero; `g7250-imgtool seal` fills them after the link.
    enable and pending bit and SysTick that a previous stage left; refresh the IWDG; clocks on HSI
    64 MHz with all prescalers /1; console on USART1 (PB6, 115200 8N1); start the IWDG (2 s);
    banner and reset cause; self-check of the safe state.
-3. Slot choice (`g7250_layout::select`): the last valid boot record in sector 7, else slot A;
+3. Slot choice (`g7250_update::boot::boot_stage`): the newest boot record in the store (sectors
+   6-7, kind 1), else slot A;
    a slot is started only if its header, length, CRC, load address and vectors check out; with
    neither slot valid the boot stage stays, holds the safe state and refreshes the watchdog.
 4. Jump: D-cache off, VTOR to the slot, stack pointer and reset vector from the slot. Interrupts
@@ -130,9 +131,18 @@ length and CRC zero; `g7250-imgtool seal` fills them after the link.
    (HSI 64 MHz, no PLL, no HSE, no HSI48, `SupplyConfig::Default` = the H72x power-on value),
    console, IWDG at 2 s refreshed from its own task every 250 ms, banner.
 
-**Trial boot.** The boot record format allows a trial slot with an attempt count (U-5, U-6). The
-F1 boot stage does not write flash, so it cannot count attempts; it ignores a trial entry and
-starts the active slot. Writing the record comes with the update path (A1.8).
+**Update and trial boot** (A1.8; `g7250-update`). The application stages a new image in the
+other slot (Writer::Application: only that slot and the store) and, after `UPDATE_VERIFY`,
+writes one boot record: active = the running slot, trial = the other, one attempt
+(`UPDATE_ACTIVATE`). The boot stage (Writer::BootStage: only the store) records the attempt
+before it jumps to the trial; if it cannot, it starts the active slot. The trial confirms itself
+after 10 s with the network up and the main loop running; until then arms get `MAINTENANCE`. If
+it has not confirmed by 60 s it resets, and the boot stage, finding the attempt used and no
+confirmation, records a rollback (byte 12 bit 0) and starts the active slot; the application
+logs it. `ROLLBACK` makes the other slot active. Each of these is one store record, so a power
+loss leaves the old or the new record (host tests cut power at every flash word and erase).
+Both the boot stage and the application write flash only through `g7250_board::flash` (erase
+and program from RAM, interrupts masked, IWDG refreshed, FlashGuard per writer).
 
 **Watchdog.** Started by the boot stage, so a hung boot stage, a hung trial image or a hung
 application resets the MCU, and the reset brings the safe state back. A panic re-applies the

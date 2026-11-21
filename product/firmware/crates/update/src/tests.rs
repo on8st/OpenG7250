@@ -39,6 +39,7 @@ fn offer(img: &[u8], version: u32) -> Offer {
         length: img.len() as u32,
         sha256: Sha256::digest(img).into(),
         signature_len: 0,
+        target_slot: 2,
     }
 }
 
@@ -263,6 +264,9 @@ fn begin_checks_in_order_and_writes_nothing() {
     assert_eq!(g.begin(&Offer { length: Slot::B.range().len() + 1, ..o }, &run, 0), Err(Refusal::TooLarge));
     assert_eq!(g.begin(&Offer { version: header::version(1, 0, 0), ..o }, &run, 0), Err(Refusal::Older));
     assert_eq!(g.begin(&o, &Running { trial: true, ..run }, 0), Err(Refusal::UpdateInProgress));
+    // 0043, T-A1-67: a package for the running slot (A) gets 63; byte 52 above 2 is malformed.
+    assert_eq!(g.begin(&Offer { target_slot: 1, ..o }, &run, 0), Err(Refusal::RunningSlot));
+    assert_eq!(g.begin(&Offer { target_slot: 3, ..o }, &run, 0), Err(Refusal::Malformed));
     assert!(!g.in_progress());
     assert_eq!(s.mem, before);
     // A downgrade with the flag is accepted (U-8); the same version is not a downgrade.

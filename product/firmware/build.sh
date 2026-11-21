@@ -46,6 +46,9 @@ $tool check boot "$out/g7250-boot.elf"
 $tool check app-a "$out/g7250-app-a.elf"
 $tool check app-b "$out/g7250-app-b.elf"
 $tool merge "$out/g7250.elf" "$out/g7250-boot.elf" "$out/g7250-app-a.elf"
+# Update packages, one per slot (A1.8; 0043): Table M-4 header, then the sealed image.
+$tool package app-a "$out/g7250-app-a.bin" "$out/g7250-update-a.pkg"
+$tool package app-b "$out/g7250-app-b.bin" "$out/g7250-update-b.pkg"
 
 echo "== test build: compaction at every start (emulator only)"
 (cd board && cargo build --release -p g7250-app --features test-compact-at-start --target-dir target/test-compact)
@@ -55,6 +58,6 @@ sh board/check-ramfunc.sh "$out/test/g7250-app-a-compact.elf"
 $tool seal app-a "$out/test/g7250-app-a-compact.elf"
 $tool merge "$out/test/g7250-compact.elf" "$out/g7250-boot.elf" "$out/test/g7250-app-a-compact.elf"
 
-(cd "$out" && shasum -a 256 g7250.elf g7250-boot.elf g7250-app-a.elf g7250-app-b.elf ./*.bin test/g7250-compact.elf > SHA256SUMS)
+(cd "$out" && shasum -a 256 g7250.elf g7250-boot.elf g7250-app-a.elf g7250-app-b.elf ./*.bin ./*.pkg test/g7250-compact.elf > SHA256SUMS)
 echo "== done"
 cat "$out/SHA256SUMS"

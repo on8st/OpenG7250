@@ -13,8 +13,10 @@
 //! Not yet: the write commands (step 4). Until then no secret can be set, so every
 //! authenticated request fails with 33, and a command not built yet is answered with 56.
 
+pub mod update;
 pub mod write;
 
+pub use update::{NoUpdate, Updater};
 pub use write::{Effect, Log};
 
 use g7250_proto::mgmt::{self, auth, Command, Incoming, Status};
@@ -91,6 +93,8 @@ pub struct Ctx<'a> {
     pub p2_session: bool,
     /// TX armed or keyed on any level (status 50).
     pub armed: bool,
+    /// The update path (A1.8).
+    pub update: &'a mut dyn Updater,
 }
 
 #[derive(Clone, Copy)]
@@ -376,8 +380,9 @@ impl Server {
             Command::SetFirstSecret => self.set_first_secret(src, req.payload, ctx),
             Command::ReadLog => self.read_log(req.payload, p),
             Command::UpdateStatus => {
-                // No update path in this build: idle, nothing received (Table M-1).
-                let u = mgmt::payload::UpdateStatus { state: 0, received: 0, count: 0, sectors_written: 0 };
+                // A read, answered at any time (A1.8; 0022 §51).
+                let (state, received, count) = ctx.update.status();
+                let u = mgmt::payload::UpdateStatus { state, received, count, sectors_written: 0 };
                 p[..10].copy_from_slice(&u.encode());
                 (Status::Ok, 10)
             }
