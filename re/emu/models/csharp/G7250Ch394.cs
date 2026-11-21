@@ -207,8 +207,11 @@ namespace Antmicro.Renode.Peripherals.SPI
                                 if(write) { cmd = WriteSocket(n, a & 0x3F, data); cmdSock = n; }
                                 else outb = ReadSocket(n, a & 0x3F);
                             }
-                            else if(kind == 1) { int sz = Math.Max(BufSize(n, true), 1024); if(write) txbuf[n][a % sz] = data; else outb = txbuf[n][a % sz]; }
-                            else if(kind == 2) { int sz = Math.Max(BufSize(n, false), 1024); if(write) rxbuf[n][a % sz] = data; else outb = rxbuf[n][a % sz]; }
+                            // buffer index = (16-bit address) mod size; size 0 = no buffer (writes ignored,
+                            // reads 0). For a size that is not a power of two the mapping of the 16-bit
+                            // pointer onto the buffer is not documented (CH394DS1): emulator assumption.
+                            else if(kind == 1) { int sz = BufSize(n, true); if(sz > 0) { if(write) txbuf[n][(a & 0xFFFF) % sz] = data; else outb = txbuf[n][(a & 0xFFFF) % sz]; } else if(!write) outb = 0; }
+                            else if(kind == 2) { int sz = BufSize(n, false); if(sz > 0) { if(write) rxbuf[n][(a & 0xFFFF) % sz] = data; else outb = rxbuf[n][(a & 0xFFFF) % sz]; } else if(!write) outb = 0; }
                         }
                     }
                     addr++;
@@ -271,7 +274,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             {
                 case 0x20: case 0x21:
                 {
-                    int free = BufSize(n, true) - ((U16(r, 0x24) - U16(r, 0x22)) & 0xFFFF);
+                    int free = Math.Max(0, BufSize(n, true) - ((U16(r, 0x24) - U16(r, 0x22)) & 0xFFFF));
                     return (byte)(a == 0x20 ? free >> 8 : free);
                 }
                 case 0x26: case 0x27:
@@ -313,10 +316,10 @@ namespace Antmicro.Renode.Peripherals.SPI
         private void Send(int n)
         {
             var r = sreg[n];
-            int rd = U16(r, 0x22), wr = U16(r, 0x24), size = Math.Max(BufSize(n, true), 1024);
-            int len = (wr - rd) & 0xFFFF;
+            int rd = U16(r, 0x22), wr = U16(r, 0x24), size = BufSize(n, true);
+            int len = size == 0 ? 0 : (wr - rd) & 0xFFFF;
             var data = new byte[len];
-            for(int i = 0; i < len; i++) data[i] = txbuf[n][(rd + i) % size];
+            for(int i = 0; i < len; i++) data[i] = txbuf[n][((rd + i) & 0xFFFF) % size];
             P16(r, 0x22, wr);
             r[0x02] |= 0x10;                                               // SEND_OK
             if(r[0x03] != 0x22) return;
@@ -347,13 +350,14 @@ namespace Antmicro.Renode.Peripherals.SPI
                     var r = sreg[n];
                     if(r[0x03] != 0x22 || U16(r, 0x04) != dport) continue;
                     if(bcast && (r[0x00] & 0x40) != 0) continue;              // BCASTB
-                    int size = Math.Max(BufSize(n, false), 1024);
+                    int size = BufSize(n, false);
+                    if(size == 0) { dropped++; ok = true; break; }             // no receive buffer
                     int used = (U16(r, 0x2A) - U16(r, 0x28)) & 0xFFFF;
                     if(size - used < 8 + len) { dropped++; ok = true; break; }
                     int wr = U16(r, 0x2A);
                     var hdr = new byte[] { p[0], p[1], p[2], p[3], p[4], p[5], (byte)(len >> 8), (byte)len };
-                    for(int i = 0; i < 8; i++) rxbuf[n][(wr + i) % size] = hdr[i];
-                    for(int i = 0; i < len; i++) rxbuf[n][(wr + 8 + i) % size] = p[9 + i];
+                    for(int i = 0; i < 8; i++) rxbuf[n][((wr + i) & 0xFFFF) % size] = hdr[i];
+                    for(int i = 0; i < len; i++) rxbuf[n][((wr + 8 + i) & 0xFFFF) % size] = p[9 + i];
                     P16(r, 0x2A, (wr + 8 + len) & 0xFFFF);
                     NetRecord("to_radio", n, dport, Ip(p, 0) + ":" + ((p[4] << 8) | p[5]), p, 9, len);
                     if(hpLogOn && dport == 1027)

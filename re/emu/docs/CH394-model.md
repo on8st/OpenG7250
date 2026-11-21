@@ -33,6 +33,16 @@ firmware-specific behaviour.
   programs (SIPR, SUBR) is reported on it, so the runner learns the radio's
   address from the image itself.
 
+- Socket buffers: Sn_RXBUF_SIZE (0x1E) and Sn_TXBUF_SIZE (0x1F) per socket in
+  whole KiB, 0 to 16, not only powers of two. Size 0 means no buffer: received
+  datagrams for that socket are dropped, TX_FS reads 0, SEND sends nothing. A
+  buffer byte is addressed by (16-bit pointer or SPI address) mod size, the same
+  in the SPI access and in the model's own copies. **Emulator assumption:** how
+  the CH394 maps a 16-bit pointer onto a buffer whose size is not a power of two
+  is not documented (CH394DS1 V1.2 says only that each socket's buffers can be
+  configured freely within the 32 KiB). The sum per direction is not checked
+  against 16 KiB.
+
 ## Not modelled
 
 TCP and MACRAW ("not modelled: CH394/Sn_MR protocol ..."), ARP and ICMP
