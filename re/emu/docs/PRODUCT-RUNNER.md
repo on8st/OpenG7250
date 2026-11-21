@@ -69,10 +69,10 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
 
 ## Fixtures (format section 4)
 
-Offered now: `hw.observe`, `hw.trace`, `hw.input`, `power.cycle`, `ctrl.set`,
-`time.scale` (fixed 1.0), `net.broadcast`, `net.hosts`. Not yet: `reset.wdt`
-(a faithful watchdog reset with its reset flags), `link.set`, `time.advance`,
-`power.cut`, `dhcp.*`, `sensor.set` (needs the HIS scales). A test that needs
+Offered now: `hw.observe`, `hw.trace`, `hw.input`, `power.cycle`, `reset.wdt`,
+`ctrl.set`, `time.scale` (fixed 1.0), `net.broadcast`, `net.hosts`. Not yet:
+`link.set`, `time.advance`, `power.cut`, `dhcp.*`, `sensor.set` (needs the HIS
+scales). A test that needs
 one of these is skipped with `fixture:<name>`.
 
 - `hw.observe`: snapshot with the keys of the format, from the HIS 85
@@ -90,6 +90,11 @@ one of these is skipped with `fixture:<name>`.
   `"pin not offered: <pin>"`.
 - `power.cycle`: the emulator restarts the image from reset; the bridge,
   control socket and an active trace continue.
+- `reset.wdt`: the MCU is reset as by an IWDG1 timeout (`docs/IWDG-model.md`):
+  RCC_RSR then shows IWDG1RSTF and PINRSTF (plus any flags not yet cleared
+  with RMVF), the core boots from 0x08000000; RAM keeps its contents, as on the
+  hardware. An active trace gets a `reset` event with cause `wdt` (a software
+  reset of the image gives cause `software`).
 - `ctrl.set {absent|silent}`: in both states the Main's interlink receives no
   bytes (no Control unit is emulated in product runs).
 
@@ -116,4 +121,4 @@ error there because that program does not speak the product protocol.
   is the BDMA (via DMAMUX2). Renode 1.17's BDMA and SPI DMA requests do not
   deliver: an image that moves SPI6 data by DMA reads zeros. Polled SPI works
   (the self-check). Planned as step 1g.
-- `reset.wdt`, `link.set`, `sensor.set` and the later fixtures, above.
+- `link.set`, `sensor.set` and the later fixtures, above.

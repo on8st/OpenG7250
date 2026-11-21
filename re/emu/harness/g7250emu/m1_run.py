@@ -31,6 +31,8 @@ REPL_MDMA = os.path.join(REPO, "platforms", "g7250_main_mdma.repl")
 CS_PA = os.path.join(REPO, "models", "csharp", "G7250PaPlant.cs")
 CS_DMA = os.path.join(REPO, "models", "csharp", "G7250Dma.cs")
 REPL_DMA = os.path.join(REPO, "platforms", "g7250_main_dma.repl")
+CS_IWDG = os.path.join(REPO, "models", "csharp", "G7250Iwdg.cs")
+REPL_IWDG = os.path.join(REPO, "platforms", "g7250_main_iwdg_stock.repl")
 CS_ADC = os.path.join(REPO, "models", "csharp", "G7250Adc.cs")
 REPL_ADC = os.path.join(REPO, "platforms", "g7250_main_adc.repl")
 CS_USART = os.path.join(REPO, "models", "csharp", "G7250Usart.cs")
@@ -84,6 +86,10 @@ def build_resc(image_path, log_path, fpga=False):
         'i @%s' % CS_ADC,
         'sysbus Unregister sysbus.adcM1S2',
         'machine LoadPlatformDescription @%s' % REPL_ADC,
+        # generic IWDG1 with the RCC_RSR reset flags (docs/IWDG-model.md)
+        'i @%s' % CS_IWDG,
+        'sysbus Unregister sysbus.watchdog',
+        'machine LoadPlatformDescription @%s' % REPL_IWDG,
         # PA bias plant on SPI2 feeding ADC1 Idd/Vext/NTC (docs/PA-plant-model.md),
         # so the boot-time bias trim converges and the boot reaches the superloop.
         'i @%s' % CS_PA,

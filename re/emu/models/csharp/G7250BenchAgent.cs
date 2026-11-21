@@ -64,6 +64,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                                      workMode: WorkMode.Periodic, eventEnabled: true);
             sampler.LimitReached += Sample;
             if(agentPort > 0) new Thread(Serve) { IsBackground = true, Name = "bench-agent" }.Start();
+            machine.MachineReset += _ => OnMachineReset();
         }
 
         public void Reset()
@@ -212,6 +213,35 @@ namespace Antmicro.Renode.Peripherals.SPI
             }
         }
 
+        // a reset of the MCU while the emulator keeps running (watchdog, software)
+        private void OnMachineReset()
+        {
+            string cause = "software";
+            IPeripheral wd;
+            if(machine.TryGetByName("sysbus.watchdog", out wd))
+            {
+                var pr = wd.GetType().GetProperty("LastResetCause");
+                if(pr != null) cause = (string)pr.GetValue(wd);
+            }
+            string ev = null;
+            lock(sync)
+            {
+                drivenLevel.Clear();
+                if(tracing) { ev = Event("\"kind\": \"reset\", \"cause\": \"" + cause + "\""); lastLevel.Clear(); }
+            }
+            if(ev != null) Send("ev " + ev);
+        }
+
+        private string WatchdogReset()
+        {
+            IPeripheral wd;
+            if(!machine.TryGetByName("sysbus.watchdog", out wd)) return "err no watchdog";
+            var m = wd.GetType().GetMethod("WatchdogReset");
+            if(m == null) return "err watchdog model has no reset";
+            m.Invoke(wd, null);
+            return "ok";
+        }
+
         // ---- link to the runner ----
         private void Serve()
         {
@@ -243,6 +273,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 switch(w[0])
                 {
                     case "time": return "time " + NowUs();
+                    case "wdt": return WatchdogReset();
                     case "observe": return "obs " + Observe();
                     case "input": return w.Length == 3 ? Input(w[1], int.Parse(w[2], CultureInfo.InvariantCulture)) : "err usage";
                     case "trace":

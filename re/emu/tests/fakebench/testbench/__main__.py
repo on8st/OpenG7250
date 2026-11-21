@@ -11,6 +11,7 @@ of the runner itself against firmware-tests/bench/net_test.c:
   T-EMU-05  hw.trace start/stop with a hw.input edge on PH6, file readable
   T-EMU-06  hw.input on a pin that is not offered is refused
   T-EMU-09  power.cycle: the image boots again, the trace carries a reset event
+  T-EMU-10  reset.wdt: watchdog reset, the image boots again, reset event "wdt"
 """
 import argparse
 import json
@@ -102,6 +103,16 @@ def run_test(tid, ep):
         return [check("power.cycle ok", pc.get("ok"), str(pc)), check("echo after cycle", d == b"after-cycle", repr(d)),
                 check("reset event", len(resets) == 1 and resets[0].get("cause") == "power", json.dumps(resets)),
                 check("seq increasing", all(evs[i]["seq"] < evs[i + 1]["seq"] for i in range(len(evs) - 1)))]
+    if tid == "T-EMU-10":
+        r1 = ctl.op("hw.trace", action="start")
+        f = (r1.get("value") or {}).get("file")
+        w = ctl.op("reset.wdt")
+        d, src = echo(ep, 0, c, b"after-wdt", wait=60.0)
+        ctl.op("hw.trace", action="stop")
+        evs = [json.loads(l) for l in open(f)] if f and os.path.isfile(f) else []
+        resets = [e for e in evs if e.get("kind") == "reset"]
+        return [check("reset.wdt ok", w.get("ok"), str(w)), check("echo after reset", d == b"after-wdt", repr(d)),
+                check("reset event wdt", len(resets) == 1 and resets[0].get("cause") == "wdt", json.dumps(resets))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

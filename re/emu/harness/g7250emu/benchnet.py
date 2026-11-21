@@ -338,7 +338,7 @@ class FixtureServer:
     """JSON Lines control socket for the test bench (format section 4)."""
 
     OFFERED = ["hw.observe", "hw.trace", "hw.input", "ctrl.set", "time.scale",
-               "net.broadcast", "net.hosts", "power.cycle"]
+               "net.broadcast", "net.hosts", "power.cycle", "reset.wdt"]
 
     def __init__(self, agent_getter, on_power_cycle):
         self.srv = _listen_tcp()
@@ -413,6 +413,9 @@ class FixtureServer:
                 return {"ok": False, "error": "state must be absent|silent"}
             self.ctrl_state = st   # both: no bytes on the Main's interlink RX
             return {"ok": True}
+        if op == "reset.wdt":
+            r = agent.ask("wdt") if agent else None
+            return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
         if op == "power.cycle":
             self.on_power_cycle()
             return {"ok": True}

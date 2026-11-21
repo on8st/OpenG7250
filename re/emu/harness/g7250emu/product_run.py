@@ -66,6 +66,10 @@ GENERIC = [
     ("cs", P("models", "csharp", "G7250PaPlant.cs")),
     ("repl", P("platforms", "g7250_main_pa_plant.repl")),
     ("cmd", "sysbus.spi2.pa Publish"),
+    # IWDG1 with the RCC_RSR reset flags (docs/IWDG-model.md)
+    ("cs", P("models", "csharp", "G7250Iwdg.cs")),
+    ("cmd", "sysbus Unregister sysbus.watchdog"),
+    ("repl", P("platforms", "g7250_main_iwdg.repl")),
     # GPIOE with the RF FPGA on its pins (his/80), DRDY at the his/80 rate
     ("cs", P("models", "csharp", "G7250Gpioe.cs")),
     ("cmd", "sysbus Unregister sysbus.gpioPortE"),

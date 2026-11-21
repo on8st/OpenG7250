@@ -1,0 +1,5 @@
+// g7250_main_iwdg_stock.repl: the generic IWDG1 (docs/IWDG-model.md) for stock
+// runs. The stock application sits at 0x08020000 and the emulator has no
+// bootloader, so after a reset the core boots from there.
+watchdog: Timers.G7250Iwdg @ sysbus <0x58004800, +0x400>
+    bootAddress: 0x08020000

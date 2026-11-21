@@ -1,0 +1,5 @@
+// g7250_main_iwdg.repl: generic IWDG1 with the RCC_RSR reset flags
+// (models/csharp/G7250Iwdg.cs, docs/IWDG-model.md) in place of Renode 1.17's
+// STM32_IndependentWatchdog. Load after `i @models/csharp/G7250Iwdg.cs` and
+// `sysbus Unregister sysbus.watchdog`.
+watchdog: Timers.G7250Iwdg @ sysbus <0x58004800, +0x400>
