@@ -17,7 +17,7 @@ G7250-P2 (level 1) and later TCI with on-board DSP (level 2), as specified in `p
 |---|---|---|
 | `crates/layout` | flash layout, write guard, EEPROM guard, image header, slot choice | host + MCU |
 | `crates/safety` | the RF safe state as data; the transmit gate (`tx`) | host + MCU |
-| `crates/proto` | discovery, rate limits, network configuration, DHCP messages | host + MCU |
+| `crates/proto` | **the protocol crate shared with `g7250ctl` (0037)**: management channel (`mgmt`: header and framing checks of A1.4, commands and status codes with their priority, HMAC-SHA256 trailer, every Annex M payload, both directions), discovery, rate limits, network configuration, DHCP messages. `no_std`, no allocation. `g7250ctl` uses it as a path dependency (`product/firmware/crates/proto`) | host + MCU |
 | `crates/ch394` | CH394 driver (W5500-compatible registers), UDP | host + MCU |
 | `tools/imgtool` | seal, check and merge images | host |
 | `board/common` | raw-register board support: safe state, watchdog, console, reset cause | MCU |
