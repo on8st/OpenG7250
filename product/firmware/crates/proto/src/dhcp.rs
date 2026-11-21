@@ -126,6 +126,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn t_a1_74_discover_and_request_carry_ciaddr_0_and_the_broadcast_flag() {
+        // 0052: also while link-local, whatever the source address (power-on: 0.0.0.0, the
+        // chip's address is not set yet; later the link-local one).
+        let mac = [2, 0, 0, 0, 0x72, 0x50];
+        let mut b = [0u8; MSG_LEN];
+        discover(1, mac, &mut b);
+        assert_eq!((&b[12..16], b[10] & 0x80), (&[0u8; 4][..], 0x80));
+        request(2, mac, [192, 168, 1, 77], [192, 168, 1, 1], &mut b);
+        assert_eq!((&b[12..16], b[10] & 0x80), (&[0u8; 4][..], 0x80));
+    }
+
+    #[test]
     fn decline_carries_the_declined_address_and_the_server() {
         let mac = [2, 0, 0, 0, 0x72, 0x50];
         let mut b = [0u8; MSG_LEN];
