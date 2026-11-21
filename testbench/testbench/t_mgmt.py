@@ -352,6 +352,39 @@ def dhcp_messages(ctx) -> list[dict]:
     return [m for m in (r or []) if isinstance(m, dict)]
 
 
+def sock_log_read(ctx) -> list[dict]:
+    """sock.log (v1.7), paged; dropped entries fail the test."""
+    out: list = []
+    for _ in range(1000):
+        r = ctx.fixture("sock.log", action="read", **{"from": len(out)}) or {}
+        out += r.get("entries", [])
+        if len(out) >= r.get("count", 0):
+            ctx.check("sock.log: no entries dropped", not r.get("dropped", 0), f"dropped {r.get('dropped', 0)}")
+            break
+    return out
+
+
+def mgmt_borrows(entries: list[dict]):
+    """(t_us of the last start-up OPEN on port 7251, [(borrow start, borrow end)]): a borrow runs
+    from the CLOSE of the socket that has port 7251, through an OPEN of that socket on port 68,
+    to its next OPEN on port 7251 (0041). A CLOSE without the OPEN on 68 (a reset) is no borrow."""
+    entries = sorted(entries, key=lambda e: e.get("t_us", 0))
+    mgmt_sock, opened, start, on68, borrows = None, None, None, False, []
+    for e in entries:
+        act, sk, port = str(e.get("action", "")).upper(), e.get("socket"), e.get("port")
+        if act == "OPEN" and port == 7251:
+            if start is not None and on68 and sk == mgmt_sock:
+                borrows.append((start, e["t_us"]))
+            elif not borrows:
+                opened = e["t_us"]  # a start-up OPEN (the last one before the first borrow)
+            start, on68, mgmt_sock = None, False, sk
+        elif act == "OPEN" and port == 68 and sk == mgmt_sock and start is not None:
+            on68 = True
+        elif act == "CLOSE" and sk == mgmt_sock and mgmt_sock is not None and start is None:
+            start = e["t_us"]
+    return opened, borrows
+
+
 def retry_exchanges(log, linklocal: str) -> list[int]:
     """Start times (t_us) of the DHCP retry exchanges while link-local: the client's DISCOVERs
     from the link-local address (0052), those less than 2 s apart counted as one exchange (one
@@ -381,6 +414,9 @@ def t_a1_66(ctx):
     ctx.need("dhcp.server")
     ctx.need("power.cycle")
     ctx.fixture("dhcp.stop")
+    socklog = "sock.log" in ctx.endpoint.get("fixtures", [])
+    if socklog:
+        ctx.fixture("sock.log", action="start")  # from before the power cycle: the start-up OPENs
     ctx.fixture("power.cycle")
     wait_reachable(ctx, "power-on with no DHCP server")
     # radio time when the bench first saw the P2 and management sockets open (they opened at or
@@ -406,9 +442,30 @@ def t_a1_66(ctx):
         if len(starts) >= 6:
             break
         time.sleep(2.0)
+    if socklog:
+        # v1.7: the borrows themselves, in emulated time: the management socket closed and opened
+        # on port 68 until it is opened on 7251 again
+        entries = sock_log_read(ctx)
+        opens, borrows = mgmt_borrows(entries)
+        ctx.check("sock.log: at least six borrows of the management socket within 240 s", len(borrows) >= 6,
+                  f"{len(borrows)} borrows")
+        lens = [round((e - b) / 1e6, 3) for b, e in borrows]
+        ctx.all_of("each borrow at most 2 s (0041; sock.log, emulated)", lens, lambda x: x <= 2.0)
+        free = []
+        if opens is not None and borrows:
+            free.append((borrows[0][0] - opens) / 1e6)
+        free += [(borrows[i + 1][0] - borrows[i][1]) / 1e6 for i in range(len(borrows) - 1)]
+        want = [min(4 * 2 ** n, 64) for n in range(len(free))]
+        if opens is None:  # no start-up OPEN seen: the first gap judged is between borrows 1 and 2
+            want = [min(8 * 2 ** n, 64) for n in range(len(free))]
+            ctx.notes.append("sock.log: the start-up OPEN of port 7251 not seen; the free gap before borrow 1 not judged")
+        ctx.all_of("free gaps 4 s (from the sockets opening) doubling to 64 s, each +-1 s (A1.11, RFC 2131 4.1; "
+                   "sock.log, emulated)", list(zip([round(f, 3) for f in free], want)), lambda x: abs(x[0] - x[1]) <= 1.0)
     times = starts
     gaps = [(b - a) / 1e6 for a, b in zip(starts, starts[1:])]
     want = [min(8 * 2 ** n, 64) for n in range(len(gaps))]
+    if socklog:
+        ctx.notes.append("DISCOVER timing (dhcp.log) judged as well; sock.log gives the borrows themselves")
     ctx.check("at least six DHCP retry exchanges while link-local within 240 s", len(starts) >= 6, f"{len(starts)} exchanges")
     if starts and t_open is not None:
         first = (starts[0] - t_open) / 1e6
