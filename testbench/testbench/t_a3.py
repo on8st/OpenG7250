@@ -2,12 +2,11 @@
 check over at least 10 ms sees the mismatch, always within 20 ms for one of 20 ms or more):
 T-A3-61. Emulator, with gpio.force (format v1.8).
 
-The pins: A3.6b names the TX-side outputs by function (TX path disable, SEND, TUNER trigger, PA
-bias channels; [HIS] HIS 85). HIS 85 gives no pin for "TX path disable", SEND or TUNER (SEND and
-TUNER are pending, P-SYS-8), so until the spec names them (finding SF-30) the bench uses the
-HIS 85 TX-side lines with a known safe level: the T/R lines PF4 (safe 1), PF6, PC7, PH11 (safe 0),
-the chain A output enable PA10 (safe 1) and the PA DAC reset PB14 (safe 0). The bias channels
-are checked by configuration only (item 1), which the bench cannot force at a pin.
+The pins are those of Table A3-6 (A3.6b; 0066 addendum, SF-30), with their safe level at reset
+from HIS 85: PF4 high; PF6, PC7, PH11 low (T/R lines); PA10 high (chain A output enable); PB14
+low (PA DAC reset); each checked by configuration and pin level. The DAC bias channels 2, 7, 8
+are checked by the value last written only; their stimulus (a simulated firmware fault writing a
+non-zero value) needs a fixture the format does not have yet, so that part is not run.
 
 GPL-3.0-or-later, (c) 2026 ON8ST.
 """
@@ -102,4 +101,4 @@ def t_a3_61(ctx: Ctx):
         ctx.fixture("gpio.force", pin="PF4", level=None, target="idr")
     clean("final")
     ctx.notes.append("'armed with the TX path open, no fault' not run: needs TX unlocked (an arm)")
-    ctx.notes.append("pins from HIS 85 TX-side lines until A3.6b names them (SF-30); bias channels by configuration only")
+    ctx.notes.append("DAC part (a non-zero value written to channel 2, 7 or 8) not run: no fixture for it yet")

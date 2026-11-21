@@ -352,14 +352,15 @@ def dhcp_messages(ctx) -> list[dict]:
     return [m for m in (r or []) if isinstance(m, dict)]
 
 
-def sock_log_read(ctx) -> list[dict]:
-    """sock.log (v1.7), paged; dropped entries fail the test."""
+def sock_log_read(ctx, judge: bool = True) -> list[dict]:
+    """sock.log (v1.7), paged to its end; dropped entries fail the test (where judged)."""
     out: list = []
     for _ in range(1000):
         r = ctx.fixture("sock.log", action="read", **{"from": len(out)}) or {}
         out += r.get("entries", [])
         if len(out) >= r.get("count", 0):
-            ctx.check("sock.log: no entries dropped", not r.get("dropped", 0), f"dropped {r.get('dropped', 0)}")
+            if judge:
+                ctx.check("sock.log: no entries dropped", not r.get("dropped", 0), f"dropped {r.get('dropped', 0)}")
             break
     return out
 
@@ -441,11 +442,22 @@ def t_a1_66(ctx):
     # from it on, exchange start to exchange start is gap 8, 16, 32, 64, 64 s + the borrow before
     # (<= 2 s), each gap randomised by -1 to +1 s (RFC 2131 4.1). The sixth exchange comes about
     # 198 s after the sockets open: 240 s leaves a margin.
-    deadline = time.monotonic() + 240
+    # the window is 240 s of radio time from the sockets opening (the sixth exchange comes about
+    # 198 s after it); on an emulator slower than real time that is longer on the wall clock, so
+    # the bench counts radio time (hw.observe t_us) and caps the wall time at 900 s
+    wall_cap = time.monotonic() + 900
     starts = []
-    while time.monotonic() < deadline:
+    while time.monotonic() < wall_cap:
         starts = retry_exchanges(dhcp_messages(ctx), ip)
-        if len(starts) >= 6:
+        borrows_ok = True
+        if socklog:
+            borrows_ok = len(mgmt_borrows(sock_log_read(ctx, judge=False))[1]) >= 6
+        if len(starts) >= 6 and borrows_ok:
+            break
+        now_emu = (ctx.fixture("hw.observe") or {}).get("t_us") if t_open is not None else None
+        if now_emu is not None and now_emu - t_open > 240e6:
+            break
+        if now_emu is None and time.monotonic() > wall_cap - 660:  # no radio clock: 240 s wall
             break
         time.sleep(2.0)
     if socklog:

@@ -278,17 +278,57 @@ def t_b4_17(ctx):
 
 
 # ---------------- B5 session ----------------
+CC_PORTS = (1024, 1025, 1026, 1027)  # C&C to the radio: General, DDC-, DUC-specific, High Priority
+
+
+def netlog_on(ctx) -> bool:
+    if "net.log" in ctx.endpoint.get("fixtures", []):
+        ctx.fixture("net.log", action="start")
+        return True
+    return False
+
+
+def standby_gap_ms(ctx, h: Host) -> float | None:
+    """From net.log (emulated time): the last C&C packet the radio received from h to the last
+    stream packet (status 1025, DDC0 1035) it sent to h."""
+    entries = []
+    for _ in range(1000):
+        r = ctx.fixture("net.log", action="read", **{"from": len(entries)}) or {}
+        entries += r.get("entries", [])
+        if len(entries) >= r.get("count", 0):
+            break
+    mine = lambda e: str(e.get("peer", "")).endswith(f":{h.port}")
+    cc = [e["t_us"] for e in entries if e.get("dir") == "to_radio" and e.get("radio_port") in CC_PORTS and mine(e)]
+    st = [e["t_us"] for e in entries if e.get("dir") == "from_radio" and e.get("radio_port") in (1025, 1035) and mine(e)]
+    if not cc or not st:
+        return None
+    return (max(st) - max(cc)) / 1000
+
+
+def judge_standby(ctx, h: Host, label: str, host_gap_s: float | None, netlog: bool):
+    """Standby within 1100 ms of the last C&C (B5.6): in emulated time from net.log where
+    offered, else on the host clock with the emulated/wall ratio noted."""
+    if netlog:
+        g = standby_gap_ms(ctx, h)
+        ctx.check(f"{label}: the last stream packet within 1100 ms of the last C&C (net.log, emulated)",
+                  g is not None and g <= 1100, f"{g:.0f} ms" if g is not None else "no C&C or stream entry in net.log")
+        return
+    ts = ctx.endpoint.get("time_scale")
+    ctx.check(f"{label}: within 1100 ms of the last C&C (host clock" + (f", emulated/wall {ts}" if ts else "") + ")",
+              host_gap_s is not None and host_gap_s <= 1.15, f"{host_gap_s} s")
+
+
 @test("T-B5-01")
 def t_b5_01(ctx):
     with host(ctx) as h:
+        netlog = netlog_on(ctx)
         h.start()
         time.sleep(0.2)
         h.drain(0.01)
         got = h.recv(1.6)
         last = max((t for p, _, t in got if p in (PORT_DDC0, PORT_DDC)), default=None)
         first = min((t for p, _, t in got), default=None)
-        ctx.check("streams stop after the watchdog", last is not None and last - first < 1.2,
-                  f"last stream packet {None if last is None else round(last - first, 3)} s")
+        judge_standby(ctx, h, "streams stop after the watchdog", None if last is None else round(last - first, 3), netlog)
         d = h.discover()
         ctx.eq("standby: discovery byte 4", d[0][4] if d else None, 2)
 
@@ -323,6 +363,7 @@ def t_b5_05(ctx):
 @test("T-B5-10")
 def t_b5_10(ctx):
     with host(ctx) as h:
+        netlog = netlog_on(ctx)
         h.start()
         for _ in range(3):
             time.sleep(0.9)
@@ -330,9 +371,9 @@ def t_b5_10(ctx):
         h.drain(0.01)
         ctx.at_least("session kept with C&C every 900 ms", len(h.recv(0.2, PORT_DDC)), what="status packets in 0.2 s")
         t0 = time.monotonic()
-        got = h.recv(1.5, PORT_DDC)
+        got = h.recv(1.5 if not netlog else 3.0, PORT_DDC)
         last = max((t for _, _, t in got), default=t0)
-        ctx.check("standby within 1100 ms of the last C&C", last - t0 <= 1.15, f"{round(last - t0, 3)} s")
+        judge_standby(ctx, h, "standby", round(last - t0, 3), netlog)
 
 
 @test("T-B5-11")

@@ -246,7 +246,7 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-68": {"target": "emulator", "also": ["host"], "needs": ["time.advance", "power.cycle"],
                 "notes": ["the network-down case needs trial.sim (reference model) or a runner that keeps the CH394 silent"]},
     "T-A3-61": {"target": "emulator", "also": [], "needs": ["gpio.force"], "tx_part": False,
-                "notes": ["pins: the HIS 85 TX-side lines until A3.6b names them (SF-30); the armed part needs TX unlocked"]},
+                "notes": ["the pins of Table A3-6; the DAC part needs a fixture; the armed part needs TX unlocked"]},
     "T-B5-22": {"target": "emulator", "also": [], "needs": ["flash.log", "flash.timing"]},
     "T-A1-83": {"target": "emulator", "also": [], "needs": ["power.cut", "time.advance"]},
     "T-A1-85": {"target": "emulator", "also": [], "needs": ["flash.fault"]},
