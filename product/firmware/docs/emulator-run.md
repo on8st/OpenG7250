@@ -129,7 +129,8 @@ confirmed`, `net: trial image confirmed (slot B)`, `boot: trial not confirmed: r
 | UP-02 | `UPDATE_BEGIN` (B package), all blocks, `UPDATE_VERIFY`, `UPDATE_ACTIVATE` [0] | 0 each; verify returns the package's SHA-256; activate replies [0]; reset; boot stage starts slot B as a trial; confirmation after about 10 s; next start: slot B, no trial |
 | UP-03 | After `UPDATE_BEGIN`: P2 run request; a register write; `CAP_REQUEST`; an arm | session ended; `STREAM_STATUS` reason 10 at most every 100 ms; write `BUSY`; record answered; arm `MAINTENANCE` (T-A1-23) |
 | UP-04 | During the trial (before confirmation): RX session and an arm | RX works; arm `MAINTENANCE` (T-A1-24); `UPDATE_BEGIN` 58 |
-| UP-05 | Trial image that never reaches the main loop (or stop the emulator's network so it cannot confirm) | reset by 60 s; boot stage rolls back to slot A and says so; `READ_LOG` after the start shows the rollback (T-A1-09) |
+| UP-05 | Trial whose network never comes up (no CH394 answer), or with a class 2 fault (force a safe-state pin) | no confirmation; reset at 60 s from the main task; boot stage rolls back to slot A and says so; `READ_LOG` after the start shows the rollback (T-A1-09, T-A1-68) |
+| UP-05a | Reset the trial image before its confirmation (watchdog: stall the executor; power cut; a fault) | next start, and every start after: slot A, rolled back; slot B is never started again until a new activation (T-A1-68) |
 | UP-06 | Power cut at any flash word or erase during blocks, verify or activate | next start: slot A, unchanged; a new update completes |
 | UP-07 | Power cut during the boot stage's trial-attempt write or the confirmation | next start: trial again (attempt not recorded), slot A rolled back (attempt used, not confirmed), or slot B (confirmed) |
 | UP-08 | Flash program error (FLASH_SR1 error flag) during a block | 55, logged, transfer discarded; slot A and the boot record unchanged (0043) |

@@ -55,9 +55,11 @@ async fn watchdog(mut wd: IndependentWatchdog<'static, embassy_stm32::peripheral
         // does not, put it back; the fault path comes with the safety core (F3).
         if !safe::holds() {
             safe::reassert();
+            update::set_class2_fault();
             println!("app: FAULT safe state found not held; re-applied");
         }
         wd.pet();
+        update::watchdog_petted(Instant::now().as_millis());
         t.next().await;
     }
 }
@@ -135,6 +137,7 @@ async fn main(spawner: Spawner) {
     if cause.is_watchdog() {
         // 0007 sub-decision 5 "Entry": a watchdog reset seen at start-up is a fault.
         println!("app: FAULT watchdog reset seen at start-up");
+        update::set_class2_fault();
     }
     // Non-volatile store in sector 7: boot counter (B10.2 item 5), secret, configuration,
     // calibration set. A store that cannot be opened is reported and the radio runs on defaults.
@@ -191,9 +194,22 @@ async fn main(spawner: Spawner) {
     let mgmt = mgmt_init::MgmtInit::new(store, tx.arm_state_reg(), SLOT);
     spawner.spawn(net::run(pins, id, mgmt, tx).unwrap());
 
+    let mut n: u64 = 0;
     loop {
-        Timer::after_secs(10).await;
-        println!("app: alive {} s", Instant::now().as_secs());
+        Timer::after_secs(1).await;
+        n += 1;
+        // A trial not confirmed 60 s after its start: commanded reset, the boot stage starts the
+        // previous image (A1.8 U-6; 0044). Here, not in the network task, so that it also holds
+        // when the network never comes up. Nothing is keyed in this build (no RF to wait for).
+        if update::trial_pending() && Instant::now().as_millis() >= update::TRIAL_LIMIT_MS {
+            println!("app: FAULT trial image not confirmed 60 s after start; restarting into the previous image");
+            safe::reassert();
+            console::flush();
+            cortex_m::peripheral::SCB::sys_reset();
+        }
+        if n % 10 == 0 {
+            println!("app: alive {} s", Instant::now().as_secs());
+        }
     }
 }
 

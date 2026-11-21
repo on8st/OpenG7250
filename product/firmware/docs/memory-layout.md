@@ -136,10 +136,13 @@ other slot (Writer::Application: only that slot and the store) and, after `UPDAT
 writes one boot record: active = the running slot, trial = the other, one attempt
 (`UPDATE_ACTIVATE`). The boot stage (Writer::BootStage: only the store) records the attempt
 before it jumps to the trial; if it cannot, it starts the active slot. The trial confirms itself
-after 10 s with the network up and the main loop running; until then arms get `MAINTENANCE`. If
-it has not confirmed by 60 s it resets, and the boot stage, finding the attempt used and no
-confirmation, records a rollback (byte 12 bit 0) and starts the active slot; the application
-logs it. `ROLLBACK` makes the other slot active. Each of these is one store record, so a power
+(0044) after at least 10 s with the network up (CH394 initialised, management socket open), the
+main loop running, the watchdog serviced and no class 2 fault (safe state found not held,
+watchdog reset at start-up); until then arms get `MAINTENANCE`. Not confirmed 60 s after start:
+the main task (independent of the network) makes a commanded reset. After that, or after any
+other reset before the confirmation (crash, watchdog, power loss), the boot stage finds the
+one attempt used and no confirmation, records a rollback (byte 12 bit 0) and starts the
+previous image; an unconfirmed image is never tried twice (T-A1-68). The application logs it. `ROLLBACK` makes the other slot active. Each of these is one store record, so a power
 loss leaves the old or the new record (host tests cut power at every flash word and erase).
 Both the boot stage and the application write flash only through `g7250_board::flash` (erase
 and program from RAM, interrupts masked, IWDG refreshed, FlashGuard per writer).

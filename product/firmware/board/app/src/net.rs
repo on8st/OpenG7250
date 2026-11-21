@@ -344,6 +344,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     }
     p2.trial = mgmt.update.run.trial;
     let loop_start = Instant::now().as_millis();
+    let mut last_confirm_try: u64 = 0;
     println!("net: management listening on UDP {} (protocol {}.{})", m::PORT, m::VERSION_MAJOR, m::VERSION_MINOR);
     let mut mrx = [0u8; 1100];
     let mut mtx = [0u8; m::MAX_REPLY];
@@ -358,19 +359,18 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         // Session watchdog and status first, on every pass, so that no branch below can delay
         // the standby beyond B5.6's 1100 ms (T-B5-10).
         p2.tick(&mut chip, Instant::now().as_millis());
-        // Trial boot (U-6): confirm once the loop has run CONFIRM_AFTER_MS with the network up;
-        // if that fails, a commanded reset before 60 s lets the boot stage roll back.
+        // Trial boot: self-confirmation by the criterion of 0044 (network up: this loop runs only
+        // then). The 60 s limit is in the main task. A failed write is tried again once a second.
         if mgmt.update.run.trial {
             let now = Instant::now().as_millis();
-            if now.saturating_sub(loop_start) >= crate::update::CONFIRM_AFTER_MS && mgmt.update.confirm(mgmt.store.as_mut()) {
-                p2.trial = false;
-                mgmt.identify.update_state = 0;
-                server.log.push(now, format_args!("trial image confirmed itself"));
-                println!("net: trial image confirmed (slot {})", slot_name);
-            } else if now >= crate::update::TRIAL_LIMIT_MS {
-                server.log.push(now, format_args!("trial image could not confirm itself; restart for rollback"));
-                println!("net: FAULT trial not confirmed within 60 s; restarting for the rollback");
-                crate::safe_reset(&mut mgmt, false);
+            if crate::update::may_confirm(now, loop_start) && now.saturating_sub(last_confirm_try) >= 1000 {
+                last_confirm_try = now;
+                if mgmt.update.confirm(mgmt.store.as_mut()) {
+                    p2.trial = false;
+                    mgmt.identify.update_state = 0;
+                    server.log.push(now, format_args!("trial image confirmed itself"));
+                    println!("net: trial image confirmed (slot {})", slot_name);
+                }
             }
         }
         // An update without an update command for 10 min is abandoned (A1.8; T-A1-34, T-A1-46):

@@ -368,3 +368,21 @@ fn the_stager_writes_only_the_other_slot() {
         }
     }
 }
+
+#[test]
+fn a_trial_reset_before_confirmation_is_never_tried_again() {
+    // T-A1-68: one attempt only. Whatever ends the trial before its confirmation (crash, watchdog,
+    // power loss, the 60 s reset), every later start is the previous image.
+    for fill in [false, true] {
+        let (mut s, a, _) = activated(fill);
+        assert_eq!(boot(&mut s), Choice::Trial(Slot::B));
+        for _ in 0..3 {
+            assert_eq!(boot(&mut s), Choice::Boot(Slot::A));
+        }
+        assert_eq!(boot::state(record(&mut s), Slot::A), UpdateState::RolledBack);
+        // A late confirmation from the old trial image cannot revive it (not the trial any more).
+        assert!(!confirm(&mut s, Slot::B));
+        assert_eq!(boot(&mut s), Choice::Boot(Slot::A));
+        assert_eq!(s.bytes(Slot::A.range().start, a.len() as u32), &a[..]);
+    }
+}
