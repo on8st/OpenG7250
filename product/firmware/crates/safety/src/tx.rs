@@ -123,7 +123,7 @@ impl Measured {
     };
 
     /// Everything needed to arm TX (the ATU parameters are needed for `ATU_TUNE` only).
-    pub fn complete_for_tx(&self) -> bool {
+    pub const fn complete_for_tx(&self) -> bool {
         self.bias_words.is_some()
             && self.drive_map.is_some()
             && self.power_detector.is_some()

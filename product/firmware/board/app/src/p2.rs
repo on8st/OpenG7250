@@ -9,6 +9,7 @@ use g7250_ch394::{Ch394, Error as ChError};
 use g7250_proto::ratelimit::RateLimit;
 use g7250_radio::regmap::{self, Pair, RegMap, WriteCtx};
 use g7250_radio::session::{Addr, CnC, EndReason, Event, Session};
+use g7250_safety::keypath::{KeyPath, Requests};
 use g7250_safety::tx::{ArmContext, DropReason, KeyContext, TxCore};
 
 /// Socket numbers (Table B2-1 rows 1-8).
@@ -29,6 +30,8 @@ pub struct P2 {
     pub session: Session,
     pub regs: RegMap,
     pub tx: TxCore,
+    /// The network key path (B10.1, B10.5, B10.10; behind the calibration gate).
+    pub key: KeyPath,
     seq_status: u32,
     seq_regs: u32,
     /// Last unasked record per destination (B4.4 item 2: at most once per 1 s).
@@ -83,6 +86,7 @@ impl P2 {
             session: Session::new(),
             regs,
             tx,
+            key: KeyPath::new(),
             seq_status: 0,
             seq_regs: 0,
             last_unasked: None,
@@ -154,6 +158,35 @@ impl P2 {
         }
     }
 
+    /// Facts at a TX request edge (A3.1a). The TX frequency and the RF path are not followed
+    /// yet (DUC-specific and High Priority frequency words, A3.9), so no request counts as in
+    /// range and no RF path as ready; with the lock closed the request is refused before that.
+    fn key_ctx(&self) -> KeyContext {
+        KeyContext {
+            in_fault: false,
+            freq_in_range: false,
+            rf_path_ready: false,
+            pa_enabled: self.session.general.is_some_and(|g| g.pa_enable),
+            mode_class_declared: self.regs.tx_mode_class != 0,
+            keyed_by_other: false,
+        }
+    }
+
+    /// Bring `TX_STATE` up to date and push it to the owner on change (Table B8-2: on every
+    /// change). An arm that dropped under a key (Table A3-1) is reported as reason 5.
+    fn sync_tx_state(&mut self, chip: &mut Chip) {
+        if self.key.keyed().is_some() && self.tx.keyed().is_none() {
+            self.key.arm_dropped();
+        }
+        let v = self.key.tx_state();
+        if v != self.regs.tx_state {
+            self.regs.tx_state = v;
+            if let Some(dest) = self.session.register_destination() {
+                self.send_regs(chip, dest, &[(regmap::addr::TX_STATE, v)]);
+            }
+        }
+    }
+
     /// Apply session events: drops (A3.2), session values (A3.6), pushes and counters (B2.7).
     fn events(&mut self, chip: &mut Chip, ev: &[Event], now: u64) {
         for e in ev {
@@ -168,6 +201,9 @@ impl P2 {
                     let mut rf = crate::BoardRf;
                     let was_armed = self.tx.drop(r, &mut rf);
                     self.tx.session_end(&mut rf);
+                    self.key.arm_dropped();
+                    self.key.session_end();
+                    self.regs.tx_state = self.key.tx_state();
                     self.regs.session_end();
                     self.regs.armed = false;
                     if reason == EndReason::Takeover && was_armed {
@@ -265,6 +301,9 @@ impl P2 {
     pub fn enter_update(&mut self, now: u64) {
         let mut rf = crate::BoardRf;
         let _ = self.tx.drop(DropReason::Maintenance, &mut rf);
+        self.key.arm_dropped();
+        self.key.session_end();
+        self.regs.tx_state = self.key.tx_state();
         if let Some(owner) = self.session.owner() {
             self.tx.session_end(&mut rf);
             self.regs.session_end();
@@ -295,6 +334,21 @@ impl P2 {
         self.regs.stream_status = self.stream_status();
         self.events(chip, &ev, now);
         self.update_stream_status(chip);
+        if self.session.owner() == Some(from) {
+            let mut rf = crate::BoardRf;
+            match kind {
+                CnC::HighPriority if self.session.running() => {
+                    let ctx = self.key_ctx();
+                    self.key.on_high_priority(Requests::parse(p), now, &mut self.tx, &ctx, false, &mut rf);
+                }
+                CnC::General => {
+                    let on = self.session.general.is_some_and(|g| g.pa_enable);
+                    self.key.pa_enable(on, &mut self.tx, &mut rf);
+                }
+                _ => {}
+            }
+            self.sync_tx_state(chip);
+        }
         if kind == CnC::General && self.session.owner() == Some(from) && self.foreign_port(self.session.general) {
             if let Some(dest) = self.session.register_destination() {
                 let p = [(regmap::addr::LINK_STATUS, self.regs.link_status)];
@@ -325,8 +379,14 @@ impl P2 {
         }
         let mut rf = crate::BoardRf;
         let arm = self.arm_ctx();
+        let class = self.regs.tx_mode_class;
         let mut c = WriteCtx { from_owner: owner, busy: self.update_in_progress, tx: &mut self.tx, rf: &mut rf, arm, key: KeyContext::default() };
         let ans = self.regs.handle(p, &mut c);
+        // A mode class change while keyed unkeys first (A3.9c); a disarm under a key is reason 5.
+        if self.regs.tx_mode_class != class {
+            self.key.mode_class_changed(&mut self.tx, &mut rf);
+        }
+        self.sync_tx_state(chip);
         if ans.pairs.is_empty() {
             return;
         }
@@ -361,6 +421,11 @@ impl P2 {
             self.events(chip, &[e], now);
             self.update_stream_status(chip);
         }
+        // Keyed timeout, CWX cap, maximum TX time (B10.5, B10.5a, Table A3-2).
+        let mut rf = crate::BoardRf;
+        if self.key.tick(now, self.regs.keyed_timeout_ms, self.regs.tx_time_in_force(), &mut self.tx, &mut rf) {
+            self.sync_tx_state(chip);
+        }
         if let Some(owner) = self.session.owner() {
             if now >= self.next_status_ms {
                 self.next_status_ms = now + STATUS_MS;
@@ -381,6 +446,9 @@ impl P2 {
             let mut rf = crate::BoardRf;
             let _ = self.tx.drop(DropReason::SessionChanged, &mut rf);
             self.tx.session_end(&mut rf);
+            self.key.arm_dropped();
+            self.key.session_end();
+            self.regs.tx_state = self.key.tx_state();
             self.regs.session_end();
             self.regs.armed = false;
             println!("p2: session of {}:{} ended (address change)", crate::net::ip_str(owner.0).as_str(), owner.1);
@@ -395,6 +463,7 @@ impl P2 {
         if self.session.owner() == Some(from) {
             let mut rf = crate::BoardRf;
             let _ = self.tx.drop(DropReason::Rediscovery, &mut rf);
+            self.key.arm_dropped();
         }
         self.session.discovery_in_use(from)
     }

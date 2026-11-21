@@ -162,7 +162,7 @@ impl RegMap {
         self.watchdog_written.is_none_or(|w| w || self.armed)
     }
 
-    fn tx_time_in_force(&self) -> u32 {
+    pub fn tx_time_in_force(&self) -> u32 {
         if self.limit_tx_time == 0 { BUILTIN_TX_TIME_MS } else { self.limit_tx_time }
     }
     fn fwd_power_in_force(&self) -> u32 {

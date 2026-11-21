@@ -20,16 +20,27 @@ use embassy_time::{Duration, Instant, Ticker, Timer};
 use g7250_board::{FW_BETA, FW_BUILD, FW_MAJOR, FW_MINOR, FW_VERSION, console, early_init, println, reset, safe, wdg};
 use g7250_layout::header::{self, Header, Kind};
 use g7250_layout::{Range, Slot};
-use g7250_safety::tx::{MEASURED, RfActuator, TxCore};
+use g7250_safety::keypath::Keyer;
+use g7250_safety::tx::{KeyPermit, MEASURED, RfActuator, TxCore};
 
-/// The radio side of an unkey: back to the safe state ([HIS] HIS 85). This build has no key
-/// path at all (no `KeyPermit` can exist, `g7250_safety::tx`), so unkey is only ever the safe
-/// state again.
+/// The radio side of a key and an unkey. Unkey: back to the safe state ([HIS] HIS 85). Key:
+/// the PA, bias and T/R sequence of A3.9a is not written yet, so a permit keys nothing and
+/// `TX_STATE` bit 0 stays 0. No `KeyPermit` can exist in this build (`g7250_safety::tx`); the
+/// assertion below stops a build with a complete calibration set until the sequence is in.
 pub struct BoardRf;
+
+const _: () = assert!(!MEASURED.complete_for_tx(), "calibrated build: write the A3.9a key sequence in BoardRf::key first");
 
 impl RfActuator for BoardRf {
     fn unkey(&mut self) {
         safe::reassert();
+    }
+}
+
+impl Keyer for BoardRf {
+    fn key(&mut self, _permit: &KeyPermit<'_>) -> bool {
+        safe::reassert();
+        false
     }
 }
 

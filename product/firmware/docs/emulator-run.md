@@ -79,7 +79,13 @@ Not yet: DDC0 I&Q (B6; `STREAM_STATUS` DDC0 reason 1), DUC I&Q (ignored), ADC wo
 status packet, the three-times notice to an old owner (sent once, and only when it was armed).
 `LINK_STATUS` bit 17 is set for a non-default radio port in a General packet (T-B7-03). TX:
 record `tx` bit 1 = 1 (r1.0, 0036), bit 4 = 0; an arm that meets every other condition is
-refused with 12 `NOT_CALIBRATED`, and no TX request keys (B10 intro).
+refused with 12 `NOT_CALIBRATED`, and no TX request keys (B10 intro). The key path
+(crates/safety keypath: PTT and CWX edges, keyed timeout, CWX 1 s cap, maximum TX time, PA
+enable and mode-class unkeys) runs on the owner's High Priority packets, but every edge is
+refused before any pin is touched: `TX_STATE` reads bit 0 = 0, source 0, unkey reason 0, and
+bit 4 = 1 (PA disabled) until the owner's General packet sets byte 58 bit [0]. Not yet:
+break-in, the CWX keyer and KEY, the CW hang delay, the DUC FIFO and underrun check, the RF-path
+checks, the ATU cycle, and the A3.9a key sequence on the pins.
 
 ## DHCP retry and renewal (A1.11, A1.11a)
 
