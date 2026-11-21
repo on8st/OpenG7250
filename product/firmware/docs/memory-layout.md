@@ -50,8 +50,10 @@ per start): (0) copy the newest record of every kind to RAM; (1) erase the *othe
 old sector is never touched by this; it is erased by the next compaction. A reset or power loss at
 any step leaves the old committed sector live (steps 0–3, until the commit word is complete) or
 the new one (after), with every value present. Host tests cut power at every flash word of a
-compaction and halfway through the erase, and check that a half-erased sector's old commit does
-not win (`crates/store`, 12 tests).
+compaction, at every word of a plain append (old value or new, never a mix) and halfway
+through the erase; a second cut during the recovery from a first; each both with the cut word
+written and with it left torn (unreadable, R0); and check that a half-erased sector's old commit
+does not win (`crates/store`, 14 tests).
 
 **Erase from RAM.** A 128 KiB sector erase can outlast the 2 s IWDG, and the CPU cannot fetch
 from the bank being erased (RM0468). `board/app/src/nv.rs` erases with `erase_sector_from_ram`:
@@ -163,7 +165,9 @@ the main task (independent of the network) makes a commanded reset. After that, 
 other reset before the confirmation (crash, watchdog, power loss), the boot stage finds the
 one attempt used and no confirmation, records a rollback (byte 12 bit 0) and starts the
 previous image; an unconfirmed image is never tried twice (T-A1-68). The application logs it. `ROLLBACK` makes the other slot active. Each of these is one store record, so a power
-loss leaves the old or the new record (host tests cut power at every flash word and erase).
+loss leaves the old or the new record (host tests cut power at every flash word and erase of an
+update, a trial start and confirmation, a rollback and a rollback command, each also with the
+cut word left torn: a slot with an unreadable word is not bootable, `crates/update`).
 Both the boot stage and the application write flash only through `g7250_board::flash` (erase
 and program from RAM, interrupts masked, IWDG refreshed, FlashGuard per writer).
 

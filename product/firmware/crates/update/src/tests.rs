@@ -47,9 +47,10 @@ fn running(slot: Slot, version: u32) -> Running {
     Running { slot, version, hw_revision: 0, trial: false, app_ram: RAM }
 }
 
+/// As the boot stage: every word of the slot readable (`flash::mapped`, R0), then the header.
 fn valid(s: &Sim, slot: Slot) -> bool {
     let r = slot.range();
-    header::validate(s.bytes(r.start, r.len()), ImgKind::Application, r, RAM).is_ok()
+    s.readable(r.start, r.len()) && header::validate(s.bytes(r.start, r.len()), ImgKind::Application, r, RAM).is_ok()
 }
 
 /// The boot stage at a start: its choice (writes the store as the boot stage).
@@ -105,8 +106,9 @@ fn steps_of(s: &Sim, f: impl Fn(&mut Sim)) -> usize {
 
 #[test]
 fn power_loss_at_every_step_of_an_update_leaves_the_old_image_running() {
-    for fill in [false, true] {
-        let (base, a) = installed(fill);
+    for (fill, ecc) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (mut base, a) = installed(fill);
+        base.ecc_on_cut = ecc;
         let b = image(Slot::B, V2, 2600, 9);
         let run = running(Slot::A, V1);
         // With the store full the activation record compacts first (a sector erase in the cut).
@@ -162,8 +164,9 @@ fn confirm(s: &mut Sim, running: Slot) -> bool {
 
 #[test]
 fn power_loss_at_every_step_of_a_trial_start_and_confirmation() {
-    for fill in [false, true] {
-        let (base, a, b) = activated(fill);
+    for (fill, ecc) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (mut base, a, b) = activated(fill);
+        base.ecc_on_cut = ecc;
         let n_boot = steps_of(&base, |s| assert_eq!(boot(s), Choice::Trial(Slot::B)));
         let n_conf = steps_of(&base, |s| {
             boot(s);
@@ -207,8 +210,9 @@ fn power_loss_at_every_step_of_a_trial_start_and_confirmation() {
 
 #[test]
 fn trial_without_confirmation_rolls_back_with_power_loss_at_every_step_of_the_rollback() {
-    for fill in [false, true] {
+    for (fill, ecc) in [(false, false), (true, false), (false, true), (true, true)] {
         let (mut base, a, _) = activated(fill);
+        base.ecc_on_cut = ecc;
         assert_eq!(boot(&mut base), Choice::Trial(Slot::B)); // attempt used; the trial hangs
         base.steps = 0;
         let n = steps_of(&base, |s| assert_eq!(boot(s), Choice::Boot(Slot::A)));
@@ -229,7 +233,9 @@ fn trial_without_confirmation_rolls_back_with_power_loss_at_every_step_of_the_ro
 
 #[test]
 fn power_loss_at_every_step_of_a_rollback_command() {
+  for ecc in [false, true] {
     let (mut base, _, _) = activated(true);
+    base.ecc_on_cut = ecc;
     boot(&mut base);
     assert!(confirm(&mut base, Slot::B));
     assert_eq!(boot(&mut base), Choice::Boot(Slot::B));
@@ -245,8 +251,9 @@ fn power_loss_at_every_step_of_a_rollback_command() {
         rb(&mut s);
         let lost = s.lost;
         s.power_on();
-        assert_eq!(boot(&mut s), if lost { Choice::Boot(Slot::B) } else { Choice::Boot(Slot::A) }, "cut {cut}/{n}");
+        assert_eq!(boot(&mut s), if lost { Choice::Boot(Slot::B) } else { Choice::Boot(Slot::A) }, "ecc {ecc} cut {cut}/{n}");
     }
+  }
 }
 
 #[test]

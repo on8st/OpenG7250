@@ -695,6 +695,78 @@ mod tests {
     }
 
     #[test]
+    fn power_loss_at_every_word_of_an_append_keeps_the_old_value_or_the_new_one() {
+        // A multi-word record over an older one of the same kind: after a cut at any word, the
+        // value read is the old one (cut before the commit) or the new one (complete), never a
+        // mix; the other kinds are untouched; the store goes on working (both cut modes).
+        let new = [0x5Au8; 300];
+        for ecc in [false, true] {
+            let mut sim = Sim::new();
+            sim.ecc_on_cut = ecc;
+            let mut s = Store::open(sim, APP).unwrap();
+            s.put(Kind::Config, 1, b"old config").unwrap();
+            s.put(Kind::Secret, 1, &[9u8; 32]).unwrap();
+            let base = s.release();
+            let mut probe = Store::open(base.clone(), APP).unwrap();
+            let before = probe.io.programs;
+            probe.put(Kind::Config, 1, &new).unwrap();
+            let words = probe.io.programs - before;
+            assert!(words >= 10, "{words}");
+            for cut in 0..=words {
+                let mut io = base.clone();
+                io.budget = Some(cut);
+                let mut s = Store::open(io, APP).unwrap();
+                let done = s.put(Kind::Config, 1, &new).is_ok();
+                let mut s = Store::open(s.release().power_on(), APP).unwrap();
+                let got = get(&mut s, Kind::Config).unwrap();
+                if done {
+                    assert_eq!(got, new.to_vec());
+                } else {
+                    assert_eq!(got, b"old config", "ecc {ecc} cut {cut}/{words}");
+                }
+                assert_eq!(get(&mut s, Kind::Secret).unwrap(), vec![9u8; 32]);
+                s.put(Kind::Config, 1, b"after").unwrap();
+                let mut s = Store::open(s.release(), APP).unwrap();
+                assert_eq!(get(&mut s, Kind::Config).unwrap(), b"after");
+            }
+        }
+    }
+
+    #[test]
+    fn a_second_power_loss_during_the_recovery_from_the_first_loses_nothing() {
+        // A cut in a compaction, then on the next start another cut in the next write (which
+        // compacts again or appends): every value is still there and the boot counter never
+        // goes back (both cut modes; every first cut, a spread of second cuts).
+        for ecc in [false, true] {
+            let (mut base, n) = full_store();
+            base.ecc_on_cut = ecc;
+            let mut probe = Store::open(base.clone(), APP).unwrap();
+            let before = probe.io.programs;
+            probe.next_boot_counter().unwrap();
+            let words = probe.io.programs - before;
+            for first in 0..=words {
+                let mut io = base.clone();
+                io.budget = Some(first);
+                let mut s = Store::open(io, APP).unwrap();
+                let _ = s.next_boot_counter();
+                let after_first = s.release().power_on();
+                for second in [0, 1, 2, words / 2, words.saturating_sub(1), words] {
+                    let mut io = after_first.clone();
+                    io.budget = Some(second);
+                    if let Ok(mut s) = Store::open(io, APP) {
+                        let _ = s.next_boot_counter();
+                        io = s.release();
+                    } else {
+                        continue;
+                    }
+                    let mut s = check_all(io.power_on(), n);
+                    assert!(s.next_boot_counter().unwrap() > n, "ecc {ecc} cuts {first}/{second}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn power_loss_during_the_erase_loses_nothing() {
         let (base, n) = full_store();
         // First compaction erases sector 6 (fresh), the second one sector 7 with old data in it.
