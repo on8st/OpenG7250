@@ -203,3 +203,15 @@ fn the_management_socket_is_free_at_least_4_s_between_borrows() {
         t += 10;
     }
 }
+
+#[test]
+fn a_conflict_on_the_leased_address_declines_and_starts_again_after_10_s_0049() {
+    let mut c = bound(3600);
+    assert_eq!(c.decline(1_000), Some(([192, 168, 1, 77], SERVER)));
+    assert!(c.lease().is_none());
+    assert_eq!(c.poll(10_999), Action::None);
+    assert!(matches!(c.poll(11_000), Action::Send { msg: Msg::Discover, .. }));
+    // No lease: nothing to decline.
+    let mut c = Client::new(MAC, 1, ll(), None, 0);
+    assert_eq!(c.decline(5), None);
+}

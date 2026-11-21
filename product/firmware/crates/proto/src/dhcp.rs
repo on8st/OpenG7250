@@ -14,6 +14,7 @@ const MAGIC: [u8; 4] = [99, 130, 83, 99];
 pub const DISCOVER: u8 = 1;
 pub const OFFER: u8 = 2;
 pub const REQUEST: u8 = 3;
+pub const DECLINE: u8 = 4;
 pub const ACK: u8 = 5;
 pub const NAK: u8 = 6;
 
@@ -46,6 +47,19 @@ pub fn request(xid: u32, mac: [u8; 6], offered: Ip, server: Ip, buf: &mut [u8; M
     let o = [
         53, 1, REQUEST, 50, 4, offered[0], offered[1], offered[2], offered[3], 54, 4, server[0], server[1], server[2],
         server[3], 55, 2, 1, 3, 61, 7, 1, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], 255,
+    ];
+    buf[240..240 + o.len()].copy_from_slice(&o);
+    MSG_LEN
+}
+
+/// DHCPDECLINE (RFC 2131 section 3.1 item 5; section 4.4.1, table 5): the leased address is in
+/// use by another host. `ciaddr` 0, requested address and server identifier, broadcast; the
+/// client then starts again (spec A1.11, 0049).
+pub fn decline(xid: u32, mac: [u8; 6], declined: Ip, server: Ip, buf: &mut [u8; MSG_LEN]) -> usize {
+    base(xid, mac, buf);
+    let o = [
+        53, 1, DECLINE, 50, 4, declined[0], declined[1], declined[2], declined[3], 54, 4, server[0], server[1], server[2],
+        server[3], 61, 7, 1, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], 255,
     ];
     buf[240..240 + o.len()].copy_from_slice(&o);
     MSG_LEN
@@ -110,6 +124,15 @@ pub fn parse(b: &[u8], xid: u32, mac: [u8; 6]) -> Option<Reply> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decline_carries_the_declined_address_and_the_server() {
+        let mac = [2, 0, 0, 0, 0x72, 0x50];
+        let mut b = [0u8; MSG_LEN];
+        decline(7, mac, [192, 168, 1, 77], [192, 168, 1, 1], &mut b);
+        assert_eq!((b[0], &b[12..16], b[10]), (1, &[0u8; 4][..], 0x80), "request, ciaddr 0, broadcast");
+        assert_eq!(&b[240..252], &[53, 1, DECLINE, 50, 4, 192, 168, 1, 77, 54, 4, 192]);
+    }
 
     fn server_reply(t: u8, xid: u32, mac: [u8; 6]) -> Vec<u8> {
         let mut b = vec![0u8; 240];

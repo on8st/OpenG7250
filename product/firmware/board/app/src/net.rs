@@ -19,6 +19,7 @@ use g7250_proto::discovery::{self, Identity, Port1024, Status};
 use g7250_proto::netcfg::{self, Ip, Mode, NetConfig, Source};
 use g7250_proto::ratelimit::RateLimit;
 use g7250_proto::dhcp;
+use g7250_proto::ipv4ll;
 use g7250_proto::mgmt as m;
 use g7250_radio::dhcp_client::{Action as DhcpAction, Client as DhcpClient};
 use g7250_radio::mgmt::{Ctx, Server};
@@ -246,25 +247,78 @@ async fn wait_reply(chip: &mut Chip, rx: &mut [u8], xid: u32, mac: [u8; 6], want
 
 /// Bring up the address: static, or DHCP with link-local fall-back. In DHCP mode the returned
 /// client goes on in the main loop: renewal, rebinding, and retries while link-local (A1.11).
-async fn configure(chip: &mut Chip, mac: [u8; 6], want: NetConfig) -> (NetConfig, Source, Option<DhcpClient>) {
+/// Claim a link-local address as RFC 3927 section 2 (A1.11; 0049): the chip's own address at
+/// 0.0.0.0 (it then answers no ARP for the candidate), socket 0 in MACRAW (the only socket that
+/// can, [CH394] 7.2.1), probes and announcements from [`ipv4ll::Claim`], every conflict logged.
+/// The caller has closed the other sockets. Ends with the address set and socket 0 closed.
+async fn claim_link_local(chip: &mut Chip, claim: &mut ipv4ll::Claim) -> NetConfig {
+    let _ = chip.set_ip([0; 4], [0; 4], [0; 4]);
+    if let Err(e) = chip.macraw_open() {
+        println!("net: FAULT cannot open socket 0 in MACRAW for the link-local probe ({:?})", e);
+    }
+    println!("net: probing link-local {} (RFC 3927)", ip_str(claim.candidate().ip).as_str());
+    let mut f = [0u8; 1514];
+    loop {
+        let now = Instant::now().as_millis();
+        while let Ok(Some(n)) = chip.macraw_recv(&mut f) {
+            let (before, cand) = (claim.conflicts(), claim.candidate().ip);
+            claim.on_frame(&f[..n], now);
+            if claim.conflicts() != before {
+                println!(
+                    "net: link-local address conflict on {} while probing; next candidate {}",
+                    ip_str(cand).as_str(),
+                    ip_str(claim.candidate().ip).as_str()
+                );
+            }
+        }
+        match claim.poll(now) {
+            ipv4ll::Action::Send(frame) => {
+                let _ = chip.macraw_send(&frame);
+            }
+            ipv4ll::Action::Claimed(c) => {
+                let _ = chip.udp_close(0);
+                let _ = chip.set_ip(c.ip, c.mask, c.gateway);
+                println!("net: link-local {} probed and announced", ip_str(c.ip).as_str());
+                return c;
+            }
+            ipv4ll::Action::None => {}
+        }
+        Timer::after_millis(2).await;
+    }
+}
+
+/// Every socket closed: before a probe on socket 0 and a new configuration (0049: discovery and
+/// the other sockets are closed during the probe).
+fn close_all(chip: &mut Chip) {
+    for s in 0..g7250_ch394::SOCKETS {
+        let _ = chip.udp_close(s);
+    }
+}
+
+async fn configure(chip: &mut Chip, mac: [u8; 6], want: NetConfig, claim: &mut ipv4ll::Claim) -> (NetConfig, Source, Option<DhcpClient>) {
     if want.mode == Mode::Static && netcfg::valid_host(want.ip, want.mask) {
         let _ = chip.set_ip(want.ip, want.mask, want.gateway);
         return (want, Source::Static, None);
     }
     let xid = u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]) ^ Instant::now().as_ticks() as u32;
-    let ll = netcfg::link_local(mac, 0);
     let found = dhcp(chip, mac, xid).await;
     // The client's timers start now, after the power-on exchange: started before it, the first
     // retry fell due at once and borrowed socket 7 just as the management port opened.
     let now = Instant::now().as_millis();
     if let Some((c, lease, server)) = found {
+        // Not probed yet: it is probed when the client falls back to it (A1.11; 0049).
+        let ll = claim.candidate();
         let _ = chip.set_ip(c.ip, c.mask, c.gateway);
         let l = lease.unwrap_or(3600).max(60);
         println!("net: DHCP lease {} s from {}; renewal at {} s", l, ip_str(server).as_str(), l / 2);
         return (c, Source::Dhcp, Some(DhcpClient::new(mac, xid.wrapping_add(16), ll, Some((c, server, l)), now)));
     }
-    let _ = chip.set_ip(ll.ip, ll.mask, ll.gateway);
+    // DHCP attempts first, then the probe and announcements, before any socket opens (0048, 0049).
+    let _ = chip.udp_close(SOCK_MGMT);
+    claim.restart(now);
+    let ll = claim_link_local(chip, claim).await;
     println!("net: no DHCP lease; link-local, DHCP keeps trying (A1.11)");
+    let now = Instant::now().as_millis();
     (ll, Source::LinkLocal, Some(DhcpClient::new(mac, xid.wrapping_add(16), ll, None, now)))
 }
 
@@ -272,7 +326,10 @@ async fn configure(chip: &mut Chip, mac: [u8; 6], want: NetConfig) -> (NetConfig
 /// link-local, renewal, rebinding. Socket 7 is borrowed (port 68) from a send until the client
 /// stops listening, at most [`g7250_radio::dhcp_client::WAIT_MS`], and then always given back to
 /// the management port, for a finished exchange as for an abandoned one.
-fn dhcp_step(chip: &mut Chip, c: &mut DhcpClient, borrowed: &mut bool, cfg: &mut NetConfig, p2: &mut crate::p2::P2, buf: &mut [u8], now: u64) {
+/// Returns true when the client falls back to link-local (lease end, DHCPNAK): the caller then
+/// probes it again with every socket closed ([`relink`]; 0049).
+fn dhcp_step(chip: &mut Chip, c: &mut DhcpClient, borrowed: &mut bool, cfg: &mut NetConfig, p2: &mut crate::p2::P2, buf: &mut [u8], now: u64) -> bool {
+    let mut relink = false;
     let mut actions: heapless::Vec<DhcpAction, 2> = heapless::Vec::new();
     if *borrowed {
         if let Ok(Some(d)) = chip.udp_recv(SOCK_MGMT, buf) {
@@ -292,6 +349,7 @@ fn dhcp_step(chip: &mut Chip, c: &mut DhcpClient, borrowed: &mut bool, cfg: &mut
                 let n = msg.encode(c.xid, c.mac(), &mut b);
                 let _ = chip.udp_send(SOCK_MGMT, to, dhcp::SERVER_PORT, &b[..n]);
             }
+            DhcpAction::Use(new) if new == c.link_local() && new != *cfg => relink = true,
             DhcpAction::Use(new) => {
                 if new.ip != cfg.ip || new.mask != cfg.mask {
                     // Another address: a C-1 change under A1.11a: the session ends
@@ -313,6 +371,40 @@ fn dhcp_step(chip: &mut Chip, c: &mut DhcpClient, borrowed: &mut bool, cfg: &mut
             *borrowed = true;
             println!("net: FAULT cannot give socket 7 back to the management port; retrying");
         }
+    }
+    relink
+}
+
+/// A link-local address chosen while running (lease end, DHCPNAK, a conflict): an address change
+/// of A1.11a (the session ends), every socket closed, the probe on socket 0, at most about 10 s
+/// (after 10 conflicts the claim waits 60 s first: no address, the sockets stay closed), then
+/// the sockets open again (A1.11; 0049). False if they cannot be opened.
+async fn relink(chip: &mut Chip, claim: &mut ipv4ll::Claim, p2: &mut crate::p2::P2, dhcpc: &mut Option<DhcpClient>, cfg: &mut NetConfig, borrowed: &mut bool) -> bool {
+    p2.address_changed(chip, Instant::now().as_millis());
+    close_all(chip);
+    *borrowed = false;
+    let c = claim_link_local(chip, claim).await;
+    if let Some(d) = dhcpc.as_mut() {
+        d.set_link_local(c);
+    }
+    *cfg = c;
+    print_cfg(cfg, Source::LinkLocal);
+    if crate::p2::P2::open(chip).is_err() || chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
+        println!("net: FAULT cannot reopen the P2 and management ports");
+        return false;
+    }
+    true
+}
+
+/// DHCPDECLINE for a leased address in conflict (RFC 2131 section 3.1 item 5; 0049), broadcast
+/// from port 68 on socket 7; the caller closes the sockets after it.
+async fn send_decline(chip: &mut Chip, mac: [u8; 6], xid: u32, declined: Ip, server: Ip) {
+    let _ = chip.udp_close(SOCK_MGMT);
+    if chip.udp_open(SOCK_MGMT, dhcp::CLIENT_PORT).is_ok() {
+        let mut b = [0u8; dhcp::MSG_LEN];
+        let n = dhcp::decline(xid, mac, declined, server, &mut b);
+        let _ = chip.udp_send(SOCK_MGMT, [255; 4], dhcp::SERVER_PORT, &b[..n]);
+        Timer::after_millis(20).await; // let it leave the CH394
     }
 }
 
@@ -350,7 +442,11 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let link = wait_link(&mut chip).await;
     println!("net: link {} Mbit/s {}", link.speed(), if link.full_duplex { "full duplex" } else { "half duplex" });
 
-    let (mut cfg, src, mut dhcpc) = configure(&mut chip, mac, NetConfig::FACTORY).await;
+    // The RFC 3927 claim lives as long as the radio: its conflict count drives the rate limit.
+    let mut claim = ipv4ll::Claim::new(mac, Instant::now().as_millis());
+    // The configuration before the last change, for the fall-back of A1.6 C-4 (0049).
+    let mut prev_cfg: Option<NetConfig> = None;
+    let (mut cfg, src, mut dhcpc) = configure(&mut chip, mac, NetConfig::FACTORY, &mut claim).await;
     // Socket 7 lent to DHCP (port 68) for a running exchange (A1.11).
     let mut dhcp_borrowed = false;
     print_cfg(&cfg, src);
@@ -418,7 +514,14 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         // DHCP after the power-on exchange (A1.11), also on every pass: no traffic on the other
         // sockets can hold a borrow of socket 7 past its 2 s (0041).
         if let Some(c) = dhcpc.as_mut() {
-            dhcp_step(&mut chip, c, &mut dhcp_borrowed, &mut cfg, &mut p2, &mut mrx, Instant::now().as_millis());
+            if dhcp_step(&mut chip, c, &mut dhcp_borrowed, &mut cfg, &mut p2, &mut mrx, Instant::now().as_millis()) {
+                // Lease end or DHCPNAK: the link-local address is probed again (0049).
+                claim.restart(Instant::now().as_millis());
+                if !relink(&mut chip, &mut claim, &mut p2, &mut dhcpc, &mut cfg, &mut dhcp_borrowed).await {
+                    return;
+                }
+                continue;
+            }
         }
         // Trial boot: self-confirmation by the criterion of 0044 (network up: this loop runs only
         // then). The 60 s limit is in the main task. A failed write is tried again once a second.
@@ -484,8 +587,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                             // A new address ends a running session (A1.6; B3.9;
                             // SESSION_CHANGED, Table A3-1 event 9) and nothing is carried over.
                             p2.address_changed(&mut chip, now);
-                            let _ = chip.udp_close(SOCK_DISCOVERY);
-                            let (c, s, d) = configure(&mut chip, mac, want).await;
+                            close_all(&mut chip);
+                            prev_cfg = Some(cfg);
+                            let (c, s, d) = configure(&mut chip, mac, want, &mut claim).await;
                             cfg = c;
                             dhcpc = d;
                             dhcp_borrowed = false;
@@ -588,8 +692,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                                 let want = crate::mgmt_init::network_from_config(&mgmt.config);
                                 let now = Instant::now().as_millis();
                                 p2.address_changed(&mut chip, now);
-                                let _ = chip.udp_close(SOCK_DISCOVERY);
-                                let (c, s, dc) = configure(&mut chip, mac, want).await;
+                                close_all(&mut chip);
+                                prev_cfg = Some(cfg);
+                                let (c, s, dc) = configure(&mut chip, mac, want, &mut claim).await;
                                 cfg = c;
                                 dhcpc = dc;
                                 dhcp_borrowed = false;
@@ -620,7 +725,51 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 }
                 if let Ok(irq) = chip.take_irq() {
                     if irq & g7250_ch394::common::IR_CONFLICT != 0 {
-                        println!("net: address conflict on {} (fall-back of C-4 not implemented yet)", ip_str(cfg.ip).as_str());
+                        // Another host uses our address ([CH394] GINT IP_CONFLI): give it up at once,
+                        // no defending ARP (RFC 3927 2.5 option (a)); each case an address change of
+                        // A1.11a; every conflict logged (A1.11; 0049).
+                        let now = Instant::now().as_millis();
+                        println!("net: address conflict on {}", ip_str(cfg.ip).as_str());
+                        server.log.push(now, format_args!("address conflict on {}", ip_str(cfg.ip).as_str()));
+                        let leased = dhcpc.as_ref().is_some_and(|d| d.lease().is_some_and(|l| l.0.ip == cfg.ip));
+                        let link_local = cfg.ip[..2] == [169, 254];
+                        if leased {
+                            // DHCPDECLINE, link-local, DHCP again (RFC 2131 3.1 item 5).
+                            if let Some(d) = dhcpc.as_mut() {
+                                let xid = d.xid;
+                                if let Some((ip, srv)) = d.decline(now) {
+                                    p2.address_changed(&mut chip, now);
+                                    send_decline(&mut chip, mac, xid, ip, srv).await;
+                                    println!("net: DHCPDECLINE for {} sent; link-local, DHCP again in 10 s", ip_str(ip).as_str());
+                                }
+                            }
+                            claim.restart(now);
+                        } else if link_local {
+                            claim.conflict(now);
+                        } else if let Some(p) = prev_cfg.take().filter(|p| p.ip != cfg.ip && p.ip[..2] != [169, 254]) {
+                            // A static address: the previous configuration (A1.6 C-4).
+                            println!("net: static address in conflict; back to the previous configuration");
+                            server.log.push(now, format_args!("static address in conflict: previous configuration restored"));
+                            p2.address_changed(&mut chip, now);
+                            close_all(&mut chip);
+                            let (c, s, dc) = configure(&mut chip, mac, p, &mut claim).await;
+                            cfg = c;
+                            dhcpc = dc;
+                            dhcp_borrowed = false;
+                            print_cfg(&cfg, s);
+                            if crate::p2::P2::open(&mut chip).is_err() || chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
+                                println!("net: FAULT cannot reopen the P2 and management ports");
+                                return;
+                            }
+                            continue;
+                        } else {
+                            // A static address with no previous configuration: link-local.
+                            claim.restart(now);
+                        }
+                        if !relink(&mut chip, &mut claim, &mut p2, &mut dhcpc, &mut cfg, &mut dhcp_borrowed).await {
+                            return;
+                        }
+                        continue;
                     }
                 }
                 if let Ok(l) = chip.link() {

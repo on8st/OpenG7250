@@ -106,6 +106,22 @@ I&Q packet is discarded and counted before it, and High Priority status byte 30 
 yet: the RF-path relays and their bounded wait (A3.9a; P-RF-1..3, HIS-07), the ATU cycle,
 LIMIT_STATUS, and the A3.9a key sequence on the pins.
 
+## Link-local address and conflicts (A1.11; 0048, 0049)
+
+With no DHCP lease after the start-up attempts, the radio claims a link-local address as RFC
+3927 section 2 before any socket opens: its own address at 0.0.0.0, socket 0 in MACRAW, three
+probes (sender 0.0.0.0, 1-2 s apart after a random 0-1 s), 2 s wait, two announcements 2 s
+apart, then the sockets open. Console: `net: probing link-local <ip> (RFC 3927)`, `net:
+link-local <ip> probed and announced`, and per conflict `net: link-local address conflict on
+<ip> while probing; next candidate <ip>`. A lease end or DHCPNAK probes the address again with
+every socket closed (the session ends, A1.11a). An IP_CONFLI (GINT bit 7) while running is
+logged (`net: address conflict on <ip>`, and in the log): on a lease, DHCPDECLINE, link-local,
+DHCP again after 10 s; on a link-local address, the next candidate; on a static address, the
+previous configuration (C-4), or link-local if there is none. After 10 conflicts each new probe
+waits 60 s, with no address and the sockets closed. The emulator needs MACRAW on socket 0 and
+IP_CONFLI in its CH394 model; the MACRAW length header is read as the frame length alone
+(`MACRAW_LEN_INCLUDES_HEADER`, to confirm).
+
 ## DHCP retry and renewal (A1.11, A1.11a)
 
 Console: `net: DHCP lease L s from <server>; renewal at L/2 s`, or `net: no DHCP lease; link-local,

@@ -17,6 +17,8 @@ use g7250_proto::netcfg::{Ip, Mode, NetConfig};
 /// and retried at the next interval.
 pub const WAIT_MS: u64 = 2_000;
 const BACKOFF_MS: [u64; 5] = [4_000, 8_000, 16_000, 32_000, 64_000];
+/// After a DHCPDECLINE (RFC 2131 section 3.1 item 5).
+pub const DECLINE_WAIT_MS: u64 = 10_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -87,6 +89,27 @@ impl Client {
             None => (State::Init { attempt: 1, next_ms: now + BACKOFF_MS[0] }, None),
         };
         Client { state, xid, mac, link_local, lease, retry_at: None }
+    }
+
+    /// The link-local address the client falls back to (A1.11).
+    pub fn link_local(&self) -> NetConfig {
+        self.link_local
+    }
+
+    /// The link-local address claimed by the RFC 3927 probe (A1.11; 0049).
+    pub fn set_link_local(&mut self, c: NetConfig) {
+        self.link_local = c;
+    }
+
+    /// The leased address is in conflict (0049): returns the DHCPDECLINE to send (address and
+    /// server), drops the lease, and starts again after 10 s (RFC 2131 section 3.1 item 5: "a
+    /// minimum of ten seconds before restarting the configuration process").
+    pub fn decline(&mut self, now: u64) -> Option<(Ip, Ip)> {
+        let (cfg, server, _, _) = self.lease.take()?;
+        self.retry_at = None;
+        self.xid = self.xid.wrapping_add(1);
+        self.state = State::Init { attempt: 1, next_ms: now + DECLINE_WAIT_MS };
+        Some((cfg.ip, server))
     }
 
     /// The lease in use, if any: configuration and server.

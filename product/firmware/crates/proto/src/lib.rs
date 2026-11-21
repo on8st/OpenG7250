@@ -10,6 +10,7 @@
 
 pub mod dhcp;
 pub mod discovery;
+pub mod ipv4ll;
 pub mod mgmt;
 pub mod netcfg;
 pub mod ratelimit;

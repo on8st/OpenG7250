@@ -62,6 +62,9 @@ pub mod sock {
     pub const RX_RD: u16 = 0x0028;
 
     pub const MR_UDP: u8 = 0x02;
+    /// Sn_MODE PMD 0100: MACRAW, socket 0 only ([CH394] 7.2.1, p.15; 12.2.7, p.40-41).
+    pub const MR_MACRAW: u8 = 0x04;
+    pub const SR_MACRAW: u8 = 0x42;
     pub const CR_OPEN: u8 = 0x01;
     pub const CR_CLOSE: u8 = 0x10;
     pub const CR_SEND: u8 = 0x20;
@@ -74,6 +77,10 @@ pub mod sock {
 
 /// Number of hardware sockets (spec B2.3: "all 8 CH394Q sockets").
 pub const SOCKETS: u8 = 8;
+
+/// Whether the 2-byte length before a MACRAW frame counts its own 2 bytes. [CH394] 12.2.7 does
+/// not say; read as "no" from its table. To confirm on the radio (emulator model to follow).
+pub const MACRAW_LEN_INCLUDES_HEADER: bool = false;
 /// UDP receive header in the socket RX buffer: source IP (4), source port (2), length (2).
 pub const UDP_HDR: usize = 8;
 
@@ -294,6 +301,58 @@ impl<S: SpiDevice> Ch394<S> {
             len: take,
             truncated: len - take,
         }))
+    }
+
+    /// Open socket 0 in MACRAW mode ([CH394] 12.2.7): every Ethernet frame, MAC filter off
+    /// (Sn_MODE bit 7 = 0), broadcasts not masked (bit 6 = 0). Only socket 0 can do this.
+    pub fn macraw_open(&mut self) -> Result<(), Error<S::Error>> {
+        self.udp_close(0)?;
+        self.write(bsb::sock_reg(0), sock::MR, &[sock::MR_MACRAW])?;
+        self.command(0, sock::CR_OPEN)?;
+        let sr = self.read_u8(bsb::sock_reg(0), sock::SR)?;
+        if sr != sock::SR_MACRAW {
+            return Err(Error::SocketState(sr));
+        }
+        Ok(())
+    }
+
+    /// One raw frame from socket 0 in MACRAW, if one is waiting: [CH394] 12.2.7 puts a 2-byte
+    /// length before each frame. Read here as the length of the frame alone; the datasheet's
+    /// table (p.41, "packet length 2 Byte, data N Byte") does not say whether it counts itself
+    /// ([`MACRAW_LEN_INCLUDES_HEADER`]). Returns the frame length copied.
+    pub fn macraw_recv(&mut self, buf: &mut [u8]) -> Result<Option<usize>, Error<S::Error>> {
+        let avail = self.read_u16_stable(bsb::sock_reg(0), sock::RX_RSR)? as usize;
+        if avail < 2 {
+            return Ok(None);
+        }
+        let rd = self.read_u16(bsb::sock_reg(0), sock::RX_RD)?;
+        let mut h = [0u8; 2];
+        self.read(bsb::sock_rx(0), rd, &mut h)?;
+        let raw = u16::from_be_bytes(h) as usize;
+        let len = if MACRAW_LEN_INCLUDES_HEADER { raw.saturating_sub(2) } else { raw };
+        let take = len.min(buf.len());
+        let data_at = rd.wrapping_add(2);
+        if take > 0 {
+            self.read(bsb::sock_rx(0), data_at, &mut buf[..take])?;
+        }
+        self.write(bsb::sock_reg(0), sock::RX_RD, &data_at.wrapping_add(len as u16).to_be_bytes())?;
+        self.command(0, sock::CR_RECV)?;
+        Ok(Some(take))
+    }
+
+    /// Send one raw Ethernet frame (without FCS) from socket 0 in MACRAW.
+    pub fn macraw_send(&mut self, frame: &[u8]) -> Result<(), Error<S::Error>> {
+        let _ = self.finish_send(0);
+        let free = self.read_u16_stable(bsb::sock_reg(0), sock::TX_FSR)? as usize;
+        if frame.len() > free {
+            return Err(Error::TooLarge);
+        }
+        let wr = self.read_u16(bsb::sock_reg(0), sock::TX_WR)?;
+        self.write(bsb::sock_tx(0), wr, frame)?;
+        self.write(bsb::sock_reg(0), sock::TX_WR, &wr.wrapping_add(frame.len() as u16).to_be_bytes())?;
+        self.command(0, sock::CR_SEND)?;
+        self.pending[0] = true;
+        Ok(())
     }
 
     /// Wait for the end of a SEND under way on socket `n` (SEND_OK or TIMEOUT).
