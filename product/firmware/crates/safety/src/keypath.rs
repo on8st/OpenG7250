@@ -665,6 +665,7 @@ mod tests {
             rf_off: Some(()),
             tr_timing: Some(()),
             underrun_ms: Some(50),
+            reset_ram_kept: Some(()),
             atu: None,
         }
     }

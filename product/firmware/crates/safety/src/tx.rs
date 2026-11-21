@@ -108,6 +108,9 @@ pub struct Measured {
     /// The TX IQ underrun time, ms (B10.5; P-TIM-2, HIS-18): at least the key latency plus one
     /// DUC packet period, at most 500 ms; the check uses the lower of it and `KEYED_TIMEOUT`.
     pub underrun_ms: Option<u32>,
+    /// P-SYS-9 (0050): the AXI SRAM range of the persist block (0x2401FFE0) is shown to survive a
+    /// reset without power loss on the radio (RD-01, T-A3-60). Part of the freeze rule.
+    pub reset_ram_kept: Option<()>,
     /// ATU latch meanings, safe values, tune power and timing (0032 item 2; HIS-08).
     pub atu: Option<AtuParams>,
 }
@@ -123,6 +126,7 @@ impl Measured {
         rf_off: None,
         tr_timing: None,
         underrun_ms: None,
+        reset_ram_kept: None,
         atu: None,
     };
 
@@ -137,6 +141,7 @@ impl Measured {
             && self.rf_off.is_some()
             && self.tr_timing.is_some()
             && matches!(self.underrun_ms, Some(2..=500))
+            && self.reset_ram_kept.is_some()
     }
 }
 
@@ -512,6 +517,7 @@ mod tests {
             rf_off: Some(()),
             tr_timing: Some(()),
             underrun_ms: Some(50),
+            reset_ram_kept: Some(()),
             atu: if atu { Some(AtuParams { time_limit_ms: 10_000 }) } else { None },
         }
     }
@@ -603,6 +609,17 @@ mod tests {
         assert_eq!((c.arm_state_reg() >> 16) & 0xFF, DropReason::Takeover as u32);
         // The old arm value no longer arms.
         assert_eq!(c.write_tx_arm(t0 ^ ARM_MAGIC, &ok_ctx(), &mut rf), ArmOutcome::Rejected(Refusal::Arm(ArmReject::BadToken)));
+    }
+
+    #[test]
+    fn every_freeze_rule_item_is_needed_p_sys_9_and_p_tim_2_included() {
+        assert!(test_measured(false).complete_for_tx());
+        let m = Measured { reset_ram_kept: None, ..test_measured(false) };
+        assert!(!m.complete_for_tx() && Calibration::from_measured(&m).is_none(), "P-SYS-9 (0050)");
+        let m = Measured { underrun_ms: None, ..test_measured(false) };
+        assert!(!m.complete_for_tx(), "P-TIM-2");
+        let m = Measured { underrun_ms: Some(501), ..test_measured(false) };
+        assert!(!m.complete_for_tx(), "underrun time above KEYED_TIMEOUT's ceiling");
     }
 
     #[test]
