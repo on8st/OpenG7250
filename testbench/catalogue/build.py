@@ -240,6 +240,8 @@ OVERRIDES: dict[str, dict] = {
        for t in ["T-B10-33", "T-B10-43", "T-B10-44", "T-B10-45", "T-B10-46"]},
     "T-A1-75": {"target": "emulator", "also": ["host"],
                 "notes": ["the armed part needs TX unlocked; 'outside a session while armed' is not reachable over P2"]},
+    "T-B6-28": {"target": "needs-radio", "also": [],
+                "notes": ["radio test with a test build, dummy loads and a signal generator under HIS 90 (0060)"]},
     "T-B5-21": {"target": "emulator", "also": ["host"], "pending": CAL_SET,
                 "notes": ["needs an arm: blocked until the calibration set is complete (tx bit 4)"]},
     "T-B5-20": {"target": "emulator", "also": ["host"],

@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "1d401fa",
-  "sha256_of_inputs": "e26ba452be5518faf724e88423cb6ba24d262b485699f4ca5d8721820abd28f5"
+  "commit": "c236385",
+  "sha256_of_inputs": "16cab1bf57f4ebed8266daba0e10e9fceacad232954d86946b72d79481ae5031"
  },
  "his": {
   "commit": "72591aa"
@@ -5083,6 +5083,32 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-B6-28",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "On the radio, before P-RX-2 counts as set, with a test build, the RF section in the A3.6 safe state, a dummy load on both antenna ports and the generator under the signal-generator rule ([HIS] HIS 90), at every offered rate with the frame values taken from the factory calibration: writing the frame keys nothing (no forward power above `P_rf_off`, SEND released); a tone at f₀ + Δ with DDC0 tuned to f₀ appears at +Δ within 10 Hz + 1 ppm; with the P-RX-2 flags applied, f₀ + Δ appears above the centre and f₀ − Δ below it, each image at least 30 dB down; the same tone gives the same level within 1 dB at every rate; the results repeat after a power cycle (Annex P \"P-RX-2 route\"; 0060).",
+   "reqs": [
+    "B6",
+    "A3.6"
+   ],
+   "scope": "v1.0",
+   "target": "needs-radio",
+   "also": [],
+   "needs": [
+    "power.cycle",
+    "sensor.set",
+    "hw.observe"
+   ],
+   "pending": [
+    "P-RF-3",
+    "P-RX-2"
+   ],
+   "tx_part": true,
+   "notes": [
+    "radio test with a test build, dummy loads and a signal generator under HIS 90 (0060)"
    ]
   },
   {
