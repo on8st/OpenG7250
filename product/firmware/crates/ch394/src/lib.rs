@@ -125,8 +125,9 @@ pub struct Datagram {
 }
 
 /// The value the version register holds on a W5500 (W5500 section 4.1, VERSIONR = 0x04).
-/// CH394? The CH394's value is not in the HIS; the driver accepts any value except the ones an
-/// absent or held-in-reset chip reads (0x00, 0xFF).
+/// On the CH394 it is CHIPV at 0x0039, read-only, value on the radio not known ([HIS] HIS 40,
+/// `d199d33`); the driver accepts any value except the ones an absent or held-in-reset chip
+/// reads (0x00, 0xFF).
 pub const W5500_VERSION: u8 = 0x04;
 
 pub struct Ch394<S> {

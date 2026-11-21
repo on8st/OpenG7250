@@ -106,8 +106,10 @@ fn mac_or_derived(chip: &mut Chip) -> Result<([u8; 6], bool), ChError<spi::Error
 
 async fn bring_up(pins: NetPins<'static>) -> Result<Chip, ChError<spi::Error>> {
     // RST# has been low since the safe state at start (HIS 85: held until the product brings it
-    // up). Keep it low a while longer, then release. CH394? Reset pulse and start-up time are
-    // datasheet values not in the HIS; these are generous.
+    // up). Keep it low a while longer, then release. [HIS] HIS 40 (`d199d33`): the chip must not
+    // be accessed 12-19 ms after RST# goes high (VERIFIED, CH394DS1 10.4.3); the minimum low
+    // time is still open. 10 ms low (after the time since start) and 200 ms before the first
+    // access are well outside both.
     let mut rst = Output::new(pins.rst, Level::Low, Speed::Low);
     Timer::after_millis(10).await;
     rst.set_high();

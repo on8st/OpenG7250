@@ -36,6 +36,8 @@ fn slot_name(s: Slot) -> &'static str {
 
 #[entry]
 fn main() -> ! {
+    // What the vendor bootloader left, before anything is changed ([HIS] HIS 90, F1-Q3/F1-Q4).
+    let start = g7250_board::start_state::capture();
     early_init();
     console::clocks_hsi();
     console::init();
@@ -52,6 +54,7 @@ fn main() -> ! {
         env!("G7250_REV")
     );
     println!("boot: reset cause {}", cause.name());
+    start.print();
 
     if !safe::holds() {
         // The safe state could not be established: class 2 fault, stay here (0007 sub-decision 5).
