@@ -586,7 +586,7 @@ class FixtureServer:
                # format v1.7: datagrams placed at exact emulated offsets; waits in emulated time
                "net.inject", "time.wait", "sock.log",
                # format v1.8
-               "gpio.force", "dac.force", "time.advance"]
+               "gpio.force", "dac.force", "time.advance", "console.log"]
 
     def __init__(self, agent_getter, on_power_cycle, bridge_getter=None):
         self.bridge_getter = bridge_getter
@@ -595,6 +595,11 @@ class FixtureServer:
         self.agent_getter = agent_getter
         self.on_power_cycle = on_power_cycle
         self.boot_no = 1
+        self.boot_forces = []                 # (pin, level) for the next emulator's start-up script
+        self.con_entries = []                 # console.log: every line since the first power-on
+        self.con_next = 0
+        self.con_origin = 0
+        self.con_on = True
         self.sock_on = False
         self.sock_entries = []
         self.sock_next = 0
@@ -650,6 +655,24 @@ class FixtureServer:
     def sock_new_boot(self, boot):
         self.boot_no = boot
         self.sock_next = 0                    # the new emulator's log starts empty
+        self.con_next = 0
+
+    def console_pull(self):
+        """Append the agent's new console lines (console.log); also before a power cycle."""
+        agent = self.agent_getter()
+        if not agent:
+            return
+        for _ in range(100):
+            r = agent.ask("consolelog %d" % self.con_next, timeout=30, internal=True)
+            if not r or not r.startswith("ok "):
+                return
+            v = json.loads(r[3:])
+            for e in v.get("entries", []):
+                e["boot"] = self.boot_no
+                self.con_entries.append(e)
+            if v.get("next", 0) <= self.con_next:
+                return
+            self.con_next = v["next"]
 
     def handle(self, op, args):
         agent = self.agent_getter()
@@ -730,6 +753,31 @@ class FixtureServer:
                 return {"ok": False, "error": "speed must be 0, 10 or 100"}
             r = agent.ask("link %d" % sp) if agent else None
             return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+        if op == "console.log":
+            action = args.get("action")
+            if action not in ("start", "read", "stop"):
+                return {"ok": False, "error": "action must be start|read|stop"}
+            self.console_pull()
+            if action == "start":
+                self.con_origin = len(self.con_entries)
+                self.con_on = True
+                return {"ok": True, "value": {"t_us": agent.now_us() if agent else None}}
+            ents = self.con_entries[self.con_origin:]
+            frm = max(0, int(args.get("from", 0)))
+            page = ents[frm:frm + 5000]
+            if action == "stop":
+                self.con_on = False
+            return {"ok": True, "value": {"t_us": agent.now_us() if agent else None, "count": len(ents), "dropped": 0,
+                                          "from": frm, "next": frm + len(page), "entries": page}}
+        if op == "gpio.force" and args.get("at_power_on"):
+            if args.get("target", "idr") != "idr":
+                return {"ok": False, "error": "bad arguments: at_power_on only for target idr"}
+            lv = args.get("level")
+            pin = str(args.get("pin"))
+            self.boot_forces = [f for f in self.boot_forces if f[0] != pin]
+            if lv is not None:
+                self.boot_forces.append((pin, int(lv)))
+            return {"ok": True, "value": {"pin": pin, "target": "idr", "level": lv, "at_power_on": True}}
         if op == "gpio.force":
             if not agent:
                 return {"ok": False, "error": "emulator not ready"}

@@ -181,7 +181,8 @@ class Boot:
                                                          flash_image=self.flash,
                                                          pwr_cr3=self.pwr_cr3 if self.boots == 1 else None,
                                                          flash_erase_us=self.flash_erase_us,
-                                                         flash_preload=self.flash_preload))
+                                                         flash_preload=self.flash_preload,
+                                                         boot_forces=list(getattr(getattr(self, "fixtures", None), "boot_forces", []))))
         env = dict(os.environ)
         # CH394 socket log of this boot (OPEN/CLOSE with port and emulated time)
         env["G7250_SOCKLOG"] = os.path.join(self.out, "sockets.jsonl" if self.boots == 1 else "sockets-boot%d.jsonl" % self.boots)
@@ -238,6 +239,7 @@ class Boot:
             self.save_netlog()
             try:
                 self.fixtures.sock_pull()
+                self.fixtures.console_pull()
             except Exception:  # noqa: BLE001
                 pass
             dump = os.path.join(self.out, "flash-%d.bin" % self.boots)
@@ -372,6 +374,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                 bt.close()
             continue
         ep["minor"] = FORMAT_MINOR
+        ep["usart1_timed"] = False                 # console.log: USART1 not timed at the baud rate
         if os.environ.get("G7250_TIME_SCALE"):
             ep["time_scale"] = float(os.environ["G7250_TIME_SCALE"])   # emulated / wall, for timed runs (the bench stretches its waits)
         ep_path = os.path.join(tdir, "endpoint.json")
@@ -414,6 +417,12 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                 e["reason"] = ("not evidence: datagram delivery shifted by up to %d us in emulated time in the judged burst(s) %s "
                                "(> %d us); bench: %s %s" % (worst, ", ".join(bad), lim, e.get("status"), e.get("reason") or ""))
                 e["status"] = "error"
+        try:
+            fc = bt.agent.ask("firstcheck", timeout=10, internal=True) if not per_list else None
+            if fc and fc.startswith("ok ") and fc[3:] != "{}":
+                e.setdefault("emulator", {})["first_tx_port_read"] = json.loads(fc[3:])
+        except Exception:  # noqa: BLE001
+            pass
         bursts = shift_bursts(tdir)
         if bursts:
             em = e.setdefault("emulator", {})

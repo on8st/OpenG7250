@@ -59,6 +59,9 @@ def check(name, ok, detail=""):
     return {"name": name, "ok": bool(ok), "detail": detail}
 
 
+EP_PATH = ""
+
+
 def run_test(tid, ep):
     c = ep["radio"]["connect"]["1024"]
     if tid == "T-EMU-01":
@@ -312,6 +315,24 @@ def run_test(tid, ep):
                 check("dac.force channel 2 = 100 in hw.observe", dc.get("ok") and len(ch) >= 2 and ch[1] == 100, str(ch)),
                 check("time.advance 200 ms of radio time", av.get("ok") and av["value"]["t_us"] - a0["value"]["t_us"] >= 200000,
                       "%s -> %s in %.1f s wall" % (a0.get("value"), av.get("value"), wall))]
+    if tid == "T-EMU-21":
+        # console.log from power-on (no start), across a power cycle; gpio.force at_power_on
+        r0 = ctl.op("console.log", action="read")
+        first = (r0.get("value") or {}).get("entries", [])
+        f = ctl.op("gpio.force", pin="PF4", target="idr", level=1, at_power_on=True)
+        pc = ctl.op("power.cycle")
+        d, _ = echo(ep, 0, c, b"after-cycle", wait=60.0)
+        r1 = ctl.op("console.log", action="read")
+        ents = (r1.get("value") or {}).get("entries", [])
+        resc = os.path.join(os.path.dirname(os.path.abspath(EP_PATH)), "run.resc")
+        script = open(resc).read() if os.path.isfile(resc) else ""
+        ctl.op("gpio.force", pin="PF4", target="idr", level=None, at_power_on=True)
+        return [check("lines from power-on without a start", any(e.get("line", "").startswith("bench ") for e in first), json.dumps(first[:2])),
+                check("fields t_first_us <= t_us, line, boot", bool(first) and all(e["t_first_us"] <= e["t_us"] and "boot" in e for e in first)),
+                check("lines of the second boot after the power cycle", pc.get("ok") and d == b"after-cycle" and
+                      any(e.get("boot", 1) > first[0].get("boot", 1) for e in ents) if first else False, json.dumps(ents[-2:])),
+                check("at_power_on force in the new boot's start-up script", f.get("ok") and 'ForceIdrAtBoot "PF4" 1' in script, str(f)),
+                check("endpoint usart1_timed false", ep.get("usart1_timed") is False)]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]
@@ -326,6 +347,8 @@ def main():
     r.add_argument("--test", action="append", default=[])
     r.add_argument("--json", action="store_true")
     a = ap.parse_args()
+    global EP_PATH
+    EP_PATH = a.endpoint
     ep = json.load(open(a.endpoint))
     for tid in a.test:
         t0 = time.time()

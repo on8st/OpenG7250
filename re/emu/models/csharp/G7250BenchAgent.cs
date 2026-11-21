@@ -72,6 +72,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             HookConsole();
             ArmBootHook();
             if(Environment.GetEnvironmentVariable("G7250_NO_PORT_HOOKS") != "1") HookPorts();
+            HookIdr();
             machine.MachineReset += _ => OnMachineReset();
         }
 
@@ -323,6 +324,10 @@ namespace Antmicro.Renode.Peripherals.SPI
                 machine.SystemBus.SetHookAfterPeripheralRead<uint>((Antmicro.Renode.Peripherals.Bus.IBusPeripheral)gp, (value, offset) =>
                 {
                     if(offset != 0x10) return value;
+                    if(!firstIdrSeen && (pn == 0 || pn == 1 || pn == 2 || pn == 5 || pn == 7))
+                    {
+                        firstIdrSeen = true; firstIdrReadUs = NowUs(); firstIdrPort = "GPIO" + (char)('A' + pn);
+                    }
                     lock(idrForceMask)
                     {
                         uint m;
@@ -333,6 +338,22 @@ namespace Antmicro.Renode.Peripherals.SPI
             }
             idrHooked = true;
         }
+
+        // a force from power-on: the runner puts this into the next emulator's start-up script,
+        // before the core's first instruction (gpio.force at_power_on)
+        public void ForceIdrAtBoot(string pin, int level)
+        {
+            int port, bit;
+            if(!ParsePin(pin, out port, out bit)) return;
+            HookIdr();
+            ApplyForce(port, bit, pin, "idr", level.ToString(), false, null);
+        }
+
+        // the first read of a TX-path port's input register after each boot (GPIOA, B, C, F, H):
+        // the emulator's view of when the image's first TX path check runs
+        private ulong firstIdrReadUs, firstIdrBootUs;
+        private string firstIdrPort;
+        private bool firstIdrSeen = true;
 
         private void ForceEvent(string pin, string target, string val, string kind)
         {
@@ -792,6 +813,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             {
                 bootInstr = Instructions();
                 bootUs = NowUs();
+                firstIdrSeen = false; firstIdrBootUs = bootUs; firstIdrPort = null;
                 if(lastLink == null)
                 {
                     // the link as the CH394 reports it from power-on (later changes come
@@ -933,6 +955,22 @@ namespace Antmicro.Renode.Peripherals.SPI
         private ulong lineStartUs;
         private bool consoleHooked;
 
+        // console.log (format v1.8): every line from power-on, emulated time of its first and
+        // last character; the runner collects it across power cycles
+        private readonly List<string> consoleList = new List<string>();
+        private int consoleDropped;
+
+        private string ConsoleLogRead(int from)
+        {
+            lock(consoleList)
+            {
+                from = Math.Max(0, Math.Min(from, consoleList.Count));
+                int to = Math.Min(consoleList.Count, from + 5000);
+                return "{\"t_us\": " + NowUs() + ", \"count\": " + consoleList.Count + ", \"dropped\": " + consoleDropped
+                    + ", \"from\": " + from + ", \"next\": " + to + ", \"entries\": [" + string.Join(", ", consoleList.GetRange(from, to - from)) + "]}";
+            }
+        }
+
         private void HookConsole()
         {
             if(consoleHooked || string.IsNullOrEmpty(timedPath)) return;
@@ -955,6 +993,18 @@ namespace Antmicro.Renode.Peripherals.SPI
             }
             if(line != null)
             {
+                var esc = new StringBuilder();
+                foreach(char ch in line)
+                {
+                    if(ch == '"' || ch == '\\') esc.Append('\\').Append(ch);
+                    else if(ch < 0x20 || ch > 0x7E) esc.AppendFormat("\\u{0:x4}", (int)ch);
+                    else esc.Append(ch);
+                }
+                lock(consoleList)
+                {
+                    if(consoleList.Count >= 100000) consoleDropped++;
+                    else consoleList.Add("{\"t_first_us\": " + lineStartUs + ", \"t_us\": " + NowUs() + ", \"line\": \"" + esc + "\"}");
+                }
                 try
                 {
                     System.IO.File.AppendAllText(timedPath, string.Format(CultureInfo.InvariantCulture, "{0,12:F6} {1}\n", lineStartUs / 1e6, line));
@@ -998,6 +1048,10 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case "wdt": return WatchdogReset();
                     case "resets": return "resets " + resetCount;
                     case "keylog": return KeyLogCommand(w);
+                    case "consolelog": return "ok " + ConsoleLogRead(w.Length > 1 ? int.Parse(w[1], CultureInfo.InvariantCulture) : 0);
+                    case "firstcheck":
+                        return firstIdrPort == null ? "ok {}" : "ok {\"boot_t_us\": " + firstIdrBootUs + ", \"first_idr_read_us\": " + firstIdrReadUs
+                            + ", \"after_boot_us\": " + (firstIdrReadUs - firstIdrBootUs) + ", \"port\": \"" + firstIdrPort + "\"}";
                     case "force": return ForceCommand(w);
                     case "dacforce": return DacForceCommand(w);
                     case "advance": return AdvanceCommand(w);

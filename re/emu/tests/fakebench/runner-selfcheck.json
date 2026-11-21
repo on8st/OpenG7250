@@ -210,6 +210,20 @@
     "hw.trace",
     "time.wait"
    ]
+  },
+  {
+   "id": "T-EMU-21",
+   "title": "console.log and gpio.force at_power_on (format v1.8)",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "console.log",
+    "gpio.force",
+    "power.cycle"
+   ]
   }
  ]
 }

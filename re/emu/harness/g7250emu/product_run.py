@@ -257,7 +257,7 @@ def iwdg_repl(out, boot_address):
 
 
 def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standin", flash_image=None, pwr_cr3=None,
-                       flash_erase_us=0, flash_preload=()):
+                       flash_erase_us=0, flash_preload=(), boot_forces=()):
     """A product boot for a g7250-testlist run: the generic models, the CH394
     with the runner's network bridge and the bench agent; runs until the
     runner quits it. Power-on and every reset boot per BOOT_MODES[boot]."""
@@ -306,6 +306,7 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
         # after a power cycle or cut the flash keeps what it held (dump of both banks)
         ('sysbus LoadBinary @%s 0x08000000' % flash_image) if flash_image else ('sysbus LoadELF @%s' % elf),
     ] + ['sysbus LoadBinary @%s 0x%08X' % (f, a) for a, f in (flash_preload if not flash_image else ())] + [
+    ] + ['sysbus.spi1.agent ForceIdrAtBoot "%s" %d' % (p_, l_) for p_, l_ in (boot_forces or [])] + [
         'sysbus.watchdog PowerOnBoot',
         'sysbus.spi1.agent ArmBootHook',
     ] + (['emulation SetGlobalAdvanceImmediately true'] if os.environ.get("G7250_ADVANCE_IMMEDIATELY") == "1" else []) + [
