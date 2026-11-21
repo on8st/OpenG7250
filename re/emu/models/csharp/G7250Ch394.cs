@@ -88,7 +88,8 @@ namespace Antmicro.Renode.Peripherals.SPI
                 + ", \"peer\": \"" + peer + "\", \"len\": " + len + ", \"head\": \"" + hx + "\""
                 + (reason != null ? ", \"reason\": \"" + reason + "\"" : "")
                 + (dir != "from_radio" && curShift != 0 ? ", \"shift_us\": " + curShift : "")
-                + (dir != "from_radio" && curWall > 0 ? ", \"t_wall\": " + curWall.ToString("F6", System.Globalization.CultureInfo.InvariantCulture) : "") + "}";
+                + (dir != "from_radio" && curWall > 0 ? ", \"t_wall\": " + curWall.ToString("F6", System.Globalization.CultureInfo.InvariantCulture) : "")
+                + (dir != "from_radio" && curInjected ? ", \"injected\": true" : "") + "}";
             if(runLog.Count >= 200000) runLogDropped++; else runLog.Add(e);
             if(!netLogOn) return;
             if(netLog.Count >= LogCap) { netLogDropped++; return; }
@@ -364,6 +365,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             lock(sync)
             {
                 curShift = shiftUs; curWall = wall;
+                curInjected = curInjectedNext; curInjectedNext = false;
                 string peer = Ip(p, 0) + ":" + ((p[4] << 8) | p[5]);
                 if(!linkUp) { dropped++; NetRecord("dropped", -1, dport, peer, p, 9, len, "link down"); return; }
                 for(int n = 0; n < Sockets && !ok; n++)
@@ -511,6 +513,86 @@ namespace Antmicro.Renode.Peripherals.SPI
             }
             foreach(var x in due) Deliver(x.Item2, x.Item3, x.Item4);
         }
+
+        // ---- net.inject (format v1.7): datagrams placed at exact emulated offsets ----
+        // The base time is taken on the emulation thread; every datagram then goes through
+        // Deliver, the same receive path as a bridged one (socket by port, buffer size, the
+        // drop rule, the header into Sn_RX, RECV), marked "injected" in the logs.
+        private readonly List<Tuple<ulong, byte[]>> injQueue = new List<Tuple<ulong, byte[]>>();
+        private Antmicro.Renode.Peripherals.Timers.LimitTimer injTimer;
+        private bool curInjected;
+
+        // srcIp "a.b.c.d", ports, offsets in us from now, payloads; returns the placing times
+        public string Inject(string srcIp, int fromPort, int toPort, string offsetsCsv, string payloadsCsv)
+        {
+            var ip = srcIp.Split('.');
+            var offs = offsetsCsv.Split(',');
+            var pls = payloadsCsv.Split(',');
+            if(offs.Length != pls.Length || ip.Length != 4) return null;
+            var done = new System.Threading.ManualResetEventSlim(false);
+            var times = new ulong[offs.Length];
+            machine.LocalTimeSource.ExecuteInNearestSyncedState(ts =>
+            {
+                ulong now = NowUs();
+                lock(paceSync)
+                {
+                    for(int k = 0; k < offs.Length; k++)
+                    {
+                        string hx = pls[k];
+                        var data = new byte[hx.Length / 2];
+                        for(int i = 0; i < data.Length; i++) data[i] = Convert.ToByte(hx.Substring(2 * i, 2), 16);
+                        var p = new byte[9 + data.Length];
+                        for(int i = 0; i < 4; i++) p[i] = byte.Parse(ip[i], System.Globalization.CultureInfo.InvariantCulture);
+                        p[4] = (byte)(fromPort >> 8); p[5] = (byte)fromPort; p[6] = (byte)(toPort >> 8); p[7] = (byte)toPort; p[8] = 0;
+                        Array.Copy(data, 0, p, 9, data.Length);
+                        ulong at = now + ulong.Parse(offs[k], System.Globalization.CultureInfo.InvariantCulture);
+                        times[k] = at;
+                        injQueue.Add(Tuple.Create(at, p));
+                    }
+                    injQueue.Sort((a, b) => a.Item1.CompareTo(b.Item1));
+                    ArmInject();
+                }
+                done.Set();
+            });
+            if(!done.Wait(30000)) return null;
+            return string.Join(",", times);
+        }
+
+        private void ArmInject()
+        {
+            if(injQueue.Count == 0) return;
+            if(injTimer == null)
+            {
+                injTimer = new Antmicro.Renode.Peripherals.Timers.LimitTimer(machine.ClockSource, 1000000, this, "ch394inject", 1UL << 40,
+                    direction: Antmicro.Renode.Time.Direction.Ascending, enabled: false,
+                    workMode: Antmicro.Renode.Time.WorkMode.Periodic, eventEnabled: true);
+                injTimer.LimitReached += OnInject;
+            }
+            ulong now = NowUs(), head = injQueue[0].Item1;
+            injTimer.Enabled = false;
+            if(head <= now) { OnInject(); return; }
+            injTimer.Value = (1UL << 40) - (head - now);
+            injTimer.Enabled = true;
+        }
+
+        private void OnInject()
+        {
+            var due = new List<Tuple<ulong, byte[]>>();
+            lock(paceSync)
+            {
+                if(injTimer != null) injTimer.Enabled = false;
+                ulong now = NowUs();
+                while(injQueue.Count > 0 && injQueue[0].Item1 <= now) { due.Add(injQueue[0]); injQueue.RemoveAt(0); }
+            }
+            foreach(var x in due)
+            {
+                long late = (long)(NowUs() - x.Item1);
+                curInjectedNext = true;
+                Deliver(x.Item2, late, 0);
+            }
+            lock(paceSync) ArmInject();
+        }
+        private bool curInjectedNext;
 
         // ---- local link to the test-bench runner ----
         private void Connect()

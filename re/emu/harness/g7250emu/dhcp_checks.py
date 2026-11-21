@@ -40,7 +40,15 @@ class Run:
         self.out = out
 
     def ready(self):
-        return self.boot.agent.wait_connected(120)
+        ok = self.boot.agent.wait_connected(120)
+        if ok and POWER_CYCLE_FIRST:
+            # one power cycle before the check (the radio's second boot is checked): the
+            # DHCP log and the socket log start again with the new boot
+            time.sleep(2.0)
+            self.boot.power_cycle()
+            ok = self.boot.agent.wait_connected(120)
+            self.dhcp.log.clear()
+        return ok
 
     def now_s(self):
         t = self.boot.agent.now_us()
@@ -52,7 +60,7 @@ class Run:
             time.sleep(0.2)
 
     def console(self):
-        p = os.path.join(self.out, "console.txt")
+        p = os.path.join(self.out, "console-boot2.txt" if POWER_CYCLE_FIRST else "console.txt")
         return open(p, errors="replace").read() if os.path.isfile(p) else ""
 
     def log(self, kind=None, direction="from_radio"):
@@ -62,9 +70,12 @@ class Run:
         self.boot.close()
 
 
+POWER_CYCLE_FIRST = False
+
+
 def sockets(out):
-    """The CH394 socket log of the first boot: OPEN/CLOSE with port and t_us."""
-    path = os.path.join(out, "sockets.jsonl")
+    """The CH394 socket log of the boot that is checked: OPEN/CLOSE with port and t_us."""
+    path = os.path.join(out, "sockets-boot2.jsonl" if POWER_CYCLE_FIRST else "sockets.jsonl")
     return [json.loads(l) for l in open(path)] if os.path.isfile(path) else []
 
 
@@ -259,8 +270,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("elf")
     ap.add_argument("--checks", default="DH-01,DH-02,DH-03,DH-04,DH-05")
+    ap.add_argument("--power-cycle-first", action="store_true",
+                    help="power-cycle once before each check (the second boot is checked)")
     ap.add_argument("--run-id")
     a = ap.parse_args()
+    global POWER_CYCLE_FIRST
+    POWER_CYCLE_FIRST = a.power_cycle_first
     run_id = a.run_id or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     root = os.path.join(pr.REPO, ".private", "dhcp-checks", run_id)
     os.makedirs(root, exist_ok=True)

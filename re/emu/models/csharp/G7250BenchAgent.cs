@@ -825,6 +825,21 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case "wdt": return WatchdogReset();
                     case "resets": return "resets " + resetCount;
                     case "keylog": return KeyLogCommand(w);
+                    case "inject":
+                    {
+                        // inject <srcip> <fromport> <toport> <offsets csv> <payloads hex csv>
+                        if(w.Length < 6) return "err inject arguments";
+                        var r = Call(Ch394(), "Inject", w[1], int.Parse(w[2], CultureInfo.InvariantCulture), int.Parse(w[3], CultureInfo.InvariantCulture), w[4], w[5]);
+                        return r == null ? "err inject failed" : "ok " + r;
+                    }
+                    case "wait":
+                    {
+                        // wait <us>: returns when emulated time has advanced by us
+                        ulong target = NowUs() + ulong.Parse(w[1], CultureInfo.InvariantCulture);
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        while(NowUs() < target && sw.Elapsed.TotalSeconds < 600) System.Threading.Thread.Sleep(1);
+                        return NowUs() >= target ? "ok " + NowUs() : "err wait timed out at " + NowUs();
+                    }
                     case "netlog": return NetLogCommand(w);
                     case "blk":
                     {

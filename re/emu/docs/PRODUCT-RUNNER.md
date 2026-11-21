@@ -152,6 +152,21 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   not model PHY renegotiation time: after a chip reset the link is up at once.
 - Self-test T-EMU-17 (runner-selfcheck.json).
 
+## Format v1.7: net.inject, time.wait
+
+- `net.inject {host, from_port, to_port, at_us: [...], payloads: [hex]}` ->
+  `{"t_us": [...]}`: each datagram is placed in the CH394 at emulated now +
+  its offset, exactly, at any emulation speed. "now" is taken on the emulation
+  thread; the answer gives every placing time. The datagram comes from
+  `hosts[host].ip:from_port` (a port the bench has bound, so the radio's answers
+  reach it as usual) and goes through the same receive path as a bridged one
+  (socket by port, buffer size, the "buffer full" drop rule, the 8-byte header,
+  RECV); in net.log it is a `to_radio` (or `dropped`) entry with
+  `"injected": true`.
+- `time.wait {us}` -> `{"t_us": now}`: returns when emulated time has advanced
+  by `us` (the bench's waits in radio time).
+- Self-test T-EMU-18 (runner-selfcheck.json).
+
 ## Fixtures (format section 4)
 
 Offered now: `hw.observe`, `hw.trace`, `hw.input`, `power.cycle`, `power.cut`,

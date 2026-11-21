@@ -167,6 +167,20 @@
     "net.log",
     "key.log"
    ]
+  },
+  {
+   "id": "T-EMU-18",
+   "title": "net.inject and time.wait (format v1.7)",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "net.inject",
+    "time.wait",
+    "net.log"
+   ]
   }
  ]
 }

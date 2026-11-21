@@ -111,6 +111,10 @@ class Bridge:
         self.ch_port = self.ch_srv.getsockname()[1]
         self.ch = None
         self.radio_ip = None
+        # the radio's source IP as its CH394 has it now (SIPR): 0.0.0.0 from power-on
+        # until the image programs an address; radio_ip is the published address
+        # for the bench and survives a power cycle, the source address does not
+        self.src_ip = "0.0.0.0"
         self.netmask = "255.255.255.0"
         self.hosts = []
         self.pcap = Pcap(pcap_path)
@@ -236,6 +240,7 @@ class Bridge:
             except OSError:
                 return
             self.ch = c
+            self.src_ip = "0.0.0.0"            # a new emulator: the CH394 starts with SIPR 0.0.0.0
             self._ch_reader(c)
 
     def _ch_reader(self, c):
@@ -257,6 +262,7 @@ class Bridge:
                 if t == 1 and len(p) >= 8:
                     self._from_radio(p)
                 elif t == 3 and len(p) >= 8:
+                    self.src_ip = socket.inet_ntoa(p[0:4])
                     self.set_radio(socket.inet_ntoa(p[0:4]), socket.inet_ntoa(p[4:8]))
 
     def _from_radio(self, p):
@@ -265,9 +271,9 @@ class Bridge:
         dport, = struct.unpack("!H", p[6:8])
         data = p[8:]
         self.stats["from_radio"] += 1
-        self.pcap.udp(self.radio_ip or "0.0.0.0", sport, dip, dport, data, True)
+        self.pcap.udp(self.src_ip, sport, dip, dport, data, True)
         if dport == 67 and sport == 68:
-            self.dhcp.handle(self.radio_ip or "0.0.0.0", dip, data)
+            self.dhcp.handle(self.src_ip, dip, data)
             return
         bcast = dip == "255.255.255.255" or dip == getattr(self, "directed", None)
         if not bcast and dip not in [h["ip"] for h in self.hosts]:
@@ -568,7 +574,9 @@ class FixtureServer:
                # fixture() looks up the operation name (cdfe899, T-A1-66 dhcp.stop)
                "dhcp.start", "dhcp.stop", "dhcp.offer", "dhcp.nak", "dhcp.expire", "dhcp.log", "net.endpoint",
                # format v1.6: datagram times and the keyer log, emulated time
-               "net.log", "key.log"]
+               "net.log", "key.log",
+               # format v1.7: datagrams placed at exact emulated offsets; waits in emulated time
+               "net.inject", "time.wait"]
 
     def __init__(self, agent_getter, on_power_cycle, bridge_getter=None):
         self.bridge_getter = bridge_getter
@@ -682,6 +690,34 @@ class FixtureServer:
                 return {"ok": False, "error": "speed must be 0, 10 or 100"}
             r = agent.ask("link %d" % sp) if agent else None
             return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+        if op == "net.inject":
+            br = self.bridge_getter() if self.bridge_getter else None
+            if not agent or br is None or not br.hosts:
+                return {"ok": False, "error": "emulator not ready"}
+            try:
+                h = br.hosts[int(args.get("host", 0))]
+                offs = [int(x) for x in args["at_us"]]
+                pls = [str(x).lower() for x in args["payloads"]]
+                fp, tp = int(args["from_port"]), int(args["to_port"])
+            except (KeyError, ValueError, IndexError, TypeError) as e:
+                return {"ok": False, "error": "bad arguments: %s" % e}
+            if len(offs) != len(pls) or not offs or any(o < 0 for o in offs):
+                return {"ok": False, "error": "bad arguments: at_us and payloads must match, offsets >= 0"}
+            r = agent.ask("inject %s %d %d %s %s" % (h["ip"], fp, tp, ",".join(map(str, offs)), ",".join(pls)), timeout=40)
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"t_us": [int(x) for x in r[3:].split(",")]}}
+        if op == "time.wait":
+            if not agent:
+                return {"ok": False, "error": "emulator not ready"}
+            try:
+                us = int(args["us"])
+            except (KeyError, ValueError, TypeError) as e:
+                return {"ok": False, "error": "bad arguments: %s" % e}
+            r = agent.ask("wait %d" % us, timeout=620)
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"t_us": int(r.split()[1])}}
         if op in ("net.log", "key.log"):
             if not agent:
                 return {"ok": False, "error": "emulator not ready"}

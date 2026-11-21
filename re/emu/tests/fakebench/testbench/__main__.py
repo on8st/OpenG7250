@@ -244,6 +244,36 @@ def run_test(tid, ep):
                 check("key.log start/stop, no key changes", k0.get("ok") and k1.get("ok") and (k1.get("value") or {}).get("count_key") == 0,
                       str(k1)[:200]),
                 check("link event in the trace", bool(link) and link[-1].get("up") == 1, json.dumps(link[-1:]))]
+    if tid == "T-EMU-18":
+        # format v1.7: net.inject places datagrams at exact emulated offsets through the
+        # CH394 receive path; time.wait advances in emulated time
+        h = ep["hosts"][0]
+        so = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        so.bind((h["bind"], h["ports"][0] + 11))
+        so.settimeout(5.0)
+        n0 = ctl.op("net.log", action="start")
+        pl = [b"inj-%d" % k for k in range(3)]
+        r = ctl.op("net.inject", host=0, from_port=h["ports"][0] + 11, to_port=1024, at_us=[0, 121, 1000],
+                   payloads=[x.hex() for x in pl])
+        got = []
+        for _ in range(3):
+            try:
+                d, _ = so.recvfrom(2048)
+                got.append(d)
+            except socket.timeout:
+                break
+        w0 = ctl.op("time.wait", us=0)
+        w = ctl.op("time.wait", us=5000)
+        n1 = ctl.op("net.log", action="stop")
+        ents = [e for e in (n1.get("value") or {}).get("entries", []) if e.get("injected")]
+        ts = (r.get("value") or {}).get("t_us", [])
+        return [check("inject ok, three placing times", r.get("ok") and len(ts) == 3, str(r)[:200]),
+                check("offsets kept exactly", len(ts) == 3 and ts[1] - ts[0] == 121 and ts[2] - ts[0] == 1000, str(ts)),
+                check("injected entries in net.log at those times", [e["t_us"] for e in ents] == ts, json.dumps(ents)[:300]),
+                check("through the receive path to port 1024", all(e["radio_port"] == 1024 and e["dir"] == "to_radio" for e in ents)),
+                check("echoes reach the bench socket", sorted(got) == sorted(pl), repr(got)),
+                check("time.wait 5000 us", w.get("ok") and w0.get("ok") and w["value"]["t_us"] - w0["value"]["t_us"] >= 5000,
+                      "%s -> %s" % (w0.get("value"), w.get("value")))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]
