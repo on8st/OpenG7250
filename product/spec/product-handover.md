@@ -85,8 +85,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0053 | Normative socket buffer split, Table B2-2, powers of two (port 1027: 4 KB in, 2 KB out for wideband) | proposed |
 | 0054 | High Priority bursts without loss: two at wire speed, or any number at >= 1 ms | proposed |
 | 0055 | Flash work exempt from the burst rule; never while armed or keyed; secret writes refused while armed | proposed |
+| 0056 | A malformed command payload is status 17, in the framing group | proposed |
 
-All numbers 0001–0055 are now in use.
+All numbers 0001–0056 are now in use.
 
 ## Open questions for ON8ST
 
