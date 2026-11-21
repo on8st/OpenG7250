@@ -676,6 +676,20 @@ def t_b5_20(ctx):
         before = status_seqs(h, 0.3)
         h.keepalive()
         before += status_seqs(h, 0.2)
+        # running, run = 0 then run = 1 back to back (the pair of 0054 item 1): the stop resets the
+        # counters (B2.7), so the status sequence restarts; this separates a lost stop in the 20
+        # below from counters that a stop with a run right after does not reset
+        time.sleep(0.005)
+        h.s.sendto(high_priority(run=False), ctx.net.dest(PORT_HP))
+        h.s.sendto(high_priority(run=True), ctx.net.dest(PORT_HP))
+        pair_after = status_seqs(h, 0.2)
+        ctx.check("running, run = 0 then run = 1 back to back: the status sequence restarts (B2.7)",
+                  bool(before) and bool(pair_after) and restarted(before[-1], pair_after),
+                  f"before {before[-3:]}, after {pair_after[:3]}")
+        h.keepalive()
+        before = status_seqs(h, 0.3)
+        h.keepalive()
+        before += status_seqs(h, 0.2)
         # 20 packets at least 1 ms apart: nine run, a stop, ten run. The stop resets the outgoing
         # counters (B2.7), so the status sequence restarts near 0 only if no packet was lost
         seq_ = [high_priority(run=True)] * 9 + [high_priority(run=False)] + [high_priority(run=True)] * 10
