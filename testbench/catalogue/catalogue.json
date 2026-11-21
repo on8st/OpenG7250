@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "7da25a9",
-  "sha256_of_inputs": "442f7143de58de2b492eef98ad12142671751835859a8d14b10b5b237cb4d69e"
+  "commit": "580f485",
+  "sha256_of_inputs": "3926c4a147f53e11efa5e1491b6e7f1157cbcc538c9636f167f9892b98080071"
  },
  "his": {
   "commit": "d07627e"
@@ -1553,13 +1553,15 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
-   "needs": [
-    "net.hosts"
+   "also": [
+    "host"
    ],
+   "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "two sockets of hosts[0] are hosts A and B (A2.2); the register destination is a third socket in the mapped range"
+   ]
   },
   {
    "id": "T-A2-11",
@@ -1571,11 +1573,15 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
+   "also": [
+    "host"
+   ],
    "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "two sockets of hosts[0] are hosts A and B (A2.2); the register destination is a third socket in the mapped range"
+   ]
   },
   {
    "id": "T-A2-12",
@@ -1604,13 +1610,15 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
-   "needs": [
-    "net.hosts"
+   "also": [
+    "host"
    ],
+   "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "two sockets of hosts[0] are hosts A and B (A2.2); the register destination is a third socket in the mapped range"
+   ]
   },
   {
    "id": "T-A2-14",
@@ -1646,13 +1654,15 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
-   "needs": [
-    "net.hosts"
+   "also": [
+    "host"
    ],
+   "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "two sockets of hosts[0] are hosts A and B (A2.2); the register destination is a third socket in the mapped range"
+   ]
   },
   {
    "id": "T-A2-16",
@@ -1666,11 +1676,15 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
+   "also": [
+    "host"
+   ],
    "needs": [],
    "pending": [],
-   "tx_part": true,
-   "notes": []
+   "tx_part": false,
+   "notes": [
+    "two sockets of hosts[0] are hosts A and B (A2.2); the register destination is a third socket in the mapped range"
+   ]
   },
   {
    "id": "T-A2-17",
@@ -1684,13 +1698,15 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
-   "needs": [
-    "net.hosts"
+   "also": [
+    "host"
    ],
+   "needs": [],
    "pending": [],
-   "tx_part": true,
-   "notes": []
+   "tx_part": false,
+   "notes": [
+    "two sockets of hosts[0] are hosts A and B (A2.2); the register destination is a third socket in the mapped range"
+   ]
   },
   {
    "id": "T-A3-01",
@@ -6217,7 +6233,7 @@
    "id": "T-B10-43",
    "origin": "spec",
    "part": "A-B",
-   "title": "With CWX, iambic set, *S* = 20 wpm and *W* = 50: a held dot paddle gives marks of 60 ms and spaces of 60 ms, a held dash paddle marks of 180 ms and spaces of 60 ms, within the tolerance of B10.5a item 6; with *S* = 60 the unit is 20 ms; *S* = 70 is used as 60, the log has `CW speed 70 used as 60` and `GET_STATS` `cw_speed_clamped` rises by one per packet; a dot paddle edge while idle keys within 5 ms of the packet's arrival (reference model with a complete calibration set, or emulator; B10.5a items 1, 4; 0046).",
+   "title": "With CWX, iambic set, *S* = 20 wpm and *W* = 50: a held dot paddle gives marks of 60 ms and spaces of 60 ms, a held dash paddle marks of 180 ms and spaces of 60 ms, within the tolerance of B10.5a item 6; with *S* = 60 the unit is 20 ms; *S* = 70 is used as 60, a log entry contains `CW speed 70 used as 60` and `GET_STATS` `cw_speed_clamped` rises by one per packet; a dot paddle edge while idle keys within 5 ms of the packet's arrival (reference model with a complete calibration set, or emulator; B10.5a items 1, 4; 0046).",
    "reqs": [
     "B10",
     "B10.5a"
@@ -6392,6 +6408,27 @@
    "tx_part": true,
    "notes": [
     "needs TX unlocked: blocked until the calibration set is complete (tx bit 4)"
+   ]
+  },
+  {
+   "id": "T-B10-47",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "An ATU tune cycle (reference model with a complete calibration set) that ends tuned gives `TX_STATE` unkey reason 11 and `ATU_STATE` 3; one that ends failed by itself reason 11 and `ATU_STATE` 4; one aborted by `ATU_TUNE` = 0, and one aborted by a stop request, reason 1 and `ATU_STATE` 4; one stopped by the ATU tune time reason 4 with limit id 8 (A3.9b item 6; 0047).",
+   "reqs": [
+    "B10",
+    "A3.9b"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": true,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
    ]
   },
   {

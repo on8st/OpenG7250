@@ -227,6 +227,11 @@ OVERRIDES: dict[str, dict] = {
     **{t: {"target": "needs-radio", "also": ["emulator"], "pending": ["P-RX-2"]}
        for t in ["T-B6-08", "T-B6-09", "T-B6-11", "T-B6-12", "T-B6-17"]},
     "T-A1-64": {"target": "emulator", "also": ["host"]},
+    # Takeover notice (A2.4): two sockets of hosts[0] are two hosts (A2.2), so no net.hosts;
+    # with TX locked the old owner is unarmed, which A2.4 step 1 covers in full
+    **{t: {"target": "emulator", "also": ["host"], "needs": [], "tx_part": False,
+           "notes": ["two sockets of hosts[0] are hosts A and B (A2.2); the register destination is a third socket in the mapped range"]}
+       for t in ["T-A2-10", "T-A2-11", "T-A2-13", "T-A2-15", "T-A2-16", "T-A2-17"]},
     # CWX keyer (B10.5a, 0046): judged on the key.log fixture (format v1.5), on the reference
     # model with a calibration set and on the emulator once the image keys; blocked on the
     # calibration set of the freeze rule until then (Annex P)
