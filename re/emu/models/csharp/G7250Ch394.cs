@@ -78,6 +78,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         private static string Ip(byte[] b, int o) { return b[o] + "." + b[o + 1] + "." + b[o + 2] + "." + b[o + 3]; }
 
         private long curShift;      // the delivery shift of the datagram being delivered (0 = on its spacing)
+        private double curWall;     // its host wall-clock arrival, epoch seconds (matches the bench's burst windows)
 
         private void NetRecord(string dir, int n, int radioPort, string peer, byte[] data, int off, int len, string reason = null)
         {
@@ -86,7 +87,8 @@ namespace Antmicro.Renode.Peripherals.SPI
             string e = "{\"t_us\": " + NowUs() + ", \"dir\": \"" + dir + "\", \"socket\": " + n + ", \"radio_port\": " + radioPort
                 + ", \"peer\": \"" + peer + "\", \"len\": " + len + ", \"head\": \"" + hx + "\""
                 + (reason != null ? ", \"reason\": \"" + reason + "\"" : "")
-                + (dir != "from_radio" && curShift != 0 ? ", \"shift_us\": " + curShift : "") + "}";
+                + (dir != "from_radio" && curShift != 0 ? ", \"shift_us\": " + curShift : "")
+                + (dir != "from_radio" && curWall > 0 ? ", \"t_wall\": " + curWall.ToString("F6", System.Globalization.CultureInfo.InvariantCulture) : "") + "}";
             if(runLog.Count >= 200000) runLogDropped++; else runLog.Add(e);
             if(!netLogOn) return;
             if(netLog.Count >= LogCap) { netLogDropped++; return; }
@@ -317,7 +319,11 @@ namespace Antmicro.Renode.Peripherals.SPI
                 }
                 case 0x10: LogSocket("close", n, r); r[0x03] = 0x00; break;   // CLOSE
                 case 0x20: case 0x21: Send(n); break;                      // SEND, SEND_MAC
-                case 0x40: break;                                          // RECV: RX_RD already updated
+                case 0x40:                                                 // RECV: RX_RD already updated
+                    if(runLog.Count < 200000)
+                        runLog.Add("{\"t_us\": " + NowUs() + ", \"dir\": \"recv\", \"socket\": " + n + ", \"radio_port\": " + U16(r, 0x04)
+                            + ", \"left\": " + ((U16(r, 0x2A) - U16(r, 0x28)) & 0xFFFF) + "}");
+                    break;
                 default:
                     this.Log(LogLevel.Warning, "not modelled: CH394/Sn_CR command 0x{0:X2} (socket {1})", c, n);
                     break;
@@ -346,9 +352,9 @@ namespace Antmicro.Renode.Peripherals.SPI
         }
 
         // a datagram from the network: srcIP(4) srcPort(2) dstPort(2) flags(1) data
-        private void Deliver(byte[] p) { Deliver(p, 0); }
+        private void Deliver(byte[] p) { Deliver(p, 0, 0); }
 
-        private void Deliver(byte[] p, long shiftUs)
+        private void Deliver(byte[] p, long shiftUs, double wall)
         {
             if(p.Length < 9) return;
             int dport = (p[6] << 8) | p[7];
@@ -357,7 +363,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             bool ok = false;
             lock(sync)
             {
-                curShift = shiftUs;
+                curShift = shiftUs; curWall = wall;
                 string peer = Ip(p, 0) + ":" + ((p[4] << 8) | p[5]);
                 if(!linkUp) { dropped++; NetRecord("dropped", -1, dport, peer, p, 9, len, "link down"); return; }
                 for(int n = 0; n < Sockets && !ok; n++)
@@ -421,22 +427,31 @@ namespace Antmicro.Renode.Peripherals.SPI
         private readonly System.Diagnostics.Stopwatch hostClock = System.Diagnostics.Stopwatch.StartNew();
         private double hostAnchorUs = -1, lastHostUs = -1e12;
         private ulong emuAnchorUs;
-        private readonly Queue<Tuple<ulong, byte[], long>> pending = new Queue<Tuple<ulong, byte[], long>>();
+        private readonly Queue<Tuple<ulong, byte[], long, double>> pending = new Queue<Tuple<ulong, byte[], long, double>>();
         private Antmicro.Renode.Peripherals.Timers.LimitTimer paceTimer;
         private const double BurstGapUs = 100000, MaxLeadUs = 20000;
+        // the endpoint's time_scale (emulated / wall) for runs where the bench stretches its
+        // host spacing by 1 / time_scale: host offsets are scaled back into emulated time
+        private readonly double timeScale = ParseScale(Environment.GetEnvironmentVariable("G7250_TIME_SCALE"));
+        private static double ParseScale(string v)
+        {
+            double d;
+            return double.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out d) && d > 0 ? d : 1.0;
+        }
 
         private void Arrive(byte[] p)
         {
-            if(machine == null) { Deliver(p, 0); return; }
+            double wall = (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+            if(machine == null) { Deliver(p, 0, wall); return; }
             double host = hostClock.Elapsed.TotalMilliseconds * 1000.0;
             ulong now = NowUs();
             long shift = 0;
             ulong target;
             lock(paceSync)
             {
-                if(host - lastHostUs > BurstGapUs || hostAnchorUs < 0) { hostAnchorUs = host; emuAnchorUs = now; }
+                if(host - lastHostUs > BurstGapUs / timeScale || hostAnchorUs < 0) { hostAnchorUs = host; emuAnchorUs = now; }
                 lastHostUs = host;
-                double t = emuAnchorUs + (host - hostAnchorUs);
+                double t = emuAnchorUs + (host - hostAnchorUs) * timeScale;
                 if(t > now + MaxLeadUs)
                 {
                     shift = (long)(now - t);                 // negative: delivered earlier than its spacing
@@ -448,9 +463,9 @@ namespace Antmicro.Renode.Peripherals.SPI
                 // keep the order of arrival
                 if(pending.Count > 0) target = Math.Max(target, LastTarget());
                 if(target <= now && pending.Count == 0) { }
-                else { pending.Enqueue(Tuple.Create(target, p, shift)); ArmPace(); return; }
+                else { pending.Enqueue(Tuple.Create(target, p, shift, wall)); ArmPace(); return; }
             }
-            Deliver(p, shift);
+            Deliver(p, shift, wall);
         }
 
         private readonly object paceSync = new object();
@@ -478,7 +493,7 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         private void OnPace()
         {
-            var due = new List<Tuple<ulong, byte[], long>>();
+            var due = new List<Tuple<ulong, byte[], long, double>>();
             lock(paceSync)
             {
                 paceTimer.Enabled = false;
@@ -486,7 +501,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 while(pending.Count > 0 && pending.Peek().Item1 <= now) due.Add(pending.Dequeue());
                 if(pending.Count > 0) ArmPace();
             }
-            foreach(var x in due) Deliver(x.Item2, x.Item3);
+            foreach(var x in due) Deliver(x.Item2, x.Item3, x.Item4);
         }
 
         // ---- local link to the test-bench runner ----

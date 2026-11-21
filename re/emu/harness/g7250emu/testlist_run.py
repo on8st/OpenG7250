@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import re
 import os
 import subprocess
 import sys
@@ -68,6 +69,39 @@ def shift_bursts(tdir):
     for b in bursts:
         b["last_t_us"] = b.pop("last")
     return bursts
+
+
+# The bench names the bursts a check judges: "[burst NAME, host wall T0-T1]" (epoch s).
+# A test whose judged burst had a datagram shifted by more than its limit is "not
+# evidence" (status error), not pass or fail.
+SHIFT_LIMIT_US = {"T-B5-20": 200}
+_BURST = re.compile(r"\[burst ([^,\]]+), host wall ([0-9.]+)-([0-9.]+)\]")
+
+
+def judged_bursts(entry, tdir):
+    """{name: (count, dropped, max_shift_us)} for the bursts named in the checks."""
+    names = {}
+    for c in entry.get("checks", []):
+        for m in _BURST.finditer("%s %s" % (c.get("name", ""), c.get("detail", ""))):
+            names[m.group(1)] = (float(m.group(2)), float(m.group(3)))
+    if not names:
+        return {}
+    path = os.path.join(tdir, "net-log.jsonl")
+    ents = []
+    if os.path.isfile(path):
+        for ln in open(path):
+            try:
+                e = json.loads(ln)
+            except ValueError:
+                continue
+            if e.get("dir") in ("to_radio", "dropped") and "t_wall" in e:
+                ents.append(e)
+    out = {}
+    for n, (t0, t1) in names.items():
+        sel = [e for e in ents if t0 - 0.002 <= e["t_wall"] <= t1 + 0.002]
+        out[n] = {"host_wall": [t0, t1], "count": len(sel), "dropped": sum(e["dir"] == "dropped" for e in sel),
+                  "max_shift_us": max([abs(int(e.get("shift_us", 0))) for e in sel] or [0])}
+    return out
 
 
 def macraw_seen(log_path):
@@ -333,6 +367,8 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                 bt.close()
             continue
         ep["minor"] = FORMAT_MINOR
+        if os.environ.get("G7250_TIME_SCALE"):
+            ep["time_scale"] = float(os.environ["G7250_TIME_SCALE"])   # emulated / wall, for timed runs (the bench stretches its waits)
         ep_path = os.path.join(tdir, "endpoint.json")
         json.dump(ep, open(ep_path, "w"), indent=2)
         wall_cap = 30.0 * float(t.get("timeout_s", 30)) + 120.0
@@ -363,6 +399,16 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         if bt.agent.traces:
             arts["trace"] = [os.path.join(rel, os.path.basename(x)) for x in bt.agent.traces]
         e["artifacts"] = arts
+        jb = judged_bursts(e, tdir)
+        if jb:
+            e.setdefault("emulator", {})["judged_bursts"] = jb
+            lim = SHIFT_LIMIT_US.get(t["id"])
+            worst = max(b["max_shift_us"] for b in jb.values())
+            if lim is not None and worst > lim and e.get("status") in ("pass", "fail"):
+                bad = [n for n, b in jb.items() if b["max_shift_us"] > lim]
+                e["reason"] = ("not evidence: datagram delivery shifted by up to %d us in emulated time in the judged burst(s) %s "
+                               "(> %d us); bench: %s %s" % (worst, ", ".join(bad), lim, e.get("status"), e.get("reason") or ""))
+                e["status"] = "error"
         bursts = shift_bursts(tdir)
         if bursts:
             em = e.setdefault("emulator", {})
