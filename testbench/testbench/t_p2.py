@@ -636,10 +636,21 @@ def status_seqs(h: Host, t: float):
     return [struct.unpack_from(">I", d, 0)[0] for p, d, _ in h.recv(t) if p == PORT_DDC]
 
 
+def restarted(last_before: int, after: list[int]) -> bool:
+    """The status sequence restarts (drops to 0 or 1) at some point after last_before; a packet
+    sent before the stop may still come first (the 20 packets take about 22 ms)."""
+    prev = last_before
+    for x in after:
+        if x < prev and x <= 1:
+            return True
+        prev = x
+    return False
+
+
 @test("T-B5-20")
 def t_b5_20(ctx):
-    """B2.3, Table B2-2 (0053): the port 1027 receive buffer holds two High Priority packets, so
-    back-to-back packets and a burst of ten are all processed."""
+    """B2.3 "High Priority bursts" (0053, 0054): two packets back to back at wire speed with no
+    third within 2 ms, and a sequence of 20 packets 1 ms apart, are all processed."""
     with Host(ctx.net) as h, Host(ctx.net) as obs:
         # running, then run = 1 and run = 0 back to back: the session ends
         h.start()
@@ -647,10 +658,11 @@ def t_b5_20(ctx):
         while time.monotonic() < keep_until:
             h.keepalive()
             h.recv(0.05)
+        time.sleep(0.005)  # no packet within 2 ms before the pair either
         h.s.sendto(high_priority(run=True), ctx.net.dest(PORT_HP))
         h.s.sendto(high_priority(run=False), ctx.net.dest(PORT_HP))
         h.running = False
-        h.recv(0.2)
+        h.recv(0.2)  # nothing sent for 200 ms: no third packet within 2 ms
         ctx.eq("run = 1 then run = 0 back to back: the session ends (discovery byte 4 for another host)",
                running_seen_by(obs), 2)
         ctx.eq("and no High Priority status packet follows", len(status_seqs(h, 0.3)), 0)
@@ -663,15 +675,24 @@ def t_b5_20(ctx):
         before = status_seqs(h, 0.3)
         h.keepalive()
         before += status_seqs(h, 0.2)
-        # a burst of ten: four run, a stop, five run. The stop resets the outgoing counters
-        # (B2.7), so the status sequence restarts near 0 only if no packet was lost
-        burst = [high_priority(run=True)] * 4 + [high_priority(run=False)] + [high_priority(run=True)] * 5
-        for pkt in burst:
+        # 20 packets at least 1 ms apart: nine run, a stop, ten run. The stop resets the outgoing
+        # counters (B2.7), so the status sequence restarts near 0 only if no packet was lost
+        seq_ = [high_priority(run=True)] * 9 + [high_priority(run=False)] + [high_priority(run=True)] * 10
+        gaps, last = [], None
+        for pkt in seq_:
+            while last is not None and time.monotonic() - last < 0.0011:
+                pass  # busy wait: at least 1 ms between packets (0054)
+            now = time.monotonic()
+            if last is not None:
+                gaps.append(now - last)
             h.s.sendto(pkt, ctx.net.dest(PORT_HP))
+            last = now
+        ctx.check("20 packets sent at least 1 ms apart (host side)", min(gaps) >= 0.001,
+                  f"gaps {min(gaps) * 1000:.2f}-{max(gaps) * 1000:.2f} ms")
         after = status_seqs(h, 0.25)
         h.keepalive()
-        ctx.eq("burst of ten: the session runs at the end (the last packet processed)", running_seen_by(obs), 3)
-        ctx.check("burst of ten: the stop inside it was processed (status sequence restarted, B2.7)",
-                  bool(after) and bool(before) and after[0] <= 2 and after[0] < before[-1],
+        ctx.eq("20 packets 1 ms apart: the session runs at the end (the last packet processed)", running_seen_by(obs), 3)
+        ctx.check("20 packets 1 ms apart: the stop inside them was processed (status sequence restarted, B2.7)",
+                  bool(after) and bool(before) and restarted(before[-1], after),
                   f"status sequence before {before[-3:]}, after {after[:3]}")
         h.stop()
