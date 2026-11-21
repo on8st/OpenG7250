@@ -26,17 +26,53 @@ The RF I/Q front end is an **FPGA reached over an 8-bit parallel bus on GPIOE**
 | Code | Function |
 | --- | --- |
 | 0x00 | loopback/test register: a written byte reads back |
-| 0x01 | 24-byte config frame: byte 0 status flags; three big-endian 32-bit NCO words at byte offsets 1, 5 and 19 (HIGH); bytes 9–18 other fields incl. per-rate calibration (meanings unknown); byte 23 most likely the rate index (MEDIUM) |
+| 0x01 | 24-byte config frame: byte 0 status flags; three big-endian 32-bit NCO words at byte offsets 1, 5 and 19 (HIGH); bytes 9–18 other fields incl. per-rate calibration (meanings unknown); byte 23 most likely the rate index (MEDIUM). F4-Q2: the meaning of byte 0 and of bytes 9–18 and safe values for them are **not known**; the values the factory image writes are per-unit data and are not given here (needs a radio measurement or FPGA documentation) |
 | 0x02 | status read (flag bits + three 16-bit values incl. ADC peak) |
 | 0x03 | TX I/Q write — two signed 24-bit values per sample |
 | 0x04 | RX I/Q read — two signed 24-bit values per sample, 8/4/2/1 per DRDY for rate index 0–3 |
 | 0x05/0x06, 0x09/0x0A | exist (two pulse commands); role unknown. **MUST NOT** be sent |
 | 0x08 | 3-byte FPGA version read |
 
+## Bus cycle (F4-Q1, F4-Q4, F4-Q5)
+
+Evidence for this section: the bus routines of the factory image (firmware
+analysis, **rests on disassembly**); no measurement on the radio, no FPGA
+documentation. Timing values the factory image happens to produce are not
+given here (stock timing).
+
+- **Strobe polarity (F4-Q1):** STB (PE9) and CMD (PE8) are active-high
+  pulses: a command byte is latched by raising CMD and STB and then lowering
+  both; each data byte by raising STB and then lowering it (MEDIUM: inferred
+  from the factory image's pin sequence; the FPGA's sampling edge is not
+  documented).
+- **Who drives D0–D7 (F4-Q1):** the MCU drives D0–D7 for the command byte and
+  for data it writes (0x00, 0x01, 0x03). For a read (0x00 read-back, 0x02,
+  0x04, 0x08) the MCU first switches D0–D7 to inputs, then the FPGA drives the
+  byte while STB is high; the MCU samples D0–D7 during the high phase of STB
+  (MEDIUM, same evidence). When the FPGA releases D0–D7 after a read strobe is
+  **not known**: new firmware MUST switch D0–D7 back to outputs only after STB
+  is low again, and should not drive them while any read is pending.
+- **Set-up time, strobe width, turnaround time (F4-Q1):** **not known**; they
+  need a measurement on the radio (`90-needs-hardware.md`).
+- **0x04 RX read (F4-Q4):** each 24-bit value is read as three bytes, most
+  significant byte first (big-endian), one STB per byte; two values per sample,
+  so six strobes per sample (MEDIUM, same evidence). Which of the two values is
+  I and which is Q is **not known**. Samples per DRDY: 8/4/2/1 for rate index
+  0–3 (MEDIUM, as below).
+- **DRDY (F4-Q5):** the active edge is rising (HIGH: the factory image
+  configures EXTI10 for the rising edge only). What the FPGA does when a read
+  comes late (a missed or lost block, an overrun indication in the 0x02 status
+  flags) is **not known**; the meaning of the 0x02 flag bits is not known.
+
 ## Timing / data
 - **NCO:** 32-bit phase words, f × 2³² / f_clk (formula VERIFIED), with
-  f_clk = 122.88 MHz (MEDIUM). The FPGA takes a phase word for the first Nyquist
-  zone (0 to f_clk/2) plus a spectral-inversion flag in the frame.
+  f_clk = 122.88 MHz (MEDIUM: half of a 245.76 MHz clock-generator output, not
+  measured). The words are given for the first Nyquist zone (0 to f_clk/2).
+  Whether the 0x01 frame carries a spectral-inversion flag, and where, is **not
+  known** (F4-Q2).
+- **Which NCO word is DDC0 (F4-Q3):** offsets 1 and 5 each set a receive-path
+  tuning frequency (MEDIUM, see "Open"); which of them drives ADC0/DDC0 is
+  **not known** and needs the capture of `90-needs-hardware.md`.
 - **Sample rate:** rate index 0–3 → 384/192/96/48 kS/s I/Q; DRDY (PE10) at
   ~48 kHz (MEDIUM; absolute rate unmeasured).
 
