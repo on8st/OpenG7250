@@ -25,15 +25,36 @@ use g7250_proto::dhcp;
 // SRAM4 (0x38000000, section `.sram4` of memory-slot-*.x), never in AXI or D2 SRAM (transfer
 // error) and never in the Backup SRAM at 0x38800000 ([HIS] HIS 15 rule 4).
 
-/// SPI clock. HIS 40: "about 17 MHz is known to work"; SPI6 kernel clock is PCLK4 = 64 MHz here.
+/// SPI clock. [HIS] HIS 40 (`6e2208a`): the CH394 takes up to 62 MHz in mode 0 or 3 (datasheet,
+/// VERIFIED), but about 17 MHz seen on the board link (MEDIUM) is the safe bound until the link
+/// is measured (P-NET-1). SPI6 kernel clock is PCLK4 = 64 MHz here; 64 / 4 = 16 MHz.
 const SPI_HZ: u32 = 16_000_000;
 const SOCK_DISCOVERY: u8 = 0;
 const SOCK_MGMT: u8 = 7;
 
 /// SPI device over the HAL bus with a GPIO chip select.
+///
+/// Every operation runs full duplex: one frame received for every frame sent. RM0468: the SPI6
+/// receive FIFO holds only a few frames, and in full-duplex mode a frame that arrives while it is
+/// full sets OVR. The HAL's `write` sends without reading back (it leaves OVR set on purpose),
+/// so a write followed by a read in one chip-select failed with `Overrun` (first emulator run,
+/// 2026-11-21: "cannot open port 1024 (Spi(Overrun))"). Writes therefore go through
+/// `transfer_in_place` on a copy, reads send zeros, and OVR is cleared before each transaction
+/// and after an error.
 pub struct CsDevice<'d> {
     bus: Spi<'d, Blocking, spi::mode::Master>,
     cs: Output<'d>,
+}
+
+/// Clear OVR (and the other error flags) of SPI6: SPI_IFCR, RM0468.
+fn spi6_clear_errors() {
+    embassy_stm32::pac::SPI6.ifcr().write(|w| {
+        w.set_ovrc(true);
+        w.set_udrc(true);
+        w.set_modfc(true);
+        w.set_eotc(true);
+        w.set_txtfc(true);
+    });
 }
 
 impl ErrorType for CsDevice<'_> {
@@ -42,12 +63,28 @@ impl ErrorType for CsDevice<'_> {
 
 impl SpiDevice for CsDevice<'_> {
     fn transaction(&mut self, ops: &mut [Operation<'_, u8>]) -> Result<(), spi::Error> {
+        spi6_clear_errors();
         self.cs.set_low();
         let mut r = Ok(());
         for op in ops.iter_mut() {
             r = match op {
-                Operation::Read(b) => SpiBus::read(&mut self.bus, b),
-                Operation::Write(b) => SpiBus::write(&mut self.bus, b),
+                Operation::Read(b) => {
+                    b.fill(0);
+                    SpiBus::transfer_in_place(&mut self.bus, b)
+                }
+                Operation::Write(b) => {
+                    let mut tmp = [0u8; 64];
+                    let mut res = Ok(());
+                    for chunk in b.chunks(tmp.len()) {
+                        let t = &mut tmp[..chunk.len()];
+                        t.copy_from_slice(chunk);
+                        res = SpiBus::transfer_in_place(&mut self.bus, t);
+                        if res.is_err() {
+                            break;
+                        }
+                    }
+                    res
+                }
                 Operation::Transfer(rd, wr) => SpiBus::transfer(&mut self.bus, rd, wr),
                 Operation::TransferInPlace(b) => SpiBus::transfer_in_place(&mut self.bus, b),
                 Operation::DelayNs(_) => Ok(()),
@@ -58,6 +95,9 @@ impl SpiDevice for CsDevice<'_> {
         }
         let f = SpiBus::<u8>::flush(&mut self.bus);
         self.cs.set_high();
+        if r.is_err() || f.is_err() {
+            spi6_clear_errors();
+        }
         r.and(f)
     }
 }
