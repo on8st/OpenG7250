@@ -48,18 +48,24 @@ fn outside_flash_refused() {
 fn application_may_write_only_other_slot_and_config() {
     let w = Writer::Application { running: Slot::A };
     assert_eq!(FlashGuard::check(w, Op::Erase, SLOT_B.start, SECTOR_SIZE), Ok(()));
-    assert_eq!(FlashGuard::check(w, Op::Program, CONFIG.start, 32), Ok(()));
+    assert_eq!(FlashGuard::check(w, Op::Program, STORE.start, 32), Ok(()));
+    assert_eq!(FlashGuard::check(w, Op::Erase, STORE_SECTORS[0].start, SECTOR_SIZE), Ok(()));
+    assert_eq!(FlashGuard::check(w, Op::Erase, STORE_SECTORS[1].start, SECTOR_SIZE), Ok(()));
     assert_eq!(FlashGuard::check(w, Op::Erase, SLOT_A.start, SECTOR_SIZE), Err(Refusal::NotAllowedForWriter));
     assert_eq!(FlashGuard::check(w, Op::Erase, BOOT_STAGE.start, SECTOR_SIZE), Err(Refusal::NotAllowedForWriter));
-    assert_eq!(FlashGuard::check(w, Op::Erase, RESERVED_S6.start, SECTOR_SIZE), Err(Refusal::NotAllowedForWriter));
-    // A span that runs from slot B into sector 6 is refused as a whole.
+    // A span that runs from slot B into the store is refused as a whole (neither region holds it).
     assert_eq!(FlashGuard::check(w, Op::Erase, SLOT_B.start, 3 * SECTOR_SIZE), Err(Refusal::NotAllowedForWriter));
+    // Running from B, slot A is the other slot; the store is still allowed, slot B is not.
+    let wb = Writer::Application { running: Slot::B };
+    assert_eq!(FlashGuard::check(wb, Op::Erase, SLOT_B.start, SECTOR_SIZE), Err(Refusal::NotAllowedForWriter));
+    assert_eq!(FlashGuard::check(wb, Op::Erase, STORE_SECTORS[0].start, SECTOR_SIZE), Ok(()));
 }
 
 #[test]
 fn boot_stage_writes_only_config() {
-    assert_eq!(FlashGuard::check(Writer::BootStage, Op::Program, CONFIG.start + 64, 32), Ok(()));
-    for r in [BOOT_STAGE, SLOT_A, SLOT_B, RESERVED_S6] {
+    assert_eq!(FlashGuard::check(Writer::BootStage, Op::Program, STORE.start + 64, 32), Ok(()));
+    assert_eq!(FlashGuard::check(Writer::BootStage, Op::Program, STORE_SECTORS[1].start, 32), Ok(()));
+    for r in [BOOT_STAGE, SLOT_A, SLOT_B] {
         assert_eq!(FlashGuard::check(Writer::BootStage, Op::Program, r.start, 32), Err(Refusal::NotAllowedForWriter));
     }
 }

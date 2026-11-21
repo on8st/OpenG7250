@@ -75,12 +75,15 @@ pub const BOOT_STAGE: Range = Range::new(0x0802_0000, 0x0804_0000);
 pub const SLOT_A: Range = Range::new(0x0804_0000, 0x0808_0000);
 /// Sectors 4-5: image slot B (256 KiB).
 pub const SLOT_B: Range = Range::new(0x0808_0000, 0x080C_0000);
-/// Sector 6: kept free. [HIS] HIS 15 rule 5 lists an open check whether the vendor bootloader
-/// uses sector 6 as a staging area (HYPOTHESIS); until the F1 drill settles it, nothing of ours
-/// lives there.
-pub const RESERVED_S6: Range = Range::new(0x080C_0000, 0x080E_0000);
-/// Sector 7: configuration, boot record and log of this firmware.
-pub const CONFIG: Range = Range::new(0x080E_0000, 0x0810_0000);
+/// Sectors 6 and 7: the store of this firmware (boot record, boot counter, configuration,
+/// calibration set, secret), used in turn so that an erase never meets the only copy
+/// (`g7250-store`). [HIS] HIS 15 rule 5 lists an open check whether the vendor bootloader uses
+/// sector 6 as a staging area (HYPOTHESIS): if F1 shows it does, a vendor update overwrites the
+/// store there, which is harmless (a vendor update replaces this firmware anyway); if it showed
+/// that the bootloader acts on sector 6 at every start, the layout comes back for review.
+pub const STORE: Range = Range::new(0x080C_0000, 0x0810_0000);
+/// The two store sectors.
+pub const STORE_SECTORS: [Range; 2] = [Range::new(0x080C_0000, 0x080E_0000), Range::new(0x080E_0000, 0x0810_0000)];
 
 /// Offset of the image header from the start of a slot or of the boot stage. The vector table
 /// sits at offset 0 ([HIS] HIS 10); the H72x vector table is shorter than 0x400 bytes.
@@ -111,9 +114,9 @@ impl Slot {
 /// Who asks to write. Each writer has its own allowed set; sector 0 is in none of them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Writer {
-    /// The running application, updating the other slot (A1.8) or its configuration and log.
+    /// The running application, updating the other slot (A1.8) or the store.
     Application { running: Slot },
-    /// The boot stage, writing only the boot record in the configuration sector.
+    /// The boot stage, writing only the boot record in the store.
     BootStage,
     /// The streaming installer for an owner-supplied stock image (0028 Decision 2; [HIS] HIS 15
     /// "Installing the factory firmware": "writes only sectors 1-7").
@@ -165,9 +168,9 @@ impl FlashGuard {
         }
         let allowed = match writer {
             Writer::Application { running } => {
-                running.other().range().contains_span(addr, len) || CONFIG.contains_span(addr, len)
+                running.other().range().contains_span(addr, len) || STORE.contains_span(addr, len)
             }
-            Writer::BootStage => CONFIG.contains_span(addr, len),
+            Writer::BootStage => STORE.contains_span(addr, len),
             Writer::StockInstaller => true, // sectors 1-7, already checked above
         };
         if allowed { Ok(()) } else { Err(Refusal::NotAllowedForWriter) }
@@ -187,9 +190,11 @@ const _: () = {
     assert!(BOOT_STAGE.start == 0x0802_0000); // [HIS] HIS 10
     assert!(BOOT_STAGE.end == SLOT_A.start);
     assert!(SLOT_A.end == SLOT_B.start);
-    assert!(SLOT_B.end == RESERVED_S6.start);
-    assert!(RESERVED_S6.end == CONFIG.start);
-    assert!(CONFIG.end == FLASH_END);
+    assert!(SLOT_B.end == STORE.start);
+    assert!(STORE.end == FLASH_END);
+    assert!(STORE_SECTORS[0].start == STORE.start && STORE_SECTORS[0].end == STORE_SECTORS[1].start);
+    assert!(STORE_SECTORS[1].end == STORE.end);
+    assert!(STORE_SECTORS[0].len() == SECTOR_SIZE && STORE_SECTORS[1].len() == SECTOR_SIZE);
     assert!(SLOT_A.len() == SLOT_B.len());
     assert!(SLOT_A.start % SECTOR_SIZE == 0 && SLOT_B.start % SECTOR_SIZE == 0);
     assert!(VENDOR_BOOTLOADER.end == APPLICATION_AREA.start);

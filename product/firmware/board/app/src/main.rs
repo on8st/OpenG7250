@@ -152,6 +152,16 @@ async fn main(spawner: Spawner) {
         None => 0,
     };
     println!("app: boot counter {}", boot_counter);
+    // Test build only: compact the store at every start, so that the emulator can cut power or
+    // stretch the erase at any point of a compaction (docs/emulator-run.md, "Store").
+    #[cfg(feature = "test-compact-at-start")]
+    if let Some(s) = store.as_mut() {
+        println!("app: TEST compaction: live sector {} generation {}", 6 + s.live_sector(), s.generation());
+        match s.compact() {
+            Ok(()) => println!("app: TEST compaction done: live sector {} generation {}", 6 + s.live_sector(), s.generation()),
+            Err(e) => println!("app: TEST compaction FAILED ({:?})", e),
+        }
+    }
     // Transmit gate (F3). With no calibration the core can never arm.
     let tx = TxCore::new(boot_counter, &MEASURED);
     println!(

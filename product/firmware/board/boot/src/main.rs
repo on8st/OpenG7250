@@ -12,7 +12,7 @@ use cortex_m_rt::entry;
 use g7250_board::{FW_BETA, FW_MAJOR, FW_MINOR, FW_BUILD, FW_VERSION, console, early_init, println, reset, safe, wdg};
 use g7250_layout::header::{self, Header, Kind};
 use g7250_layout::select::{self, Choice};
-use g7250_layout::{BOOT_STAGE, CONFIG, Range, Slot};
+use g7250_layout::{BOOT_STAGE, Range, STORE, Slot};
 
 #[unsafe(link_section = ".image_header")]
 #[used]
@@ -71,7 +71,7 @@ fn main() -> ! {
     wdg::start();
     println!("boot: safe state held, watchdog {} ms", wdg::TIMEOUT_MS);
 
-    let record = select::last_record(flash(CONFIG));
+    let record = select::last_record(flash(STORE));
     let valid = |s: Slot| {
         let r = s.range();
         match header::validate(flash(r), Kind::Application, r, APP_RAM) {

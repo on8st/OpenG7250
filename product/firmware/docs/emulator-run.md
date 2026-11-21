@@ -58,6 +58,26 @@ gets 32 (no trailer) or 33 (no secret can be set yet); `SET_FIRST_SECRET`, `READ
 `UPDATE_STATUS` and all writes get 56 until step 4. `GET_CHALLENGE` gets 56 if the RNG does not
 deliver (HSI48 or RNG not modelled).
 
+## Store: watchdog- and power-loss-safe compaction
+
+Image: `out/test/g7250-compact.elf` (test build: compacts the store at every start; never for
+the radio). Console: `app: boot counter N`, `app: TEST compaction: live sector S generation G`,
+`app: TEST compaction done: live sector S' generation G+1`, with S' alternating 7 → 6 → 7 …
+
+What the emulator should force, and what passes:
+
+| Id | Force | Pass |
+|---|---|---|
+| ST-01 | Sector erase time at the STM32H725/735 datasheet maximum (FLASH_SR1 BSY/QW held for that long after START) | No watchdog reset during the erase; the compaction ends; the next start shows the next generation and N + 1 |
+| ST-02 | Erase time beyond 10 s (BSY never clears) | No hang, no watchdog reset loop: `app: TEST compaction FAILED (…Erase(…))`, the radio goes on running on the old sector; next start: same generation, N + 1 |
+| ST-03 | Power cut during the erase of the other sector (any point) | Next start: same generation as before, every value present, N ≥ the last value |
+| ST-04 | Power cut after each flash word written during steps 2-3 (copy, commit) | Next start: generation G or G+1, every value present, N never goes back |
+| ST-05 | During ST-01, check the bus | No instruction fetch from 0x08000000–0x080FFFFF between START and the end of BSY/QW; interrupts masked; IWDG KR written with 0xAAAA during the poll |
+| ST-06 | Flash ECC fault on reading a word of a half-erased sector, if the emulator can model it | Known residual risk (see `docs/memory-layout.md`, "Residual risk"); please report what happens |
+
+"Every value present" can be read over the management channel once step 4 exists; until then
+the console boot counter (monotonic, never back to 1) is the visible check.
+
 ## F3 status (transmit gate)
 
 No network path to TX exists yet (no High Priority packet, no register map). What the image

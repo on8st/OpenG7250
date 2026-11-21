@@ -32,6 +32,10 @@ cp "$rel/g7250-boot" "$out/g7250-boot.elf"
 cp "$rel/g7250-app" "$out/g7250-app-a.elf"
 cp "$relb/g7250-app" "$out/g7250-app-b.elf"
 
+echo "== flash erase runs from RAM"
+sh board/check-ramfunc.sh "$out/g7250-app-a.elf"
+sh board/check-ramfunc.sh "$out/g7250-app-b.elf"
+
 echo "== seal and check"
 tool="cargo run --quiet -p g7250-imgtool --"
 $tool seal boot "$out/g7250-boot.elf" --bin "$out/g7250-boot.bin"
@@ -42,6 +46,14 @@ $tool check app-a "$out/g7250-app-a.elf"
 $tool check app-b "$out/g7250-app-b.elf"
 $tool merge "$out/g7250.elf" "$out/g7250-boot.elf" "$out/g7250-app-a.elf"
 
-(cd "$out" && shasum -a 256 g7250.elf g7250-boot.elf g7250-app-a.elf g7250-app-b.elf ./*.bin > SHA256SUMS)
+echo "== test build: compaction at every start (emulator only)"
+(cd board && cargo build --release -p g7250-app --features test-compact-at-start --target-dir target/test-compact)
+mkdir -p "$out/test"
+cp board/target/test-compact/thumbv7em-none-eabihf/release/g7250-app "$out/test/g7250-app-a-compact.elf"
+sh board/check-ramfunc.sh "$out/test/g7250-app-a-compact.elf"
+$tool seal app-a "$out/test/g7250-app-a-compact.elf"
+$tool merge "$out/test/g7250-compact.elf" "$out/g7250-boot.elf" "$out/test/g7250-app-a-compact.elf"
+
+(cd "$out" && shasum -a 256 g7250.elf g7250-boot.elf g7250-app-a.elf g7250-app-b.elf ./*.bin test/g7250-compact.elf > SHA256SUMS)
 echo "== done"
 cat "$out/SHA256SUMS"

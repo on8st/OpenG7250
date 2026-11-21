@@ -14,11 +14,15 @@ Single bank, 1 MiB, eight sectors of 128 KiB ([HIS] HIS 15, `9d10e72`, part MEDI
 | 0x08020000–0x0803FFFF | 1 | our boot stage; the vendor bootloader starts it (HIS 10) | the stock installer only (0028 Decision 2) |
 | 0x08040000–0x0807FFFF | 2–3 | slot A, 256 KiB | the application running from B; the stock installer |
 | 0x08080000–0x080BFFFF | 4–5 | slot B, 256 KiB | the application running from A; the stock installer |
-| 0x080C0000–0x080DFFFF | 6 | kept free | the stock installer only |
-| 0x080E0000–0x080FFFFF | 7 | configuration, boot record, log | application, boot stage; the stock installer |
+| 0x080C0000–0x080DFFFF | 6 | store, used in turn with sector 7 | application, boot stage; the stock installer |
+| 0x080E0000–0x080FFFFF | 7 | store, used in turn with sector 6 | application, boot stage; the stock installer |
 
-- Sector 6 is kept free because HIS 15 rule 5 has an open check whether the vendor bootloader
-  uses sector 6 as a staging area (HYPOTHESIS). Once the F1 drill settles it, it can hold the log.
+- Sectors 6 and 7 hold the store in turn, so that a compaction never erases the only copy
+  (coordinator review of 25cd204). HIS 15 rule 5 has an open check whether the vendor bootloader
+  uses sector 6 as a staging area (HYPOTHESIS). If it does, a vendor update overwrites the store
+  there; that is harmless, since a vendor update replaces this firmware anyway (and our secret
+  should not survive a return to stock, 0024 R5). If F1 showed that the bootloader *acts on*
+  sector 6 at every start, this layout comes back for review.
 - Option bytes are not memory-mapped flash. They are protected by never using the option-byte
   registers (`FLASH_OPTCR`, `OPTSR_PRG`, `OPTKEYR` and the other `*_PRG` registers): a source scan
   test fails on any use.
@@ -27,27 +31,43 @@ Single bank, 1 MiB, eight sectors of 128 KiB ([HIS] HIS 15, `9d10e72`, part MEDI
 - Backup SRAM and RTC backup registers are never used (HIS 15 rule 4). The vendored Embassy HAL
   is patched so that its init does not touch the backup domain (`board/vendor/README.md`).
 
-## Store (sector 7)
+## Store (sectors 6 and 7)
 
 `crates/store`: append-only records, each a whole number of 32-byte flash words, each word
 programmed once; header (magic "G7ST", kind, payload version, length, sequence number, CRC-32)
 and payload, padded with 0xFF. The newest valid record of a kind wins; a torn record fails its CRC
 and is skipped. Kinds: boot record (1), boot counter (2), configuration (3, Table M-3 TLVs),
-calibration set (4, the `SET_CALIBRATION` payload), management secret (5).
+calibration set (4, the `SET_CALIBRATION` payload), management secret (5), commit (6).
 
-When the sector is full, the newest record of every kind is copied to RAM, the sector erased and
-written back. A power loss in that window loses configuration, calibration set and secret: the
-radio then comes up with the factory configuration, TX disabled (no calibration) and a new
-first-secret window, which is the safe side. The boot counter then restarts at 1; the arm token
-still differs from the last one before the reset only if the boot counter does (B10.2 item 5),
-so this is an accepted risk while TX cannot be armed. Two-sector rotation needs sector 6, which
-stays free until the F1 drill (HIS 15 rule 5).
+**Generations.** A commit record (payload: generation) marks a sector as complete. The live sector
+is the one whose newest commit has the highest generation; with no commit anywhere (a fresh unit,
+or a store written by the step-2 image) sector 7 is live as generation 0, and its records are
+read as they are.
 
-At one boot-counter record per start, compaction happens about every 4000 starts. **Risk:** a
-128 KiB sector erase stalls the CPU while it runs from the same bank (RM0468), for a time the
-datasheet gives per sector; if it comes near the 2 s IWDG timeout, a compaction resets the MCU
-after the erase and before the write-back, with the effect above. The watchdog is refreshed
-right before and after the erase. Measure on the radio.
+**Compaction**, when the live sector is full (about every 4000 starts at one boot-counter record
+per start): (0) copy the newest record of every kind to RAM; (1) erase the *other* sector;
+(2) copy the records into it; (3) write a commit with the next generation; (4) switch to it. The
+old sector is never touched by this; it is erased by the next compaction. A reset or power loss at
+any step leaves the old committed sector live (steps 0–3, until the commit word is complete) or
+the new one (after), with every value present. Host tests cut power at every flash word of a
+compaction and halfway through the erase, and check that a half-erased sector's old commit does
+not win (`crates/store`, 11 tests).
+
+**Erase from RAM.** A 128 KiB sector erase can outlast the 2 s IWDG, and the CPU cannot fetch
+from the bank being erased (RM0468). `board/app/src/nv.rs` erases with `erase_sector_from_ram`:
+placed in `.data` (AXI SRAM), interrupts masked for its duration (vector table and handlers are
+in that bank), own FLASH register access, IWDG refreshed on every poll of BSY/QW, poll count
+bounded (far above the datasheet maximum); a timeout or an error flag is an error, the store
+stays on the old sector. `board/check-ramfunc.sh` (run by `build.sh`) fails the build if the
+function is not in RAM or branches out of it.
+
+**Residual risk: flash ECC.** On the radio, a word left half-programmed or half-erased by a power
+loss may carry an invalid ECC; reading it can raise a bus fault (RM0468, flash ECC), which the CRC
+scheme cannot catch. A fault-tolerant read path for the store scan is the proposed next fix;
+until then this case resets (watchdog) instead of continuing.
+
+**Test build.** `out/test/g7250-compact.elf` (feature `test-compact-at-start`) compacts at every
+start, for the emulator run (`docs/emulator-run.md`, "Store").
 
 ## RAM
 

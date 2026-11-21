@@ -16,6 +16,8 @@ bench = false
 default = []
 # Link for slot B instead of slot A (an image is linked for one slot; g7250-layout SLOT_A/SLOT_B).
 slot-b = []
+# Test build for the emulator: compact the store at every start (never in a product image).
+test-compact-at-start = []
 
 [dependencies]
 g7250-board = { workspace = true }
