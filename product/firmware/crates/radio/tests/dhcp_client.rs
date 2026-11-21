@@ -136,3 +136,30 @@ fn one_borrow_lasts_at_most_2_s_decision_0041() {
     assert!(matches!(c.state, State::Init { .. }), "retried at the next interval");
     assert_eq!(WAIT_MS, 2_000);
 }
+
+#[test]
+fn the_management_socket_is_free_at_least_4_s_between_borrows() {
+    // No server: every borrow (first send until the client stops listening) is at most 2 s,
+    // and the channel is free for at least 4 s before each one, also right after `new` (the
+    // board starts the client after the power-on exchange: emulator run of dffed29, where the
+    // first retry fell due at once and every management test met a borrow).
+    let mut c = Client::new(MAC, 100, ll(), None, 10_000);
+    let (mut borrowed_at, mut free_since) = (None::<u64>, 10_000u64);
+    let mut t = 10_000;
+    while t < 400_000 {
+        if let Action::Send { .. } = c.poll(t) {
+            if borrowed_at.is_none() {
+                assert!(t - free_since >= 4_000, "borrow at {} only {} ms after the last", t, t - free_since);
+                borrowed_at = Some(t);
+            }
+        }
+        if let Some(b) = borrowed_at {
+            if !c.listening() {
+                assert!(t - b <= WAIT_MS, "borrow from {} to {}", b, t);
+                borrowed_at = None;
+                free_since = t;
+            }
+        }
+        t += 10;
+    }
+}

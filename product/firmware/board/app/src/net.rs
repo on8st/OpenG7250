@@ -4,8 +4,8 @@
 //!
 //! Pins and bus: [HIS] HIS 40 (SCK PG13, MISO PG12, MOSI PG14, AF5, mode 0; CS# PG15; RST# PB5;
 //! INT# PC13, not used yet: the driver polls). Sockets: spec Table B2-1; socket 0 is port 1024.
-//! Socket 7 (the management socket, port 7251) is borrowed for DHCP at power-on, before the P2
-//! sockets are opened (A1.11, provisional).
+//! Socket 7 (the management socket, port 7251) is used for DHCP at power-on, before the P2
+//! sockets are opened, and borrowed for each later exchange, at most 2 s (A1.11; 0041).
 
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::mode::Blocking;
@@ -227,7 +227,7 @@ async fn dhcp(chip: &mut Chip, mac: [u8; 6], xid: u32) -> Option<(NetConfig, Opt
 
 async fn wait_reply(chip: &mut Chip, rx: &mut [u8], xid: u32, mac: [u8; 6], want: u8) -> Option<dhcp::Reply> {
     let start = Instant::now();
-    while Instant::now() - start < Duration::from_secs(3) {
+    while Instant::now() - start < Duration::from_millis(g7250_radio::dhcp_client::WAIT_MS) {
         if let Ok(Some(d)) = chip.udp_recv(SOCK_MGMT, rx) {
             if let Some(r) = dhcp::parse(&rx[..d.len], xid, mac) {
                 if r.msg_type == want {
@@ -253,8 +253,11 @@ async fn configure(chip: &mut Chip, mac: [u8; 6], want: NetConfig) -> (NetConfig
     }
     let xid = u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]) ^ Instant::now().as_ticks() as u32;
     let ll = netcfg::link_local(mac, 0);
+    let found = dhcp(chip, mac, xid).await;
+    // The client's timers start now, after the power-on exchange: started before it, the first
+    // retry fell due at once and borrowed socket 7 just as the management port opened.
     let now = Instant::now().as_millis();
-    if let Some((c, lease, server)) = dhcp(chip, mac, xid).await {
+    if let Some((c, lease, server)) = found {
         let _ = chip.set_ip(c.ip, c.mask, c.gateway);
         let l = lease.unwrap_or(3600).max(60);
         println!("net: DHCP lease {} s from {}; renewal at {} s", l, ip_str(server).as_str(), l / 2);
@@ -263,6 +266,54 @@ async fn configure(chip: &mut Chip, mac: [u8; 6], want: NetConfig) -> (NetConfig
     let _ = chip.set_ip(ll.ip, ll.mask, ll.gateway);
     println!("net: no DHCP lease; link-local, DHCP keeps trying (A1.11)");
     (ll, Source::LinkLocal, Some(DhcpClient::new(mac, xid.wrapping_add(16), ll, None, now)))
+}
+
+/// One pass of the DHCP client after the power-on exchange (A1.11; 0041): retries while
+/// link-local, renewal, rebinding. Socket 7 is borrowed (port 68) from a send until the client
+/// stops listening, at most [`g7250_radio::dhcp_client::WAIT_MS`], and then always given back to
+/// the management port, for a finished exchange as for an abandoned one.
+fn dhcp_step(chip: &mut Chip, c: &mut DhcpClient, borrowed: &mut bool, cfg: &mut NetConfig, p2: &mut crate::p2::P2, buf: &mut [u8], now: u64) {
+    let mut actions: heapless::Vec<DhcpAction, 2> = heapless::Vec::new();
+    if *borrowed {
+        if let Ok(Some(d)) = chip.udp_recv(SOCK_MGMT, buf) {
+            let _ = actions.push(c.on_reply(&buf[..d.len], now));
+        }
+    }
+    let _ = actions.push(c.poll(now));
+    for a in actions {
+        match a {
+            DhcpAction::None => {}
+            DhcpAction::Send { to, msg } => {
+                if !*borrowed {
+                    let _ = chip.udp_close(SOCK_MGMT);
+                    *borrowed = chip.udp_open(SOCK_MGMT, dhcp::CLIENT_PORT).is_ok();
+                }
+                let mut b = [0u8; dhcp::MSG_LEN];
+                let n = msg.encode(c.xid, c.mac(), &mut b);
+                let _ = chip.udp_send(SOCK_MGMT, to, dhcp::SERVER_PORT, &b[..n]);
+            }
+            DhcpAction::Use(new) => {
+                if new.ip != cfg.ip || new.mask != cfg.mask {
+                    // Another address: a C-1 change under A1.11a: the session ends
+                    // (SESSION_CHANGED while armed), nothing is carried over.
+                    p2.address_changed(chip, now);
+                    let _ = chip.set_ip(new.ip, new.mask, new.gateway);
+                    print_cfg(&new, if new.ip[..2] == [169, 254] { Source::LinkLocal } else { Source::Dhcp });
+                } else if new.gateway != cfg.gateway {
+                    let _ = chip.set_ip(new.ip, new.mask, new.gateway);
+                }
+                *cfg = new;
+            }
+        }
+    }
+    if *borrowed && !c.listening() {
+        *borrowed = false;
+        // udp_open closes first; a failed open is tried again on the next pass.
+        if chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
+            *borrowed = true;
+            println!("net: FAULT cannot give socket 7 back to the management port; retrying");
+        }
+    }
 }
 
 fn print_cfg(c: &NetConfig, s: Source) {
@@ -359,6 +410,11 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         // Session watchdog and status first, on every pass, so that no branch below can delay
         // the standby beyond B5.6's 1100 ms (T-B5-10).
         p2.tick(&mut chip, Instant::now().as_millis());
+        // DHCP after the power-on exchange (A1.11), also on every pass: no traffic on the other
+        // sockets can hold a borrow of socket 7 past its 2 s (0041).
+        if let Some(c) = dhcpc.as_mut() {
+            dhcp_step(&mut chip, c, &mut dhcp_borrowed, &mut cfg, &mut p2, &mut mrx, Instant::now().as_millis());
+        }
         // Trial boot: self-confirmation by the criterion of 0044 (network up: this loop runs only
         // then). The 60 s limit is in the main task. A failed write is tried again once a second.
         if mgmt.update.run.trial {
@@ -468,51 +524,6 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 p2.tick(&mut chip, Instant::now().as_millis());
                 if handled {
                     continue;
-                }
-                // DHCP after the power-on exchange (A1.11): retries while link-local, renewal,
-                // rebinding. It borrows socket 7 only for an exchange.
-                if let Some(c) = dhcpc.as_mut() {
-                    let now = Instant::now().as_millis();
-                    let mut actions: heapless::Vec<DhcpAction, 2> = heapless::Vec::new();
-                    if dhcp_borrowed {
-                        if let Ok(Some(d)) = chip.udp_recv(SOCK_MGMT, &mut mrx) {
-                            let _ = actions.push(c.on_reply(&mrx[..d.len], now));
-                        }
-                    }
-                    let _ = actions.push(c.poll(now));
-                    for a in actions {
-                        match a {
-                            DhcpAction::None => {}
-                            DhcpAction::Send { to, msg } => {
-                                if !dhcp_borrowed {
-                                    let _ = chip.udp_close(SOCK_MGMT);
-                                    dhcp_borrowed = chip.udp_open(SOCK_MGMT, dhcp::CLIENT_PORT).is_ok();
-                                }
-                                let mut b = [0u8; dhcp::MSG_LEN];
-                                let n = msg.encode(c.xid, c.mac(), &mut b);
-                                let _ = chip.udp_send(SOCK_MGMT, to, dhcp::SERVER_PORT, &b[..n]);
-                            }
-                            DhcpAction::Use(new) => {
-                                if new.ip != cfg.ip || new.mask != cfg.mask {
-                                    // Another address: a C-1 change under A1.11a: the session ends
-                                    // (SESSION_CHANGED while armed), nothing is carried over.
-                                    p2.address_changed(&mut chip, now);
-                                    let _ = chip.set_ip(new.ip, new.mask, new.gateway);
-                                    print_cfg(&new, if new.ip[..2] == [169, 254] { Source::LinkLocal } else { Source::Dhcp });
-                                } else if new.gateway != cfg.gateway {
-                                    let _ = chip.set_ip(new.ip, new.mask, new.gateway);
-                                }
-                                cfg = new;
-                            }
-                        }
-                    }
-                    if dhcp_borrowed && !c.listening() {
-                        let _ = chip.udp_close(SOCK_MGMT);
-                        dhcp_borrowed = false;
-                        if chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
-                            println!("net: FAULT cannot give socket 7 back to the management port");
-                        }
-                    }
                 }
                 // Management channel, socket 7 (not while lent to DHCP).
                 if dhcp_borrowed {
