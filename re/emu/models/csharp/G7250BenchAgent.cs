@@ -825,6 +825,11 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case "wdt": return WatchdogReset();
                     case "resets": return "resets " + resetCount;
                     case "keylog": return KeyLogCommand(w);
+                    case "socklog":
+                    {
+                        var r = Call(Ch394(), "SockLogRead", w.Length > 1 ? int.Parse(w[1], CultureInfo.InvariantCulture) : 0);
+                        return r == null ? "err no CH394" : "ok " + r;
+                    }
                     case "inject":
                     {
                         // inject <srcip> <fromport> <toport> <offsets csv> <payloads hex csv>

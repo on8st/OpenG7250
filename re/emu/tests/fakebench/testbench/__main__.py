@@ -274,6 +274,20 @@ def run_test(tid, ep):
                 check("echoes reach the bench socket", sorted(got) == sorted(pl), repr(got)),
                 check("time.wait 5000 us", w.get("ok") and w0.get("ok") and w["value"]["t_us"] - w0["value"]["t_us"] >= 5000,
                       "%s -> %s" % (w0.get("value"), w.get("value")))]
+    if tid == "T-EMU-19":
+        # sock.log (format v1.7): the CH394's OPEN/CLOSE in emulated time, read across a power cycle
+        r0 = ctl.op("sock.log", action="start")
+        pc = ctl.op("power.cycle")
+        d, _ = echo(ep, 0, c, b"after-cycle", wait=60.0)
+        r1 = ctl.op("sock.log", action="stop")
+        ents = (r1.get("value") or {}).get("entries", [])
+        last = max([e.get("boot", 0) for e in ents] or [0])
+        b2 = [e for e in ents if e.get("boot") == last]     # sock.log started before the cycle
+        opens = [e for e in b2 if e.get("action") == "OPEN"]
+        return [check("start", r0.get("ok"), str(r0)), check("power.cycle", pc.get("ok") and d == b"after-cycle", repr(d)),
+                check("entries of the boot after the cycle", bool(b2), json.dumps(ents[:4])),
+                check("an OPEN of port 1024 after the cycle", any(e.get("port") == 1024 for e in opens), json.dumps(opens[:3])),
+                check("fields", all(set(("t_us", "socket", "action", "port", "mode", "boot")) <= set(e) for e in ents) and bool(ents))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

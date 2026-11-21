@@ -181,6 +181,19 @@
     "time.wait",
     "net.log"
    ]
+  },
+  {
+   "id": "T-EMU-19",
+   "title": "sock.log across a power cycle (format v1.7)",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "sock.log",
+    "power.cycle"
+   ]
   }
  ]
 }

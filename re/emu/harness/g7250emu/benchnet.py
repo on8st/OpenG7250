@@ -261,11 +261,14 @@ class Bridge:
                 buf = buf[3 + n:]
                 if t == 1 and len(p) >= 8:
                     self._from_radio(p)
+                elif t == 6 and len(p) >= 16:
+                    # the CH394's emulated SEND time in front of the frame
+                    self._from_radio(p[8:], t_us=struct.unpack("!Q", p[0:8])[0])
                 elif t == 3 and len(p) >= 8:
                     self.src_ip = socket.inet_ntoa(p[0:4])
                     self.set_radio(socket.inet_ntoa(p[0:4]), socket.inet_ntoa(p[4:8]))
 
-    def _from_radio(self, p):
+    def _from_radio(self, p, t_us=None):
         sport, = struct.unpack("!H", p[0:2])
         dip = socket.inet_ntoa(p[2:6])
         dport, = struct.unpack("!H", p[6:8])
@@ -273,7 +276,7 @@ class Bridge:
         self.stats["from_radio"] += 1
         self.pcap.udp(self.src_ip, sport, dip, dport, data, True)
         if dport == 67 and sport == 68:
-            self.dhcp.handle(self.src_ip, dip, data)
+            self.dhcp.handle(self.src_ip, dip, data, t_us=t_us)
             return
         bcast = dip == "255.255.255.255" or dip == getattr(self, "directed", None)
         if not bcast and dip not in [h["ip"] for h in self.hosts]:
@@ -380,12 +383,17 @@ class DhcpServer:
             e["t_us"] = self.now_us()
         except Exception:  # noqa: BLE001
             e["t_us"] = None
+        exact = kw.pop("t_us_exact", None)
         e.update(kw)
+        if exact is not None:
+            e["t_us"] = exact               # the radio's message: its emulated SEND time in the CH394
+        else:
+            e["t_us_approx"] = True         # read from the emulator when the bridge handled it
         if "broadcast_flag" in e:
             e["broadcast"] = e["broadcast_flag"]        # the key format v1.4 reads (dhcp.log, T-A1-74)
         self.log.append(e)
 
-    def handle(self, src_ip, dst_ip, data):
+    def handle(self, src_ip, dst_ip, data, t_us=None):
         if len(data) < 240 or data[236:240] != b"\x63\x82\x53\x63":
             return
         o = self._opts(data)
@@ -396,7 +404,7 @@ class DhcpServer:
         sid = socket.inet_ntoa(o[54]) if 54 in o else None
         bflag = (data[10] & 0x80) != 0
         self._record("from_radio", names.get(mtype, str(mtype)), src=src_ip, dst=dst_ip, ciaddr=ciaddr,
-                     opt50=req, opt54=sid, broadcast_flag=bflag, running=self.running)
+                     opt50=req, opt54=sid, broadcast_flag=bflag, running=self.running, t_us_exact=t_us)
         if not self.running:
             return
         if mtype == 1:                                   # DISCOVER
@@ -576,7 +584,7 @@ class FixtureServer:
                # format v1.6: datagram times and the keyer log, emulated time
                "net.log", "key.log",
                # format v1.7: datagrams placed at exact emulated offsets; waits in emulated time
-               "net.inject", "time.wait"]
+               "net.inject", "time.wait", "sock.log"]
 
     def __init__(self, agent_getter, on_power_cycle, bridge_getter=None):
         self.bridge_getter = bridge_getter
@@ -584,6 +592,10 @@ class FixtureServer:
         self.port = self.srv.getsockname()[1]
         self.agent_getter = agent_getter
         self.on_power_cycle = on_power_cycle
+        self.boot_no = 1
+        self.sock_on = False
+        self.sock_entries = []
+        self.sock_next = 0
         self.ctrl_state = "absent"
         self.trace_pins = []
         self.stop = False
@@ -610,6 +622,32 @@ class FixtureServer:
                 rep = {"ok": False, "error": "bad request: %s" % e}
             f.write(json.dumps(rep) + "\n")
             f.flush()
+
+    def _sock_count(self, agent):
+        r = agent.ask("socklog 1000000000", timeout=30, internal=True) if agent else None
+        return json.loads(r[3:]).get("count", 0) if r and r.startswith("ok ") else 0
+
+    def sock_pull(self, boot=None):
+        """Append the CH394's new OPEN/CLOSE entries (sock.log); called on reads and by
+        the runner before a power cycle (sock.log reads across the reset)."""
+        agent = self.agent_getter()
+        if not getattr(self, "sock_on", False) or not agent:
+            return
+        for _ in range(100):
+            r = agent.ask("socklog %d" % self.sock_next, timeout=30, internal=True)
+            if not r or not r.startswith("ok "):
+                return
+            v = json.loads(r[3:])
+            for e in v.get("entries", []):
+                e["boot"] = self.boot_no
+                self.sock_entries.append(e)
+            if v.get("next", 0) <= self.sock_next:
+                return
+            self.sock_next = v["next"]
+
+    def sock_new_boot(self, boot):
+        self.boot_no = boot
+        self.sock_next = 0                    # the new emulator's log starts empty
 
     def handle(self, op, args):
         agent = self.agent_getter()
@@ -690,6 +728,27 @@ class FixtureServer:
                 return {"ok": False, "error": "speed must be 0, 10 or 100"}
             r = agent.ask("link %d" % sp) if agent else None
             return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+        if op == "sock.log":
+            action = args.get("action")
+            if action not in ("start", "read", "stop"):
+                return {"ok": False, "error": "action must be start|read|stop"}
+            if action == "start":
+                if not agent:
+                    return {"ok": False, "error": "emulator not ready"}
+                self.sock_on = True
+                self.sock_entries = []
+                self.sock_next = self._sock_count(agent)     # record from now
+                return {"ok": True, "value": {"t_us": agent.now_us()}}
+            if not getattr(self, "sock_on", False) and action == "read":
+                return {"ok": False, "error": "sock.log not started"}
+            self.sock_pull()
+            if action == "stop":
+                self.sock_on = False
+            ents = getattr(self, "sock_entries", [])
+            frm = max(0, int(args.get("from", 0)))
+            page = ents[frm:frm + 5000]
+            return {"ok": True, "value": {"t_us": agent.now_us() if agent else None, "count": len(ents), "dropped": 0,
+                                          "from": frm, "next": frm + len(page), "entries": page}}
         if op == "net.inject":
             br = self.bridge_getter() if self.bridge_getter else None
             if not agent or br is None or not br.hosts:

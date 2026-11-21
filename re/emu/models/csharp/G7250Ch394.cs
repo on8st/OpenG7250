@@ -124,8 +124,16 @@ namespace Antmicro.Renode.Peripherals.SPI
             catch(Exception) { }
         }
 
+        // sock.log (format v1.7): every OPEN and CLOSE in emulated time, always on
+        private readonly List<string> sockList = new List<string>();
+        private int sockLogDropped;
+        public string SockLogRead(int from) { lock(sync) return Page(sockList, from, sockLogDropped, NowUs(), "entries"); }
+
         private void LogSocket(string op, int n, byte[] r)
         {
+            if(sockList.Count >= 100000) sockLogDropped++;
+            else sockList.Add("{\"t_us\": " + NowUs() + ", \"socket\": " + n + ", \"action\": \"" + op.ToUpperInvariant()
+                + "\", \"port\": " + U16(r, 0x04) + ", \"mode\": " + (r[0x00] & 0x0F) + "}");
             if(string.IsNullOrEmpty(sockLog)) return;
             ulong t = machine == null ? 0 : (ulong)machine.LocalTimeSource.ElapsedVirtualTime.TotalMicroseconds;
             try
@@ -201,7 +209,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         public byte Transmit(byte data)
         {
             byte outb = 0;
-            bool cmd = false; int cmdSock = 0;
+            bool cmd = false; int cmdSock = 0; bool regWrite = false;
             lock(sync)
             {
                 if(phase == 0) { addr = data << 8; phase = 1; }
@@ -210,7 +218,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 else
                 {
                     int a = addr & 0xFFFF;
-                    if(bsb == 0) { if(write) WriteCommon(a, data); else outb = ReadCommon(a); }
+                    if(bsb == 0) { if(write) { WriteCommon(a, data); regWrite = true; } else outb = ReadCommon(a); }
                     else
                     {
                         int n = (bsb - 1) / 4, kind = (bsb - 1) % 4;
@@ -218,7 +226,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                         {
                             if(kind == 0)
                             {
-                                if(write) { cmd = WriteSocket(n, a & 0x3F, data); cmdSock = n; }
+                                if(write) { cmd = WriteSocket(n, a & 0x3F, data); cmdSock = n; regWrite = true; }
                                 else outb = ReadSocket(n, a & 0x3F);
                             }
                             // buffer index = (16-bit address) mod size; size 0 = no buffer (writes ignored,
@@ -234,7 +242,9 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(softReset) { softReset = false; bool up = linkUp; Reset(); SetLink(up); }
             var addrMsg = addressPending;
             if(addrMsg != null) { addressPending = null; ToBridge(3, addrMsg); }
-            if(cmd) UpdateIrq();
+            // INT# follows every register write: commands and Sn_INT clears, and also the enables
+            // (SINTE 0x18, GINTE 0x16, Sn_INTE 0x2C), so enabling with a flag already set asserts it
+            if(cmd || regWrite) UpdateIrq();
             return outb;
         }
 
@@ -349,7 +359,11 @@ namespace Antmicro.Renode.Peripherals.SPI
             Array.Copy(data, 0, frame, 8, len);
             NetRecord("from_radio", n, U16(r, 0x04), Ip(r, 0x0C) + ":" + U16(r, 0x10), data, 0, len);
             sent++;
-            ToBridge(1, frame);
+            ulong ts = NowUs();
+            var tframe = new byte[8 + frame.Length];
+            for(int i = 0; i < 8; i++) tframe[i] = (byte)(ts >> (56 - 8 * i));
+            Array.Copy(frame, 0, tframe, 8, frame.Length);
+            ToBridge(6, tframe);
         }
 
         // a datagram from the network: srcIP(4) srcPort(2) dstPort(2) flags(1) data

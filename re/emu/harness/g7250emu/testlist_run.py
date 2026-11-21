@@ -236,12 +236,17 @@ class Boot:
             if not cut:
                 self.agent.ask("halt", internal=True)          # supply gone: the core stops first
             self.save_netlog()
+            try:
+                self.fixtures.sock_pull()
+            except Exception:  # noqa: BLE001
+                pass
             dump = os.path.join(self.out, "flash-%d.bin" % self.boots)
             if self.agent.ask("flashdump " + dump, timeout=30, internal=True) == "ok":
                 self.flash = dump
             self.stop_emulator()
             self.agent.conn = None          # the old emulator's link: wait for the new one
             self.start()
+            self.fixtures.sock_new_boot(self.boots)
             self.agent.wait_connected(BOOT_WALL_TIMEOUT)
             if tracing:
                 self.agent.append_event({"seq": seq, "t_us": 0, "kind": "reset", "cause": "power"})
