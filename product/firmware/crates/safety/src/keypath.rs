@@ -17,7 +17,7 @@
 //! break-in clear it is waived and DUC I&Q dropped, B10.5b item 2.3), the TX frequency and
 //! RF-path checks of A3.9, the ATU tune cycle (A3.9b). KEY keys nothing in v1.0 (0030; [`crate::cw`]).
 
-use crate::cw::{CwKeyer, DucSettings};
+use crate::cw::{Clamped, CwKeyer, DucSettings};
 use crate::tx::{ArmReject, KeyContext, KeyPermit, Refusal, RfActuator, Source, TxCore};
 
 /// `TX_STATE` [23:16], last unkey reason (Table B8-2).
@@ -96,8 +96,10 @@ pub struct KeyPath {
     pending: Option<DucSettings>,
     cw: CwKeyer,
     element_on: bool,
-    /// Hang delays above 2000 ms clamped (Table B10-1; `GET_STATS`).
+    /// Hang delays above 2000 ms and keyer speeds above 60 wpm clamped (Table B10-1, B10.5a
+    /// item 1; `GET_STATS`).
     pub hang_clamped: u32,
+    pub speed_clamped: u32,
 }
 
 impl Default for KeyPath {
@@ -127,6 +129,7 @@ impl KeyPath {
             cw: CwKeyer::default(),
             element_on: false,
             hang_clamped: 0,
+            speed_clamped: 0,
         }
     }
 
@@ -235,8 +238,8 @@ impl KeyPath {
     }
 
     /// A DUC-specific packet from the owner (B10.6). While keyed, the hang delay included, it is
-    /// deferred to the unkey (B10.5b item 3). Returns true if the hang delay was clamped.
-    pub fn on_duc_specific(&mut self, p: &[u8]) -> bool {
+    /// deferred to the unkey (B10.5b item 3). Returns what was clamped, for the log (A1.7).
+    pub fn on_duc_specific(&mut self, p: &[u8]) -> Clamped {
         let (s, clamped) = DucSettings::parse(p);
         self.set_duc(s, clamped);
         clamped
@@ -244,8 +247,9 @@ impl KeyPath {
 
     /// Settings from a DUC-specific packet already parsed (a set-up packet taken at the session
     /// start, B5.1a item 2), with the same deferral while keyed.
-    pub fn set_duc(&mut self, s: DucSettings, clamped: bool) {
-        self.hang_clamped += clamped as u32;
+    pub fn set_duc(&mut self, s: DucSettings, clamped: Clamped) {
+        self.hang_clamped += clamped.hang as u32;
+        self.speed_clamped += clamped.speed as u32;
         if self.source.is_some() {
             self.pending = Some(s);
         } else {
@@ -379,9 +383,9 @@ impl KeyPath {
     /// Session end or takeover: request levels forgotten, PA enable cleared, DUC-specific
     /// settings back to their power-on values (A3.6a, Table A3-4).
     pub fn session_end(&mut self) {
-        let keep = (self.last_unkey, self.limit_id, self.hang_clamped);
+        let keep = (self.last_unkey, self.limit_id, self.hang_clamped, self.speed_clamped);
         *self = KeyPath::new();
-        (self.last_unkey, self.limit_id, self.hang_clamped) = keep;
+        (self.last_unkey, self.limit_id, self.hang_clamped, self.speed_clamped) = keep;
     }
 }
 

@@ -85,9 +85,13 @@ enable and mode-class unkeys) runs on the owner's High Priority packets, but eve
 refused before any pin is touched: `TX_STATE` reads bit 0 = 0, source 0, unkey reason 0, and
 bit 4 = 1 (PA disabled) until the owner's General packet sets byte 58 bit [0]. The
 DUC-specific packet (B10.6) is followed: break-in, CW select, the keyer bits, speed, weight,
-hang delay (above 2000 ms clamped, logged `p2: DUC-specific hang delay above 2000 ms clamped`),
+hang delay (above 2000 ms used as 2000, logged `p2: DUC-specific hang delay above 2000 ms used
+as 2000 ms`), keyer speed (above 60 wpm used as 60, logged `p2: DUC-specific keyer speed above 60
+wpm used as 60 wpm`),
 EER and the DUC0 format refusals; a packet while keyed waits for the unkey. The CWX keyer
-(crates/safety cw: iambic A/B, straight key with iambic clear, weight, strict spacing) and the
+(crates/safety cw, B10.5a "Keyer timing", 0046: unit 1200/S ms, weight 33-66 as a mark/space
+shift, Curtis iambic A/B with one element of memory per paddle, strict spacing 3 T from the end
+of the mark; straight key with iambic clear; host tests T-B10-43 to T-B10-46) and the
 hang delay exist but form nothing here. KEY keys nothing in v1.0 (Table B10-1, 0030). Not yet:
 the DUC FIFO and underrun check, the TX frequency and RF-path checks, the ATU cycle, and the
 A3.9a key sequence on the pins.

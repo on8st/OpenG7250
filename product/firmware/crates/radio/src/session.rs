@@ -10,7 +10,7 @@
 pub type Addr = ([u8; 4], u16);
 
 /// Which C&C packet.
-use g7250_safety::cw::DucSettings;
+use g7250_safety::cw::{Clamped, DucSettings};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CnC {
@@ -125,7 +125,7 @@ struct Kept {
     general: Option<General>,
     ddc: Option<Ddc>,
     /// The last DUC-specific packet, and whether its hang delay was clamped (B10.6).
-    duc: Option<(DucSettings, bool)>,
+    duc: Option<(DucSettings, Clamped)>,
 }
 
 const KEPT: usize = 4;
@@ -145,7 +145,7 @@ pub struct Session {
     pub ddc: Option<Ddc>,
     /// The new owner's DUC-specific packet from its set-up phase, for the key path to take at
     /// the session start (B5.1a item 2). Never carried over from an ended session (A3.6a).
-    pub duc_setup: Option<(DucSettings, bool)>,
+    pub duc_setup: Option<(DucSettings, Clamped)>,
     /// The owner's High Priority byte 4 bit [1] (PTT) as last received (B10.2 item 3).
     pub ptt: bool,
     /// Count of C&C packets discarded as short (B11.3).
@@ -359,7 +359,7 @@ mod tests {
         s.on_cnc(A, CnC::General, &g, 0, true);
         s.on_cnc(A, CnC::HighPriority, &hp(true), 10, true);
         let (duc, clamped) = s.duc_setup.unwrap();
-        assert!(duc.break_in && duc.speed_wpm == 20 && !clamped);
+        assert!(duc.break_in && duc.speed_wpm == 20 && !clamped.any());
         assert!(s.general.unwrap().pa_enable, "set-up General of the new owner applies (B5.1a)");
         // Stop and restart by the same host: General carried over without PA enable, no DUC.
         s.on_cnc(A, CnC::HighPriority, &hp(false), 20, true);

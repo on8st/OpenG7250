@@ -23,6 +23,16 @@ fn duc<R>(f: impl FnOnce(&mut DucFifo<20>) -> R) -> R {
     DUC.lock(|d| f(&mut d.borrow_mut()))
 }
 
+/// Values of a DUC-specific packet used clamped are logged (A1.7) and counted in the key path.
+fn log_clamped(c: g7250_safety::cw::Clamped) {
+    if c.hang {
+        println!("p2: DUC-specific hang delay above 2000 ms used as 2000 ms (Table B10-1)");
+    }
+    if c.speed {
+        println!("p2: DUC-specific keyer speed above 60 wpm used as 60 wpm (B10.5a item 1)");
+    }
+}
+
 /// Socket numbers (Table B2-1 rows 1-8).
 pub const S1024: u8 = 0;
 pub const S1025: u8 = 1;
@@ -262,9 +272,7 @@ impl P2 {
                     self.key.pa_enable(pa, &mut self.tx, &mut rf);
                     if let Some((d, clamped)) = self.session.duc_setup.take() {
                         self.key.set_duc(d, clamped);
-                        if clamped {
-                            println!("p2: DUC-specific hang delay above 2000 ms clamped to 2000 ms (Table B10-1)");
-                        }
+                        log_clamped(clamped);
                     }
                     self.regs.tx_state = self.key.tx_state();
                     println!(
@@ -383,9 +391,7 @@ impl P2 {
                     self.key.on_high_priority(Requests::parse(p), now, &mut self.tx, &ctx, &mut rf);
                 }
                 CnC::DucSpecific => {
-                    if self.key.on_duc_specific(p) {
-                        println!("p2: DUC-specific hang delay above 2000 ms clamped to 2000 ms (Table B10-1)");
-                    }
+                    log_clamped(self.key.on_duc_specific(p));
                 }
                 CnC::General => {
                     let on = self.session.general.is_some_and(|g| g.pa_enable);
