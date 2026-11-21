@@ -134,3 +134,77 @@ fn only_the_fpga_module_touches_gpioe() {
         }
     }
 }
+
+/// Code lines of every board and crate `.rs` file (comments cut at `//`), with its path.
+fn code_lines() -> Vec<(PathBuf, String)> {
+    let mut v = Vec::new();
+    files(&firmware_root().join("board"), &mut v);
+    files(&firmware_root().join("crates"), &mut v);
+    let mut out = Vec::new();
+    for f in v.into_iter().filter(|f| f.extension().is_some_and(|e| e == "rs")) {
+        let text = std::fs::read_to_string(&f).unwrap();
+        for line in text.lines() {
+            // Code only: the comment cut off, and string literals blanked (descriptions name pins).
+            let code = line.split("//").next().unwrap();
+            let mut kept = String::new();
+            let mut in_str = false;
+            for c in code.chars() {
+                if c == '"' {
+                    in_str = !in_str;
+                } else if !in_str {
+                    kept.push(c);
+                }
+            }
+            out.push((f.clone(), kept));
+        }
+    }
+    out
+}
+
+#[test]
+fn only_the_key_path_calls_the_rf_hooks() {
+    // docs/tx-lock-audit.md: Keyer::key needs a KeyPermit, but cw_element and atu_step do not;
+    // they are called only by g7250_safety::keypath, between a successful key and the unkey.
+    // Any other caller would bypass the key path.
+    for (f, code) in code_lines() {
+        if f.ends_with("crates/safety/src/keypath.rs") {
+            continue;
+        }
+        for call in [".key(&", ".cw_element(", ".atu_step("] {
+            assert!(!code.contains(call), "{} calls an RF hook outside the key path: {code}", f.display());
+        }
+    }
+}
+
+#[test]
+fn rf_ports_and_rf_peripherals_are_named_only_by_the_safe_state() {
+    // docs/tx-lock-audit.md: the RF control pins of [HIS] HIS 85 (ports A, C, D, F, G, H and
+    // B14) are written only by board/common/src/safe.rs, at their safe-state levels; the RF
+    // peripherals (SPI1 shift-register chains, SPI2 PA bias/drive DAC, DAC1 RF gain) are not used
+    // at all. The pins given out are the CH394's (SPI6, PG12-PG15, PB5) and the console's
+    // (USART1, PB6, PB7).
+    const PORTS: &[&str] = &["GPIOA", "GPIOC", "GPIOD", "GPIOF", "GPIOG", "GPIOH", "Port::A", "Port::C", "Port::D", "Port::F", "Port::G", "Port::H"];
+    const PERIPHERALS: &[&str] = &["SPI1", "SPI2", "DAC1", "pac::DAC", "p.DAC"];
+    const PINS_ALLOWED: &[&str] = &["PG12", "PG13", "PG14", "PG15", "PB5", "PB6", "PB7"];
+    for (f, code) in code_lines() {
+        let path = f.to_string_lossy();
+        let allowed_ports = path.ends_with("board/common/src/safe.rs") || path.ends_with("crates/safety/src/safe_state.rs");
+        if !allowed_ports {
+            for p in PORTS {
+                assert!(!code.contains(p), "{} names an RF port outside the safe state: {code}", f.display());
+            }
+        }
+        for p in PERIPHERALS {
+            let hit = code.match_indices(p).any(|(i, _)| !code[i + p.len()..].starts_with(|c: char| c.is_ascii_digit()));
+            assert!(!hit, "{} uses an RF peripheral: {code}", f.display());
+        }
+        // Embassy pin singletons: `p.PXn` for a pin outside the allowed set.
+        for (i, _) in code.match_indices("p.P") {
+            let rest: String = code[i + 2..].chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            let is_pin = rest.len() >= 3 && rest.as_bytes()[1].is_ascii_uppercase() && rest[2..].chars().all(|c| c.is_ascii_digit());
+            if is_pin {
+                assert!(PINS_ALLOWED.contains(&rest.as_str()), "{} claims pin {rest}: {code}", f.display());
+            }
+        }
+    }
+}
