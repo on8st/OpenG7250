@@ -19,6 +19,15 @@ fn gpio(p: Port) -> pac::gpio::Gpio {
     }
 }
 
+/// TX is armed or keyed (set by the application every pass): the TX path check, also its
+/// samples during flash work, is not made (A3.6b).
+pub static TX_OPEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// The register base address of a port, for the flash wait loop's samples.
+pub fn gpio_base(p: Port) -> u32 {
+    gpio(p).as_ptr() as u32
+}
+
 fn enable_gpio_clocks() {
     pac::RCC.ahb4enr().modify(|w| {
         w.set_gpioaen(true);

@@ -51,6 +51,41 @@ pub struct Mismatch {
     pub what: Comparison,
 }
 
+/// Samples of the Table A3-6 pins taken in a flash operation's wait loop, where the watchdog is
+/// fed (A3.6b, 0066 addendum (a): the 5 ms period does not apply during an erase or program; a
+/// sample counts as a check). Times are core cycles (DWT); the arithmetic only, so that it can
+/// be inlined into the RAM routine (no tables, no calls).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sampler {
+    /// Start of the current run of samples with a mismatch, and its pin index.
+    run: Option<(u32, u8)>,
+    /// A run that lasted [`HOLD_MS`] (in cycles, `hold`): its pin index.
+    pub held: Option<u8>,
+}
+
+impl Sampler {
+    /// One sample at cycle `t`; `bad` is the index into [`PINS`] of a mismatch, or `None`;
+    /// `hold` is [`HOLD_MS`] in cycles.
+    #[inline(always)]
+    pub fn sample(&mut self, t: u32, bad: Option<u8>, hold: u32) {
+        match (bad, self.run) {
+            (None, _) => self.run = None,
+            (Some(i), None) => self.run = Some((t, i)),
+            (Some(_), Some((s, i))) => {
+                if self.held.is_none() && t.wrapping_sub(s) >= hold {
+                    self.held = Some(i);
+                }
+            }
+        }
+    }
+
+    /// The run still open when the operation ended at cycle `end`: cycles since its start, and
+    /// its pin index.
+    pub fn open_at(&self, end: u32) -> Option<(u32, u8)> {
+        self.run.map(|(s, i)| (end.wrapping_sub(s), i))
+    }
+}
+
 /// The time filter of A3.6b.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Check {
@@ -61,6 +96,21 @@ pub struct Check {
 impl Check {
     pub const fn new() -> Self {
         Check { since: None }
+    }
+
+    /// After a flash operation (0066 addendum (a)), before the check that runs when it ends: a
+    /// mismatch the wait-loop samples saw for [`HOLD_MS`] is the fault at once (`Some(true)`);
+    /// one still present at the end counts from its first sample (`open_ms` before `now_ms`), so
+    /// that the checks after the end give the fault no later than 20 ms after it.
+    pub fn after_flash(&mut self, now_ms: u64, held: bool, open_ms: Option<u64>) -> bool {
+        if held {
+            return true;
+        }
+        if let Some(ms) = open_ms {
+            let start = now_ms.saturating_sub(ms);
+            self.since = Some(self.since.map_or(start, |s| s.min(start)));
+        }
+        false
     }
 
     /// One check at `now_ms` with its result. `tx_open`: armed or keyed (no check; the run
@@ -117,6 +167,51 @@ mod tests {
                 let t = run(PERIOD_MS, start, len, 2000, |_| false).expect("fault");
                 assert!(t - start <= 20, "len {len} phase {phase}: at +{}", t - start);
             }
+        }
+    }
+
+    #[test]
+    fn samples_during_flash_work_t_b5_22() {
+        const HOLD: u32 = 10 * 64_000; // 10 ms at 64 MHz
+        // Forced and released within the erase, seen for under 10 ms: no fault.
+        let mut s = Sampler::default();
+        for t in (0..2_000_000u32).step_by(1000) {
+            let bad = (t >= 100_000 && t < 100_000 + HOLD - 64_000).then_some(1);
+            s.sample(t, bad, HOLD);
+        }
+        assert_eq!((s.held, s.open_at(2_000_000)), (None, None));
+        let mut c = Check::new();
+        assert!(!c.after_flash(5_000, false, None));
+        assert_eq!(c.observe(5_000, false, None), None);
+        // Seen for 10 ms in the loop: the fault at once after the operation.
+        let mut s = Sampler::default();
+        for t in (0..2_000_000u32).step_by(1000) {
+            s.sample(t, (t >= 100_000 && t < 100_000 + HOLD + 1000).then_some(2), HOLD);
+        }
+        assert_eq!(s.held, Some(2));
+        assert!(Check::new().after_flash(5_000, true, None));
+        // Forced just before the end of a long erase and kept: counted from its first sample, so
+        // the checks after the end give it within 20 ms of the end.
+        for before_end_ms in [0u64, 1, 5, 9, 15, 300] {
+            let end = 4_000_000u32; // 62.5 ms
+            let mut s = Sampler::default();
+            for t in (0..=end).step_by(1000) {
+                s.sample(t, (t as u64 >= (end as u64).saturating_sub(before_end_ms * 64_000)).then_some(0), HOLD);
+            }
+            let open = s.open_at(end).map(|(cyc, _)| cyc as u64 / 64_000);
+            let held = s.held.is_some();
+            let mut c = Check::new();
+            let end_ms = 1_000u64;
+            let mut fault_at = c.after_flash(end_ms, held, open).then_some(end_ms);
+            let mut t = end_ms;
+            while fault_at.is_none() && t < end_ms + 100 {
+                if c.observe(t, false, Some(Mismatch { port: PINS[0].0, pin: PINS[0].1, what: Comparison::PinLevel })).is_some() {
+                    fault_at = Some(t);
+                }
+                t += PERIOD_MS;
+            }
+            let at = fault_at.expect("fault");
+            assert!(at - end_ms <= 20, "forced {before_end_ms} ms before the end: fault {} ms after it", at - end_ms);
         }
     }
 

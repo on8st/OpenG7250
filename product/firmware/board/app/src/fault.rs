@@ -15,8 +15,9 @@ pub static WAKE: embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw:
 /// Codes raised and not yet logged (bit per code), for the net loop's event log.
 static UNLOGGED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-/// TX is armed or keyed (set by P2 every pass): the TX path check is not made (A3.6b).
-pub static TX_OPEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// TX is armed or keyed (set by P2 every pass): the TX path check is not made (A3.6b). In
+/// board-common, so that the flash wait loop sees it too.
+pub use g7250_board::safe::TX_OPEN;
 /// The mismatch that raised TX_PATH_NOT_BLOCKED, for the log (A3.6b: the pin and the comparison).
 static DETAIL: Mutex<RefCell<Option<g7250_safety::txpath::Mismatch>>> = Mutex::new(RefCell::new(None));
 

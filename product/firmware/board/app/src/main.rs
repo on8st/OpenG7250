@@ -344,19 +344,39 @@ async fn tx_path() {
     let mut t = Ticker::every(Duration::from_millis(PERIOD_MS));
     // When the first check runs, from the boot stage's start (0066 addendum: at most 100 ms).
     TX_CHECK_FIRST_US.store(safe::us_since_boot_stage(), core::sync::atomic::Ordering::Relaxed);
+    // A check when a flash operation ends (0066 addendum (a)), besides the 5 ms period.
+    g7250_board::flash::on_operation_end(|| FLASH_ENDED.signal(()));
     loop {
         let open = fault::TX_OPEN.load(core::sync::atomic::Ordering::Relaxed);
+        let now = Instant::now().as_millis();
+        // The wait-loop samples of flash work since the last check: a mismatch they saw for
+        // 10 ms is the fault now; one open at the end counts from its first sample.
+        let mut held = None;
+        if let Some((h, o)) = g7250_board::flash::take_samples() {
+            let open_ms = o.map(|(cyc, _)| (cyc / (console::HSI_HZ / 1000)) as u64);
+            if c.after_flash(now, h.is_some(), open_ms) {
+                held = h;
+            }
+        }
         let seen = if open { None } else { safe::tx_path_mismatch() };
-        if let Some(m) = c.observe(Instant::now().as_millis(), open, seen) {
+        let from_flash = held.map(|i| {
+            let (port, pin, _) = g7250_safety::txpath::PINS[(i & 0x7F) as usize];
+            let what = if i & 0x80 != 0 { g7250_safety::txpath::Comparison::Configuration } else { g7250_safety::txpath::Comparison::PinLevel };
+            g7250_safety::txpath::Mismatch { port, pin, what }
+        });
+        if let Some(m) = from_flash.or_else(|| c.observe(now, open, seen)) {
             safe::reassert();
             fault::set_detail(m);
             if fault::raise(g7250_safety::fault::code::TX_PATH_NOT_BLOCKED) {
                 println!("app: FAULT TX path not blocked: P{:?}{} {:?}", m.port, m.pin, m.what);
             }
         }
-        t.next().await;
+        let _ = embassy_futures::select::select(t.next(), FLASH_ENDED.wait()).await;
     }
 }
+
+/// Signalled by the flash driver after every erase or program.
+static FLASH_ENDED: embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, ()> = embassy_sync::signal::Signal::new();
 
 /// Waits for buffered output (the console's hook), then moves it into the USART FIFO; a timer
 /// only while bytes wait for FIFO room (16 bytes at 115 200 Bd take about 1.4 ms). No periodic

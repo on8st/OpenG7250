@@ -62,6 +62,8 @@ pub const LIMIT_MS: u32 = 2 * T_ERASE_MAX_MS;
 /// counter, which wraps after 67 s, far above the limit.
 const LIMIT_CYCLES: u32 = LIMIT_MS * (crate::console::HSI_HZ / 1000);
 const _: () = assert!((LIMIT_MS as u64) * (crate::console::HSI_HZ as u64 / 1000) < u32::MAX as u64 / 2);
+/// The TX path check's 10 ms in cycles (A3.6b).
+const HOLD_CYCLES: u32 = g7250_safety::txpath::HOLD_MS as u32 * (crate::console::HSI_HZ / 1000);
 /// DWT cycle counter (ARMv7-M): DEMCR.TRCENA (bit 24), DWT_CTRL.CYCCNTENA (bit 0), CYCCNT, and
 /// the Cortex-M7 DWT lock access register.
 const DEMCR: u32 = 0xE000_EDFC;
@@ -83,6 +85,93 @@ pub fn take_failure() -> Option<u32> {
 
 fn note_failure(sr: u32) {
     FAILURE.store(sr, core::sync::atomic::Ordering::Relaxed); // never 0: an error flag or TIMEOUT
+}
+
+/// The Table A3-6 pins for the wait loop's samples (A3.6b, 0066 addendum (a)), in RAM: the
+/// loop runs from RAM while the flash is busy and must not read flash (the pin table is there).
+#[derive(Clone, Copy)]
+struct RamPins {
+    base: [u32; 6],
+    pin: [u32; 6],
+    high: [bool; 6],
+    /// No samples while TX is armed or keyed (the path is meant to be open).
+    on: bool,
+}
+
+fn ram_pins() -> RamPins {
+    let mut p = RamPins { base: [0; 6], pin: [0; 6], high: [false; 6], on: !crate::safe::TX_OPEN.load(core::sync::atomic::Ordering::Relaxed) };
+    for (k, (port, pin, high)) in g7250_safety::txpath::PINS.iter().enumerate() {
+        p.base[k] = crate::safe::gpio_base(*port);
+        p.pin[k] = *pin as u32;
+        p.high[k] = *high;
+    }
+    p
+}
+
+/// The samples of the last flash operation, for the TX path check (taken by
+/// [`take_samples`]): a mismatch held for 10 ms (pin index, bit 7 = the configuration, else the
+/// pin level), and a run still open at the end (cycles before the end, index).
+static SAMPLES: cortex_m::interrupt::Mutex<core::cell::Cell<Option<(Option<u8>, Option<(u32, u8)>)>>> = cortex_m::interrupt::Mutex::new(core::cell::Cell::new(None));
+/// Called when a flash operation ends (the application wakes its TX path check); 0 = none.
+static ON_END: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Register the hook called after every erase or program.
+pub fn on_operation_end(f: fn()) {
+    ON_END.store(f as usize, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// The wait-loop samples of the flash operations since the last call, if any.
+pub fn take_samples() -> Option<(Option<u8>, Option<(u32, u8)>)> {
+    cortex_m::interrupt::free(|cs| SAMPLES.borrow(cs).take())
+}
+
+fn operation_ended(s: &g7250_safety::txpath::Sampler) {
+    let end = cycles_now();
+    let r = (s.held, s.open_at(end));
+    cortex_m::interrupt::free(|cs| {
+        let c = SAMPLES.borrow(cs);
+        // Keep the worst of several operations since the last take.
+        let merged = match c.get() {
+            Some((h, o)) => (h.or(r.0), r.1.or(o)),
+            None => r,
+        };
+        c.set(Some(merged));
+    });
+    let f = ON_END.load(core::sync::atomic::Ordering::Relaxed);
+    if f != 0 {
+        // SAFETY: only `on_operation_end` stores here, always a `fn()`.
+        let f: fn() = unsafe { core::mem::transmute::<usize, fn()>(f) };
+        f();
+    }
+}
+
+fn cycles_now() -> u32 {
+    // SAFETY: a read of DWT CYCCNT.
+    unsafe { core::ptr::read_volatile(DWT_CYCCNT as *const u32) }
+}
+
+/// One sample of the pins in the wait loop: the index of the first mismatch, bit 7 set when it
+/// is the configuration (mode, output type, output register), clear for the pin level (input
+/// register). Register reads only (RM0468 GPIO: MODER 0x00, OTYPER 0x04, IDR 0x10, ODR 0x14).
+#[inline(always)]
+unsafe fn sample_pins(p: &RamPins) -> Option<u8> {
+    use core::ptr::read_volatile as rd;
+    let mut k = 0;
+    while k < 6 {
+        let b = p.base[k];
+        let n = p.pin[k];
+        // SAFETY: GPIO registers of the ports of Table A3-6 (clocked since the safe state).
+        let (moder, otyper, idr, odr) = unsafe { (rd(b as *const u32), rd((b + 0x04) as *const u32), rd((b + 0x10) as *const u32), rd((b + 0x14) as *const u32)) };
+        let out = (moder >> (2 * n)) & 3 == 1 && (otyper >> n) & 1 == 0 && ((odr >> n) & 1 == 1) == p.high[k];
+        if !out {
+            return Some(k as u8 | 0x80);
+        }
+        if ((idr >> n) & 1 == 1) != p.high[k] {
+            return Some(k as u8);
+        }
+        k += 1;
+    }
+    None
 }
 
 /// Start the DWT cycle counter (idempotent).
@@ -194,13 +283,17 @@ unsafe fn unlock_and_clear() {
 }
 
 #[inline(always)]
-unsafe fn wait_and_lock(clear_bits: u32) -> u32 {
+unsafe fn wait_and_lock(clear_bits: u32, pins: &RamPins, s: &mut g7250_safety::txpath::Sampler) -> u32 {
     use core::ptr::{read_volatile as rd, write_volatile as wr};
     unsafe {
         let mut sr = rd(FLASH_SR1 as *const u32);
         let t0 = rd(DWT_CYCCNT as *const u32);
         while sr & SR_BUSY != 0 {
             wr(IWDG1_KR as *mut u32, 0xAAAA);
+            // A3.6b during flash work (0066 addendum (a)): a sample where the IWDG is fed.
+            if pins.on {
+                s.sample(rd(DWT_CYCCNT as *const u32), sample_pins(pins), HOLD_CYCLES);
+            }
             if rd(DWT_CYCCNT as *const u32).wrapping_sub(t0) > LIMIT_CYCLES {
                 sr = TIMEOUT;
                 break;
@@ -218,21 +311,21 @@ unsafe fn wait_and_lock(clear_bits: u32) -> u32 {
 /// Erase sector `snb` (1-7) and wait, from RAM.
 #[unsafe(link_section = ".data.g7250_ramfunc")]
 #[inline(never)]
-unsafe fn flash_erase_from_ram(snb: u32) -> u32 {
+unsafe fn flash_erase_from_ram(snb: u32, pins: &RamPins, s: &mut g7250_safety::txpath::Sampler) -> u32 {
     use core::ptr::{read_volatile as rd, write_volatile as wr};
     unsafe {
         unlock_and_clear();
         let cr = rd(FLASH_CR1 as *const u32) & !(0x7 << 8);
         wr(FLASH_CR1 as *mut u32, cr | CR_SER | (snb << 8));
         wr(FLASH_CR1 as *mut u32, cr | CR_SER | (snb << 8) | CR_START);
-        wait_and_lock(CR_SER | (0x7 << 8))
+        wait_and_lock(CR_SER | (0x7 << 8), pins, s)
     }
 }
 
 /// Program one 32-byte flash word at `addr` from `words` and wait, from RAM.
 #[unsafe(link_section = ".data.g7250_ramfunc")]
 #[inline(never)]
-unsafe fn flash_program_from_ram(addr: u32, words: &[u32; 8]) -> u32 {
+unsafe fn flash_program_from_ram(addr: u32, words: &[u32; 8], pins: &RamPins, s: &mut g7250_safety::txpath::Sampler) -> u32 {
     use core::ptr::{read_volatile as rd, write_volatile as wr};
     unsafe {
         unlock_and_clear();
@@ -244,7 +337,7 @@ unsafe fn flash_program_from_ram(addr: u32, words: &[u32; 8]) -> u32 {
             i += 1;
         }
         cortex_m::asm::dsb();
-        wait_and_lock(CR_PG)
+        wait_and_lock(CR_PG, pins, s)
     }
 }
 
@@ -268,9 +361,12 @@ impl FlashIo for RawFlash {
             }
             let a = addr + k as u32 * FLASH_WORD;
             cycle_counter_on();
+            let pins = ram_pins();
+            let mut smp = g7250_safety::txpath::Sampler::default();
             // SAFETY: the guard allowed [addr, addr+len) for this writer; the routine runs from
-            // RAM and touches only FLASH bank 1, the target word and IWDG1.
-            let sr = cortex_m::interrupt::free(|_| unsafe { flash_program_from_ram(a, &w) });
+            // RAM and touches only FLASH bank 1, the target word and IWDG1 (and reads GPIO).
+            let sr = cortex_m::interrupt::free(|_| unsafe { flash_program_from_ram(a, &w, &pins, &mut smp) });
+            operation_ended(&smp);
             if sr & FAILED != 0 {
                 note_failure(sr);
                 return Err(FlashError::Hw(sr));
@@ -286,8 +382,11 @@ impl FlashIo for RawFlash {
             return Err(FlashError::Guard); // never sector 0 (also refused by the guard)
         }
         cycle_counter_on();
+        let pins = ram_pins();
+        let mut smp = g7250_safety::txpath::Sampler::default();
         // SAFETY: as above, for one whole sector the guard allowed.
-        let sr = cortex_m::interrupt::free(|_| unsafe { flash_erase_from_ram(snb) });
+        let sr = cortex_m::interrupt::free(|_| unsafe { flash_erase_from_ram(snb, &pins, &mut smp) });
+        operation_ended(&smp);
         if sr & FAILED != 0 {
             note_failure(sr);
             Err(FlashError::Hw(sr))
