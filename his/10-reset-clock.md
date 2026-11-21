@@ -65,11 +65,14 @@ facts can only come from the radio (`90-needs-hardware.md`).
 
 - **AXI SRAM over a reset without power loss:** a system reset (software reset,
   watchdog reset) does not clear SRAM: the hardware keeps AXI SRAM content
-  through it (ST RM0468, embedded SRAM). AXI SRAM has a 64-bit ECC word (ST
-  AN5342), so data kept over a reset must be written as whole, aligned 64-bit
-  words; a partial word can be lost. Whether the stage that runs before
-  0x08020000 writes AXI SRAM at 0x2401FFE0–0x2401FFFF is **not known**.
-  Measurement in `90-needs-hardware.md`.
+  through it (MEDIUM; ST RM0468, embedded SRAM, citation not checked; to be
+  confirmed by the measurement in `90-needs-hardware.md`). AXI SRAM has a
+  64-bit ECC word, so data kept over a reset must be written as whole, aligned
+  64-bit words; a partial word can be lost (MEDIUM; ST AN5342, citation not
+  checked; to be confirmed by the measurement in `90-needs-hardware.md`).
+  Whether the stage that runs before 0x08020000 writes AXI SRAM at
+  0x2401FFE0–0x2401FFFF is **not known**. Measurement in
+  `90-needs-hardware.md`.
 
 ## Image placement (platform constraint)
 - The bootloader occupies 0x08000000–0x0801FFFF and is not part of the
