@@ -59,9 +59,20 @@ def lengths(speed: int, weight: int) -> tuple[float, float, float]:
     return t + d, 3 * t + d, t - d
 
 
+RX_TR = {"PF4": 1, "PF6": 0, "PC7": 0, "PH11": 0}  # T/R lines at their RX levels (HIS 85)
+
+
 class Log:
     def __init__(self, rep: dict):
         self.key = [(e["t_us"], e["on"]) for e in rep["key"]]
+        # v1.5 entries may carry the other RF signals at the key change: "tr" (the four T/R
+        # levels) and "bias_nonzero". At a key-on both must already be in the transmit state
+        # (A3.9a: relays switch before RF); at a key-off they are not judged, since the relays
+        # return only after RF is gone (A3.9a item 1) and stay between CW elements (A3.4d).
+        self.disagree = [e for e in rep["key"] if e.get("on") and (
+            ("tr" in e and all(e["tr"].get(k) == v for k, v in RX_TR.items()))
+            or ("bias_nonzero" in e and not e["bias_nonzero"]))]
+        self.carries_rf = any("tr" in e or "bias_nonzero" in e for e in rep["key"])
         self.marks: list[tuple[float, float]] = []
         on = None
         for t, v in self.key:
@@ -154,7 +165,12 @@ class Cw:
             time.sleep(0.0005)
         rep = read_all(ctx)
         rep["start_t_us"] = start.get("t_us")
-        return Log(rep)
+        log = Log(rep)
+        if log.carries_rf:
+            ctx.check("key.log: at every key-on the T/R lines have left their RX levels and the bias is non-zero "
+                      "(chain A bit 7 taken as the key signal; T/R and bias must agree)", not log.disagree,
+                      f"{len(log.disagree)} key-on entries disagree, first {log.disagree[0]}" if log.disagree else "agree")
+        return log
 
 
 def read_all(ctx: Ctx) -> dict:

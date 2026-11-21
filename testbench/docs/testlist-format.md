@@ -338,10 +338,18 @@ measurement on the radio's own clock.
   until it has `count_key` and `count_hp` entries.
 - `stop {from_key?, from_hp?}` → the same as `read`, then stops.
 - `key`: every change of the keyed state (`TX_STATE` bit 0, PA actually keyed) as `{"t_us",
-  "on": 0|1}`. On the emulator, from the write times of the keying pin(s), which the emulator
-  side names from the gate-cleared HIS 85 wording only; where the HIS does not single out one
-  keying signal it says so instead of choosing a pin. On the reference model, its own keyed
-  state.
+  "on": 0|1, "tr": {"PF4", "PF6", "PC7", "PH11"}, "bias_nonzero"}`. The gate-cleared HIS 85
+  does not single out one keying output, so the emulator takes **chain A bit 7** as the key
+  signal: `on` = 1 while the frame latched into chain A (by PA11) has bit 7 set with its output
+  enable PA10 low ("a T/R relay or PA-enable line", HIGH), edges timed from the PA11 latch and
+  PA10 writes. `tr` (the four T/R levels; RX levels PF4 1, PF6, PC7, PH11 0: levels VERIFIED,
+  function HYPOTHESIS) and `bias_nonzero` (any of PA DAC bias channels 2, 7, 8 non-zero) come
+  with each entry, so the judgement can change without an emulator rebuild. The bench takes
+  `on` and checks at every key-on that `tr` has left the RX levels and `bias_nonzero` is true
+  (a disagreement fails, with its own reason); at a key-off they are not judged, since the
+  relays return only after RF is gone (A3.9a item 1) and stay in transmit between CW elements
+  (A3.4d). Which signal the radio keys with is fixed later with the measured values (A3.9a).
+  On the reference model, its own keyed state, with `tr` and `bias_nonzero` following it.
 - `hp`: every High Priority packet received on radio port 1027 as `{"t_us", "seq", "b4",
   "b5"}`: bytes 0–3 (the sequence number), byte 4 and byte 5 (CWX and the paddle bits). On the
   emulator `t_us` is the time the datagram enters the CH394 socket receive buffer (first

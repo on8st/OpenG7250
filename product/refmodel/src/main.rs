@@ -281,7 +281,14 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
             let from_h = args.get("from_hp").and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
             const PAGE: usize = 2000;
             let key: Vec<J> = l.key.iter().skip(from_k).take(PAGE)
-                .map(|(t, on)| J::obj(vec![("t_us", J::Num(*t as f64)), ("on", J::Num(*on as u8 as f64))])).collect();
+                .map(|(t, on)| {
+                    // the model's other RF signals follow the key: T/R lines at TX levels and
+                    // a non-zero bias while keyed (v1.5 "tr", "bias_nonzero")
+                    let l = |b: bool| J::Num(b as u8 as f64);
+                    J::obj(vec![("t_us", J::Num(*t as f64)), ("on", l(*on)),
+                                ("tr", J::obj(vec![("PF4", l(!*on)), ("PF6", l(*on)), ("PC7", l(*on)), ("PH11", l(*on))])),
+                                ("bias_nonzero", J::Bool(*on))])
+                }).collect();
             let hp: Vec<J> = l.hp.iter().skip(from_h).take(PAGE)
                 .map(|(t, seq, b4, b5)| J::obj(vec![("t_us", J::Num(*t as f64)), ("seq", J::Num(*seq as f64)),
                                                     ("b4", J::Num(*b4 as f64)), ("b5", J::Num(*b5 as f64))])).collect();
