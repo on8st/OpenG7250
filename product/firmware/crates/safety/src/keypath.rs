@@ -89,10 +89,24 @@ pub fn phase_to_hz(w: u32) -> u64 {
     (w as u64 * DSP_CLOCK_HZ) >> 32
 }
 
-/// The RF-path state a TX frequency needs: the index of its transmit range, `None` outside
-/// every range (A3.1b, A3.9; Table A3-2 `LIMIT_TX_FREQ`).
+/// The transmit ranges of a region (A1.6 C-6). This version has region 0 only (0039); any other
+/// value, which management refuses with status 48, has no range, so nothing keys.
+pub fn tx_ranges(region: u8) -> &'static [(u32, u32)] {
+    match region {
+        0 => &TX_RANGES,
+        _ => &[],
+    }
+}
+
+/// The RF-path state a TX frequency needs in a region: the index of its transmit range, `None`
+/// outside every range (A3.1b, A3.9; Table A3-2 `LIMIT_TX_FREQ`).
+pub fn tx_state_in(region: u8, hz: u64) -> Option<usize> {
+    tx_ranges(region).iter().position(|&(lo, hi)| (lo as u64..=hi as u64).contains(&hz))
+}
+
+/// [`tx_state_in`] for region 0.
 pub fn tx_state_of(hz: u64) -> Option<usize> {
-    TX_RANGES.iter().position(|&(lo, hi)| (lo as u64..=hi as u64).contains(&hz))
+    tx_state_in(0, hz)
 }
 
 /// CWX paddle bit held longer than this unkeys (B10.5a): not before 1000 ms.
@@ -143,6 +157,8 @@ pub struct KeyPath {
     req: Requests,
     /// The DUC0 frequency in force, Hz (A3.9; `None` before the owner's first one).
     tx_hz: Option<u64>,
+    /// The configured region (A1.6 C-6): whose transmit ranges apply.
+    region: u8,
     source: Option<Source>,
     keyed_at: u64,
     last_hp_ms: u64,
@@ -191,6 +207,7 @@ impl KeyPath {
             prev: Requests::default(),
             req: Requests::default(),
             tx_hz: None,
+            region: 0,
             source: None,
             keyed_at: 0,
             last_hp_ms: 0,
@@ -228,7 +245,19 @@ impl KeyPath {
 
     /// The DUC0 frequency in force lies inside a transmit range (A3.1a; Table A3-2).
     pub fn tx_in_range(&self) -> bool {
-        self.tx_hz.and_then(tx_state_of).is_some()
+        self.tx_hz.and_then(|h| self.state_of(h)).is_some()
+    }
+
+    /// The RF-path state of a TX frequency in the configured region.
+    pub fn state_of(&self, hz: u64) -> Option<usize> {
+        tx_state_in(self.region, hz)
+    }
+
+    /// The configured region (A1.6 C-6). Management refuses a change while a session runs, and
+    /// so while armed or keyed (A1.6 C-6; status 57); set at start and after a configuration
+    /// change. A change under a key would unkey with `LIMIT_TX_FREQ` at the next frequency.
+    pub fn set_region(&mut self, region: u8) {
+        self.region = region;
     }
 
     /// The TX frequency of the next High Priority packet (A3.9): followed while keyed if it
@@ -238,9 +267,9 @@ impl KeyPath {
     fn tx_frequency(&mut self, w: u32, tx: &mut TxCore, rf: &mut impl RfActuator) {
         let hz = phase_to_hz(w);
         if self.source.is_some() && Some(hz) != self.tx_hz {
-            match tx_state_of(hz) {
+            match self.state_of(hz) {
                 None => self.unkey_limit(LIMIT_TX_FREQ_ID, tx, rf),
-                s if s != self.tx_hz.and_then(tx_state_of) => self.unkey(UnkeyReason::Retune, tx, rf),
+                s if s != self.tx_hz.and_then(|h| self.state_of(h)) => self.unkey(UnkeyReason::Retune, tx, rf),
                 _ => {}
             }
         }
@@ -585,9 +614,9 @@ impl KeyPath {
     pub fn session_end(&mut self) {
         let keep = (self.last_unkey, self.limit_id, self.cw_hang_clamped, self.cw_speed_clamped);
         let atu = (self.atu_state, self.atu_last_end, self.now_ms);
-        let limits = (self.tripped, self.trips);
+        let limits = (self.tripped, self.trips, self.region);
         *self = KeyPath::new();
-        (self.tripped, self.trips) = limits;
+        (self.tripped, self.trips, self.region) = limits;
         (self.last_unkey, self.limit_id, self.cw_hang_clamped, self.cw_speed_clamped) = keep;
         // ATU_STATE is the radio's: it stays until the next cycle or an in/out change (A3.9b).
         (self.atu_state, self.atu_last_end, self.now_ms) = atu;
@@ -1033,6 +1062,27 @@ mod tests {
         k.on_high_priority(ptt(true), 0, &mut tx, &bad, &mut rf);
         k.on_high_priority(ptt(true), 10, &mut tx, &ctx(), &mut rf);
         assert!(k.keyed().is_none() && rf.log.is_empty());
+    }
+
+    #[test]
+    fn the_ranges_follow_the_configured_region_c_6() {
+        // T-A1-65: region 0, each edge of every range inside, 1 Hz outside each edge outside.
+        for &(lo, hi) in tx_ranges(0) {
+            assert!(tx_state_in(0, lo as u64).is_some() && tx_state_in(0, hi as u64).is_some());
+            assert!(tx_state_in(0, lo as u64 - 1).is_none() && tx_state_in(0, hi as u64 + 1).is_none());
+        }
+        // Another region has no range in this version: nothing is in range.
+        assert!(tx_ranges(1).is_empty() && tx_state_in(1, 14_100_000).is_none());
+        let (mut tx, mut k, mut rf) = path();
+        let hp = Requests { ptt: true, duc0: Some(word(14_100_000)), ..Default::default() };
+        k.on_high_priority(hp, 0, &mut tx, &ctx(), &mut rf);
+        assert!(k.tx_in_range());
+        k.on_high_priority(Requests { ptt: false, ..hp }, 10, &mut tx, &ctx(), &mut rf);
+        k.set_region(1);
+        assert!(!k.tx_in_range());
+        k.session_end();
+        k.on_high_priority(Requests { ptt: false, ..hp }, 20, &mut tx, &ctx(), &mut rf);
+        assert!(!k.tx_in_range(), "the region is configuration, not session state");
     }
 
     #[test]

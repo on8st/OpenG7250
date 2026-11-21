@@ -188,6 +188,11 @@ pub fn network_from_config(cfg: &[u8]) -> g7250_proto::netcfg::NetConfig {
     }
 }
 
+/// The configured region C-6 from the stored Table M-3 items (factory: 0, Table A3-0).
+pub fn region_from_config(cfg: &[u8]) -> u8 {
+    Config::decode(cfg).ok().and_then(|c| c.region).unwrap_or(0)
+}
+
 /// Table A1-4 in the store: configuration (C-1, C-2, C-6, C-7) back to the factory values and the
 /// secret cleared, by leaving them out of a compaction; twice, so that no copy of the secret is
 /// left in the other sector. Calibration set and boot counter are kept.

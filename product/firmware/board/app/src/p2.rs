@@ -192,7 +192,7 @@ impl P2 {
     fn key_ctx(&self, p: &[u8]) -> KeyContext {
         // The packet's own frequency is applied before its edge (A3.9a item 3).
         let in_range = match Requests::parse(p).duc0 {
-            Some(w) => g7250_safety::keypath::tx_state_of(g7250_safety::keypath::phase_to_hz(w)).is_some(),
+            Some(w) => self.key.state_of(g7250_safety::keypath::phase_to_hz(w)).is_some(),
             None => self.key.tx_in_range(),
         };
         KeyContext {

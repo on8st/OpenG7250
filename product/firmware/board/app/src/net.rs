@@ -372,6 +372,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     });
     let mut p2 = crate::p2::P2::new(tx, g7250_radio::regmap::RegMap::new(rec));
     p2.set_link(link);
+    // The transmit ranges of the configured region (A1.6 C-6).
+    p2.key.set_region(crate::mgmt_init::region_from_config(&mgmt.config));
     // Management channel on socket 7 (A1.2, A1.3), after DHCP has given the socket back.
     if let Err(e) = chip.udp_open(SOCK_MGMT, m::PORT) {
         println!("net: FAULT cannot open the management port {} ({:?})", m::PORT, e);
@@ -574,6 +576,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                     if let Some(n) = reply {
                         let _ = chip.udp_send(SOCK_MGMT, d.src_ip, d.src_port, &mtx[..n]);
                     }
+                    // A SET_CONFIG or FACTORY_RESET may have changed the region (A1.6 C-6).
+                    p2.key.set_region(crate::mgmt_init::region_from_config(&mgmt.config));
                     for e in after {
                         match e {
                             g7250_radio::mgmt::Effect::ApplyNetwork => {
