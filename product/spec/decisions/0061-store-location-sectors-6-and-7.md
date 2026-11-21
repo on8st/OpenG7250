@@ -26,7 +26,7 @@ bootloader uses sector 6 as a staging area; the drill F1 settles it (P-SYS-5).
 3. Nothing else changes: no store in sector 0 or 1, the EEPROM, the Backup SRAM or the RTC
    backup registers ([HIS] HIS 15 rules 1, 3, 4).
 
-## Addendum: updates keep clear of the store (testbench SF-26, 2026-11-21; proposed)
+## Addendum: updates keep clear of the store (testbench SF-26, 2026-11-21; accepted by ON8ST, 2026-11-21)
 
 4. An image of this firmware longer than the slot it is linked to gets status 61 before
    anything is written; the slots end where the store begins. Order of the command-specific

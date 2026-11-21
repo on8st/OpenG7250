@@ -1,7 +1,7 @@
 # Annex — Changes needed in AetherSDR
 
-- Version: rc4, 2026-11-19
-- Status: rc4, for review by ON8ST. Informative annex to `spec/network-interface.md`
+- Version: 1.0, 2026-11-21, accepted by ON8ST
+- Status: version 1.0 (tag `spec-v1.0`). Informative annex to `spec/network-interface.md`
   (0001, spec section 13; 0013, 0014, 0016).
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`, decision 0018).
 
@@ -12,8 +12,9 @@ github.com/aethersdr/AetherSDR, at commit `9f7cbebcc976b7b798a33dd5a9fc491548d1b
 AetherSDR is GPL-3.0 [AETHER]; this annex quotes no AetherSDR code, only describes it.
 Line numbers are those of that commit and will drift.
 
-Spec sections cited as "B3.4" and similar refer to `spec/network-interface.md` rc2 of
-2026-11-19, and to its rc3, rc4 draft and rc4 for the sections added or changed by 0022 §62–§78, §81 and
+Spec sections cited as "B3.4" and similar refer to `spec/network-interface.md` 1.0 of
+2026-11-21; the annex was written against its rc2 of 2026-11-19, and its rc3, rc4 draft and
+rc4 for the sections added or changed by 0022 §62–§78, §81 and
 §84–§88 (A3.4d, A3.6a, A3.9a items 1a and 6; B5.4 by 0022 §78, B3.8 by 0022 §81, A2.4 and
 B10.5b by 0022 §85, §87).
 

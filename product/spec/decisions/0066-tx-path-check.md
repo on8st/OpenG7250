@@ -1,7 +1,7 @@
 # 0066 — What `TX_PATH_NOT_BLOCKED` detects, and how fast
 
-- Status: proposed (to the repository owner, ON8ST); answers testbench finding SF-29,
-  2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers testbench
+  finding SF-29, 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0007 Decision 5 (safe state, fault classes), 0022 §5, 0045 (safe state from the
   boot stage), 0064 (T-A1-68); [HIS] HIS 85.
@@ -12,7 +12,7 @@ Drop event 13 and fault code 16 `TX_PATH_NOT_BLOCKED` existed (Table A3-1, Table
 spec did not say what is checked: the MCU's own configuration of the pin, or the level at the
 pin as the hardware sees it, nor how fast. The test bench and the firmware need one stimulus.
 
-## Decision (proposed)
+## Decision
 
 1. New A3.6b. While TX is not armed and not keyed, the firmware checks the TX-side outputs of
    A3.6 (TX path disable, SEND, TUNER trigger, PA bias channels; [HIS] HIS 85) at least every
