@@ -12,8 +12,10 @@
 use g7250_proto::dhcp::{self, Reply};
 use g7250_proto::netcfg::{Ip, Mode, NetConfig};
 
-/// How long one exchange keeps the borrowed socket (A1.11: "the few seconds the exchange takes").
-pub const WAIT_MS: u64 = 3_000;
+/// Longest borrow of the management socket by one exchange, from its first send (0041: at most
+/// 2 s, since a host gives up after about 2.5 s). An exchange not finished by then is abandoned
+/// and retried at the next interval.
+pub const WAIT_MS: u64 = 2_000;
 const BACKOFF_MS: [u64; 5] = [4_000, 8_000, 16_000, 32_000, 64_000];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,8 +166,10 @@ impl Client {
     pub fn on_reply(&mut self, b: &[u8], now: u64) -> Action {
         let Some(r) = dhcp::parse(b, self.xid, self.mac) else { return Action::None };
         match self.state {
-            State::Selecting { attempt, .. } if r.msg_type == dhcp::OFFER => {
-                self.state = State::Requesting { attempt, until_ms: now + WAIT_MS, offer: r };
+            State::Selecting { attempt, until_ms } if r.msg_type == dhcp::OFFER => {
+                // Same deadline: the whole DISCOVER-OFFER-REQUEST-ACK exchange is one borrow.
+                let _ = now;
+                self.state = State::Requesting { attempt, until_ms, offer: r };
                 Action::Send { to: [255; 4], msg: Msg::Request { offered: r.yiaddr, server: r.server } }
             }
             State::Requesting { .. } | State::Renewing { .. } | State::Rebinding { .. } if r.msg_type == dhcp::ACK => {

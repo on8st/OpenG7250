@@ -122,3 +122,17 @@ fn foreign_replies_are_ignored() {
     assert_eq!(c.on_reply(&reply(dhcp::OFFER, x.wrapping_add(9), [192, 168, 1, 77], 3600), 4_100), Action::None);
     assert_eq!(c.on_reply(&reply(dhcp::ACK, x, [192, 168, 1, 77], 3600), 4_100), Action::None, "ACK while selecting");
 }
+
+#[test]
+fn one_borrow_lasts_at_most_2_s_decision_0041() {
+    // OFFER late in the window: the REQUEST does not get a new 2 s.
+    let mut c = Client::new(MAC, 100, ll(), None, 0);
+    assert!(matches!(c.poll(4_000), Action::Send { .. }));
+    let x = c.xid;
+    assert!(matches!(c.on_reply(&reply(dhcp::OFFER, x, [192, 168, 1, 77], 3600), 5_900), Action::Send { .. }));
+    assert!(c.listening());
+    assert_eq!(c.poll(6_000), Action::None);
+    assert!(!c.listening(), "abandoned 2 s after the first send");
+    assert!(matches!(c.state, State::Init { .. }), "retried at the next interval");
+    assert_eq!(WAIT_MS, 2_000);
+}
