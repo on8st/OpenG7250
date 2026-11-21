@@ -82,7 +82,7 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "state.dump"];
+    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump"];
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -184,8 +184,21 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
             if action == "start" {
                 r.hw.chain_a_bit7_ever = r.hw.tx_levels;
                 r.hw.bias_nonzero_ever = r.hw.tx_levels;
+                return ok(J::Null);
             }
-            ok(J::Arr(vec![]))
+            // stop: v1.2 shape; the model has no raw events and writes no trace file
+            ok(J::obj(vec![("events", J::Num(0.0)), ("dropped", J::Num(0.0))]))
+        }
+        "hw.input" => {
+            // local PTT (PH6) and KEY contacts (PH3, PH4): not used in v1.0 (0030), so the model
+            // records the level and nothing follows from it
+            let pin = args.get("pin").and_then(|v| v.as_str()).unwrap_or("");
+            if !["PH3", "PH4", "PH6"].contains(&pin) {
+                return err(&format!("pin not offered: {pin}"));
+            }
+            let level = args.get("level").and_then(|v| v.as_f64()).unwrap_or(0.0) as u8;
+            r.count(&format!("hw.input.{pin}.{level}"));
+            ok(J::Null)
         }
         "power.cycle" => {
             r.reset("power-on");

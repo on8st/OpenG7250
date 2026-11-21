@@ -55,6 +55,16 @@ def safe(ctx: Ctx, label: str):
     bias_ok = not dac.get("bias_nonzero_ever", False) and (ch is None or all(ch[i] in (None, 0) for i in (1, 6, 7)))
     ctx.check(f"{label}: PA bias channels 2, 7, 8 at 0 or never written", bias_ok, str(dac))
     ctx.check(f"{label}: ATU latches never written (0032)", all(v == 0 for v in o["atu_latch_writes"].values()))
+    if "hw.trace" in ctx.endpoint.get("fixtures", []):
+        # v1.2: stop returns the counts and (proposed) the trace file; check every event since
+        # the trace start, then start a new trace for the rest of the test
+        rep = ctx.fixture("hw.trace", action="stop") or {}
+        ctx.check(f"{label}: no trace events dropped", not rep.get("dropped"), str(rep))
+        if rep.get("file"):
+            from .trace import check_safe, load
+            for name, ok, detail in check_safe(load(rep["file"])):
+                ctx.check(f"{label} (trace): {name}", ok, detail)
+        ctx.fixture("hw.trace", action="start")
 
 
 def record(h: Host) -> dict:
@@ -232,3 +242,46 @@ def t_l11(ctx):
         if "power.cycle" in ctx.endpoint.get("fixtures", []):
             ctx.fixture("power.cycle")
             safe(ctx, "power-on")
+
+
+@test("T-A3-58")
+def t_a3_58(ctx):
+    """v1.0 (0030): toggling the local PTT (PH6) and KEY contacts (PH3, PH4) keys nothing; High
+    Priority status byte 4 bits [0]-[2] stay 0. Levels are electrical; both levels are driven,
+    so the active level ([HIS] HIS 85 does not give it) does not matter."""
+    ctx.need("hw.input")
+
+    def toggle(h: Host, label: str):
+        keyed, status = False, []
+        for pin in ("PH6", "PH3", "PH4"):
+            for level in (0, 1, 0, 1):
+                ctx.fixture("hw.input", pin=pin, level=level)
+                h.keepalive()
+                for p, d, _ in h.recv(0.03):
+                    if p == PORT_REG:
+                        v = value(parse_regs(d), TX_STATE)
+                        keyed |= v is not None and bool(v & 1)
+                    elif p == PORT_DDC:
+                        status.append(d)
+        ctx.check(f"{label}: nothing keys", not keyed)
+        ctx.check(f"{label}: status byte 4 bits 0-2 stay 0", status and all(d[4] & 0b111 == 0 for d in status))
+
+    with host(ctx) as h:
+        pairs = session(h)
+        toggle(h, "unarmed")
+        h.send(PORT_DUC, bytes(5) + bytes([0x82]) + bytes(54))  # hardware CW selected, break-in
+        toggle(h, "unarmed, hardware CW selected")
+        rec = record(h)
+        if (rec.get(0x20, 0) >> 4) & 1:
+            tok = token_of(h, pairs)
+            h.write([(TX_MODE_CLASS, 2)])
+            st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
+            if ctx.eq("armed", None if st is None else st & 0xF, 1):
+                toggle(h, "armed, hardware CW selected")
+        else:
+            ctx.notes.append("armed part not run: TX frozen (record tx bit 4 = 0)")
+        if has_obs(ctx):
+            safe(ctx, "after the inputs")
+        h.stop()
+        for pin in ("PH6", "PH3", "PH4"):
+            ctx.fixture("hw.input", pin=pin, level=0)

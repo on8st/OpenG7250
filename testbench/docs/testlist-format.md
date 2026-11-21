@@ -1,10 +1,12 @@
-# Test list and result format (v1.1)
+# Test list and result format (v1.2)
 
-- Status: **v1.1**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folds in
-  the answers of the emulator side (openg7250-emu, relayed by openg7250, 2026-11-21): the
-  address mapping of section 3, the fixture plan of section 4, and its four proposals
-  (emulated-time timeouts, boot per test, artifacts, "not modelled" errors), all accepted.
-  Changes from v1 are marked **(v1.1)**. A v1 reader stays valid: v1.1 only adds fields.
+- Status: **v1.2**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
+  the first answers of the emulator side (openg7250-emu, relayed by openg7250): the address
+  mapping of section 3, the fixture plan of section 4, and its four proposals (emulated-time
+  timeouts, boot per test, artifacts, "not modelled" errors), all accepted. v1.2 folds in its
+  answers to the open points of v1.1: the mapping confirmed, the `hw.trace` event schema, and
+  `hw.input`. Changes are marked **(v1.1)** and **(v1.2)**. Each version only adds fields, so a
+  reader of an earlier version stays valid.
 - Purpose: the file that `product_run.py <elf> <tests> -o <result>` reads (`<tests>`), and the file
   it writes (`<result>`). The test bench uses the same two formats against the reference model
   and against the radio, so that results from all three compare per test id.
@@ -44,7 +46,7 @@ hand-written subset.
 ```json
 {
   "format": "g7250-testlist",
-  "version": 1, "minor": 1,
+  "version": 1, "minor": 2,
   "spec":  { "branch": "spec/draft", "commit": "0e075f2" },
   "his":   { "commit": "9d10e72" },
   "catalogue": { "commit": "<tb/main commit>", "sha256": "<of catalogue.json>" },
@@ -88,7 +90,7 @@ hand-written subset.
 
 ```json
 {
-  "format": "g7250-endpoint", "version": 1, "minor": 1,
+  "format": "g7250-endpoint", "version": 1, "minor": 2,
   "kind": "emulator",
   "radio": { "ip": "192.168.73.10", "netmask": "255.255.255.0", "mac": "02:00:00:00:72:50",
              "connect": { "1024": "127.0.0.1:41024", "1025": "127.0.0.1:41025",
@@ -115,13 +117,20 @@ the test host cannot bind those addresses without root. So:
 - `radio.connect` (optional): for each radio port, the local address the bench sends to. A
   datagram the bench receives from that address is read as coming from that radio port (sender
   port demultiplexing, B2.4a). Without `connect` the bench sends to `radio.ip` on the spec ports.
-- `hosts[i].bind` and `hosts[i].ports` (optional): the local address and the port range the
-  bench binds for host *i*. The radio sees the datagram from `hosts[i].ip` **with the same
-  port** the bench bound, so a test that compares the owner's port in `IDENTIFY` (A1.5 I-4)
-  with its own works unchanged. Tests that need a fixed source port (1024, 7250: T-B3-33,
-  T-B8-19) bind that port at `bind` and skip if it is taken.
+- `hosts[i].bind` and `hosts[i].ports` [lo, hi] (optional): the local address and the port
+  range the bench binds for host *i*. **(v1.2, confirmed by the emulator side)** Each local
+  port *p* in [lo, hi] maps 1:1: the radio sees the source `hosts[i].ip`:*p*. A reply to
+  `hosts[i].ip`:*p* arrives at local port *p* of `hosts[i].bind`, sent from the
+  `radio.connect` address of the radio port it comes from. The ranges of hosts that share one
+  local address do not overlap; the runner assigns them and writes them into the endpoint
+  file. So a test that compares the owner's port in `IDENTIFY` (A1.5 I-4) with its own works
+  unchanged. Tests that need a fixed source port (1024, 7250: T-B3-33, T-B8-19) bind that port
+  and skip if it is taken or outside the range.
 - `broadcast.send_to` (optional): where the bench sends a datagram meant as a limited or
   directed broadcast to a radio port (discovery and Set IP on 1024, identification on 7251).
+  **(v1.2, confirmed)** A datagram to `send_to[kind][port]` reaches the radio as a limited
+  (255.255.255.255) or directed broadcast on that port, from `hosts[i].ip`:*p* of the socket that
+  sent it.
   Without it the bench sends to 255.255.255.255 or to `broadcast.directed` if those flags allow
   it, else the test skips with `fixture:net.broadcast`.
 - `kind`: `refmodel`, `emulator` or `radio`. The bench uses it only for reporting and for
@@ -141,7 +150,7 @@ delivery is given in the last column; the reference model offers the ones marked
 | Fixture | Ops | Used for | Plan |
 |---|---|---|---|
 | `hw.observe` | `hw.observe {}` → snapshot of the HIS 85 safe-state items (below) | safe state under every TX request (T-B10-41, T-B10-42, L09, L11) | emulator first; model |
-| `hw.trace` | `hw.trace {action: "start"}`; `hw.trace {action: "stop"}` → events | the bench starts a trace at the beginning of every test, so latched observations count from the test start | emulator first (raw events); model (start only) |
+| `hw.trace` | `hw.trace {action: "start", pins: [...]}`; `hw.trace {action: "stop"}` → `{events, dropped, file}` | the bench starts a trace at the beginning of every test, so latched observations count from the test start, and checks every event against HIS 85 | emulator first (raw events); model (start, and stop with zero events) |
 | `power.cycle` | `power.cycle {}` | token after power cycle, counters, T-B3-09, T-A3-38, L11 | emulator first; model |
 | `reset.wdt` | `reset.wdt {}` (processor watchdog reset) | A3.5 `WDT_RESET_AT_START`, T-A3-15, T-A3-38 | emulator first; model |
 | `ctrl.set` | `ctrl.set {state: "absent"\|"silent"}` | 0023 item 4, T-A1-57, T-A1-58 | emulator first |
@@ -152,7 +161,7 @@ delivery is given in the last column; the reference model offers the ones marked
 | `power.cut` | `power.cut {at_us: t}` | A1.8 U-5, T-A1-08 | emulator later |
 | `dhcp.server` | `dhcp.offer {…}`, `dhcp.nak {}`, `dhcp.expire {}` | A1.11a, T-A1-35 | emulator later |
 | `sensor.set` | `sensor.set {name, value}`; names `supply_mv`, `current_ma`, `pa_temp_mc`, `fwd_power_mw`, `rev_power_mw` | Table A3-2 rows, RF-gone waits, A3.4c | after the emulator's analog models; **(v1.1)** only in the units and scales the HIS gives, else `ok: false`, `"not in HIS: <name>"` |
-| `hw.input` | **(v1.1, new proposal)** `hw.input {pin: "PH6"\|"PH3"\|"PH4", level: 0\|1}` | T-A3-58: local PTT and KEY inputs key nothing (0030; [HIS] HIS 85) | open: please confirm |
+| `hw.input` | **(v1.2)** `hw.input {pin: "PH6"\|"PH3"\|"PH4", level: 0\|1}`; any other pin `ok: false`, `"pin not offered: <pin>"` | T-A3-58: local PTT and KEY inputs key nothing (0030; [HIS] HIS 85) | emulator step 3; model |
 
 A fixture that answers `ok: false` with `"not in HIS: <name>"` makes the test `skip` with that
 reason. The coordinator turns each such reason into a HIS question.
@@ -176,19 +185,48 @@ latched. `ch` holds the last 10-bit word per DAC channel, `null` if never writte
 bench checks: T/R lines at RX levels, chain A bit 7 clear in every latched frame, bias channels
 2, 7 and 8 at 0 or never written, ATU latches never written (0032), codec in reset (0031).
 
-`hw.trace` events **(v1.1)**: time-stamped raw events, GPIO set and reset per pin, SPI words with
-chip select and latch edges, with no interpretation beyond HIS 85. The bench applies the checks
-above to every latched frame and DAC word in the trace, not only to the last one. The event
-schema is to be given by the emulator side. Until then the bench uses only `start` and the
-snapshot. The reference model has no raw events: `stop` returns `[]`, and its snapshot carries
-two summary flags, `spi1_a.bit7_ever` and `pa_dac.bias_nonzero_ever`, latched since the trace
-start.
+`hw.trace` **(v1.2)**. A trace records, from `start` to `stop`, JSON Lines in emulated time:
+
+```
+{"seq": 17, "t_us": 81234, "kind": "gpio", "pin": "PB14", "level": 1}
+{"seq": 18, "t_us": 81240, "kind": "spi", "bus": "SPI1", "cs": null, "data": "01"}
+{"seq": 19, "t_us": 81300, "kind": "reset", "cause": "power"}
+```
+
+- `seq` orders the events; `t_us` is microseconds since boot.
+- `kind` `gpio`: one pin changed to the electrical `level`. Latch and output-enable edges are
+  `gpio` events.
+- `kind` `spi`: one transfer between chip-select edges on `SPI1` or `SPI2`; `cs` is the
+  chip-select pin or `null`; `data` is the bytes as hex.
+- `kind` `reset`: `cause` `power`, `wdt` or `software`.
+- A reader MUST ignore an unknown `kind`.
+- Pins: the HIS 85 safe-state items, plus any pin named in `start {pins: [...]}`.
+- `stop` returns `{"events": n, "dropped": n}`. The events go to `trace.jsonl` in the run
+  artifacts. **(v1.2, proposal)** `stop` also returns `"file"`, the path of that trace's events
+  readable by the bench process (absolute, or relative to the bench's working directory), so the
+  bench can check them during the test.
+
+The bench (`testbench/testbench/trace.py`) checks every event since the trace start:
+- no T/R line leaves its RX level;
+- chain A bit 7 is clear in every frame latched into chain A (the last 1-byte SPI1 transfer
+  before an edge of latch PA11);
+- the ATU latch lines never toggle (0032);
+- the codec stays in reset (0031);
+- `dropped` is 0.
+The bias check uses the snapshot's `pa_dac.ch`, because the HIS doesn't give the DAC word layout
+per channel. The reference model has no raw events: `stop` returns zero counts and no file, and
+its snapshot carries two summary flags, `spi1_a.bit7_ever` and `pa_dac.bias_nonzero_ever`,
+latched since the trace start.
+
+`hw.input` **(v1.2)**. The level is electrical (0 or 1). The bench drives both levels on every
+pin, because the HIS doesn't give the active level. Edges reach the interrupt controller as from
+a real input.
 
 ## 5. Result file (`<result>`)
 
 ```json
 {
-  "format": "g7250-testresult", "version": 1, "minor": 1,
+  "format": "g7250-testresult", "version": 1, "minor": 2,
   "testlist": { "sha256": "…" },
   "subject":  { "kind": "emulator", "elf_sha256": "…", "fw_version": "0.1.0+12" },
   "runner":   { "name": "product_run.py", "version": "…", "emulator_commit": "…" },
@@ -230,9 +268,10 @@ Runner exit code: 0 if there is no `fail` and no `error`, 1 if there is a `fail`
 A test with target `emulator` is also run against the reference model. A test with target
 `host` is not sent to `product_run.py`.
 
-## 7. Open points for the emulator side (v1.1)
+## 7. Open points for the emulator side (v1.2)
 
-1. Confirm that the radio sees a host's datagram with the port the bench bound (section 3), and
-   that datagrams from the radio arrive from the `radio.connect` address of their port.
-2. The `hw.trace` event schema.
-3. `hw.input` for T-A3-58 (section 4): is driving PH6, PH3 and PH4 possible?
+1. Settled in v1.2: the address mapping (section 3), the `hw.trace` schema and `hw.input`
+   (section 4).
+2. Open: the `file` field of `hw.trace {stop}` (section 4), so that the bench can check the
+   events of a running test. Without it the bench checks the snapshot only, and the events
+   are checked after the run from `trace.jsonl` in the artifacts.
