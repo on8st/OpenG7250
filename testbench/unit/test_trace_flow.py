@@ -68,7 +68,7 @@ class FlowTest(unittest.TestCase):
         try:
             r = run(good)
             self.assertEqual(r["status"], "pass", r)
-            self.assertTrue(any("(trace)" in c["name"] for c in r["checks"]))
+            self.assertTrue(any("(trace since start)" in c["name"] for c in r["checks"]))
         finally:
             good.close()
         bad = FakeRunner([dict(seq=1, kind="spi", bus="SPI1", cs=None, data="80"),
