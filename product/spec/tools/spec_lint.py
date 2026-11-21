@@ -8,7 +8,8 @@ Checks over spec/*.md:
   L4  every referenced HIS-nn exists in open-questions-his.md
   L5  every paragraph or table row with MUST/SHOULD/MAY (upper case, RFC 2119) cites a source:
       [KEY], a decision number, or a section reference "Bn"/"An"/"Cn"
-  L6  conformance test ids (T-...) are unique across the spec
+  L6  conformance test ids (T-...) are defined once across the spec (a table row whose first
+      cell is the id); citations elsewhere are references
   L7  register names used in the spec exist in spec/register-map.yaml (if that file exists)
   L8  spec/register-map.yaml matches the spec tables (tools/regmap.py --check)
   L9  no "TBD" in the spec (v1.0 freeze, 0035); every pending-hardware id P-... used is defined
@@ -79,11 +80,14 @@ def main():
             for h in RE_HIS.findall(line):
                 if f"HIS-{h}" not in HIS_IDS:
                     findings.append(f"L4 {rel}:{i}: HIS-{h} not in open-questions-his.md")
-            for t in RE_TEST.findall(line):
-                if line.lstrip().startswith("|") or line.lstrip().startswith("-"):
-                    if t in tests and tests[t] != (rel, i):
-                        findings.append(f"L6 {rel}:{i}: test id {t} also at {tests[t][0]}:{tests[t][1]}")
-                    tests.setdefault(t, (rel, i))
+            # A test is defined by a table row whose first cell is its id; an id cited
+            # elsewhere (another row, a list item, the changelog) is a reference, not a definition.
+            m = re.match(r"^\| (T-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d{2,3}) \|", line)
+            if m:
+                t = m.group(1)
+                if t in tests:
+                    findings.append(f"L6 {rel}:{i}: test id {t} also at {tests[t][0]}:{tests[t][1]}")
+                tests.setdefault(t, (rel, i))
             if regnames is not None and path.name != "part-c-tci-profile.md":
                 for r in RE_REG.findall(line):
                     if r not in regnames:

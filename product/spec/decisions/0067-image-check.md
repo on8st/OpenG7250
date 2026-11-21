@@ -33,6 +33,13 @@ Context reworded to the contract alone (a), blocks sent again (b), slot names in
    5. its own integrity check over the whole image holds (the firmware chooses it, for example
       a CRC-32);
    6. its initial stack pointer lies in RAM and its entry point in that slot.
+   **The image is what its record describes** (bench question on T-A1-88, 2026-11-21): every
+   item above is judged over the length the image record gives, never over the length
+   received, because the boot stage has no package header and must reach the same result as
+   `UPDATE_VERIFY`. Bytes received beyond the recorded length are covered by the hash (check
+   1 of point 2) and by the record–header agreement (check 3). So a package with bytes
+   appended to an intact image, header length and hash adjusted, passes the image check and
+   MUST be refused with `header`, not `integrity`.
    The boot stage is not an image of this kind; it is not updated through this channel (U-7).
    A foreign image (A1.8a item 3) gets no image check: it stays opaque, and only its SHA-256 is
    checked.
