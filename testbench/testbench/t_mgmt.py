@@ -431,7 +431,7 @@ def t_a1_66(ctx):
 
 
 # ---------------- start-up bound and DHCP while link-local (0048, 0052) ----------------
-START_LEASE_S, START_LINKLOCAL_S = 5.0, 15.0  # A1.11 "Bound on start-up" (0048)
+START_LEASE_S, START_LINKLOCAL_S = 5.0, 17.0  # A1.11 "Bound on start-up" (0048, 0057: 17 s without DHCP)
 
 
 def link_up_t_us(ctx) -> int | None:
@@ -491,6 +491,7 @@ def t_a1_69(ctx):
     finally:
         ctx.fixture("dhcp.stop")
     startup(ctx, "no DHCP server (link-local)", START_LINKLOCAL_S)
+    ctx.notes.append("'after both announcements' not checked yet: needs the ARP frames of eth.log (v1.6)")
     ip = ctx.endpoint["radio"]["ip"]
     ctx.check("with no DHCP server the answers come from the link-local address", ip.startswith("169.254."), ip)
 
@@ -672,3 +673,56 @@ def _t_a1_75(ctx, c, s, past_end, unknown):
     ctx.eq("unarmed, no session: the unknown id gets 48 (command-specific, after the state checks)",
            r["status"] if r else None, 48)
     c.authed("END_WRITE_SESSION", s)
+
+
+
+# ---------------- link-local address used unprobed (A1.11; 0057) ----------------
+FAULT_FLAGS = 0x0212
+
+
+@test("T-A1-76")
+def t_a1_76(ctx):
+    """MACRAW on socket 0 fails to open: the chosen link-local address is used unprobed, reported
+    by IDENTIFY tag 24, the log, GET_STATS ll_unprobed; IP_CONFLI still gives it up; no A3.5
+    fault."""
+    from .mgmt import read_log, stats
+    from .p2 import Host, reread_endpoint, wait_reachable
+    ctx.need("dhcp.server")
+    ctx.need("power.cycle")
+    ctx.fixture("dhcp.stop")
+    if "macraw.fail" in ctx.endpoint.get("fixtures", []):
+        ctx.fixture("macraw.fail", on=True)
+    else:
+        ctx.notes.append("no macraw.fail fixture: relies on the runner having no MACRAW (judged by IDENTIFY tag 24)")
+    try:
+        ctx.fixture("power.cycle")
+        wait_reachable(ctx, "power-on with MACRAW failing", START_LINKLOCAL_S + 5)
+        ll = ctx.endpoint["radio"]["ip"]
+        ctx.check("link-local address in use", ll.startswith("169.254."), ll)
+        with m(ctx) as c:
+            t = identify(ctx, c)
+            if t.get(24) == b"\x00":
+                raise Skip("MACRAW opened on this runner (IDENTIFY tag 24 = 0): not the unprobed path")
+            ctx.eq("IDENTIFY tag 24 = 1 (address in use without a complete probe)", t.get(24), b"\x01")
+            texts = [e[2] for e in read_log(c)]
+            want = f"link-local {ll} used without a complete RFC 3927 probe"
+            ctx.check(f"log entry containing '{want}'", any(want in x for x in texts),
+                      f"{len(texts)} entries" + (f", last {texts[-1]!r}" if texts else ""))
+            st = stats(c) or {}
+            ctx.check("GET_STATS ll_unprobed raised", st.get("ll_unprobed", 0) >= 1, f"ll_unprobed {st.get('ll_unprobed')}")
+        with Host(ctx.net) as h:
+            ff = value(h.write([(FAULT_FLAGS, 0)]), FAULT_FLAGS)
+        ctx.eq("no A3.5 fault (FAULT_FLAGS 0)", ff, 0)
+        ctx.notes.append("console line 'G7250 FAULT LINKLOCAL <address> UNPROBED' not checked: no console fixture")
+        if "ip.conflict" in ctx.endpoint.get("fixtures", []):
+            ctx.fixture("ip.conflict", action="raise")
+            time.sleep(1.0)
+            took = wait_reachable(ctx, "IP_CONFLI", START_LINKLOCAL_S + 5)
+            new = ctx.endpoint["radio"]["ip"]
+            ctx.check("IP_CONFLI still gives the unprobed address up: a new link-local address", new != ll and new.startswith("169.254."),
+                      f"{ll} -> {new} after {took:.1f} s")
+        else:
+            ctx.notes.append("IP_CONFLI part not run: no ip.conflict fixture (format v1.6)")
+    finally:
+        if "macraw.fail" in ctx.endpoint.get("fixtures", []):
+            ctx.fixture("macraw.fail", on=False)

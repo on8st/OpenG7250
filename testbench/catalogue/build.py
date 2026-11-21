@@ -246,6 +246,8 @@ OVERRIDES: dict[str, dict] = {
                 "notes": ["the reference model has no socket buffers: it always passes there; the emulator honours the sizes of Table B2-2"]},
     "T-A1-69": {"target": "emulator", "also": ["host"], "needs": ["dhcp.server", "power.cycle"],
                 "notes": ["from link up: the trace link event where offered, else counted from the power cycle (stricter)"]},
+    "T-A1-76": {"target": "emulator", "also": [], "needs": ["dhcp.server", "power.cycle"],
+                "notes": ["MACRAW failing: macraw.fail where offered (proposed), else a runner without MACRAW; console line not checked"]},
     "T-A1-74": {"target": "emulator", "also": ["host"], "needs": ["dhcp.server", "power.cycle"]},
     "T-B10-47": {"target": "emulator", "also": ["host"], "pending": CAL_SET,
                  "notes": ["needs TX unlocked: blocked until the calibration set is complete (tx bit 4)",

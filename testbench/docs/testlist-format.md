@@ -456,6 +456,9 @@ A test with target `emulator` is also run against the reference model. A test wi
    read from the image's registers, with the latch writes as evidence. The reference model's
    `atu.sim {result, after_ms, tune_time_ms}` (section 4) is a different, model-level shape:
    the bench tells them apart by the presence of `action`.
-4. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
+4. Proposed (v1.6): `macraw.fail {on: true|false}` makes socket 0 fail to open in MACRAW, for
+   T-A1-76 (0057) once the emulator has MACRAW; until then a runner without MACRAW takes the
+   same path, and the bench judges by `IDENTIFY` tag 24.
+5. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
    runs, the 0x04 reads are six strobes per sample; such a trace is meant for a short test
    only, and the runner may drop events (which fails the test) if it cannot keep up.

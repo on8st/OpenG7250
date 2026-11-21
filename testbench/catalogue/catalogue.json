@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "0e4fcd8",
-  "sha256_of_inputs": "71f360d13742266b1d0ed08b46959a314468d398e9d9aa979f3e5e995308b3bb"
+  "commit": "6308396",
+  "sha256_of_inputs": "d1c3bb063c6e57c1314c02d25359a87ca0cbbb344c660cd4780440d8e89567cf"
  },
  "his": {
   "commit": "72591aa"
@@ -1396,7 +1396,7 @@
    "id": "T-A1-69",
    "origin": "spec",
    "part": "A-B",
-   "title": "From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 15 s, from the link-local address (reference model or emulator; A1.11 \"Bound on start-up\"; 0048).",
+   "title": "From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 17 s, from the link-local address, after both announcements (reference model or emulator; A1.11 \"Bound on start-up\"; 0048, 0057).",
    "reqs": [
     "A1",
     "A1.11"
@@ -1541,6 +1541,31 @@
    "tx_part": true,
    "notes": [
     "the armed part needs TX unlocked; 'outside a session while armed' is not reachable over P2"
+   ]
+  },
+  {
+   "id": "T-A1-76",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "With socket 0 failing to open in MACRAW (simulated): after three tries 10 ms apart the radio uses the chosen link-local address unprobed, answers `IDENTIFY` with tag 24 = 1, logs an entry containing `link-local <address> used without a complete RFC 3927 probe`, raises `GET_STATS` `ll_unprobed`, prints a `G7250 FAULT LINKLOCAL` console line, and still gives the address up on IP_CONFLI; no A3.5 fault is set (emulator; A1.11; 0057).",
+   "reqs": [
+    "A1",
+    "A3.5",
+    "A1.11"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "dhcp.server",
+    "power.cycle"
+   ],
+   "pending": [
+    "P-NET-2"
+   ],
+   "tx_part": false,
+   "notes": [
+    "MACRAW failing: macraw.fail where offered (proposed), else a runner without MACRAW; console line not checked"
    ]
   },
   {
