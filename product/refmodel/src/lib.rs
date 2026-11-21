@@ -7,5 +7,6 @@ pub mod crypto;
 pub mod json;
 pub mod keyer;
 pub mod mgmt;
+pub mod prx2;
 pub mod radio;
 pub mod util;

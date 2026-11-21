@@ -154,6 +154,10 @@ pub mod mgmt {
     pub const READ_LOG: u16 = 0x0030;
     pub const CLEAR_LOG: u16 = 0x0031;
     pub const UPDATE_BEGIN: u16 = 0x0040;
+    pub const UPDATE_BLOCK: u16 = 0x0041;
+    pub const UPDATE_VERIFY: u16 = 0x0042;
+    pub const UPDATE_ACTIVATE: u16 = 0x0043;
+    pub const UPDATE_ABORT: u16 = 0x0044;
     pub const UPDATE_STATUS: u16 = 0x0045;
     pub const ROLLBACK: u16 = 0x0046;
     pub const RETURN_TO_STOCK: u16 = 0x0050;
@@ -182,5 +186,11 @@ pub mod mgmt {
         pub const SESSION_RUNS: u16 = 57;
         pub const UPDATE_IN_PROGRESS: u16 = 58;
         pub const ARMED: u16 = 50;
+        pub const WRONG_HARDWARE: u16 = 51;
+        pub const OLDER_IMAGE: u16 = 52;
+        pub const BAD_CRC: u16 = 53;
+        pub const OUT_OF_ORDER: u16 = 54;
+        pub const VERIFY_FAILED: u16 = 55;
+        pub const RUNNING_SLOT: u16 = 63;
     }
 }

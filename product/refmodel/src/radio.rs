@@ -22,6 +22,45 @@ use crate::mgmt::Mgmt;
 use crate::util::*;
 
 pub const MS: u64 = 1_000;
+/// The firmware in the slots (A1.8): survives resets; the boot stage picks the running slot.
+#[derive(Debug, Clone)]
+pub struct Image {
+    pub version: (u8, u8, u16),
+    pub len: u32,
+    pub sha: [u8; 32],
+    /// confirmed (A1.8 self-confirmation) or the factory image
+    pub good: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Firmware {
+    /// 1 slot A, 2 slot B (IDENTIFY tag 23)
+    pub running: u8,
+    pub slots: [Option<Image>; 2],
+    /// start of an unconfirmed trial boot
+    pub trial: Option<u64>,
+    pub rolled_back: bool,
+}
+
+/// Flash layout of the model (IDENTIFY tag 25, 0062): in 128 KiB sectors, slot A, slot B, store.
+pub const LAYOUT: [(u8, u8); 3] = [(2, 2), (4, 2), (6, 2)];
+pub const SECTOR_BYTES: u32 = 128 * 1024;
+
+impl Firmware {
+    pub fn slot_size(slot: u8) -> u32 {
+        LAYOUT[(slot - 1) as usize].1 as u32 * SECTOR_BYTES
+    }
+    pub fn other(&self) -> u8 {
+        3 - self.running
+    }
+    pub fn running_image(&self) -> Option<&Image> {
+        self.slots[(self.running - 1) as usize].as_ref()
+    }
+    pub fn other_image(&self) -> Option<&Image> {
+        self.slots[(self.other() - 1) as usize].as_ref()
+    }
+}
+
 /// TX_STATE [11:8] source CWX, ATU (Table B8-2)
 pub const SRC_CWX: u8 = 2;
 pub const SRC_ATU: u8 = 4;
@@ -241,6 +280,7 @@ pub struct Radio {
     lim_cap: Limiter<Host>,
     lim_notowner: Limiter<Host>,
     lim_link: Limiter<Host>,
+    lim_update: Limiter<Host>,
     last_unasked: HashMap<Host, u64>,
     pub mgmt: Mgmt,
     pub resets: u64,
@@ -250,6 +290,8 @@ pub struct Radio {
     pub keyer: Keyer,
     /// The ATU tune cycle of A3.9b (0047).
     pub atu: Atu,
+    /// The images in the two slots and the boot choice (A1.8).
+    pub fw: Firmware,
     /// The key.log fixture (format v1.5): key changes and High Priority arrivals since start.
     pub keylog: Option<KeyLog>,
 }
@@ -357,6 +399,7 @@ impl Radio {
             lim_cap: Limiter::new(S, 1, 10),
             lim_notowner: Limiter::new(100 * MS, 1, usize::MAX),
             lim_link: Limiter::new(100 * MS, 1, 10),
+            lim_update: Limiter::new(100 * MS, 1, usize::MAX),
             last_unasked: HashMap::new(),
             mgmt: Mgmt::new(now),
             resets: 0,
@@ -364,12 +407,51 @@ impl Radio {
             keyer: Keyer::new(keyer::Settings { iambic: false, mode_b: false, strict: false, speed: 0, weight: 50 }),
             keylog: None,
             atu: Atu::default(),
+            fw: Firmware { running: 1, slots: [None, None], trial: None, rolled_back: false },
             nonowner_seq: 0,
             old_seq: 0,
         };
         r.new_token();
+        // the factory image in slot A, confirmed
+        r.fw.slots[0] = Some(Image { version: r.cfg.fw, len: 0, sha: [0; 32], good: true });
         r.logf("power-on reset");
         r
+    }
+
+    /// Stop everything for an update (A1.8; 0022 §10): the P2 session ends, the arm drops with
+    /// MAINTENANCE, the streams stop; the state lasts until a restart.
+    pub fn begin_update(&mut self, out: &mut Vec<Tx>) {
+        self.update_in_progress = true;
+        if self.session.is_some() {
+            self.end_session(drop::MAINTENANCE, false, out);
+        }
+        self.logf("update started: session ended, streams stopped");
+    }
+
+    /// The boot stage after a reset: a trial image that has not confirmed itself is rolled back
+    /// (A1.8 U-6; 0044).
+    fn boot_choice(&mut self, cause: &str) {
+        if self.fw.trial.is_some() {
+            self.fw.trial = None;
+            self.fw.slots[(self.fw.running - 1) as usize] = None;
+            self.fw.running = self.fw.other();
+            self.fw.rolled_back = true;
+            self.logf(&format!("trial image not confirmed before reset ({cause}): rolled back to slot {}", self.fw.running));
+        }
+    }
+
+    /// Self-confirmation of a trial image (0044): 10 s running with the network up (always up in
+    /// the model) and no class 2 fault (not modelled).
+    fn confirm_trial(&mut self) {
+        if let Some(t) = self.fw.trial {
+            if self.now >= t + 10 * S {
+                self.fw.trial = None;
+                if let Some(img) = self.fw.slots[(self.fw.running - 1) as usize].as_mut() {
+                    img.good = true;
+                }
+                self.logf("trial image confirmed");
+            }
+        }
     }
 
     // ---------- helpers ----------
@@ -779,6 +861,15 @@ impl Radio {
         if self.link_mbit < 100 && kind == CcKind::Hp && d[4] & 1 != 0 {
             if self.lim_link.allow(&rx.src, self.now) {
                 let data = self.reg_packet(&[(reg::LINK_STATUS, self.link_status()), (reg::STREAM_STATUS, self.stream_status())]);
+                out.push(Tx { src_port: port::REGMAP, dst: rx.src, data });
+            }
+            return;
+        }
+        if self.update_in_progress {
+            // A1.8 (0022 §10): no session during an update; a run request is answered with
+            // STREAM_STATUS reason 10, at most once per 100 ms (an answer to a non-owner, 0051)
+            if kind == CcKind::Hp && d[4] & 1 != 0 && self.lim_update.allow(&rx.src, self.now) {
+                let data = self.reg_packet_nonowner(&[(reg::STREAM_STATUS, self.stream_status())]);
                 out.push(Tx { src_port: port::REGMAP, dst: rx.src, data });
             }
             return;
@@ -1443,7 +1534,8 @@ impl Radio {
             arm::WATCHDOG_DISABLED
         } else if s.s.hp.ptt {
             arm::PTT_ACTIVE
-        } else if self.update_in_progress {
+        } else if self.update_in_progress || self.fw.trial.is_some() {
+            // an update, and an unconfirmed trial boot (A1.8, 0022 §10)
             arm::MAINTENANCE
         } else if self.mode_class == 0 {
             arm::NO_MODE_CLASS
@@ -1468,6 +1560,7 @@ impl Radio {
     pub fn tick(&mut self, now: u64) -> Vec<Tx> {
         self.now = now;
         let mut out = Vec::new();
+        self.confirm_trial();
         self.run_keyer(now, &mut out);
         let mut due: Vec<Tx> = Vec::new();
         self.scheduled.retain(|(t, p)| {
@@ -1542,6 +1635,7 @@ impl Radio {
     pub fn reset(&mut self, cause: &str) {
         let mut out = Vec::new();
         self.drop_arm(drop::MAINTENANCE, &mut out);
+        self.boot_choice(cause);
         self.keyer.reset();
         self.atu.cycle = None;
         self.session = None;

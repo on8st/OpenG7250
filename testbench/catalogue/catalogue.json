@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "4fe1b69",
-  "sha256_of_inputs": "e75dc17f9979ad7c9468523f17b636f46b28d9f3f1b192e04a40c9430eeae3d8"
+  "commit": "90097d9",
+  "sha256_of_inputs": "6e6344f11a101be96f6a65a7ac995017e05ac0c2e82a5ac6b03854423e279680"
  },
  "his": {
   "commit": "72591aa"
@@ -1572,7 +1572,7 @@
    "id": "T-A1-77",
    "origin": "spec",
    "part": "A-B",
-   "title": "During a complete update to an image of this firmware (`UPDATE_BEGIN` to the confirmed trial boot), and during an aborted one, flash.log shows no erase or write in sectors 6 and 7 other than store writes or compactions (whole store records of the store format, no erase of the only live store sector), and none outside the staging slot and the store (emulator, flash.log; A1.8 \"Slot size and the store\"; 0061).",
+   "title": "During a complete update to an image of this firmware (`UPDATE_BEGIN` to the confirmed trial boot), and during an aborted one, flash.log shows no erase or write in sectors 6 and 7 other than store writes or compactions (whole store records of the store format, no erase of the only live store sector), and none outside the staging slot and the store; the staging slot and the store are the sectors `IDENTIFY` tag 25 reports (emulator, flash.log; A1.8 \"Slot size and the store\"; 0061).",
    "reqs": [
     "A1",
     "A1.8"
@@ -1593,7 +1593,7 @@
    "id": "T-A1-78",
    "origin": "spec",
    "part": "A-B",
-   "title": "`UPDATE_BEGIN` for an image of this firmware, linked for the other slot, with a length one byte more than that slot (slot size from the firmware's layout) gets 61 and nothing is written; with a length equal to the slot size it is accepted; with the wrong hardware id it gets 51 and for the running slot 63, whatever its length (emulator or reference model; A1.8; 0043, 0061).",
+   "title": "`UPDATE_BEGIN` for an image of this firmware, linked for the other slot, with a length one byte more than that slot (its size from `IDENTIFY` tag 25: number of sectors × 128 KiB) gets 61 and nothing is written; with a length equal to the slot size it is accepted; with the wrong hardware id it gets 51 and for the running slot 63, whatever its length; an image both too large and older than the running one, without the downgrade flag, gets 61 (order 51, 56, 63, 61, 52) (emulator or reference model; A1.8; 0043, 0061, 0062).",
    "reqs": [
     "A1",
     "A1.8"
@@ -1610,6 +1610,23 @@
     "spec marks it reference model; emulator only with the fixtures",
     "needs the update client (Table M-4 package) in the bench and the slot size of the firmware layout"
    ]
+  },
+  {
+   "id": "T-A1-79",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "`IDENTIFY` tag 25 is present with length 6; slots A and B and the store do not overlap, lie within sectors 2–7 (never sector 0 or 1) and do not change across restarts and updates of this firmware; the slot named by tag 23 is the one the running image occupies; a reader skips the tag if it does not know it (A1.5; Annex M; 0062).",
+   "reqs": [
+    "A1",
+    "A1.5"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
   },
   {
    "id": "T-A2-01",

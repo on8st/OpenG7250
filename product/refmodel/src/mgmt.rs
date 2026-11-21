@@ -9,8 +9,8 @@
 use std::net::Ipv4Addr;
 
 use crate::codes::mgmt::{st, *};
-use crate::crypto::{ct_eq, hmac_sha256, sha256};
-use crate::radio::{Calibration, Radio, Rx, Tx, ALL_PARAMS, MS, S};
+use crate::crypto::{crc32, ct_eq, hmac_sha256, sha256};
+use crate::radio::{Calibration, Firmware, Image, Radio, Rx, Tx, ALL_PARAMS, LAYOUT, MS, S};
 use crate::util::*;
 
 pub const CHALLENGE_LEN: usize = 16; // Annex M
@@ -39,7 +39,27 @@ pub struct Mgmt {
     lim_outside: Limiter<u8>,
     rng: u64,
     pub conf: Conf,
+    /// the transfer of an update to an image of this firmware (A1.8)
+    pub upd: Option<Upd>,
 }
+
+/// One update transfer: the header of Table M-4 and the blocks received so far.
+#[derive(Debug, Clone)]
+pub struct Upd {
+    pub version: (u8, u8, u16),
+    pub len: u32,
+    pub sha: [u8; 32],
+    /// the staging slot: the one not running
+    pub slot: u8,
+    pub count: u32,
+    pub data: Vec<u8>,
+    pub received: u32,
+    pub verified: bool,
+}
+
+pub const BLOCK: usize = 512;
+const HW_ID: u16 = 0x00C8;
+const PK_MAGIC: u32 = 0x4737_504B; // "G7PK"
 
 fn header(req: &[u8], status: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(18 + payload.len());
@@ -119,6 +139,7 @@ impl Mgmt {
             lim_outside: Limiter::new(S, 10, 10),
             rng: 0x9E37_79B9_7F4A_7C15 ^ now,
             conf: Conf::factory(),
+            upd: None,
         }
     }
 
@@ -278,7 +299,10 @@ impl Mgmt {
         }
         let armed_or_keyed = r.armed() || r.tx.keyed;
         // 58, 57, 50
-        if (is_update(cmd) && r.update_in_progress) || (cmd == SWITCH_LEVEL && r.update_in_progress)
+        // during an update the transfer commands go on; a new UPDATE_BEGIN (and ROLLBACK) gets 58,
+        // and so does UPDATE_BEGIN during an unconfirmed trial boot (A1.8, 0043)
+        if ((cmd == UPDATE_BEGIN || cmd == ROLLBACK) && (r.update_in_progress || r.fw.trial.is_some()))
+            || (cmd == SWITCH_LEVEL && r.update_in_progress)
             || ((cmd == RETURN_TO_STOCK || cmd == ENTER_VENDOR_RECOVERY) && r.update_in_progress)
         {
             return self.send(r, rx, st::UPDATE_IN_PROGRESS, &[], true, cmd, out);
@@ -373,8 +397,15 @@ impl Mgmt {
             }
             // Annex M: state (u8), blocks received (u32), block count (u32), sectors written (u8)
             UPDATE_STATUS => {
-                let mut v = vec![if r.update_in_progress { 1 } else { 0 }];
-                v.extend_from_slice(&[0u8; 9]);
+                let (state, rec, cnt) = match &self.upd {
+                    Some(u) if u.verified => (2u8, u.received, u.count),
+                    Some(u) => (1, u.received, u.count),
+                    None => (0, 0, 0),
+                };
+                let mut v = vec![state];
+                v.extend_from_slice(&rec.to_be_bytes());
+                v.extend_from_slice(&cnt.to_be_bytes());
+                v.push(0);
                 (st::OK, v, None)
             }
             GET_CALIBRATION => (st::OK, cal_payload(r), None),
@@ -383,6 +414,13 @@ impl Mgmt {
                     let complete = c.complete();
                     let id = c.id;
                     r.logf(&format!("calibration set by {} ({} entries, complete {complete})", rx.src, c.entries.len()));
+                    if let Some((_, v)) = c.entries.iter().find(|(k, _)| k == "P-RX-2") {
+                        match crate::prx2::decode(v) {
+                            Some(p) => r.logf(&format!("P-RX-2: swap {} invert {} offset {} rates {}", p.swap_iq, p.invert,
+                                                       p.tuning_offset, p.rates.len())),
+                            None => r.logf("P-RX-2: value not in the encoding of Table P-1 (kept; no status for it)"),
+                        }
+                    }
                     r.cal = Some(c);
                     r.rebuild_record();
                     let mut v = id.to_vec();
@@ -406,7 +444,38 @@ impl Mgmt {
                 (s, p, None)
             }
             RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY => (st::NOT_SUPPORTED, vec![], None),
-            _ => (st::NOT_SUPPORTED, vec![], None), // model gap in T1
+            UPDATE_BEGIN => self.update_begin(r, payload, out),
+            UPDATE_BLOCK => self.update_block(payload),
+            UPDATE_VERIFY => match self.upd.as_mut() {
+                Some(u) if u.received == u.count => {
+                    let h = sha256(&u.data);
+                    if h == u.sha {
+                        u.verified = true;
+                        (st::OK, h.to_vec(), None)
+                    } else {
+                        r.logf("update: SHA-256 of the staged image differs from the header");
+                        (st::VERIFY_FAILED, vec![], None)
+                    }
+                }
+                _ => (st::VERIFY_FAILED, vec![], None),
+            },
+            UPDATE_ACTIVATE => match self.upd.as_ref() {
+                Some(u) if u.verified => (st::OK, vec![0], Some("ACTIVATE")), // permanent 0: a trial boot follows
+                _ => (st::VERIFY_FAILED, vec![], None),
+            },
+            UPDATE_ABORT => {
+                self.upd = None;
+                r.logf("update aborted: staging discarded, RESTART needed");
+                (st::OK, vec![1], None)
+            }
+            ROLLBACK => {
+                if r.fw.other_image().map_or(false, |i| i.good) {
+                    (st::OK, vec![], Some("ROLLBACK"))
+                } else {
+                    (st::VERIFY_FAILED, vec![], None)
+                }
+            }
+            _ => (st::NOT_SUPPORTED, vec![], None),
         };
         if verified && cmd != RESTART {
             if let Some((h, _)) = self.holder {
@@ -419,6 +488,24 @@ impl Mgmt {
         match after {
             Some("RESTART") => {
                 r.reset("RESTART");
+                self.on_reset(r.now);
+            }
+            Some("ACTIVATE") => {
+                // atomic switch, then the trial boot of the new image (A1.8 U-5, U-6)
+                if let Some(u) = self.upd.take() {
+                    r.fw.slots[(u.slot - 1) as usize] = Some(Image { version: u.version, len: u.len, sha: u.sha, good: false });
+                    r.logf(&format!("update activated: slot {} on trial", u.slot));
+                    r.reset("UPDATE_ACTIVATE");
+                    r.fw.running = u.slot;
+                    r.fw.rolled_back = false;
+                    r.fw.trial = Some(r.now);
+                    self.on_reset(r.now);
+                }
+            }
+            Some("ROLLBACK") => {
+                r.logf("ROLLBACK: to the other slot");
+                r.reset("ROLLBACK");
+                r.fw.running = r.fw.other();
                 self.on_reset(r.now);
             }
             Some("FACTORY_RESET") => {
@@ -481,16 +568,20 @@ impl Mgmt {
         };
         tlv(1, b"G7250");
         tlv(2, &r.cfg.mac);
-        let (maj, min, b) = r.cfg.fw;
-        let mut fw = vec![maj, min];
-        fw.extend_from_slice(&b.to_be_bytes());
-        tlv(4, &fw);
-        tlv(5, &[0, 0, 0, 0]); // other slot empty
+        let ver = |i: Option<&Image>| i.map_or(vec![0, 0, 0, 0], |i| {
+            let mut v = vec![i.version.0, i.version.1];
+            v.extend_from_slice(&i.version.2.to_be_bytes());
+            v
+        });
+        tlv(4, &ver(r.fw.running_image()));
+        tlv(5, &ver(r.fw.other_image()));
         tlv(6, &[0, 1, 0, 1]); // boot stage version (model)
         tlv(7, &0u32.to_be_bytes());
         tlv(8, &[0]); // bit 0 stock image retained = 0; bit 1 vendor recovery supported = 0
-        tlv(9, &[1, 0]); // integrity: running ok, other slot empty
-        tlv(10, &[0]); // update state normal
+        let integ = |i: Option<&Image>| i.map_or(0, |_| 1);
+        tlv(9, &[integ(r.fw.running_image()), integ(r.fw.other_image())]);
+        let state = if r.fw.trial.is_some() { 1 } else if r.fw.rolled_back { 2 } else { 0 };
+        tlv(10, &[state]);
         tlv(11, &[self.secret.is_some() as u8]);
         let w = self.window_open(r.now).map_or(0, |us| (us / S) as u16);
         tlv(12, &[(w > 0) as u8, (w >> 8) as u8, w as u8]);
@@ -514,11 +605,89 @@ impl Mgmt {
         }
         tlv(21, &c);
         tlv(22, &[0]); // sectors written by the streaming installer (none in the model)
+        tlv(23, &[r.fw.running]);
+        tlv(24, &[0]); // the model's link-local address is never used unprobed
+        let mut lay = Vec::new();
+        for (first, n) in LAYOUT {
+            lay.push(first);
+            lay.push(n);
+        }
+        tlv(25, &lay);
         v
     }
 }
 
 impl Mgmt {
+    /// UPDATE_BEGIN (A1.8, Table M-4): the command-specific checks after the state checks, in the
+    /// order of A1.8 (51, 63, 61), then 52 for an older image without the downgrade flag; a
+    /// foreign image (A1.8a item 3) gets 56 after 51 while the F1 gate (P-SYS-5) is closed.
+    fn update_begin(&mut self, r: &mut Radio, p: &[u8], out: &mut Vec<Tx>) -> (u16, Vec<u8>, Option<&'static str>) {
+        let flags = p[0];
+        let h = &p[1..];
+        if be32(h, 0) != PK_MAGIC || h[4] != 1 || h[5] != 1 {
+            return (st::MALFORMED, vec![], None);
+        }
+        if be16(h, 6) != HW_ID {
+            return (st::WRONG_HARDWARE, vec![], None);
+        }
+        if flags & 1 != 0 {
+            return (st::NOT_SUPPORTED, vec![], None); // F1 gate closed (P-SYS-5), A1.8a "Gate"
+        }
+        let version = (h[10], h[11], be16(h, 12));
+        let len = be32(h, 14);
+        let mut sha = [0u8; 32];
+        sha.copy_from_slice(&h[18..50]);
+        let target = h[52];
+        if target == r.fw.running {
+            return (st::RUNNING_SLOT, vec![], None);
+        }
+        let slot = r.fw.other();
+        if len > Firmware::slot_size(slot) {
+            return (st::TOO_LARGE_IMAGE, vec![], None);
+        }
+        let cur = r.fw.running_image().map_or((0, 0, 0), |i| i.version);
+        if version < cur && flags & 2 == 0 {
+            return (st::OLDER_IMAGE, vec![], None);
+        }
+        if version < cur {
+            r.logf("update: downgrade requested");
+        }
+        let count = (len as usize).div_ceil(BLOCK) as u32;
+        self.upd = Some(Upd { version, len, sha, slot, count, data: Vec::new(), received: 0, verified: false });
+        r.begin_update(out);
+        let mut v = (BLOCK as u16).to_be_bytes().to_vec();
+        v.extend_from_slice(&count.to_be_bytes());
+        v.push(0); // not one-way
+        (st::OK, v, None)
+    }
+
+    /// UPDATE_BLOCK: blocks in order from 0; a repeat of a received block is harmless; the next
+    /// one only (54 otherwise); CRC-32 per block (53); the exact length of the block (17).
+    fn update_block(&mut self, p: &[u8]) -> (u16, Vec<u8>, Option<&'static str>) {
+        let Some(u) = self.upd.as_mut() else { return (st::OUT_OF_ORDER, vec![], None) };
+        let n = be32(p, 0);
+        let crc = be32(p, 4);
+        let data = &p[8..];
+        if n >= u.count || n > u.received {
+            return (st::OUT_OF_ORDER, vec![], None);
+        }
+        let want = if n + 1 < u.count { BLOCK } else { u.len as usize - BLOCK * (u.count as usize - 1) };
+        if data.len() != want {
+            return (st::MALFORMED, vec![], None);
+        }
+        if crc32(data) != crc {
+            return (st::BAD_CRC, vec![], None);
+        }
+        if n == u.received {
+            u.data.extend_from_slice(data);
+            u.received += 1;
+            u.verified = false;
+        }
+        let mut v = n.to_be_bytes().to_vec();
+        v.extend_from_slice(&u.received.to_be_bytes());
+        (st::OK, v, None)
+    }
+
     /// GET_CONFIG / SET_CONFIG reply: every item of Table M-3.
     fn conf_payload(&self, r: &Radio) -> Vec<u8> {
         let c = &self.conf;
@@ -684,6 +853,9 @@ fn payload_malformed(cmd: u16, p: &[u8]) -> bool {
     match cmd {
         SET_FIRST_SECRET | CHANGE_SECRET => p.len() != 32,
         SWITCH_LEVEL => p.len() != 1,
+        UPDATE_BEGIN => p.len() != 1 + 53,
+        UPDATE_BLOCK => p.len() < 8 || p.len() > 8 + BLOCK,
+        UPDATE_ACTIVATE => p.len() != 1,
         SET_CALIBRATION => !cal_structure_ok(p),
         SET_CONFIG => {
             let mut i = 0;
