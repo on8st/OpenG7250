@@ -133,7 +133,7 @@ TXR = {"target": "needs-radio", "also": ["host"]}
 # The freeze rule of Annex P: TX unlocks (record tx bit 4) when every one of these is set.
 CAL_SET = ([f"P-RF-{i}" for i in range(1, 6)] + [f"P-PWR-{i}" for i in range(1, 6)]
            + [f"P-SEN-{i}" for i in range(1, 6)] + ["P-TIM-1", "P-TIM-2", "P-RX-2", "P-TX-1",
-                                                    "P-ATU-1", "P-ANT-1"])
+                                                    "P-ATU-1", "P-ANT-1", "P-SYS-9"])  # P-SYS-9: 0050
 OVERRIDES: dict[str, dict] = {
     # A1: update and reset tests whose subject is the armed / keyed case
     **{t: TXR for t in ["T-A1-02", "T-A1-05", "T-A1-27", "T-A1-29", "T-A1-30", "T-A1-33",
@@ -231,7 +231,7 @@ OVERRIDES: dict[str, dict] = {
     # with TX locked the old owner is unarmed, which A2.4 step 1 covers in full
     **{t: {"target": "emulator", "also": ["host"], "needs": [], "tx_part": False,
            "notes": ["two sockets of hosts[0] are hosts A and B (A2.2); the register destination is a third socket in the mapped range"]}
-       for t in ["T-A2-10", "T-A2-11", "T-A2-13", "T-A2-15", "T-A2-16", "T-A2-17"]},
+       for t in ["T-A2-10", "T-A2-11", "T-A2-13", "T-A2-15", "T-A2-16", "T-A2-17", "T-B8-21"]},
     # CWX keyer (B10.5a, 0046): judged on the key.log fixture (format v1.5), on the reference
     # model with a calibration set and on the emulator once the image keys; blocked on the
     # calibration set of the freeze rule until then (Annex P)
@@ -344,7 +344,7 @@ def main() -> int:
     doc = {"format": "g7250-catalogue", "version": 1,
            "spec": {"branch": "spec/draft", "commit": git("log", "-1", "--format=%h", "--",
                     "product/spec"), "sha256_of_inputs": src_hash},
-           "his": {"commit": "d07627e"},
+           "his": {"commit": "72591aa"},
            "targets": ["host", "emulator", "needs-radio"],
            "tests": tests}
     (OUT / "catalogue.json").write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n",

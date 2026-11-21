@@ -1,6 +1,6 @@
-# Test list and result format (v1.5)
+# Test list and result format (v1.6)
 
-- Status: **v1.5**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
+- Status: **v1.6**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
   the first answers of the emulator side (openg7250-emu, relayed by openg7250): the address
   mapping of section 3, the fixture plan of section 4, and its four proposals (emulated-time
   timeouts, boot per test, artifacts, "not modelled" errors), all accepted. v1.2 folded in its
@@ -12,7 +12,10 @@
   and the replay at a trace start, with the point from which pins are judged (A3.6, 0045); the
   port rule for a shared machine. v1.5 adds the `key.log` fixture for the CW keyer timing of
   B10.5a (0046), in the shape the emulator side answered (paging, a cap, exact write times of
-  the keying pins). Changes are marked **(v1.1)** to **(v1.5)**. Each version only adds fields, apart
+  the keying pins). v1.6 takes over the emulator's proposal of `net.log` (the image's sends and
+  arrivals in emulated time), `eth.log` (MACRAW frames), `arp.peer` and `ip.conflict`, for the
+  takeover timing of A2.4 and the address rules of A1.11 (0049). Changes are marked **(v1.1)**
+  to **(v1.6)**. Each version only adds fields, apart
   from that one rename of a count nobody reads. A v1.3 reader keeps working if it treats an
   unknown level as "not driven".
 - Purpose: the file that `product_run.py <elf> <tests> -o <result>` reads (`<tests>`), and the file
@@ -54,7 +57,7 @@ hand-written subset.
 ```json
 {
   "format": "g7250-testlist",
-  "version": 1, "minor": 5,
+  "version": 1, "minor": 6,
   "spec":  { "branch": "spec/draft", "commit": "0e075f2" },
   "his":   { "commit": "d07627e" },
   "catalogue": { "commit": "<tb/main commit>", "sha256": "<of catalogue.json>" },
@@ -98,7 +101,7 @@ hand-written subset.
 
 ```json
 {
-  "format": "g7250-endpoint", "version": 1, "minor": 5,
+  "format": "g7250-endpoint", "version": 1, "minor": 6,
   "kind": "emulator",
   "radio": { "ip": "192.168.73.10", "netmask": "255.255.255.0", "mac": "02:00:00:00:72:50",
              "connect": { "1024": "127.0.0.1:41024", "1025": "127.0.0.1:41025",
@@ -196,6 +199,10 @@ delivery is given in the last column; the reference model offers the ones marked
 | `sensor.set` | `sensor.set {name, value}`; names `supply_mv`, `current_ma`, `pa_temp_mc`, `fwd_power_mw`, `rev_power_mw` | Table A3-2 rows, RF-gone waits, A3.4c | after the emulator's analog models; **(v1.1)** only in the units and scales the HIS gives, else `ok: false`, `"not in HIS: <name>"` |
 | `key.log` | **(v1.5)** `key.log {action: "start"\|"read"\|"stop", from_key?, from_hp?}`; below | B10.5a keyer timing (0046): T-B10-33, T-B10-43 to T-B10-46 | emulator after its CH394 socket log and DHCP checks; model |
 | `atu.sim` | **(v1.5, reference model only)** `atu.sim {result: "tuned"\|"failed"\|"none", after_ms?, tune_time_ms?}`: how the next ATU tune cycle ends by itself and the ATU tune time, which is pending hardware (P-ATU-1); without it the bench runs only the abort part | T-B10-47 (0047) | model |
+| `net.log` | **(v1.6)** `net.log {action: "start"\|"read"\|"stop", from?}`; below | A2.4 timing (T-A2-10 to T-A2-17: the 10 ms copies, the 5 s notice window) | emulator; the reference model's host clock is its own clock |
+| `eth.log` | **(v1.6)** `eth.log {action, from?}`; below | A1.11 link-local probe and announce, conflicts (T-A1-70 to T-A1-73, 0049) | emulator |
+| `arp.peer` | **(v1.6)** `arp.peer {action: "set", ip, mac?, answer_probe, defend}` \| `{action: "announce", ip, mac?, count?}` \| `{action: "clear", ip?}`: a simulated other host on the link | T-A1-70 to T-A1-73 | emulator |
+| `ip.conflict` | **(v1.6)** `ip.conflict {action: "raise"}` sets the CH394's IP conflict interrupt (GINT bit 7) now; `{action: "auto", on}` raises it when an `arp.peer` frame carries the radio's own non-zero source address (an emulator assumption) | T-A1-72, T-A1-73 | emulator |
 | `hw.input` | **(v1.2)** `hw.input {pin: "PH6"\|"PH3"\|"PH4", level: 0\|1}`; any other pin `ok: false`, `"pin not offered: <pin>"` | T-A3-58: local PTT and KEY inputs key nothing (0030; [HIS] HIS 85) | emulator step 3; model |
 
 A fixture that answers `ok: false` with `"not in HIS: <name>"` makes the test `skip` with that
@@ -349,6 +356,28 @@ edge at least 0.2 T from the keyer's decision points and checks afterwards that 
 there; if one did not, the test is an `error` with reason `pacing: …`, not a verdict. Until the
 image keys (record `tx` bit 4 = 1), these tests are `blocked` on the calibration set.
 
+`net.log` **(v1.6)**. `start` empties the log and records from now on; `read {from?: n}` →
+`{"t_us", "count", "dropped", "entries": [...]}` from index `n` on (paged); `stop` reads, then
+stops. Each entry: `{"t_us", "dir": "to_radio"|"from_radio", "socket", "radio_port", "peer":
+"ip:port", "len", "head"}`, `head` the first 16 payload bytes in hex. `to_radio` `t_us` is when
+the datagram is placed in the socket receive buffer, `from_radio` `t_us` when the image's SEND
+executes, both on the clock of `hw.trace`. Cap and `dropped` as `key.log` (dropped fails the
+test). The bench judges radio behaviour in time (the copies about 10 ms apart, the 5 s notice
+window) on these stamps where `net.log` is offered; otherwise on the host clock, strictly only
+where that is the radio's clock (the reference model), loosely and with a note on an emulator.
+
+`eth.log` **(v1.6)**. The same paging, for the MACRAW frames of socket 0: `{"t_us", "dir",
+"len", "dst", "src", "ethertype", "arp"?: {"op", "sha", "spa", "tha", "tpa"}, "hex"?}` (`hex` for
+a frame that is not ARP). Frames the image sends in MACRAW go only to this log and to
+`arp.peer`, not onto the host network.
+
+`arp.peer` and `ip.conflict` **(v1.6)**. `arp.peer` is a simulated other host: it answers the
+radio's ARP probe for its address (`answer_probe`), defends it (`defend`), or announces it
+(`announce`, `count` times). `ip.conflict raise` is the exact tool for a conflict interrupt;
+`auto` is the emulator's model of the chip (marked as an assumption). Emulator assumptions,
+marked in its answers: the MACRAW length is the frame alone (switchable); the chip does no ARP
+of its own in UDP mode; the MAC filter bits of Sn_MODE are applied per the datasheet.
+
 `hw.input` **(v1.2)**. The level is electrical (0 or 1). The bench drives both levels on every
 pin, because the HIS doesn't give the active level. Edges reach the interrupt controller as from
 a real input.
@@ -357,7 +386,7 @@ a real input.
 
 ```json
 {
-  "format": "g7250-testresult", "version": 1, "minor": 5,
+  "format": "g7250-testresult", "version": 1, "minor": 6,
   "testlist": { "sha256": "…" },
   "subject":  { "kind": "emulator", "elf_sha256": "…", "fw_version": "0.1.0+12" },
   "runner":   { "name": "product_run.py", "version": "…", "emulator_commit": "…" },
@@ -405,7 +434,7 @@ A test with target `emulator` is also run against the reference model. A test wi
    (section 4, v1.2), the live trace file (v1.3), pin modes with `"z"` and `null`,
    `fixed_ports`, the DHCP fixtures, `net.endpoint`, the `boot` event and the replay, the
    `t_us` of `hw.trace start`, and `"emulator not ready"` during a power cycle (v1.4); the
-   shape of `key.log` (v1.5).
+   shape of `key.log` (v1.5); `net.log`, `eth.log`, `arp.peer`, `ip.conflict` (v1.6).
 2. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
    runs, the 0x04 reads are six strobes per sample; such a trace is meant for a short test
    only, and the runner may drop events (which fails the test) if it cannot keep up.

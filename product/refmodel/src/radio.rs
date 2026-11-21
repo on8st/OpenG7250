@@ -214,6 +214,12 @@ pub struct Radio {
     pub carried: Option<Settings>,
     pub counters_continue: bool,
     pub seq: HashMap<u16, u32>,
+    /// port 7250 counter for every answer to a host that is not the owner (0051); reset only
+    /// by a reset of the radio
+    pub nonowner_seq: u32,
+    /// port 7250 counter of the old session towards the old owner, continued by the repeated
+    /// TAKEOVER notice (0051)
+    pub old_seq: u32,
     pub token: u32,
     pub token_n: u32,
     pub arm: ArmState,
@@ -271,14 +277,14 @@ pub const FREEZE_SET: [&str; 19] = [
     "P-PWR-5", "P-SEN-1", "P-SEN-2", "P-SEN-3", "P-SEN-4", "P-SEN-5", "P-TIM-1", "P-TIM-2",
     "P-TX-1", "P-ATU-1",
 ];
-/// Annex P freeze rule as amended by 0042: P-RX-2 is part of it too.
-pub const FREEZE_EXTRA: [&str; 2] = ["P-ANT-1", "P-RX-2"];
+/// Annex P freeze rule as amended by 0042 (P-RX-2) and 0050 (P-SYS-9).
+pub const FREEZE_EXTRA: [&str; 3] = ["P-ANT-1", "P-RX-2", "P-SYS-9"];
 /// Every parameter id of Table P-1.
-pub const ALL_PARAMS: [&str; 36] = [
+pub const ALL_PARAMS: [&str; 37] = [
     "P-RF-1", "P-RF-2", "P-RF-3", "P-RF-4", "P-RF-5", "P-ANT-1", "P-ATU-1", "P-PWR-1",
     "P-PWR-2", "P-PWR-3", "P-PWR-4", "P-PWR-5", "P-SEN-1", "P-SEN-2", "P-SEN-3", "P-SEN-4",
     "P-SEN-5", "P-TIM-1", "P-TIM-2", "P-NET-1", "P-NET-2", "P-NET-3", "P-SYS-1", "P-SYS-2",
-    "P-SYS-3", "P-SYS-4", "P-SYS-5", "P-SYS-6", "P-SYS-7", "P-SYS-8", "P-RX-1", "P-RX-2",
+    "P-SYS-3", "P-SYS-4", "P-SYS-5", "P-SYS-6", "P-SYS-7", "P-SYS-8", "P-SYS-9", "P-RX-1", "P-RX-2",
     "P-TX-1", "P-L2-1", "P-L2-2", "P-L2-3",
 ];
 
@@ -358,6 +364,8 @@ impl Radio {
             keyer: Keyer::new(keyer::Settings { iambic: false, mode_b: false, strict: false, speed: 0, weight: 50 }),
             keylog: None,
             atu: Atu::default(),
+            nonowner_seq: 0,
+            old_seq: 0,
         };
         r.new_token();
         r.logf("power-on reset");
@@ -435,8 +443,18 @@ impl Radio {
         Some(SocketAddrV4::new(*s.owner.ip(), if p != 0 { p } else { s.owner.port() }))
     }
     fn reg_packet(&mut self, pairs: &[(u16, u32)]) -> Vec<u8> {
+        let seq = self.next_seq(port::REGMAP);
+        Self::reg_packet_seq(pairs, seq)
+    }
+    /// An answer to a non-owner, numbered by the non-owner counter (0051).
+    fn reg_packet_nonowner(&mut self, pairs: &[(u16, u32)]) -> Vec<u8> {
+        let seq = self.nonowner_seq;
+        self.nonowner_seq = seq.wrapping_add(1);
+        Self::reg_packet_seq(pairs, seq)
+    }
+    fn reg_packet_seq(pairs: &[(u16, u32)], seq: u32) -> Vec<u8> {
         let mut v = Vec::with_capacity(4 + 6 * pairs.len());
-        v.extend_from_slice(&self.next_seq(port::REGMAP).to_be_bytes());
+        v.extend_from_slice(&seq.to_be_bytes());
         for (a, d) in pairs {
             v.extend_from_slice(&a.to_be_bytes());
             v.extend_from_slice(&d.to_be_bytes());
@@ -837,6 +855,8 @@ impl Radio {
                 self.scheduled.push((self.now + i * 10 * MS, t));
             }
         }
+        // the repeated notice continues the old session's counter towards the old owner (0051)
+        self.old_seq = *self.seq.get(&port::REGMAP).unwrap_or(&0);
         let notice = self.reg_packet_noseq(&pairs);
         self.old_owner_notice = Some((old, old_dest.port(), self.now + 5 * S, 0, notice));
         self.count("takeover");
@@ -1167,7 +1187,8 @@ impl Radio {
         if let Some((h, port, until, last, pkt)) = self.old_owner_notice.clone() {
             if h == src && self.now < until && (last == 0 || self.now - last >= 100 * MS) {
                 let mut data = pkt.clone();
-                let seq = self.next_seq(port::REGMAP);
+                let seq = self.old_seq;
+                self.old_seq = seq.wrapping_add(1);
                 data[..4].copy_from_slice(&seq.to_be_bytes());
                 out.push(Tx { src_port: port::REGMAP, dst: SocketAddrV4::new(*h.ip(), port), data });
                 self.old_owner_notice = Some((h, port, until, self.now, pkt));
@@ -1238,11 +1259,12 @@ impl Radio {
             }
         }
         for chunk in answer.chunks(240) {
-            let data = self.reg_packet(chunk);
+            let data = if is_owner { self.reg_packet(chunk) } else { self.reg_packet_nonowner(chunk) };
             out.push(Tx { src_port: port::REGMAP, dst, data });
         }
         if self.link_mbit < 100 && cap_req && self.lim_link.allow(&rx.src, self.now) {
-            let data = self.reg_packet(&[(reg::LINK_STATUS, self.link_status()), (reg::STREAM_STATUS, self.stream_status())]);
+            let pairs = [(reg::LINK_STATUS, self.link_status()), (reg::STREAM_STATUS, self.stream_status())];
+            let data = if is_owner { self.reg_packet(&pairs) } else { self.reg_packet_nonowner(&pairs) };
             out.push(Tx { src_port: port::REGMAP, dst: rx.src, data });
         }
     }
@@ -1522,6 +1544,7 @@ impl Radio {
         self.last_owner = None;
         self.setup.clear();
         self.seq.clear();
+        self.nonowner_seq = 0; // only a reset of the radio resets it (0051)
         self.scheduled.clear();
         self.old_owner_notice = None;
         self.cfg.boot_counter = self.cfg.boot_counter.wrapping_add(1);

@@ -21,7 +21,7 @@ CMD = dict(IDENTIFY=0x0001, GET_STATS=0x0002, GET_CHALLENGE=0x0010, SET_FIRST_SE
 # P-ANT-1 (Table P-1).
 FREEZE_SET = ([f"P-RF-{i}" for i in range(1, 6)] + [f"P-PWR-{i}" for i in range(1, 6)]
               + [f"P-SEN-{i}" for i in range(1, 6)] + ["P-TIM-1", "P-TIM-2", "P-RX-2", "P-TX-1", "P-ATU-1",
-                                                         "P-ANT-1"])  # P-RX-2 joined with 0042
+                                                         "P-ANT-1", "P-SYS-9"])  # P-RX-2: 0042; P-SYS-9: 0050
 
 
 def calibration_payload(entries: dict[str, bytes], date: int = 0, source: str = "testbench") -> bytes:

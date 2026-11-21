@@ -3,11 +3,11 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "580f485",
-  "sha256_of_inputs": "3926c4a147f53e11efa5e1491b6e7f1157cbcc538c9636f167f9892b98080071"
+  "commit": "cc4483f",
+  "sha256_of_inputs": "f664fcc67bbfdf1658ffb0fa0f1e8cca635e643b770c5d72df4116b231967b95"
  },
  "his": {
-  "commit": "d07627e"
+  "commit": "72591aa"
  },
  "targets": [
   "host",
@@ -1393,6 +1393,109 @@
    ]
   },
   {
+   "id": "T-A1-69",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 15 s, from the link-local address (reference model or emulator; A1.11 \"Bound on start-up\"; 0048).",
+   "reqs": [
+    "A1",
+    "A1.11"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [
+    "dhcp.server"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-70",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "At start-up with no DHCP server: the radio sends the RFC 3927 probes for its chosen link-local address with the section 9 timing before it answers discovery; an ARP reply claiming that address during the probe makes it choose another and probe again (reference model or emulator; A1.11; 0049).",
+   "reqs": [
+    "A1",
+    "A1.11"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [
+    "dhcp.server"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-71",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "After a successful probe the radio sends the RFC 3927 announcements, and only then answers discovery and `IDENTIFY` on the link-local address, within the start-up bound (A1.11; 0048, 0049).",
+   "reqs": [
+    "A1",
+    "A1.11"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
+   "id": "T-A1-72",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "While running on a link-local address, a conflict (IP_CONFLI) makes the radio give the address up at once without a defending ARP, end the session as an address change (A1.11a), probe a new address with discovery and management closed for at most 10 s, and log the conflict; after 10 conflicts it waits 60 s before the next probe (A1.11; 0049).",
+   "reqs": [
+    "A1",
+    "A1.11a",
+    "A1.11"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "time.scale"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
+   "id": "T-A1-73",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "A conflict on a DHCP-leased address sends DHCPDECLINE, moves to link-local and restarts DHCP; a conflict on a static address falls back to the previous configuration (C-4), or to link-local if there is none; each is logged (A1.6 C-4, A1.11; 0049).",
+   "reqs": [
+    "A1",
+    "A1.6",
+    "A1.11"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "dhcp.server"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
    "id": "T-A2-01",
    "origin": "spec",
    "part": "A-B",
@@ -1567,9 +1670,10 @@
    "id": "T-A2-11",
    "origin": "spec",
    "part": "A-B",
-   "title": "After B takes over from A, each DUC I&Q or register packet from A within 5 s is answered with one copy of the `TAKEOVER` notice, at most once per 100 ms; a C&C packet from A takes the radio back, B receives three notices, and the streams to A restart at sequence 0.",
+   "title": "After B takes over from A, each DUC I&Q or register packet from A within 5 s is answered with one copy of the `TAKEOVER` notice, at most once per 100 ms; a C&C packet from A takes the radio back, B receives three notices, and the streams to A restart at sequence 0. On port 7250 the notices to B continue B's session counter (the packet after B's last register packet), and answers sent to A while B was owner do not advance it (B2.7; 0051).",
    "reqs": [
-    "A2"
+    "A2",
+    "B2.7"
    ],
    "scope": "v1.0",
    "target": "emulator",
@@ -3008,6 +3112,29 @@
     "spec marks it reference model; emulator only with the fixtures",
     "needs the debug console (USART1) of the runner; no fixture for it yet"
    ]
+  },
+  {
+   "id": "T-A3-60",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Needs the radio (P-SYS-9): after two `SWR_REPEATED` entries, a `RESTART` and then a processor watchdog reset leave the fault entry counter and `TRIP_COUNT` unchanged, so the third entry is class 2; a power cycle clears them. Before P-SYS-9 is set the arm is rejected with `NOT_CALIBRATED` (A3.5; Annex P; 0050).",
+   "reqs": [
+    "A3",
+    "A3.5"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "power.cycle",
+    "reset.wdt",
+    "sensor.set"
+   ],
+   "pending": [
+    "P-SYS-9"
+   ],
+   "tx_part": true,
+   "notes": []
   },
   {
    "id": "T-B3-01",
@@ -5274,6 +5401,27 @@
    "notes": []
   },
   {
+   "id": "T-B8-21",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "During A's session: register writes and `CAP_REQUEST`s from host C get answers on port 7250 numbered by the non-owner counter (0, 1, 2, …), and A's register stream shows no gap; the non-owner counter is not reset by A's session ending or by a takeover, only by a reset of the radio (B2.7; 0051).",
+   "reqs": [
+    "B8",
+    "B2.7"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "two sockets of hosts[0] are hosts A and B (A2.2); the register destination is a third socket in the mapped range"
+   ]
+  },
+  {
    "id": "T-B9-01",
    "origin": "spec",
    "part": "A-B",
@@ -6027,7 +6175,8 @@
     "P-RX-2",
     "P-TX-1",
     "P-ATU-1",
-    "P-ANT-1"
+    "P-ANT-1",
+    "P-SYS-9"
    ],
    "tx_part": true,
    "notes": [
@@ -6267,7 +6416,8 @@
     "P-RX-2",
     "P-TX-1",
     "P-ATU-1",
-    "P-ANT-1"
+    "P-ANT-1",
+    "P-SYS-9"
    ],
    "tx_part": true,
    "notes": [
@@ -6313,7 +6463,8 @@
     "P-RX-2",
     "P-TX-1",
     "P-ATU-1",
-    "P-ANT-1"
+    "P-ANT-1",
+    "P-SYS-9"
    ],
    "tx_part": true,
    "notes": [
@@ -6358,7 +6509,8 @@
     "P-RX-2",
     "P-TX-1",
     "P-ATU-1",
-    "P-ANT-1"
+    "P-ANT-1",
+    "P-SYS-9"
    ],
    "tx_part": true,
    "notes": [
@@ -6403,7 +6555,8 @@
     "P-RX-2",
     "P-TX-1",
     "P-ATU-1",
-    "P-ANT-1"
+    "P-ANT-1",
+    "P-SYS-9"
    ],
    "tx_part": true,
    "notes": [
@@ -6446,7 +6599,8 @@
     "P-RX-2",
     "P-TX-1",
     "P-ATU-1",
-    "P-ANT-1"
+    "P-ANT-1",
+    "P-SYS-9"
    ],
    "tx_part": true,
    "notes": [
