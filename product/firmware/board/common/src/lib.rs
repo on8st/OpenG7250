@@ -12,6 +12,7 @@ pub mod console;
 pub mod reset;
 pub mod safe;
 pub mod start_state;
+pub mod supply;
 pub mod wdg;
 
 /// Firmware version of this build: [31:24] major, [23:16] minor, [15:0] build (B4.8 `fw_version`).

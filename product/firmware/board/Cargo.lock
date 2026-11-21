@@ -623,6 +623,7 @@ dependencies = [
  "cortex-m-rt",
  "g7250-board",
  "g7250-layout",
+ "g7250-safety",
 ]
 
 [[package]]

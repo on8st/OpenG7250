@@ -38,3 +38,16 @@ Found in a local smoke run of milestone F1, 2026-11-21: the application stalled 
 
 `crates/layout/tests/forbidden.rs` (`vendored_embassy_keeps_backup_domain_patch`) fails if the
 marker is missing.
+
+### Second change: `G7250 PATCH (supply-once)` in `src/rcc/h.rs`
+
+- On the RM0468 parts (STM32H72x/H73x) `init` no longer writes PWR_CR3. Its supply bits are
+  write-once per power-on and a configuration that does not match the board can stop or harm the
+  part ([HIS] HIS 10, `d199d33`). The G7250 boot stage sets them once, explicitly
+  (`g7250_safety::supply`: keep if already the board's configuration, write only from the
+  power-on value, otherwise hold the safe state), and the application calls `init` only after
+  checking that PWR_CR3 holds that configuration and ACTVOSRDY is set.
+- The waits on ACTVOSRDY and VOSRDY are bounded (2 000 000 polls); a timeout panics, and the
+  G7250 panic handler puts the safe state back and lets the watchdog reset the MCU.
+- `crates/layout/tests/forbidden.rs` (`vendored_embassy_keeps_supply_patch`) fails if the marker
+  or the bound is missing.

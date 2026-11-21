@@ -89,6 +89,12 @@ async fn main(spawner: Spawner) {
     early_init();
     let cause = reset::read(true);
 
+    // The boot stage set the core supply once; the HAL init must not write it (vendored patch
+    // "supply-once") and runs only if it holds the board's configuration and is ready.
+    let (supply_ok, cr3) = g7250_board::supply::ready_for_init();
+    if !supply_ok {
+        hold_without_hal(cr3);
+    }
     let p = embassy_stm32::init(clock_config());
     // The HAL init does not touch GPIO levels (feature gpio-init-analog is off); re-assert anyway.
     safe::reassert();
@@ -143,6 +149,23 @@ async fn main(spawner: Spawner) {
     loop {
         Timer::after_secs(10).await;
         println!("app: alive {} s", Instant::now().as_secs());
+    }
+}
+
+/// Supply not as HIS 10 says: no HAL init, no network, no transmit. Safe state held, raw
+/// console, watchdog refreshed (the boot stage started it).
+fn hold_without_hal(cr3: u32) -> ! {
+    console::init();
+    println!("app: FAULT supply PWR_CR3={:#010x} is not SMPS->LDO 2.5 V or not ready; holding the safe state", cr3);
+    let mut n: u32 = 0;
+    loop {
+        for _ in 0..10 {
+            cortex_m::asm::delay(console::HSI_HZ / 10);
+            safe::reassert();
+            wdg::refresh();
+        }
+        n = n.wrapping_add(1);
+        println!("app: supply fault, idle {}", n);
     }
 }
 

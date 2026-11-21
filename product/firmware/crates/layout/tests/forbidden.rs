@@ -96,3 +96,20 @@ fn vendored_embassy_keeps_backup_domain_patch() {
     let code: String = cargo.lines().map(|l| l.split('#').next().unwrap()).collect::<Vec<_>>().join("\n");
     assert!(!code.contains("gpio-init-analog"), "gpio-init-analog must stay off");
 }
+
+#[test]
+fn vendored_embassy_keeps_supply_patch() {
+    let h = std::fs::read_to_string(firmware_root().join("board/vendor/embassy-stm32-0.6.0/src/rcc/h.rs")).unwrap();
+    assert!(h.contains("G7250 PATCH (supply-once)"), "supply-once patch marker missing");
+    // The PWR_CR3 write block (it starts with `use pac::pwr::vals::Sdlevel;`) must not be
+    // compiled for the RM0468 parts.
+    let at = h.find("use pac::pwr::vals::Sdlevel;").expect("supply write block not found");
+    let before = &h[at.saturating_sub(120)..at];
+    assert!(
+        before.contains("#[cfg(any(pwr_h7rm0399, pwr_h7rm0455, pwr_h7rs))]"),
+        "PWR_CR3 write block enabled for RM0468: {before}"
+    );
+    // No unbounded voltage-ready wait is left.
+    assert!(!h.contains("while !PWR.csr1().read().actvosrdy() {}"), "unbounded ACTVOSRDY wait");
+    assert!(!h.contains("while !PWR.d3cr().read().vosrdy() {}"), "unbounded VOSRDY wait");
+}

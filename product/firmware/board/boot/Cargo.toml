@@ -15,5 +15,6 @@ bench = false
 [dependencies]
 g7250-board = { workspace = true }
 g7250-layout = { workspace = true }
+g7250-safety = { workspace = true }
 cortex-m = { workspace = true }
 cortex-m-rt = { workspace = true }

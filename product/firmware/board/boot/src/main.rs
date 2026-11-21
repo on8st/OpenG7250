@@ -63,6 +63,18 @@ fn main() -> ! {
     }
     println!("boot: safe state held, watchdog {} ms", wdg::TIMEOUT_MS);
 
+    // Core supply, once and explicitly ([HIS] HIS 10; g7250_safety::supply).
+    match g7250_board::supply::configure() {
+        g7250_safety::supply::Outcome::Kept => println!("boot: supply PWR_CR3 already SMPS->LDO 2.5 V, not written"),
+        g7250_safety::supply::Outcome::Written => println!("boot: supply PWR_CR3 set to SMPS->LDO 2.5 V (was the power-on value)"),
+        o => {
+            // Not the board's configuration, or not ready: no further init that depends on it,
+            // no application start, no transmit. Safe state held, watchdog refreshed.
+            println!("boot: FAULT supply {:?}; PWR_CR3 not written; holding the safe state", o);
+            hold();
+        }
+    }
+
     let record = select::last_record(flash(CONFIG));
     let valid = |s: Slot| {
         let r = s.range();

@@ -297,7 +297,14 @@ pub(crate) unsafe fn init(config: Config) {
         w.set_bypass(false);
     });
 
-    #[cfg(any(pwr_h7rm0399, pwr_h7rm0455, pwr_h7rm0468, pwr_h7rs))]
+    // G7250 PATCH (supply-once): on the RM0468 parts (STM32H72x/H73x) this init never writes
+    // PWR_CR3. Its supply bits are write-once per power-on and a wrong value can harm the part;
+    // the G7250 boot stage sets them once, explicitly, and the application calls this init only
+    // after checking that they hold the board's configuration ([HIS] HIS 10; g7250-safety
+    // `supply`). See board/vendor/README.md.
+    #[cfg(pwr_h7rm0468)]
+    let _ = (&pwr_reg, &config.supply_config);
+    #[cfg(any(pwr_h7rm0399, pwr_h7rm0455, pwr_h7rs))]
     {
         use pac::pwr::vals::Sdlevel;
         match config.supply_config {
@@ -362,8 +369,18 @@ pub(crate) unsafe fn init(config: Config) {
     // in the D3CR.VOS and CR3.SDLEVEL fields. By default after reset
     // VOS = Scale 3, so check that the voltage on the VCAP pins =
     // 1.0V.
+    // G7250 PATCH (supply-once): bounded wait; on timeout panic (the G7250 panic handler puts
+    // the safe state back and lets the watchdog reset the MCU).
     #[cfg(any(stm32h7))]
-    while !PWR.csr1().read().actvosrdy() {}
+    {
+        let mut n: u32 = 0;
+        while !PWR.csr1().read().actvosrdy() {
+            n += 1;
+            if n > 2_000_000 {
+                panic!("G7250: ACTVOSRDY not set");
+            }
+        }
+    }
     #[cfg(any(stm32h7rs))]
     while !PWR.sr1().read().actvosrdy() {}
 
@@ -391,7 +408,14 @@ pub(crate) unsafe fn init(config: Config) {
                 VoltageScale::Scale3 => crate::pac::pwr::vals::Vos::SCALE3,
             })
         });
-        while !PWR.d3cr().read().vosrdy() {}
+        // G7250 PATCH (supply-once): bounded wait, as above.
+        let mut n: u32 = 0;
+        while !PWR.d3cr().read().vosrdy() {
+            n += 1;
+            if n > 2_000_000 {
+                panic!("G7250: VOSRDY not set");
+            }
+        }
     }
     #[cfg(pwr_h7rs)]
     {
@@ -405,11 +429,11 @@ pub(crate) unsafe fn init(config: Config) {
             VoltageScale::Scale0 => {
                 // to go to scale0, we must go to Scale1 first...
                 PWR.d3cr().modify(|w| w.set_vos(crate::pac::pwr::vals::Vos::SCALE1));
-                while !PWR.d3cr().read().vosrdy() {}
+                { let mut n: u32 = 0; while !PWR.d3cr().read().vosrdy() { n += 1; if n > 2_000_000 { panic!("G7250: VOSRDY not set") } } } // G7250 PATCH (supply-once): bounded
 
                 // Then enable overdrive.
                 critical_section::with(|_| pac::SYSCFG.pwrcr().modify(|w| w.set_oden(1)));
-                while !PWR.d3cr().read().vosrdy() {}
+                { let mut n: u32 = 0; while !PWR.d3cr().read().vosrdy() { n += 1; if n > 2_000_000 { panic!("G7250: VOSRDY not set") } } } // G7250 PATCH (supply-once): bounded
             }
             _ => {
                 // for all other scales, we can go directly.
@@ -421,7 +445,7 @@ pub(crate) unsafe fn init(config: Config) {
                         VoltageScale::Scale3 => crate::pac::pwr::vals::Vos::SCALE3,
                     })
                 });
-                while !PWR.d3cr().read().vosrdy() {}
+                { let mut n: u32 = 0; while !PWR.d3cr().read().vosrdy() { n += 1; if n > 2_000_000 { panic!("G7250: VOSRDY not set") } } } // G7250 PATCH (supply-once): bounded
             }
         }
     }
