@@ -157,6 +157,14 @@ impl Default for LsConfig {
 impl LsConfig {
     #[cfg(not(stm32n6))]
     pub(crate) fn init(&self) -> Option<Hertz> {
+        // G7250 PATCH (no-backup-domain): the G7250 main firmware MUST NOT use the Backup SRAM or
+        // the RTC backup registers ([HIS] HIS 15 rule 4). The code below would clear PWR_CR1.DBP
+        // protection, change PWR_BDCR.BREN and, if the RTC set-up differs, reset the whole backup
+        // domain (RCC_BDCR.BDRST). Leave the backup domain exactly as the previous stage left it:
+        // no RTC clock, no backup-domain write. See board/vendor/README.md.
+        if true {
+            return None;
+        }
         let rtc_clk = match self.rtc {
             RtcClockSource::LSI => {
                 assert!(self.lsi);
