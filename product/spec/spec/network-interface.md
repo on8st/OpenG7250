@@ -343,6 +343,16 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   list, versions, length, SHA-256 [FIPS180-4] per component, and a signature field that is
   reserved and empty in this version. An image for other hardware MUST be refused before
   anything is written (U-2; 0008 option I1).
+- **Unreadable or unsupported header** (0063). A package whose magic (Table M-4 bytes 0–3) or
+  header version (byte 4) is not the one Annex M gives cannot be read, so `UPDATE_BEGIN` gets
+  17 in the framing group (A1.4 "Malformed payload"; 0056). A readable header with a component
+  (byte 5) other than 1 gets 56 (not supported in this firmware), in the place of 56 in the
+  `UPDATE_BEGIN` order below.
+- **No transfer in progress** (0063). `UPDATE_BLOCK` with no transfer in progress (no accepted
+  `UPDATE_BEGIN`, or after `UPDATE_ABORT` or an activation) gets 54; `UPDATE_VERIFY` and
+  `UPDATE_ACTIVATE` with no transfer in progress get 55. For these three commands this is the
+  first command-specific check (before 53 for a block); the general codes of Table A1-3 (17,
+  authentication, 58, 57, 50) still come first. Nothing changes.
 - **Slot-linked images** (0043). An image of this firmware is linked for one slot; the
   package header names that slot (Table M-4 byte 52: 1 slot A, 2 slot B; 0 for an image that
   runs in either slot). Because an update is staged in the other slot, `UPDATE_BEGIN` with an
@@ -3759,6 +3769,8 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-77 | During a complete update to an image of this firmware (`UPDATE_BEGIN` to the confirmed trial boot), and during an aborted one, flash.log shows no erase or write in sectors 6 and 7 other than store writes or compactions (whole store records of the store format, no erase of the only live store sector), and none outside the staging slot and the store; the staging slot and the store are the sectors `IDENTIFY` tag 25 reports (emulator, flash.log; A1.8 "Slot size and the store"; 0061). |
 | T-A1-78 | `UPDATE_BEGIN` for an image of this firmware, linked for the other slot, with a length one byte more than that slot (its size from `IDENTIFY` tag 25: number of sectors × 128 KiB) gets 61 and nothing is written; with a length equal to the slot size it is accepted; with the wrong hardware id it gets 51 and for the running slot 63, whatever its length; an image both too large and older than the running one, without the downgrade flag, gets 61 (order 51, 56, 63, 61, 52) (emulator or reference model; A1.8; 0043, 0061, 0062). |
 | T-A1-79 | `IDENTIFY` tag 25 is present with length 6; slots A and B and the store do not overlap, lie within sectors 2–7 (never sector 0 or 1) and do not change across restarts and updates of this firmware; the slot named by tag 23 is the one the running image occupies; a reader skips the tag if it does not know it (A1.5; Annex M; 0062). |
+| T-A1-80 | With no transfer in progress (after a restart, after `UPDATE_ABORT`, and after an activation): `UPDATE_BLOCK` gets 54, also with a bad CRC; `UPDATE_VERIFY` and `UPDATE_ACTIVATE` get 55; nothing is written and `UPDATE_STATUS` stays idle; with a malformed payload the reply is 17 (reference model or emulator; A1.8 "No transfer in progress"; 0063). |
+| T-A1-81 | `UPDATE_BEGIN` with a wrong magic, or with header version 2, gets 17 and nothing changes; with a readable header and component 2 it gets 56; with component 2 and the wrong hardware id, 51 (order 51, 56, 63, 61, 52) (reference model or emulator; A1.8 "Unreadable or unsupported header"; 0063). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
