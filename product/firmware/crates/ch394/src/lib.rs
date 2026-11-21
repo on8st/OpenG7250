@@ -252,10 +252,12 @@ impl<S: SpiDevice> Ch394<S> {
         self.write(bsb::COMMON, common::SIPR, &ip)
     }
 
-    /// INT# on received datagrams of the sockets in `mask` ([CH394] 7.1.8-10); the global sources
-    /// (IP conflict, unreachable) stay polled through [`Self::take_irq`].
+    /// INT# on received datagrams of the sockets in `mask` ([CH394] 7.1.8-10) and on an IP
+    /// conflict; the other global sources stay polled through [`Self::take_irq`].
     pub fn enable_recv_interrupts(&mut self, mask: u8) -> Result<(), Error<S::Error>> {
-        self.write(bsb::COMMON, common::GINTE, &[0])?;
+        // IP conflict (GINT bit 7, [CH394] 7.1.7-8) raises INT# too, so the net loop need not
+        // poll for it; take_irq clears it.
+        self.write(bsb::COMMON, common::GINTE, &[common::IR_CONFLICT])?;
         self.write(bsb::COMMON, common::SINTE, &[mask])
     }
 

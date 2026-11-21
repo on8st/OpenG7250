@@ -29,6 +29,19 @@ static OUT: Mutex<RefCell<Ring>> = Mutex::new(RefCell::new(Ring { buf: [0; RING]
 static BUFFERED: AtomicBool = AtomicBool::new(false);
 /// Console bytes dropped because the ring was full.
 pub static DROPPED: AtomicU32 = AtomicU32::new(0);
+/// Called after bytes are buffered (the application's pump task waits on it, so it needs no
+/// periodic timer); 0 = none (the boot stage). A `fn()` stored as an address.
+static ON_OUTPUT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Register the hook that wakes the pump task when output is buffered.
+pub fn on_output(f: fn()) {
+    ON_OUTPUT.store(f as usize, Ordering::Relaxed);
+}
+
+/// Bytes wait in the ring (the transmit FIFO was full).
+pub fn pending() -> bool {
+    cortex_m::interrupt::free(|cs| OUT.borrow(cs).borrow().len > 0)
+}
 
 use crate::pac;
 use crate::pac::gpio::vals::{Moder, Ospeedr, Ot, Pupdr};
@@ -139,6 +152,12 @@ pub fn write_bytes(b: &[u8]) {
         }
     });
     pump();
+    let f = ON_OUTPUT.load(Ordering::Relaxed);
+    if f != 0 && pending() {
+        // SAFETY: only `on_output` stores here, always a `fn()`.
+        let f: fn() = unsafe { core::mem::transmute::<usize, fn()>(f) };
+        f();
+    }
 }
 
 /// Move buffered bytes into the transmit FIFO while it has room; never waits.

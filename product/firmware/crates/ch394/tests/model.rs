@@ -250,7 +250,7 @@ fn received_datagrams_raise_int_and_only_they() {
     c.enable_recv_interrupts(0xFF).unwrap();
     c.udp_open(3, 1027).unwrap();
     let mut d = c.release().0;
-    assert_eq!((d.common[0x16], d.common[0x18]), (0, 0xFF));
+    assert_eq!((d.common[0x16], d.common[0x18]), (0x80, 0xFF));
     assert_eq!(d.sreg[3][0x2C], 0x04);
     d.sreg[3][0x02] = 0x04 | 0x10; // RECV and SEND_OK pending
     d.deliver(3, [10, 0, 0, 1], 5000, &[1, 2, 3]);

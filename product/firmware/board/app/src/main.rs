@@ -277,11 +277,22 @@ pub fn safe_reset(mgmt: &mut mgmt_init::MgmtInit, factory: bool) -> ! {
 }
 
 /// Moves buffered console output into the USART FIFO when the net loop does not (idle times).
+static CONSOLE_OUT: embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, ()> = embassy_sync::signal::Signal::new();
+
+/// Waits for buffered output (the console's hook), then moves it into the USART FIFO; a timer
+/// only while bytes wait for FIFO room (16 bytes at 115 200 Bd take about 1.4 ms). No periodic
+/// wake while nothing is printed (WFE; emulator time.advance).
 #[embassy_executor::task]
 async fn console_pump() {
+    console::on_output(|| CONSOLE_OUT.signal(()));
     loop {
+        if !console::pending() {
+            CONSOLE_OUT.wait().await;
+        }
         console::pump();
-        Timer::after_millis(1).await;
+        if console::pending() {
+            Timer::after_millis(1).await;
+        }
     }
 }
 

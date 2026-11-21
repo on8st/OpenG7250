@@ -34,6 +34,9 @@ use g7250_radio::mgmt::{Ctx, Server};
 /// is measured (P-NET-1). SPI6 kernel clock is PCLK4 = 64 MHz here; 64 / 4 = 16 MHz.
 const SPI_HZ: u32 = 16_000_000;
 const SOCK_DISCOVERY: u8 = 0;
+/// Longest idle sleep of the net loop with no session (INT# wakes it at once): the link check,
+/// the trial's 10 s confirmation (checked once a second) and the 10 min update abandonment.
+const IDLE_MAX_MS: u64 = 1000;
 /// Record the time of a pass step (GET_STATS step_*_us).
 fn step(steps: &mut [u64; g7250_radio::mgmt::STEPS], i: usize, t: Instant) {
     steps[i] = steps[i].max(t.elapsed().as_micros());
@@ -1060,7 +1063,18 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 // pass at once.
                 embassy_futures::yield_now().await;
                 if chip.rx_pending(0xFF).map_or(true, |m| m == 0) {
-                    let _ = embassy_futures::select::select(int.wait_for_low(), Timer::after_millis(2)).await;
+                    // Sleep until INT# or the next due deadline: 2 ms while P2 needs its tick
+                    // (a session's 50 ms status packet and its timers); else the DHCP client's
+                    // next step, at most IDLE_MAX_MS (link check, trial confirmation, update
+                    // abandonment, IP conflict also raises INT#). WFE in between.
+                    let now = Instant::now().as_millis();
+                    let due = if p2.needs_tick() {
+                        now + 2
+                    } else {
+                        let d = dhcpc.as_ref().map_or(u64::MAX, |d| d.next_due());
+                        d.clamp(now + 1, now + IDLE_MAX_MS)
+                    };
+                    let _ = embassy_futures::select::select(int.wait_for_low(), Timer::at(embassy_time::Instant::from_millis(due))).await;
                 }
             }
             Err(e) => {

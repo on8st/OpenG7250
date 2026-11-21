@@ -481,6 +481,14 @@ impl P2 {
         self.record_due || self.record_next.is_some()
     }
 
+    /// The tick must run every pass (2 ms at most apart): a session runs (status packet every
+    /// 50 ms, session watchdog, key path and keyed timeout, DUC), the record goes out in parts,
+    /// or a takeover notice is still being repeated. Otherwise the tick has nothing to do and
+    /// the net loop may sleep longer.
+    pub fn needs_tick(&self) -> bool {
+        self.session.running() || self.record_pending() || self.notice.is_some()
+    }
+
     /// One part of the unasked record (RECORD_PART pairs from `at`, ascending register address);
     /// the next part on the next tick, while the session's register destination is still
     /// `dest`. Each part takes the next number of the session counter (B2.7): numbers increase,

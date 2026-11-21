@@ -215,3 +215,37 @@ fn a_conflict_on_the_leased_address_declines_and_starts_again_after_10_s_0049() 
     let mut c = Client::new(MAC, 1, ll(), None, 0);
     assert_eq!(c.decline(5), None);
 }
+
+/// The actions of a client polled every millisecond, and of the same client polled only at its
+/// `next_due` (the net loop's idle sleep): the same actions at the same times.
+fn run_both(mut fine: Client, end_ms: u64, start: u64) {
+    let mut coarse = fine.clone();
+    let mut a = vec![];
+    for t in start..end_ms {
+        let act = fine.poll(t);
+        if act != Action::None {
+            a.push((t, act));
+        }
+    }
+    let mut b = vec![];
+    let mut t = start;
+    while t < end_ms {
+        let act = coarse.poll(t);
+        if act != Action::None {
+            b.push((t, act));
+        }
+        let due = coarse.next_due();
+        assert!(due >= t, "next_due {due} before now {t}");
+        t = if due == t { t + 1 } else { due };
+    }
+    assert_eq!(a, b);
+    assert!(!a.is_empty());
+}
+
+#[test]
+fn next_due_is_when_poll_acts() {
+    // No server: DISCOVER and the back-off gaps (free gaps 4, 8, 16, 32 s; T-A1-66).
+    run_both(Client::new(MAC, 100, ll(), None, 0), 200_000, 0);
+    // A silent server and a short lease: renewal at T1, rebinding at T2, the pauses, the end.
+    run_both(bound(120), 200_000, 0);
+}

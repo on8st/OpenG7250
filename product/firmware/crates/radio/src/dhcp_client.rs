@@ -68,6 +68,7 @@ impl Msg {
     }
 }
 
+#[derive(Clone)]
 pub struct Client {
     pub state: State,
     pub xid: u32,
@@ -138,6 +139,25 @@ impl Client {
     }
 
     /// Call often.
+    /// The next time [`Self::poll`] can act (send, give up, end the lease); the net loop sleeps
+    /// until then when nothing else is due. `poll` before it does nothing.
+    pub fn next_due(&self) -> u64 {
+        match self.state {
+            State::Init { next_ms, .. } => next_ms,
+            State::Selecting { until_ms, .. } | State::Requesting { until_ms, .. } => until_ms,
+            State::Bound | State::Renewing { .. } | State::Rebinding { .. } => {
+                let Some((t1, _t2, end)) = self.t1_t2_end() else { return u64::MAX };
+                let renew = match self.state {
+                    State::Renewing { until_ms } | State::Rebinding { until_ms } => until_ms,
+                    // Bound: T1 (T2 comes after it), or the end of a pause after a renewal
+                    // without answer.
+                    _ => self.retry_at.map_or(t1, |r| r.max(t1)),
+                };
+                renew.min(end)
+            }
+        }
+    }
+
     pub fn poll(&mut self, now: u64) -> Action {
         match self.state {
             State::Init { attempt, next_ms } if now >= next_ms => {
