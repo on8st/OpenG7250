@@ -181,3 +181,49 @@ open), P3 (ATU strobe polarity MEDIUM, worded as inference), P4 (PC13 pull-up
 without "the factory image does so"), P5 (HSE removed per D1, 90 row added).
 Advisory: A1–A4, N1. With P1–P5 applied, ec929f2's content is clearable on a
 diff check.
+
+## Final check (diff ec929f2..b7df142, his/)
+
+| Item | Result |
+| --- | --- |
+| P1 (10, 90) | Applied. No hex value and no stock bit list; the RM0468 configuration is named as wiring, MEDIUM and tied to the part; the write-once constraint and "select this configuration and no other" are stated; the 90 row adds the SMPS/LDO pin check from photos. |
+| P2 (40, 90) | Applied. The 10 ms / 100 ms / 2 s values and the PCLK4 / prescaler are gone; the minimum RST# low time and the maximum SCK are open, with a 90 row (datasheet, not a radio measurement). |
+| P3 (85, 90) | Applied, using the wording proposed; the 90 row is MEDIUM. |
+| P4 (40) | Applied in 40, but **not in 90**: the F2-Q4 row still says "internal pull-up known to work", which is the stock-behaviour phrase P4 removed. See Q1. |
+| P5 (10, 90) | Applied. HSE is not recorded (D1), and a 90 row reads the crystal marking. |
+| A1 (40) | Applied; judged below. |
+| A2 (85 table) | Applied, and consistent with P3. |
+| A3 (10) | Applied. |
+| A4 (40) | Applied: the check against table 6-1 is named as open. |
+| N1 (40) | Applied: one MAC bullet. |
+
+### A1: "about 17 MHz, upper value seen in use, not a datasheet limit (MEDIUM)"
+
+Acceptable as worded, for the time being.
+
+- It does rest on the factory image's operating point, but the form no longer
+  carries stock detail: no clock tree, no prescaler, a rounded value.
+- What remains says something about the board, not the code: the SPI6 link on
+  shipped units carries about 17 MHz. The datasheet cannot give that, because
+  the chip maximum says nothing about traces or the connector. Once the
+  datasheet maximum is taken, both values are useful: the lower of the two is
+  the safe bound until the link is measured.
+- The tag MEDIUM and "not a datasheet limit" stop the product side from
+  reading it as a limit.
+
+An "open until the datasheet maximum" wording would also pass. I don't
+require it.
+
+### Q1 (required)
+
+In `his/90-needs-hardware.md`, row "F2-Q4: INT# board pull-up", change
+"Unknown; internal pull-up known to work" to
+"Unknown; use the MCU's internal pull-up unless one is found (`40-ethernet.md`)".
+
+The rest of the diff is clean. It adds no stock behaviour and no untagged
+fact, and every new 90 step is a photo, a read or a datasheet look-up.
+
+### Verdict (final check)
+
+**CHANGES**: Q1 only, a one-row fix in 90. With Q1 applied, b7df142 is
+cleared on a diff check of that row.
