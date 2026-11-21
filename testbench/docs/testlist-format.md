@@ -195,6 +195,7 @@ delivery is given in the last column; the reference model offers the ones marked
 | `net.endpoint` | **(v1.4)** `net.endpoint {}` → the endpoint as it is now. When the image moves to a new subnet (DHCP, Set IP, link-local), `hosts[]` follow it; the bench re-reads the endpoint after an address change | T-A1-66 | emulator now |
 | `sensor.set` | `sensor.set {name, value}`; names `supply_mv`, `current_ma`, `pa_temp_mc`, `fwd_power_mw`, `rev_power_mw` | Table A3-2 rows, RF-gone waits, A3.4c | after the emulator's analog models; **(v1.1)** only in the units and scales the HIS gives, else `ok: false`, `"not in HIS: <name>"` |
 | `key.log` | **(v1.5)** `key.log {action: "start"\|"read"\|"stop", from_key?, from_hp?}`; below | B10.5a keyer timing (0046): T-B10-33, T-B10-43 to T-B10-46 | emulator after its CH394 socket log and DHCP checks; model |
+| `atu.sim` | **(v1.5, reference model only)** `atu.sim {result: "tuned"\|"failed"\|"none", after_ms?, tune_time_ms?}`: how the next ATU tune cycle ends by itself and the ATU tune time, which is pending hardware (P-ATU-1); without it the bench runs only the abort part | T-B10-47 (0047) | model |
 | `hw.input` | **(v1.2)** `hw.input {pin: "PH6"\|"PH3"\|"PH4", level: 0\|1}`; any other pin `ok: false`, `"pin not offered: <pin>"` | T-A3-58: local PTT and KEY inputs key nothing (0030; [HIS] HIS 85) | emulator step 3; model |
 
 A fixture that answers `ok: false` with `"not in HIS: <name>"` makes the test `skip` with that

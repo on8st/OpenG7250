@@ -22,8 +22,32 @@ use crate::mgmt::Mgmt;
 use crate::util::*;
 
 pub const MS: u64 = 1_000;
-/// TX_STATE [11:8] source CWX (Table B8-2)
+/// TX_STATE [11:8] source CWX, ATU (Table B8-2)
 pub const SRC_CWX: u8 = 2;
+pub const SRC_ATU: u8 = 4;
+
+/// The ATU tune cycle of A3.9b. The model has no ATU: how a cycle ends is set by the atu.sim
+/// fixture (model only), and so is the ATU tune time, which is pending hardware (P-ATU-1).
+#[derive(Debug, Clone)]
+pub struct Atu {
+    /// ATU_STATE once P-ATU-1 is set (0 off or bypassed, 2 tuning, 3 tuned, 4 failed)
+    pub state: u32,
+    /// the running cycle: (start, end by itself at, ends tuned)
+    pub cycle: Option<(u64, Option<u64>, bool)>,
+    pub last_end: Option<u64>,
+    /// atu.sim: the next cycle's result (Some(true) tuned, Some(false) failed, None never by
+    /// itself) and after how long
+    pub sim_result: Option<bool>,
+    pub sim_after_us: u64,
+    pub tune_time_us: u64,
+}
+
+impl Default for Atu {
+    fn default() -> Atu {
+        // tune time: the manual's "initial tuning <= 10 s" plus a 1 s margin (P-ATU-1 pending)
+        Atu { state: 0, cycle: None, last_end: None, sim_result: Some(true), sim_after_us: 300 * MS, tune_time_us: 11 * S }
+    }
+}
 pub const S: u64 = 1_000_000;
 
 #[derive(Debug, Clone)]
@@ -163,6 +187,8 @@ pub struct TxState {
     pub keyed: bool,
     pub source: u8,
     pub unkey: u8,
+    /// limit id with unkey reason 4 (TX_STATE [31:24])
+    pub limit: u8,
     pub outside: bool,
 }
 
@@ -216,6 +242,8 @@ pub struct Radio {
     pub cal: Option<Calibration>,
     /// The CWX keyer of B10.5a (0046).
     pub keyer: Keyer,
+    /// The ATU tune cycle of A3.9b (0047).
+    pub atu: Atu,
     /// The key.log fixture (format v1.5): key changes and High Priority arrivals since start.
     pub keylog: Option<KeyLog>,
 }
@@ -329,6 +357,7 @@ impl Radio {
             cal,
             keyer: Keyer::new(keyer::Settings { iambic: false, mode_b: false, strict: false, speed: 0, weight: 50 }),
             keylog: None,
+            atu: Atu::default(),
         };
         r.new_token();
         r.logf("power-on reset");
@@ -390,6 +419,7 @@ impl Radio {
             | (pa_disabled as u32) << 4
             | (self.tx.source as u32) << 8
             | (self.tx.unkey as u32) << 16
+            | (self.tx.limit as u32) << 24
     }
     pub fn watchdog_state(&self) -> u32 {
         let g = self.session.as_ref().and_then(|s| s.s.general.as_ref());
@@ -520,7 +550,19 @@ impl Radio {
                 self.keyer.stop(now, &mut Vec::new());
             }
         }
+        if self.tx.keyed && self.tx.source == SRC_ATU {
+            // A3.9b items 6, 7 (0047): every end but a tuned one leaves ATU_STATE 4
+            let tuned = reason == unkey::ATU_ENDED && self.atu.cycle.map_or(false, |c| c.2);
+            self.atu.cycle = None;
+            self.atu.last_end = Some(self.now);
+            self.atu.state = if tuned { 3 } else { 4 };
+            let st = self.atu_state();
+            self.push(&[(reg::ATU_STATE, st)], out);
+        }
         if self.tx.keyed {
+            if reason != unkey::LIMIT {
+                self.tx.limit = 0;
+            }
             self.tx.keyed = false;
             self.tx.source = 0;
             self.tx.unkey = reason;
@@ -942,7 +984,7 @@ impl Radio {
             if ok_10ms {
                 self.try_key(out);
             }
-        } else if !ptt && was && self.tx.keyed && self.tx.source != SRC_CWX {
+        } else if !ptt && was && self.tx.keyed && self.tx.source == 1 {
             self.unkey(unkey::RELEASED, out);
         }
         self.cwx_input(d[5], out);
@@ -1007,6 +1049,15 @@ impl Radio {
         let mut ko = Vec::new();
         self.keyer.advance(now, &mut ko);
         self.apply_keyer(ko, out);
+    }
+
+    /// The conditions of A3.1a other than the arm, for an ATU tune start (NOT_KEYABLE).
+    fn atu_keyable(&self) -> bool {
+        let Some(s) = self.session.as_ref() else { return false };
+        let freq = phase_to_hz(s.s.hp.duc0_phase).round() as u32;
+        let inside = cap::TX_BANDS.iter().any(|(lo, hi)| freq >= *lo && freq <= *hi);
+        let pa = s.s.general.as_ref().map_or(false, |g| g.pa_enable());
+        inside && pa && self.mode_class != 0 && self.tx_calibrated() && !self.update_in_progress
     }
 
     /// The conditions of A3.1a for a keyer element, as far as modelled (as try_key, with
@@ -1234,7 +1285,7 @@ impl Radio {
 
     /// 5 unknown while the ATU latches are unwritten (P-ATU-1 not set; Annex P, 0032).
     pub fn atu_state(&self) -> u32 {
-        if self.has_param("P-ATU-1") { 0 } else { 5 }
+        if self.has_param("P-ATU-1") { self.atu.state } else { 5 }
     }
 
     fn limit_in_force(&self, i: usize) -> u32 {
@@ -1304,10 +1355,36 @@ impl Radio {
                 // armed, a start is answered as the no-op with ATU_STATE (model gap).
                 // 0 is always accepted and a no-op with no cycle running; its answer is the
                 // pair of B8.4 only (ATU_STATE comes with a start's no-op only, item 1).
-                0 => W::Answer(vec![(a, 0)]),
+                0 => {
+                    if self.tx.keyed && self.tx.source == SRC_ATU {
+                        // an abort: reason 1, ATU_STATE 4 (0047)
+                        self.unkey(unkey::RELEASED, out);
+                    }
+                    W::Answer(vec![(a, 0)])
+                }
                 1 if !self.has_param("P-ATU-1") => W::Reject(0, wr::NOT_CALIBRATED),
                 1 if !self.armed() => W::Reject(0, wr::NOT_ARMED),
-                1 => W::Answer(vec![(a, 0), (reg::ATU_STATE, self.atu_state())]),
+                1 if self.atu.cycle.is_some() || self.atu.last_end.map_or(false, |t| self.now < t + 2 * S) => {
+                    // the no-op (cycle running or within 2 s of the end of the previous one)
+                    let run = self.atu.cycle.is_some() as u32;
+                    W::Answer(vec![(a, run), (reg::ATU_STATE, self.atu_state())])
+                }
+                1 if self.tx.keyed => W::Reject(0, wr::KEYED),
+                1 if !self.atu_keyable() => W::Reject(0, wr::NOT_KEYABLE),
+                1 => {
+                    let now = self.now;
+                    let end_at = self.atu.sim_result.map(|_| now + self.atu.sim_after_us);
+                    self.atu.cycle = Some((now, end_at, self.atu.sim_result == Some(true)));
+                    self.atu.state = 2;
+                    self.tx.keyed = true;
+                    self.tx.source = SRC_ATU;
+                    self.hw.tx_levels = true;
+                    self.hw.chain_a_bit7_ever = true;
+                    self.hw.bias_nonzero_ever = true;
+                    let w = self.tx_state_word();
+                    self.push(&[(reg::TX_STATE, w)], out);
+                    W::Answer(vec![(a, 1), (reg::ATU_STATE, 2)])
+                }
                 _ => W::Reject(cur, wr::BAD_VALUE),
             },
             _ => W::Reject(cur, wr::READ_ONLY),
@@ -1378,6 +1455,19 @@ impl Radio {
         let mut m = std::mem::replace(&mut self.mgmt, Mgmt::new(now));
         m.tick(self, &mut out);
         self.mgmt = m;
+        // ATU tune cycle (A3.9b item 6; 0047): ended by itself, or by the ATU tune time
+        if let Some((start, end_at, _)) = self.atu.cycle {
+            if self.tx.keyed && self.tx.source == SRC_ATU {
+                let limit_at = start + self.atu.tune_time_us;
+                if end_at.map_or(false, |t| now >= t && t < limit_at) {
+                    self.unkey(unkey::ATU_ENDED, &mut out);
+                } else if now >= limit_at {
+                    self.tx.limit = limit::ATU_TIME;
+                    self.logf("ATU tune time: unkey, tune failed (A3.9b)");
+                    self.unkey(unkey::LIMIT, &mut out);
+                }
+            }
+        }
         let Some(s) = self.session.as_ref() else { return out };
         // watchdog (B5.6): standby between 1000 and 1100 ms
         let wd_on = self.watchdog_state() & 2 != 0;
@@ -1426,6 +1516,7 @@ impl Radio {
         let mut out = Vec::new();
         self.drop_arm(drop::MAINTENANCE, &mut out);
         self.keyer.reset();
+        self.atu.cycle = None;
         self.session = None;
         self.carried = None;
         self.last_owner = None;

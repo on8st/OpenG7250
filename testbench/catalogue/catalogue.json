@@ -6420,15 +6420,39 @@
     "A3.9b"
    ],
    "scope": "v1.0",
-   "target": "host",
+   "target": "emulator",
    "also": [
-    "emulator"
+    "host"
    ],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RF-1",
+    "P-RF-2",
+    "P-RF-3",
+    "P-RF-4",
+    "P-RF-5",
+    "P-PWR-1",
+    "P-PWR-2",
+    "P-PWR-3",
+    "P-PWR-4",
+    "P-PWR-5",
+    "P-SEN-1",
+    "P-SEN-2",
+    "P-SEN-3",
+    "P-SEN-4",
+    "P-SEN-5",
+    "P-TIM-1",
+    "P-TIM-2",
+    "P-RX-2",
+    "P-TX-1",
+    "P-ATU-1",
+    "P-ANT-1"
+   ],
    "tx_part": true,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "needs TX unlocked: blocked until the calibration set is complete (tx bit 4)",
+    "tuned, failed and tune-time parts need the model-only fixture atu.sim; the stop request is TCI (part C C5.7), not on P2"
    ]
   },
   {

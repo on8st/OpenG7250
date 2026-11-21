@@ -238,6 +238,10 @@ OVERRIDES: dict[str, dict] = {
     **{t: {"target": "emulator", "also": ["host"], "needs": ["key.log"], "pending": CAL_SET,
            "notes": ["needs TX unlocked: blocked until the calibration set is complete (tx bit 4)"]}
        for t in ["T-B10-33", "T-B10-43", "T-B10-44", "T-B10-45", "T-B10-46"]},
+    "T-B10-47": {"target": "emulator", "also": ["host"], "pending": CAL_SET,
+                 "notes": ["needs TX unlocked: blocked until the calibration set is complete (tx bit 4)",
+                           "tuned, failed and tune-time parts need the model-only fixture atu.sim; the stop "
+                           "request is TCI (part C C5.7), not on P2"]},
     "T-B10-08": {"target": "emulator", "also": ["host"]},
     "T-B10-16": {"target": "emulator", "also": ["host"],
                  "notes": ["write range and session-end reset run locked; the unkey timing "

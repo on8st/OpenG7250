@@ -110,7 +110,7 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log"];
+    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim"];
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -296,6 +296,24 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 r.keylog = None;
             }
             ok(v)
+        }
+        "atu.sim" => {
+            // model only: how the next ATU tune cycle ends (result "tuned", "failed" or "none",
+            // after_ms) and the ATU tune time (tune_time_ms; pending hardware, P-ATU-1)
+            let res = args.get("result").and_then(|v| v.as_str()).unwrap_or("tuned");
+            r.atu.sim_result = match res {
+                "tuned" => Some(true),
+                "failed" => Some(false),
+                "none" => None,
+                _ => return err(&format!("atu.sim: result {res}")),
+            };
+            if let Some(ms) = args.get("after_ms").and_then(|v| v.as_f64()) {
+                r.atu.sim_after_us = (ms * 1000.0) as u64;
+            }
+            if let Some(ms) = args.get("tune_time_ms").and_then(|v| v.as_f64()) {
+                r.atu.tune_time_us = (ms * 1000.0) as u64;
+            }
+            ok(J::Null)
         }
         "state.dump" => ok(J::obj(vec![
             ("session_owner", r.session.as_ref().map_or(J::Null, |s| J::Str(s.owner.to_string()))),

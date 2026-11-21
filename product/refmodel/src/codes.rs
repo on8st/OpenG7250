@@ -107,8 +107,16 @@ pub mod unkey {
     pub const KEYED_TIMEOUT: u8 = 2;
     pub const ARM_DROPPED: u8 = 5;
     pub const PA_DISABLED: u8 = 7;
+    pub const LIMIT: u8 = 4;
     pub const CW_CAP: u8 = 9;
     pub const MODE_CLASS: u8 = 10;
+    /// ATU tune cycle ended by itself, tuned or failed (A3.9b item 6; 0047)
+    pub const ATU_ENDED: u8 = 11;
+}
+
+/// Limit ids, TX_STATE [31:24] (Table B8-3).
+pub mod limit {
+    pub const ATU_TIME: u8 = 8;
 }
 
 /// Stream reasons, `STREAM_STATUS` [6:0] (Table B8-3).
