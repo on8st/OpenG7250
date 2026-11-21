@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "5cbcd4b",
-  "sha256_of_inputs": "cd224cd46b7901ee230c00f88930be68a5ea2783326650f106d1ba8a11a0b23e"
+  "commit": "6c91683",
+  "sha256_of_inputs": "126136edb116c91c84ba493eb1f6e7b5e6974ce6bd60f40d9a21037ca7b580cb"
  },
  "his": {
   "commit": "72591aa"
@@ -4418,7 +4418,7 @@
    "id": "T-B5-20",
    "origin": "spec",
    "part": "A-B",
-   "title": "Two High Priority packets sent back to back on port 1027, run = 1 then run = 0, and the reverse: the radio processes both, so the session ends (or starts) as the last one says; with ten in a burst none is lost while the firmware reads the socket within the time two packets take to arrive (emulator; B2.3, Table B2-2; 0053).",
+   "title": "On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 \"High Priority bursts\", Table B2-2; 0053, 0054).",
    "reqs": [
     "B5",
     "B2.3",
@@ -4435,6 +4435,51 @@
    "tx_part": false,
    "notes": [
     "the reference model has no socket buffers: it always passes there; the emulator honours the sizes of Table B2-2"
+   ]
+  },
+  {
+   "id": "T-B5-21",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "While armed: `SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET` (as a commanded reset, A1.9) and `SET_CALIBRATION` get status 50 or first unkey and disarm as their rules say, and no flash work starts while TX is armed or keyed; unarmed, a `SET_CONFIG` is answered only after its flash write has ended (emulator; B2.3 \"Flash work\"; 0055).",
+   "reqs": [
+    "B5",
+    "A1.9",
+    "B2.3"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [],
+   "pending": [
+    "P-RF-1",
+    "P-RF-2",
+    "P-RF-3",
+    "P-RF-4",
+    "P-RF-5",
+    "P-PWR-1",
+    "P-PWR-2",
+    "P-PWR-3",
+    "P-PWR-4",
+    "P-PWR-5",
+    "P-SEN-1",
+    "P-SEN-2",
+    "P-SEN-3",
+    "P-SEN-4",
+    "P-SEN-5",
+    "P-TIM-1",
+    "P-TIM-2",
+    "P-RX-2",
+    "P-TX-1",
+    "P-ATU-1",
+    "P-ANT-1",
+    "P-SYS-9"
+   ],
+   "tx_part": true,
+   "notes": [
+    "needs an arm: blocked until the calibration set is complete (tx bit 4)"
    ]
   },
   {

@@ -527,3 +527,85 @@ def t_a1_74(ctx):
                       not ip.startswith("169.254."), f"{ip} after {took:.1f} s")
     finally:
         ctx.fixture("dhcp.stop")
+
+
+# ---------------- flash work and transmit (B2.3 "Flash work"; 0055) ----------------
+@test("T-B5-21")
+def t_b5_21(ctx):
+    """B2.3 "Flash work" (0055) in the order of Table A1-3 (36, 35, 58, 57, 50): while armed,
+    CHANGE_SECRET gets 50, SET_CALIBRATION 57 (a P2 session runs), and neither changes anything;
+    FACTORY_RESET disarms before its reply; armed with the first-secret window open (after the
+    factory reset), SET_FIRST_SECRET gets 50; unarmed, a SET_CONFIG reply comes after its flash
+    write."""
+    import hashlib
+    import hmac
+    import threading
+    from .core import Blocked
+    from .p2 import wait_reachable
+    from .t_cw import pending_reason
+    s = secret_of(ctx)
+    with m(ctx) as c, Host(ctx.net) as h:
+        if tx_bit4(h) != 1:
+            raise Blocked(pending_reason(ctx))
+        st = arm_once(ctx, h)
+        if not ctx.eq("armed", None if st is None else st & 0xF, 1):
+            return
+        h.keepalive()
+        cfg0, cal0 = c.req("GET_CONFIG"), c.req("GET_CALIBRATION")
+        ch = ctx.got(c.challenge(), "GET_CHALLENGE", "no challenge")
+        mask = hmac.new(s, b"G7NS" + ch, hashlib.sha256).digest()
+        r = c.authed("CHANGE_SECRET", s, bytes(a ^ b for a, b in zip(os.urandom(32), mask)), challenge=ch)
+        ctx.eq("armed: CHANGE_SECRET refused with 50", r["status"] if r else None, 50)
+        h.keepalive()
+        r = c.authed("SET_CALIBRATION", s, simulated_set())
+        ctx.eq("armed: SET_CALIBRATION refused with 57 (a P2 session runs; 57 comes before 50, Table A1-3)",
+               r["status"] if r else None, 57)
+        h.keepalive()
+        r = c.req("SET_FIRST_SECRET", os.urandom(32))
+        ctx.eq("SET_FIRST_SECRET with a secret set: 36 (before 50, Table A1-3)", r["status"] if r else None, 36)
+        h.keepalive()
+        r = c.authed("END_WRITE_SESSION", s)
+        ctx.eq("the old secret still works (CHANGE_SECRET changed nothing)", r["status"] if r else None, 0)
+        cfg1, cal1 = c.req("GET_CONFIG"), c.req("GET_CALIBRATION")
+        ctx.check("no flash work while armed: configuration and calibration set unchanged",
+                  bool(cfg1 and cal1) and cfg1.get("payload") == (cfg0 or {}).get("payload")
+                  and cal1.get("payload") == (cal0 or {}).get("payload"),
+                  "unchanged" if cfg1 and cal1 else "GET_CONFIG or GET_CALIBRATION unanswered")
+        # FACTORY_RESET while armed: a commanded reset (A1.9): unkey and disarm, then the reply
+        h.keepalive()
+        pushes: list = []
+        t = threading.Thread(target=lambda: pushes.extend(h.recv(1.0, PORT_REG)))
+        t.start()
+        r = c.authed("FACTORY_RESET", s)
+        t_reply = time.monotonic()
+        t.join()
+        ctx.eq("armed: FACTORY_RESET answered 0", r["status"] if r else None, 0)
+        disarm = [tt for _, d, tt in pushes if (value(parse_regs(d), TX_ARM_STATE) if value(parse_regs(d), TX_ARM_STATE) is not None else 1) & 0xF == 0]
+        ctx.check("FACTORY_RESET disarmed before its reply (A1.9; no flash work while armed)",
+                  bool(disarm) and disarm[0] <= t_reply,
+                  f"disarm push {format(disarm[0] - t_reply, '+.3f') + ' s' if disarm else 'not seen'} relative to the reply")
+    # after the factory reset: the network back to its default, the secret cleared, the window open
+    wait_reachable(ctx, "FACTORY_RESET")
+    with m(ctx) as c, Host(ctx.net) as h:
+        st = arm_once(ctx, h)
+        if ctx.eq("armed again after the factory reset", None if st is None else st & 0xF, 1):
+            h.keepalive()
+            r = c.req("SET_FIRST_SECRET", os.urandom(32))
+            ctx.eq("armed, window open: SET_FIRST_SECRET refused with 50", r["status"] if r else None, 50)
+        h.stop()
+        time.sleep(0.1)
+        new = os.urandom(32)
+        r = c.req("SET_FIRST_SECRET", new)
+        if ctx.eq("unarmed, window open: SET_FIRST_SECRET 0", r["status"] if r else None, 0):
+            ctx.endpoint.setdefault("_learned", {})["secret"] = new.hex()
+            s = new
+        # unarmed SET_CONFIG: the reply comes after the flash write, so the radio is not stalled
+        # once it has answered
+        r = c.authed("SET_CONFIG", s, config_tlv((6, b"\x00")))
+        ctx.eq("unarmed SET_CONFIG: 0", r["status"] if r else None, 0)
+        from .p2 import PORT_DISC, discovery
+        t0 = time.monotonic()
+        h.send(PORT_DISC, discovery())
+        d = h.recv(0.05, PORT_DISC, until=lambda g: bool(g))
+        ctx.check("right after the SET_CONFIG reply the radio answers discovery within 50 ms (its flash write "
+                  "ended before the reply)", bool(d), f"{(d[0][2] - t0) * 1000:.1f} ms" if d else "no reply within 50 ms")

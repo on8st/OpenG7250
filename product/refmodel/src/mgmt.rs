@@ -284,7 +284,9 @@ impl Mgmt {
         if is_cal_write(cmd) && r.session.is_some() {
             return self.send(r, rx, st::SESSION_RUNS, &[], true, cmd, out);
         }
-        if (is_update(cmd) || cmd == RETURN_TO_STOCK || cmd == ENTER_VENDOR_RECOVERY || is_cal_write(cmd))
+        // 0055: SET_FIRST_SECRET and CHANGE_SECRET write flash too: refused while armed or keyed
+        if (is_update(cmd) || cmd == RETURN_TO_STOCK || cmd == ENTER_VENDOR_RECOVERY || is_cal_write(cmd)
+            || cmd == SET_FIRST_SECRET || cmd == CHANGE_SECRET)
             && armed_or_keyed
         {
             return self.send(r, rx, st::ARMED, &[], true, cmd, out);

@@ -650,7 +650,8 @@ def restarted(last_before: int, after: list[int]) -> bool:
 @test("T-B5-20")
 def t_b5_20(ctx):
     """B2.3 "High Priority bursts" (0053, 0054): two packets back to back at wire speed with no
-    third within 2 ms, and a sequence of 20 packets 1 ms apart, are all processed."""
+    third within 2 ms, and a sequence of 20 packets 1 ms apart, are all processed. Precondition
+    (0055): no management write, store compaction or update in progress; the test sends none."""
     with Host(ctx.net) as h, Host(ctx.net) as obs:
         # running, then run = 1 and run = 0 back to back: the session ends
         h.start()
