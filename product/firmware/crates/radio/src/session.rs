@@ -30,6 +30,13 @@ impl CnC {
     }
 }
 
+/// Bytes of a High Priority packet ([P2], 1444 bytes) that this firmware parses: byte 4 (run,
+/// PTT), 5 (CWX), 329-332 (DUC0 frequency, A3.9), and up to 345 (drive level, B10.8, for the key
+/// sequence). The net loop reads only these over SPI (0054) and zero-fills the rest.
+pub const HP_BYTES_USED: usize = 346;
+/// Bytes of a DDC-specific packet that this firmware parses (7, 18-19, 22; Table B6-2).
+pub const DDC_BYTES_USED: usize = 64;
+
 /// The General packet fields this firmware acts on now (Table B7-1; B5.1a item 2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct General {
@@ -400,6 +407,27 @@ mod tests {
         let mut q = general(false, 50002);
         q[13..15].copy_from_slice(&1234u16.to_be_bytes());
         assert!(!General::parse(&q).foreign_port);
+    }
+
+    #[test]
+    fn nothing_beyond_the_bytes_read_is_parsed() {
+        // The net loop reads HP_BYTES_USED and DDC_BYTES_USED and zero-fills the rest (0054).
+        let mut full = std::vec![0xA5u8; 1444];
+        full[4] = 0x03;
+        full[5] = 0x07;
+        let mut cut = full.clone();
+        cut[HP_BYTES_USED..].fill(0);
+        let r = |p: &[u8]| g7250_safety::keypath::Requests::parse(p);
+        assert_eq!(r(&full), r(&cut));
+        let mut s1 = Session::new();
+        let mut s2 = Session::new();
+        assert_eq!(s1.on_cnc(A, CnC::HighPriority, &full, 0, true), s2.on_cnc(A, CnC::HighPriority, &cut, 0, true));
+        assert_eq!(s1.ptt, s2.ptt);
+        let mut d = std::vec![0x5Au8; 1444];
+        d[7] = 1;
+        let mut dc = d.clone();
+        dc[DDC_BYTES_USED..].fill(0);
+        assert_eq!(Ddc::parse(&d), Ddc::parse(&dc));
     }
 
     #[test]

@@ -115,6 +115,11 @@ fn clock_config() -> embassy_stm32::Config {
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     early_init();
+    // The instruction cache: code runs from flash with wait states (RM0468). Safe here: the
+    // application never writes the flash it runs from. The data cache stays off: flash read back
+    // after a program or erase, and the store, would need cache maintenance.
+    // SAFETY: the core peripherals are taken once, at the start, for this only.
+    unsafe { cortex_m::Peripherals::steal() }.SCB.enable_icache();
     let cause = reset::read(true);
     // TRIP_COUNT over resets without power loss (A3.5; Table B8-2): before anything else reads
     // or writes the persist block.

@@ -81,6 +81,9 @@ pub struct P2 {
     /// The key path was keyed after the last call (to empty and arm the FIFO on a change).
     was_keyed: bool,
     notice: Option<Notice>,
+    /// The unasked record is due: sent from the next tick, not in the pass that starts the
+    /// session (its 1246 bytes are the longest send; 0054).
+    record_due: bool,
     /// The longest session-event handling and the longest single register-packet send, us
     /// (GET_STATS step_events_us, step_send_us).
     pub max_events_us: u64,
@@ -166,6 +169,7 @@ impl P2 {
             duc_iq_ignored: 0,
             was_keyed: false,
             notice: None,
+            record_due: false,
             max_events_us: 0,
             max_send_us: 0,
             takeovers: 0,
@@ -418,7 +422,7 @@ impl P2 {
                     // The unasked record, once per session, if the set-up had a General packet
                     // (B4.4 item 2), at most once per 1 s per destination.
                     if self.session.general.is_some() {
-                        self.send_unasked_record(chip, dest, now);
+                        self.record_due = true;
                     }
                 }
                 Event::Refused { from } => {
@@ -566,10 +570,8 @@ impl P2 {
             if let Some(g) = self.session.general {
                 self.regs.watchdog_written = Some(g.timer);
                 // The unasked record at the owner's first General packet of the session
-                // (B4.4 item 2), if not sent at the start.
-                if let Some(dest) = self.session.register_destination() {
-                    self.send_unasked_record(chip, dest, now);
-                }
+                // (B4.4 item 2), if not sent at the start: from the next tick.
+                self.record_due = true;
             }
         }
     }
@@ -635,6 +637,13 @@ impl P2 {
         if let Some(e) = self.session.tick(now, self.regs.watchdog_effective(), self.link_ok) {
             self.events(chip, &[e], now);
             self.update_stream_status(chip);
+        }
+        // The unasked record of B4.4 item 2, one pass after the session start or first General.
+        if self.record_due {
+            self.record_due = false;
+            if let Some(dest) = self.session.register_destination() {
+                self.send_unasked_record(chip, dest, now);
+            }
         }
         // The second and third copy of the takeover notice, about 10 ms apart (A2.4 step 1).
         if let Some(n) = self.notice.as_mut() {

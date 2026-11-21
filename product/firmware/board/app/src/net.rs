@@ -734,7 +734,20 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 ] {
                     for _ in 0..per_pass {
                         let t = Instant::now();
-                        let Ok(Some(d)) = chip.udp_recv(sock, &mut rx) else { break };
+                        // Only the bytes the firmware parses are read over SPI (0054); the chip
+                        // moves past the whole datagram, and the rest of the buffer is zeroed so
+                        // that the packet keeps its length for the checks.
+                        let want = match sock {
+                            crate::p2::S1027 => g7250_radio::session::HP_BYTES_USED,
+                            crate::p2::S1025 => g7250_radio::session::DDC_BYTES_USED,
+                            _ => rx.len(),
+                        };
+                        let Ok(Some(mut d)) = chip.udp_recv(sock, &mut rx[..want]) else { break };
+                        if d.truncated > 0 && want < rx.len() {
+                            let full = (d.len + d.truncated).min(rx.len());
+                            rx[d.len..full].fill(0);
+                            d.len = full;
+                        }
                         let i = match sock {
                             crate::p2::S1027 => {
                                 hp_rx += 1;
