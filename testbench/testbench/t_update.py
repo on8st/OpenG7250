@@ -857,12 +857,31 @@ def t_a1_88(ctx: Ctx):
             ctx.eq("a block after the good verify cancels it: UPDATE_ACTIVATE 55", r["status"] if r else None, 55)
 
 
-def corrupt(ctx, slot: int, release: bool = False):
-    """slot.corrupt (proposed for the emulator; the reference model has it): one byte of the image
-    in that slot changed, at its middle; release restores it."""
+def corrupt(ctx, slot: int, release: bool = False, length: int | None = None):
+    """slot.corrupt (v1.8): one bit of the byte at the middle of the image in that slot changed
+    (offset from the slot start; ECC kept consistent, so it reads as changed data); release writes
+    it back. The image length: given, else from the runner's package for that slot (the image the
+    slot holds), else on the reference model any (it ignores the offset)."""
     if "slot.corrupt" not in ctx.endpoint.get("fixtures", []):
         raise PartSkip("needs slot.corrupt (one byte of a slot changed)")
-    ctx.fixture("slot.corrupt", slot=slot, **({"restore": True} if release else {}))
+    done = ctx.__dict__.setdefault("_corrupted", set())
+    if release:
+        if slot in done:
+            ctx.fixture("slot.corrupt", slot=slot, restore=True)
+            done.discard(slot)
+        return
+    if length is None:
+        real = real_package(ctx, slot)
+        if real:
+            length = real[2]["length"]
+        elif "model" in ctx.endpoint:
+            length = 2
+        else:
+            raise PartSkip(f"the image length in slot {'AB'[slot - 1]} is unknown: needs params.package_slot_{'ab'[slot - 1]}")
+    r = ctx.fixture("slot.corrupt", slot=slot, offset=length // 2) or {}
+    done.add(slot)
+    if "old" in r and "new" in r:
+        ctx.check(f"slot.corrupt: the byte at {r.get('address')} changed", r["old"] != r["new"], f"old {r['old']}, new {r['new']}")
 
 
 @test("T-A1-89")
@@ -925,7 +944,7 @@ def t_a1_90(ctx: Ctx):
         if not ctx.eq("a good package verifies", u.full(gimg, ghdr), (0, "verified")):
             return
         n0 = last_log_seq(u)
-        corrupt(ctx, other)
+        corrupt(ctx, other, length=len(gimg))
         r = u.req("UPDATE_ACTIVATE", b"\x00")
         ctx.eq("UPDATE_ACTIVATE 0 (it adds no check)", r["status"] if r else None, 0)
     try:
@@ -963,9 +982,9 @@ def t_a1_90(ctx: Ctx):
         ctx.notes.append("both slots changed: not run on the reference model (the safe state without network is not modelled)")
         return
     ctx.need("power.cycle")
-    corrupt(ctx, 1)
-    corrupt(ctx, 2)
     try:
+        corrupt(ctx, 1)
+        corrupt(ctx, 2)
         ctx.fixture("power.cycle")
         time.sleep(3)
         with Host(ctx.net) as h:

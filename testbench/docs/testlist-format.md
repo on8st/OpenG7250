@@ -526,6 +526,13 @@ A test with target `emulator` is also run against the reference model. A test wi
      image may overwrite it); `null` releases (the channel takes the word the image last wrote);
      the image's start-up safe state (PB14 low) and `power.cycle` clear it; traced
      `{"kind": "dac_force", channel, value, t_us}` (T-A3-61).
+   - `slot.corrupt {slot: 1|2, offset: n, xor?: 0x01}` → `{slot, address, old, new, t_us}`: the
+     byte at `offset` from the slot start (0x08040000, 0x08080000) XORed (default one bit) with
+     its ECC kept consistent (it reads as changed data, no ECC error); `{slot, restore: true}`
+     writes it back; kept across `power.cycle` like the flash; traced `{"kind": "slot_corrupt" |
+     "slot_restore", slot, address, t_us}`, in `flash.log` as `{op: "corrupt", address}`. The
+     bench gives the middle of the image, from the package header's length (T-A1-89, T-A1-90;
+     0067). The reference model has it too and ignores `offset`.
    - `gpio.force {pin, level: 0|1|null, target?: "idr"|"odr"|"moder", mode?, from_us?, duration_us?}` →
      `{pin, level, t_us}`: with `target` `idr` (the default) the pin reads `level` whatever the
      image drives; with `odr` the output register is written to `level`, with `moder` the pin
