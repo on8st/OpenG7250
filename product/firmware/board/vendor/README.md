@@ -5,8 +5,11 @@
 - Source: crates.io `embassy-stm32` 0.6.0 (MIT OR Apache-2.0, https://github.com/embassy-rs/embassy),
   copied unmodified from the cargo registry; `Cargo.lock`, `.cargo_vcs_info.json` and `.cargo-ok`
   left out. Used through `[patch.crates-io]` in `board/Cargo.toml`.
-- Licence: the crates.io package ships no licence files; its licence is the `license` field of
-  its `Cargo.toml` (MIT OR Apache-2.0). The texts are in the Embassy repository.
+- Licence: MIT OR Apache-2.0 (`license` field of its `Cargo.toml`). The crates.io package ships
+  no licence files, so `LICENSE-MIT` and `LICENSE-APACHE` were added from the Embassy
+  repository at tag `embassy-stm32-v0.6.0` (raw.githubusercontent.com/embassy-rs/embassy),
+  unmodified; they carry the notice "Copyright (c) Embassy project contributors". The one
+  changed file, `src/rcc/bd.rs`, is marked at the change (Apache-2.0 section 4(b)).
 - One local change, marked `G7250 PATCH (no-backup-domain)` in `src/rcc/bd.rs`:
   `LsConfig::init` returns at once.
 
