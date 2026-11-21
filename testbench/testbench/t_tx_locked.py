@@ -23,15 +23,20 @@ def session(h: Host, pa=True, wd=True):
     return sum((parse_regs(d) for _, d, _ in got), [])
 
 
-def token_of(h: Host, pairs):
-    t = value(pairs, TX_ARM_TOKEN)
-    if t is None:
-        t = value(h.write([(TX_ARM_TOKEN, 0)]), TX_ARM_TOKEN)
-    return t
+def token_of(ctx, h: Host, pairs):
+    return need_token(ctx, h, pairs)
 
 
 def current_token(h: Host):
     return value(h.write([(TX_ARM_TOKEN, 0)]), TX_ARM_TOKEN)
+
+
+def status_detail(status: list) -> str:
+    """What the High Priority status packets showed (B9.2 byte 4)."""
+    if not status:
+        return "no High Priority status packet from port 1025 received"
+    bits = sorted({d[4] & 0b111 for d in status})
+    return f"{len(status)} status packets, byte 4 bits 0-2 seen: {bits}"
 
 
 def arm_reason(st):
@@ -54,7 +59,8 @@ def safe(ctx: Ctx, label: str):
     ch = dac.get("ch")
     bias_ok = not dac.get("bias_nonzero_ever", False) and (ch is None or all(ch[i] in (None, 0) for i in (1, 6, 7)))
     ctx.check(f"{label}: PA bias channels 2, 7, 8 at 0 or never written", bias_ok, str(dac))
-    ctx.check(f"{label}: ATU latches never written (0032)", all(v == 0 for v in o["atu_latch_writes"].values()))
+    ctx.check(f"{label}: ATU latches never written (0032)", all(v == 0 for v in o["atu_latch_writes"].values()),
+              str(o["atu_latch_writes"]))
     if "hw.trace" in ctx.endpoint.get("fixtures", []):
         # v1.3: hw.trace start returns the live trace file (flushed per event); read it at
         # this checkpoint, all events since the test start. Without a file (the reference
@@ -65,14 +71,14 @@ def safe(ctx: Ctx, label: str):
                 ctx.check(f"{label} (trace): {name}", ok, detail)
 
 
-def record(h: Host) -> dict:
-    return record_of((h.cap_request() or [None])[1:])
+def record(ctx, h: Host) -> dict:
+    return need_record(ctx, h)
 
 
 @test("T-B10-L01")
 def t_l01(ctx):
     with host(ctx) as h:
-        rec = record(h)
+        rec = record(ctx, h)
         tx = rec[0x20]
         ctx.eq("tx bit 0 TX hardware present", tx & 1, 1)
         ctx.eq("tx bit 1 TX implemented (0036)", (tx >> 1) & 1, 1)
@@ -87,12 +93,12 @@ def t_l01(ctx):
 def t_b10_03(ctx):
     """The reasons reachable with TX frozen, and their order (B10.2 item 3)."""
     with host(ctx) as h:
-        rec = record(h)
+        rec = record(ctx, h)
         if (rec.get(0x20, 0) >> 4) & 1:
             ctx.notes.append("TX calibrated here: NOT_CALIBRATED rows not checked")
         # 1. watchdog bit clear, no mode class, PTT clear: WATCHDOG_DISABLED before NO_MODE_CLASS
         pairs = session(h, wd=False)
-        tok = token_of(h, pairs)
+        tok = token_of(ctx, h, pairs)
         st = value(h.write([(TX_ARM, tok ^ 0x1234)]), TX_ARM_STATE)
         ctx.eq("wrong value: BAD_TOKEN first", arm_reason(st), "BAD_TOKEN")
         st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
@@ -100,7 +106,7 @@ def t_b10_03(ctx):
         h.stop()
     with host(ctx) as h:
         pairs = session(h)
-        tok = token_of(h, pairs)
+        tok = token_of(ctx, h, pairs)
         h.keepalive(ptt=True)
         st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
         ctx.eq("PTT at 1: PTT_ACTIVE before NO_MODE_CLASS", arm_reason(st), "PTT_ACTIVE")
@@ -119,15 +125,15 @@ def t_b10_03(ctx):
 @test("T-B10-41")
 def t_b10_41(ctx):
     with host(ctx) as h:
-        rec = record(h)
+        rec = record(ctx, h)
         if not ctx.eq("record tx bit 1 = 1, bit 4 = 0", rec.get(0x20, 0) & 0b1_0010, 0b10):
             return
         pairs = session(h)
-        tok = token_of(h, pairs)
+        tok = token_of(ctx, h, pairs)
         h.write([(TX_MODE_CLASS, 1)])
         before = value(h.write([(TX_ARM_STATE, 0)]), TX_ARM_STATE)
         st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
-        if ctx.check("TX_ARM answered with TX_ARM_STATE", st is not None):
+        if ctx.check("TX_ARM answered with TX_ARM_STATE", st is not None, "no TX_ARM_STATE in the answer within 0.3 s" if st is None else hex(st)):
             ctx.eq("state stays 0", st & 0xF, 0)
             ctx.eq("generation unchanged", st >> 24, (before or 0) >> 24)
             ctx.eq("reject reason NOT_CALIBRATED (12)", (st >> 8) & 0xFF, NOT_CALIBRATED_ARM)
@@ -145,7 +151,7 @@ def t_b10_41(ctx):
 def t_b10_42(ctx):
     with host(ctx) as h:
         pairs = session(h)
-        tok = token_of(h, pairs)
+        tok = token_of(ctx, h, pairs)
         h.write([(TX_MODE_CLASS, 1)])
         h.write([(TX_ARM, tok ^ ARM_MAGIC)])
         for _ in range(20):
@@ -171,10 +177,11 @@ def t_b10_42(ctx):
             for p, d, _ in h.recv(0.03, PORT_REG):
                 v = value(parse_regs(d), TX_STATE)
                 keyed |= v is not None and bool(v & 1)
-        ctx.check("PTT and CWX key nothing (no TX_STATE push with bit 0)", not keyed)
+        ctx.check("PTT and CWX key nothing (no TX_STATE push with bit 0)", not keyed, "a TX_STATE push showed bit 0 = 1" if keyed else "no key seen")
         ts = value(h.write([(TX_STATE, 0)]), TX_STATE)
         ctx.eq("TX_STATE bit 0 after the requests (not latched)", None if ts is None else ts & 1, 0)
-        ctx.check("status byte 4 bits 0-2 are 0 (0030)", status and all(d[4] & 0b111 == 0 for d in status))
+        ctx.check("status byte 4 bits 0-2 are 0 (0030)", status and all(d[4] & 0b111 == 0 for d in status),
+                  status_detail(status))
         if has_obs(ctx):
             safe(ctx, "after DUC I&Q, PTT and CWX")
         h.stop()
@@ -189,7 +196,7 @@ def t_l07(ctx):
         ctx.eq("ATU_TUNE = 0 accepted (no rejection)", write_status(ans), [])
         ctx.eq("answered with ATU_STATE 5", value(ans, ATU_STATE), 5)
         ans = other.write([(ATU_TUNE, 0)])
-        ctx.check("from a non-owner NOT_OWNER", any(r == "NOT_OWNER" for _, _, r in write_status(ans)))
+        ctx.check("from a non-owner NOT_OWNER", any(r == "NOT_OWNER" for _, _, r in write_status(ans)), f"WRITE_STATUS seen: {write_status(ans)}")
         h.stop()
 
 
@@ -225,7 +232,7 @@ def t_l11(ctx):
         safe(ctx, "idle")
         pairs = session(a)
         safe(ctx, "session")
-        tok = token_of(a, pairs)
+        tok = token_of(ctx, a, pairs)
         a.write([(TX_MODE_CLASS, 1), (TX_ARM, tok ^ ARM_MAGIC)])
         t_end = time.monotonic() + 2.0
         while time.monotonic() < t_end:
@@ -261,17 +268,18 @@ def t_a3_58(ctx):
                         keyed |= v is not None and bool(v & 1)
                     elif p == PORT_DDC:
                         status.append(d)
-        ctx.check(f"{label}: nothing keys", not keyed)
-        ctx.check(f"{label}: status byte 4 bits 0-2 stay 0", status and all(d[4] & 0b111 == 0 for d in status))
+        ctx.check(f"{label}: nothing keys", not keyed, "a TX_STATE push showed bit 0 = 1" if keyed else "no key seen")
+        ctx.check(f"{label}: status byte 4 bits 0-2 stay 0", status and all(d[4] & 0b111 == 0 for d in status),
+                  status_detail(status))
 
     with host(ctx) as h:
         pairs = session(h)
         toggle(h, "unarmed")
         h.send(PORT_DUC, bytes(5) + bytes([0x82]) + bytes(54))  # hardware CW selected, break-in
         toggle(h, "unarmed, hardware CW selected")
-        rec = record(h)
+        rec = record(ctx, h)
         if (rec.get(0x20, 0) >> 4) & 1:
-            tok = token_of(h, pairs)
+            tok = token_of(ctx, h, pairs)
             h.write([(TX_MODE_CLASS, 2)])
             st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
             if ctx.eq("armed", None if st is None else st & 0xF, 1):

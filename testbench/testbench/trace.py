@@ -1,5 +1,5 @@
-"""Reading an hw.trace event list (testlist-format v1.2 section 4) against the HIS 85 safe
-state. Only the HIS 85 safe-state table and pin map are used; unknown event kinds are ignored.
+"""Reading an hw.trace event list (testlist-format v1.3 section 4) against the HIS 85 safe
+state ([HIS] at d07627e, gate review 7). Only the HIS 85 safe-state table and pin map are used; unknown event kinds are ignored.
 
 GPL-3.0-or-later, (c) 2026 ON8ST.
 """
@@ -12,7 +12,9 @@ from pathlib import Path
 TR_RX = {"PF4": 1, "PF6": 0, "PC7": 0, "PH11": 0}
 CHAIN_A_LATCH = "PA11"  # SPI1 chain A (TX low-pass bank + T/R), latch
 CHAIN_A_OE = "PA10"  # active low
-ATU_LATCHES = ("PD13", "PG2", "PG5")  # the CS line is the latch
+ATU_LATCHES = ("PD13", "PG2", "PG5")  # the CS line is the latch; inactive high (MEDIUM)
+PD12 = "PD12"  # unknown output: keep low
+USART2_TX = "PD5"  # idle level, never low (CTRL idle, HIS 70)
 DAC_RESET = "PB14"  # active low
 CODEC_RESET = "PB10"
 
@@ -46,8 +48,14 @@ def check_safe(events: list[dict]) -> list[tuple[str, bool, str]]:
                 bad_frames.append(last_spi1)
             last_spi1 = None
     res.append(("chain A bit 7 clear in every latched frame", not bad_frames, _first(bad_frames)))
-    atu = [e for e in events if e.get("kind") == "gpio" and e.get("pin") in ATU_LATCHES]
-    res.append(("ATU latches never toggled (0032)", not atu, _first(atu)))
+    # HIS 85 (d199d33 and later): drive the strobes to the inactive level (high) and never pulse
+    # them. Driving high is allowed; any event at level 0 is an active strobe (a pulse).
+    atu = [e for e in events if e.get("kind") == "gpio" and e.get("pin") in ATU_LATCHES and e.get("level") == 0]
+    res.append(("ATU strobes never active: no level 0 on PD13, PG2, PG5 (0032; HIS 85)", not atu, _first(atu)))
+    pd12 = [e for e in events if e.get("kind") == "gpio" and e.get("pin") == PD12 and e.get("level") == 1]
+    res.append(("PD12 kept low (HIS 85)", not pd12, _first(pd12)))
+    tx = [e for e in events if e.get("kind") == "gpio" and e.get("pin") == USART2_TX and e.get("level") == 0]
+    res.append(("USART2 TX (PD5) never low: CTRL idle (0023; HIS 85)", not tx, _first(tx)))
     codec = [e for e in events if e.get("kind") == "gpio" and e.get("pin") == CODEC_RESET and e.get("level") == 1]
     res.append(("codec held in reset (0031)", not codec, _first(codec)))
     # PA DAC: the word layout per channel is the BU2506 datasheet's, not in the HIS; the bias

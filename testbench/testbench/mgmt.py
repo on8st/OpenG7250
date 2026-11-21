@@ -117,3 +117,12 @@ class Mgmt:
             mac = bytes([mac[0] ^ 1]) + mac[1:]
         r = self.raw(msg + mac, timeout)
         return r[0] if r else None
+
+
+def identify(ctx, c: Mgmt) -> dict[int, bytes]:
+    """IDENTIFY TLVs (Annex M Table M-2), or a failed test."""
+    r = ctx.got(c.req("IDENTIFY"), "IDENTIFY", "no reply on port 7251 within 0.5 s")
+    if r.get("status") != 0:
+        from .core import Missing
+        raise Missing(f"IDENTIFY: status {r.get('status')}")
+    return tlv(r["payload"])

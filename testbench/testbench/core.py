@@ -30,6 +30,11 @@ class Blocked(Exception):
     pass
 
 
+class Missing(Exception):
+    """An expected reply did not come: the test fails (it is a verdict on the endpoint, not a
+    bench error). Raised by Ctx.got() and by the helpers that read replies."""
+
+
 @dataclass
 class Ctx:
     endpoint: dict
@@ -57,9 +62,29 @@ class Ctx:
     def kind(self) -> str:
         return self.endpoint.get("kind", "?")
 
-    def check(self, name: str, ok: bool, detail: str = "") -> bool:
-        self.checks.append({"name": name, "ok": bool(ok), "detail": detail})
+    def check(self, name: str, ok, detail: str = "") -> bool:
+        ok = bool(ok)
+        if not detail:
+            detail = "ok" if ok else "condition not met"
+        self.checks.append({"name": name, "ok": ok, "detail": detail})
         return ok
+
+    def at_least(self, name: str, n: int, k: int = 1, what: str = "packets") -> bool:
+        return self.check(name, n >= k, f"{n} {what}")
+
+    def all_of(self, name: str, items: list, pred) -> bool:
+        """Every item satisfies pred; the detail names the first that does not."""
+        bad = [i for i in items if not pred(i)]
+        return self.check(name, not bad and bool(items),
+                          "nothing received" if not items else
+                          f"all {len(items)} ok" if not bad else f"{len(bad)} of {len(items)} not, first: {bad[0]!r}"[:300])
+
+    def got(self, value, what: str, observed: str = "no reply"):
+        """The reply a test needs; without it the test fails here with `what` and the
+        observation (format v1.3 section 5: a missing reply is a fail, not an error)."""
+        if value is None or value == [] or value == {}:
+            raise Missing(f"{what}: {observed}")
+        return value
 
     def eq(self, name: str, got, want) -> bool:
         return self.check(name, got == want, f"got {fmt(got)}, want {fmt(want)}")
@@ -107,6 +132,13 @@ def run_one(tid: str, ctx: Ctx) -> dict:
         res["status"] = "pass" if ok else "fail"
         if not ctx.checks:
             res["reason"] = "no checks recorded"
+        else:
+            bad = [c for c in ctx.checks if not c["ok"]]
+            if bad:  # the first failed check with what was observed
+                res["reason"] = f"{bad[0]['name']}: {bad[0]['detail']}" + (f" (+{len(bad) - 1} more)" if len(bad) > 1 else "")
+    except Missing as e:
+        ctx.checks.append({"name": str(e).split(":")[0], "ok": False, "detail": str(e)})
+        res.update(status="fail", reason=str(e))
     except Skip as e:
         res.update(status="skip", reason=str(e))
     except Blocked as e:

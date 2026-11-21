@@ -50,7 +50,7 @@ hand-written subset.
   "format": "g7250-testlist",
   "version": 1, "minor": 3,
   "spec":  { "branch": "spec/draft", "commit": "0e075f2" },
-  "his":   { "commit": "9d10e72" },
+  "his":   { "commit": "d07627e" },
   "catalogue": { "commit": "<tb/main commit>", "sha256": "<of catalogue.json>" },
   "defaults": { "timeout_s": 30 },
   "boot": "per-test",
@@ -215,7 +215,9 @@ each safe-state checkpoint of the test reads that file. At the end of the test i
 - no T/R line leaves its RX level;
 - chain A bit 7 is clear in every frame latched into chain A (the last 1-byte SPI1 transfer
   before an edge of latch PA11);
-- the ATU latch lines never toggle (0032);
+- the ATU strobes PD13, PG2, PG5 are only ever driven to their inactive level, high, and never
+  pulsed (no event at level 0; [HIS] HIS 85 from `d199d33`; 0032);
+- PD12 stays low, and USART2 TX (PD5) is never low (CTRL idle; HIS 85, 0023);
 - the codec stays in reset (0031);
 - `dropped` is 0.
 The bias check uses the snapshot's `pa_dac.ch`, because the HIS doesn't give the DAC word layout

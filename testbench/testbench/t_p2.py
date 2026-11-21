@@ -38,7 +38,7 @@ def t_b3_04(ctx):
 def t_b3_reply_bytes(ctx):
     with host(ctx) as h:
         r = h.discover()
-        if not ctx.check("a reply", len(r) == 1):
+        if not ctx.check("a reply", len(r) == 1, f"{len(r)} replies on port 1024 within 0.5 s"):
             return
         d = r[0]
         ctx.eq("payload 60 bytes (B3.3)", len(d), 60)
@@ -49,7 +49,7 @@ def t_b3_reply_bytes(ctx):
         ctx.eq("bytes 24-59 zero", d[24:60], bytes(36))
         ctx.eq("byte 22 endian modes 0", d[22], 0)
         ctx.check("byte 4 not 0xFE/0xFF", d[4] in (2, 3), hex(d[4]))
-        ctx.check("byte 11 not 254/255", d[11] not in (254, 255))
+        ctx.check("byte 11 not 254/255", d[11] not in (254, 255), f"byte 11 = {d[11]}")
 
 
 @test("T-B3-06")
@@ -85,10 +85,10 @@ def t_b3_08(ctx):
 @test("T-B3-12", "T-B3-30")
 def t_b3_12(ctx):
     with host(ctx) as h:
-        d = h.discover()[0]
-        rec = record_of(h.cap_request() or [])
+        d = need_discovery(ctx, h)
+        rec = need_record(ctx, h)
         fw = rec.get(0x08)
-        if not ctx.check("record read", fw is not None):
+        if not ctx.check("record read", fw is not None, "fw_version (0x08) absent" if fw is None else hex(fw)):
             return
         maj, mino = fw >> 24, (fw >> 16) & 0xFF
         ctx.eq("byte 13 = major*10+minor (capped)", d[13], min(maj * 10 + mino, 255))
@@ -98,10 +98,10 @@ def t_b3_12(ctx):
 @test("T-B3-14")
 def t_b3_14(ctx):
     with host(ctx) as h:
-        d = h.discover()[0]
-        rec = record_of(h.cap_request() or [])
-        ctx.eq("byte 20 = num_ddc", d[20], rec.get(0x0E))
-        ctx.eq("one DDC in this version (0004)", d[20], 1)
+        d = need_discovery(ctx, h)
+        ctx.eq("byte 20: one DDC in this version (0004; Table B3-1)", d[20], 1)
+        rec = need_record(ctx, h)
+        ctx.eq("byte 20 = record num_ddc (B4.8)", d[20], rec[0x0E])
 
 
 @test("T-B3-17")
@@ -109,7 +109,7 @@ def t_b3_17(ctx):
     with host(ctx) as h:
         h.send(PORT_DISC, general(b39=0x01))
         r = h.discover()
-        ctx.check("answered, Big-Endian layout", len(r) == 1 and r[0][11] == 200)
+        ctx.check("answered, Big-Endian layout", len(r) == 1 and r[0][11] == 200, f"{len(r)} replies" + (f", byte 11 = {r[0][11]}" if r else ""))
 
 
 @test("T-B3-18")
@@ -131,7 +131,7 @@ def t_b3_20(ctx):
             b = bytearray(264)
             b[4] = cmd
             h.send(PORT_DISC, bytes(b))
-        ctx.eq("no reply to Erase/Program/unknown", h.recv(0.5), [])
+        ctx.eq("no reply to Erase/Program/unknown (datagrams)", len(h.recv(0.5)), 0)
         ctx.eq("still answers discovery", len(h.discover()), 1)
 
 
@@ -139,10 +139,17 @@ def t_b3_20(ctx):
 def t_b3_21(ctx):
     """Firmware rule: nothing answers outside Table B2-1 (B11.9). Over UDP we can only check
     that no datagram comes back; ICMP is not visible to an unprivileged socket."""
+    closed = [1028, 1030, 1036, 1100, 7249, 7252, 50001]
+    if ctx.net.connect:  # v1.3 mapping: only ports the runner maps are reachable
+        closed = [p for p in closed if p in ctx.net.connect]
+        if not closed:
+            raise Skip("radio.connect maps no closed port; to test B11.9 the runner can map "
+                       "closed ports too (for example 1028)")
     with host(ctx) as h:
-        for p in (1028, 1030, 1036, 1100, 7249, 7252, 50001):
+        for p in closed:
             h.send(p, b"\0" * 64)
-        ctx.eq("no datagram from closed ports", h.recv(0.5), [])
+        got = h.recv(0.5)
+        ctx.eq(f"no datagram from closed ports {closed}", [(p, len(d)) for p, d, _ in got], [])
 
 
 @test("T-B3-26")
@@ -153,7 +160,7 @@ def t_b3_26(ctx):
         b[5:11] = bytes.fromhex("0affffffff01")
         b[11:15] = bytes([127, 0, 0, 99])
         h.send(PORT_DISC, bytes(b))
-        ctx.eq("Set IP with another MAC: no reply", h.recv(0.5), [])
+        ctx.eq("Set IP with another MAC: no reply (datagrams)", len(h.recv(0.5)), 0)
         ctx.eq("address unchanged", len(h.discover()), 1)
 
 
@@ -174,7 +181,9 @@ def t_b3_33(ctx):
         raise Skip(f"cannot bind source port 1024 here: {e}")
     with h:
         h.send(PORT_DISC, discovery())
-        ctx.eq("no reply to a discovery from source port 1024", h.recv(0.5), [])
+        ctx.eq("no reply to a discovery from source port 1024 (datagrams)", len(h.recv(0.5)), 0)
+    with host(ctx) as h2:  # liveness: the same request from another port is answered
+        ctx.eq("a discovery from another port is answered", len(h2.discover()), 1)
 
 
 # ---------------- B4 record ----------------
@@ -182,7 +191,7 @@ def t_b3_33(ctx):
 def t_b4_record(ctx):
     with host(ctx) as h:
         pr = h.cap_request()
-        if not ctx.check("record answered in one packet", pr is not None):
+        if not ctx.check("record answered in one packet", pr is not None, "no answer to CAP_REQUEST (with one retry after 1 s)"):
             return
         rec = record_of(pr[1:])
         ctx.eq("echo first", pr[0], (CAP_REQUEST, 1))
@@ -202,7 +211,7 @@ def t_b4_record(ctx):
 def t_b4_04(ctx):
     with host(ctx) as h, host(ctx) as other:
         pr = h.cap_request()
-        ctx.check("answered to its source", pr is not None)
+        ctx.check("answered to its source", pr is not None, "no answer to CAP_REQUEST at the request's source" if pr is None else "answered")
         d = other.discover()
         ctx.eq("no session started (discovery byte 4)", d[0][4] if d else None, 2)
         h.send(PORT_REG, regs([(KEYED_TIMEOUT, 200)]))
@@ -240,11 +249,11 @@ def t_b4_07(ctx):
 @test("T-B4-10")
 def t_b4_10(ctx):
     with host(ctx) as h:
-        rec = record_of(h.cap_request()[1:])
+        rec = need_record(ctx, h)
         n_rx = rec[0x13]
-        ctx.check("unused rx_range pairs zero", all(rec[0x14 + i] == 0 for i in range(2 * n_rx, 8)))
+        ctx.all_of("unused rx_range pairs zero", [(hex(0x14 + i), rec[0x14 + i]) for i in range(2 * n_rx, 8)], lambda x: x[1] == 0)
         n_tx = rec[0x21]
-        ctx.check("unused tx_band entries zero", all(rec[0x22 + i] == 0 for i in range(3 * n_tx, 48)))
+        ctx.all_of("unused tx_band entries zero", [(hex(0x22 + i), rec[0x22 + i]) for i in range(3 * n_tx, 48)], lambda x: x[1] == 0)
         ctx.eq("ddc_rates bits 4, 5 zero (no 768/1536)", rec[0x10] & 0x30, 0)
         ctx.eq("streams bit 2 DDC audio zero", rec[0x0C] & 0x4, 0)
 
@@ -253,18 +262,18 @@ def t_b4_10(ctx):
 def t_b4_11(ctx):
     with host(ctx) as h:
         ans = h.write([(CAP_REQUEST, 2)], 0.5)
-        ctx.check("no record", value(ans, 0x0000) is None)
+        ctx.check("no record", value(ans, 0x0000) is None, "record register 0x00 in the answer" if value(ans, 0x0000) is not None else "no record")
         ctx.check("BAD_VALUE", any(r == "BAD_VALUE" for _, _, r in write_status(ans)), str(write_status(ans)))
 
 
 @test("T-B4-17")
 def t_b4_17(ctx):
     with host(ctx) as h:
-        ctx.check("first answered", h.cap_request() is not None)
+        ctx.check("first answered", h.cap_request(retry=False) is not None, "no answer within 0.5 s")
         time.sleep(0.2)
-        ctx.check("repeat after 200 ms dropped", h.cap_request(0.3, retry=False) is None)
+        ctx.check("repeat after 200 ms dropped", h.cap_request(0.3, retry=False) is None, "answered")
         time.sleep(0.6)
-        ctx.check("repeat after 1 s answered", h.cap_request() is not None)
+        ctx.check("repeat after 1 s answered", h.cap_request(retry=False) is not None, "no answer within 0.5 s")
 
 
 # ---------------- B5 session ----------------
@@ -287,12 +296,15 @@ def t_b5_01(ctx):
 def t_b5_02(ctx):
     with host(ctx) as h:
         h.start()
+        # liveness first: a radio that answers nothing would pass the negative check below
+        if not ctx.at_least("session started (status packets)", len(h.recv(0.2, PORT_DDC)), what="status packets in 0.2 s"):
+            return
         for _ in range(15):
             time.sleep(0.1)
             h.send(PORT_REG, regs([(KEYED_TIMEOUT, 500)]))
         h.drain(0.05)
         got = h.recv(0.3, PORT_DDC)
-        ctx.eq("memory-mapped packets alone do not keep the session", len(got), 0)
+        ctx.eq("memory-mapped packets alone do not keep the session (status packets after 1.5 s)", len(got), 0)
 
 
 @test("T-B5-05")
@@ -315,7 +327,7 @@ def t_b5_10(ctx):
             time.sleep(0.9)
             h.keepalive()
         h.drain(0.01)
-        ctx.check("session kept with C&C every 900 ms", len(h.recv(0.2, PORT_DDC)) > 0)
+        ctx.at_least("session kept with C&C every 900 ms", len(h.recv(0.2, PORT_DDC)), what="status packets in 0.2 s")
         t0 = time.monotonic()
         got = h.recv(1.5, PORT_DDC)
         last = max((t for _, _, t in got), default=t0)
@@ -338,7 +350,10 @@ def t_b6_01(ctx):
     with host(ctx) as h:
         h.send(PORT_DISC, general())
         h.send(PORT_DDC, ddc_specific(192))
-        ctx.eq("no DDC0 before run", h.recv(0.3, PORT_DDC0), [])
+        ctx.eq("no DDC0 before run (packets in 0.3 s)", len(h.recv(0.3, PORT_DDC0)), 0)
+        h.keepalive()  # liveness: the same set-up with run does stream
+        ctx.at_least("DDC0 after run", len(h.recv(0.3, PORT_DDC0)), what="DDC0 packets in 0.3 s")
+        idle(h)
 
 
 @test("T-B6-02", "T-B6-03", "T-B6-04", "T-B6-05", "T-B6-25")
@@ -351,12 +366,12 @@ def t_b6_stream(ctx):
         if not ctx.check("DDC0 packets from port 1035 to the session socket", len(ddc) > 50, f"{len(ddc)}"):
             idle(h)
             return
-        ctx.check("every payload 1444 bytes", all(len(d) == 1444 for d, _ in ddc))
-        ctx.check("bytes 12-13 = 24, 14-15 = 238",
-                  all(struct.unpack_from(">HH", d, 12) == (24, 238) for d, _ in ddc))
+        ctx.all_of("every payload 1444 bytes", [len(d) for d, _ in ddc], lambda n: n == 1444)
+        ctx.all_of("bytes 12-13 = 24, 14-15 = 238", [struct.unpack_from(">HH", d, 12) for d, _ in ddc],
+                   lambda x: x == (24, 238))
         seqs = [struct.unpack_from(">I", d)[0] for d, _ in ddc]
         ctx.eq("sequence starts at 0", seqs[0], 0)
-        ctx.check("increments by one", all(b - a == 1 for a, b in zip(seqs, seqs[1:])))
+        ctx.all_of("increments by one", list(zip(seqs, seqs[1:])), lambda x: x[1] - x[0] == 1)
         ports = {p for p, _, _ in got}
         ctx.check("only ports of B2.4a", ports <= {1025, 1035, 7250}, str(sorted(ports)))
         idle(h)
@@ -397,7 +412,7 @@ def t_b6_10(ctx):
     with host(ctx) as h:
         h.start(192)
         h.recv(0.1)
-        rec = record_of((h.cap_request() or [None])[1:])
+        rec = need_record(ctx, h)
         mask = rec.get(0x10, 0)
         bits = {48: 0, 96: 1, 192: 2, 384: 3}
         rates = [r for r, b in bits.items() if not mask >> b & 1] + [768, 1536, 100]
@@ -405,12 +420,12 @@ def t_b6_10(ctx):
             h.send(PORT_DDC, ddc_specific(rate))
             ss = _stream_status(h)
             h.drain(0.05)
-            ctx.check(f"rate {rate}: DDC0 stops", len(h.recv(0.15, PORT_DDC0)) == 0)
+            ctx.eq(f"rate {rate}: DDC0 stops (packets in 0.15 s)", len(h.recv(0.15, PORT_DDC0)), 0)
             ctx.eq(f"rate {rate}: reason 3", None if ss is None else ss & 0x7F, 3)
             h.keepalive()
         h.send(PORT_DDC, ddc_specific(96))
         h.drain(0.05)
-        ctx.check("valid rate resumes", len(h.recv(0.2, PORT_DDC0)) > 0)
+        ctx.at_least("valid rate resumes", len(h.recv(0.2, PORT_DDC0)), what="DDC0 packets in 0.2 s")
         idle(h)
 
 
@@ -423,7 +438,7 @@ def t_b6_13(ctx):
         h.drain(0.05)
         ctx.eq("enable bit clear stops DDC0", len(h.recv(0.2, PORT_DDC0)), 0)
         h.send(PORT_DDC, ddc_specific(192))
-        ctx.check("set resumes", len(h.recv(0.2, PORT_DDC0)) > 0)
+        ctx.at_least("set resumes", len(h.recv(0.2, PORT_DDC0)), what="DDC0 packets in 0.2 s")
         idle(h)
 
 
@@ -440,7 +455,7 @@ def t_b6_refusals(ctx):
             act(h)
             ss = _stream_status(h)
             h.drain(0.05)
-            ctx.check(f"{name}: DDC0 stops", len(h.recv(0.15, PORT_DDC0)) == 0)
+            ctx.eq(f"{name}: DDC0 stops (packets in 0.15 s)", len(h.recv(0.15, PORT_DDC0)), 0)
             ctx.eq(f"{name}: reason", None if ss is None else ss & 0x7F, reason)
             idle(h)
 
@@ -451,10 +466,10 @@ def t_b6_26(ctx):
         h.send(PORT_DISC, general())
         h.keepalive()
         got = h.recv(0.3)
-        ctx.check("status packets run", any(p == PORT_DDC for p, _, _ in got))
-        ctx.check("no DDC0 without a DDC-specific packet", not any(p == PORT_DDC0 for p, _, _ in got))
+        ctx.at_least("status packets run", sum(p == PORT_DDC for p, _, _ in got), what="status packets in 0.3 s")
+        ctx.check("no DDC0 without a DDC-specific packet", not any(p == PORT_DDC0 for p, _, _ in got), f"{sum(p == PORT_DDC0 for p, _, _ in got)} DDC0 packets")
         h.send(PORT_DDC, ddc_specific(192))
-        ctx.check("DDC-specific starts DDC0", len(h.recv(0.2, PORT_DDC0)) > 0)
+        ctx.at_least("DDC-specific starts DDC0", len(h.recv(0.2, PORT_DDC0)), what="DDC0 packets in 0.2 s")
         idle(h)
 
 
@@ -465,7 +480,7 @@ def t_b7_03(ctx):
         h.send(PORT_DDC, ddc_specific(192))
         h.keepalive()
         got = h.recv(0.4)
-        ctx.check("DDC0 still from 1035", any(p == PORT_DDC0 for p, _, _ in got))
+        ctx.at_least("DDC0 still from 1035", sum(p == PORT_DDC0 for p, _, _ in got), what="DDC0 packets from 1035 in 0.4 s")
         ls = None
         for p, d, _ in got:
             if p == PORT_REG:
@@ -516,7 +531,7 @@ def t_b8_06(ctx):
         b.send(PORT_REG, regs([(KEYED_TIMEOUT, 200)]))
         got = b.recv(0.08, PORT_REG)
         ans = sum((parse_regs(d) for _, d, _ in got), [])
-        ctx.check("NOT_OWNER to the writer", any(r == "NOT_OWNER" for _, _, r in write_status(ans)))
+        ctx.check("NOT_OWNER to the writer", any(r == "NOT_OWNER" for _, _, r in write_status(ans)), f"WRITE_STATUS seen: {write_status(ans)}")
         ctx.eq("one answer for two writes within 100 ms", len(got), 1)
         d = b.discover()
         ctx.eq("no takeover", d[0][4] if d else None, 3)
@@ -532,7 +547,9 @@ def t_b8_07(ctx):
         h.start()
         h.drain(0.2)
         h.send(PORT_REG, regs([(0xFFFF, 5), (0x0000, 0)]) + b"\x02\x05\x00")
-        ctx.eq("padding and a trailing incomplete pair not answered", h.recv(0.2, PORT_REG), [])
+        ctx.eq("padding and a trailing incomplete pair not answered (register packets)", len(h.recv(0.2, PORT_REG)), 0)
+        # liveness: a real pair in the same session is answered
+        ctx.eq("a real write is answered", value(h.write([(KEYED_TIMEOUT, 400)]), KEYED_TIMEOUT), 400)
         idle(h)
 
 
@@ -541,7 +558,7 @@ def t_b8_08(ctx):
     with host(ctx) as h, host(ctx) as dest:
         h.start(reg_dest=dest.port)
         got_dest = dest.recv(0.4, PORT_REG)
-        ctx.check("register packets go to General bytes 31-32", len(got_dest) > 0)
+        ctx.check("register packets go to General bytes 31-32", len(got_dest) > 0, f"{len(got_dest)} register packets at port {dest.port} within 0.4 s")
         idle(h)
 
 

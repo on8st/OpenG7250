@@ -6,7 +6,7 @@ import struct
 import time
 
 from .core import Ctx, Skip, test
-from .mgmt import CMD, Mgmt, build, tlv
+from .mgmt import CMD, Mgmt, build, identify, tlv
 
 
 def m(ctx: Ctx) -> Mgmt:
@@ -43,17 +43,20 @@ def t_a1_43(ctx):
     with m(ctx) as c:
         ctx.eq("type 2 (reply): no answer", c.raw(build(1, typ=2)), [])
         ctx.eq("type 2, 14 bytes: no answer", c.raw(build(1, typ=2)[:14]), [])
+        r = c.req("IDENTIFY")  # liveness: the same port answers a request
+        ctx.check("a type 1 request is answered", r is not None, "no reply on port 7251 within 0.5 s" if r is None else f"status {r['status']}")
 
 
 @test("T-A1-01")
 def t_a1_01(ctx):
     with m(ctx) as c:
         r = c.req("IDENTIFY")
-        if not ctx.check("identification answered", r is not None and r["status"] == 0):
+        if not ctx.check("identification answered", r is not None and r["status"] == 0,
+                         "no reply on port 7251 within 0.5 s" if r is None else f"status {r['status']}"):
             return
         t = tlv(r["payload"])
         ctx.eq("model", t.get(1), b"G7250")
-        ctx.check("MAC present (6 bytes)", len(t.get(2, b"")) == 6)
+        ctx.check("MAC present (6 bytes)", len(t.get(2, b"")) == 6, f"tag 2: {t.get(2)!r}")
 
 
 @test("T-A1-53")
@@ -66,7 +69,7 @@ def t_a1_53(ctx):
         for cmd in ("RETURN_TO_STOCK", "ENTER_VENDOR_RECOVERY"):
             r = c.authed(cmd, s)
             ctx.eq(f"{cmd}: 56", r["status"] if r else None, 56)
-        t = tlv(c.req("IDENTIFY")["payload"])
+        t = identify(ctx, c)
         ctx.eq("flags: no stock image, no vendor recovery", t.get(8), b"\x00")
         c.authed("END_WRITE_SESSION", s)
 
@@ -75,7 +78,7 @@ def t_a1_53(ctx):
 def t_a1_secret(ctx):
     """Claims the first-secret window, so it runs only where the window is open (fresh model)."""
     with m(ctx) as c, m(ctx) as c2:
-        t = tlv(c.req("IDENTIFY")["payload"])
+        t = identify(ctx, c)
         if t.get(11) != b"\x00" or not t.get(12, b"\0")[0]:
             raise Skip("first-secret window not open (secret set or window used)")
         s = os.urandom(32)
@@ -83,7 +86,7 @@ def t_a1_secret(ctx):
         ctx.eq("first secret set", r["status"] if r else None, 0)
         r = c2.req("SET_FIRST_SECRET", os.urandom(32))
         ctx.eq("second claim: 36", r["status"] if r else None, 36)
-        t = tlv(c.req("IDENTIFY")["payload"])
+        t = identify(ctx, c)
         ctx.eq("identify: secret set", t.get(11), b"\x01")
         ctx.eq("identify: window closed", t.get(12, b"\1")[0], 0)
         # T-A1-03: without valid HMAC refused
@@ -109,7 +112,7 @@ def t_a1_secret(ctx):
         masked = bytes(a ^ b for a, b in zip(new, mask))
         r = c.authed("CHANGE_SECRET", s, masked, challenge=ch)
         ctx.eq("CHANGE_SECRET: 0", r["status"] if r else None, 0)
-        ctx.check("new secret not in the datagram", new not in masked)
+        ctx.check("new secret not in the datagram", new not in masked, "masked payload contains the secret" if new in masked else "absent")
         r = c.authed("END_WRITE_SESSION", new)
         ctx.eq("new secret works", r["status"] if r else None, 0)
         ctx.endpoint.setdefault("_learned", {})["secret"] = new.hex()
@@ -122,7 +125,9 @@ def t_a1_14(ctx):
         r1 = c.raw(build(CMD["GET_CHALLENGE"], b"", rid))
         r2 = c.raw(build(CMD["GET_CHALLENGE"], b"", rid))
         ctx.check("repeat answered from the stored reply (same challenge)",
-                  r1 and r2 and r1[0]["payload"] == r2[0]["payload"])
+                  r1 and r2 and r1[0]["payload"] == r2[0]["payload"],
+                  f"replies: first {'none' if not r1 else 'one'}, repeat {'none' if not r2 else 'one'}"
+                  + ("" if not (r1 and r2) else ", challenges equal" if r1[0]["payload"] == r2[0]["payload"] else ", challenges differ"))
         r3 = c.raw(build(CMD["IDENTIFY"], b"", rid))
         ctx.eq("same id, other command: executed", r3[0]["cmd"] if r3 else None, CMD["IDENTIFY"])
 
@@ -150,11 +155,11 @@ def t_a2_01(ctx):
     with m(ctx) as c, Host(ctx.net) as h:
         h.start()
         h.drain(0.1)
-        t = tlv(c.req("IDENTIFY")["payload"])
+        t = identify(ctx, c)
         ctx.eq("active level 1", t.get(13), b"\x01")
         owner = t.get(14, b"")
         ctx.eq("owner port", struct.unpack(">H", owner[4:6])[0] if len(owner) == 6 else None, h.port)
-        rec = {a: v for a, v in (h.cap_request() or [])[1:]}
+        rec = need_record(ctx, h)
         ctx.eq("record level: active level 1", (rec.get(0x0B, 0) >> 4) & 0xF, 1)
         h.stop()
 
@@ -176,7 +181,8 @@ def t_a2_05(ctx):
 # ---------------- calibration (A1.12, Annex M, Annex P) ----------------
 from .mgmt import FREEZE_SET, calibration_payload, config_tlv  # noqa: E402
 from .p2 import (ARM_MAGIC, LIMIT_SWR, LIMIT_PA_TEMP, PORT_REG, TX_ARM, TX_ARM_STATE,  # noqa: E402
-                 TX_ARM_TOKEN, TX_MODE_CLASS, TX_STATE, Host, parse_regs, value, write_status)
+                 TX_ARM_TOKEN, TX_MODE_CLASS, TX_STATE, Host, need_record, need_token, parse_regs, value,
+                 write_status)
 
 
 def secret_of(ctx) -> bytes:
@@ -201,7 +207,7 @@ def simulated_set() -> bytes:
 def arm_once(ctx, h: Host) -> int | None:
     h.start(pa=True)
     pairs = sum((parse_regs(d) for _, d, _ in h.recv(0.3, PORT_REG)), [])
-    tok = value(pairs, TX_ARM_TOKEN) or value(h.write([(TX_ARM_TOKEN, 0)]), TX_ARM_TOKEN)
+    tok = need_token(ctx, h, pairs)
     h.write([(TX_MODE_CLASS, 1)])
     return value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
 
@@ -224,7 +230,7 @@ def t_a1_63(ctx):
         ctx.eq("reply: TX calibrated", r["payload"][32:33] if r else None, b"\x01")
         set_id = r["payload"][:32] if r else b""
         ctx.eq("record tx bit 4 = 1 from the next session", tx_bit4(h), 1)
-        t = tlv(c.req("IDENTIFY")["payload"])
+        t = identify(ctx, c)
         ctx.eq("IDENTIFY tag 20 (I-7)", t.get(20), b"\x01")
         ctx.eq("IDENTIFY tag 21 set id", t.get(21, b"")[:32], set_id)
         st = arm_once(ctx, h)
@@ -280,7 +286,7 @@ def t_a1_65(ctx):
         ctx.eq("region 1: 48", r["status"] if r else None, 48)
         r = c.authed("SET_CONFIG", s, config_tlv((6, b"\x00")))
         ctx.eq("region 0: 0", r["status"] if r else None, 0)
-        rec = {a: v for a, v in (h.cap_request() or [])[1:]}
+        rec = need_record(ctx, h)
         bands = [(rec[0x22 + 3 * i], rec[0x23 + 3 * i]) for i in range(rec.get(0x21, 0))]
         ctx.eq("tx_band entries = Table A3-0", bands, [(round(a * 1e6), round(b * 1e6)) for a, b in ranges])
         r = c.authed("SET_CALIBRATION", s, simulated_set())

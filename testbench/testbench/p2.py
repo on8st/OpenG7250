@@ -210,8 +210,36 @@ class Host:
         return None
 
 
-def record_of(pairs) -> dict[int, int]:
-    return {a: v for a, v in pairs if a < 0x0100}
+class Record(dict):
+    """Capability record by offset; an absent register is a failed test, not a KeyError."""
+
+    def __missing__(self, k):
+        from .core import Missing
+        raise Missing(f"record register 0x{k:02X}: not in the record received ({len(self)} registers)")
+
+
+def record_of(pairs) -> Record:
+    return Record({a: v for a, v in (pairs or []) if a < 0x0100})
+
+
+def need_record(ctx, h: "Host") -> Record:
+    """The capability record (B4.4), or a failed test that says so."""
+    pr = ctx.got(h.cap_request(), "capability record", "no answer to CAP_REQUEST (with one retry after 1 s)")
+    return record_of(pr[1:])
+
+
+def need_discovery(ctx, h: "Host", timeout: float = 0.5) -> bytes:
+    """Exactly one discovery reply's payload, or a failed test."""
+    r = ctx.got(h.discover(timeout), "discovery reply", f"no reply on port 1024 within {timeout} s")
+    return r[0]
+
+
+def need_token(ctx, h: "Host", pairs=None) -> int:
+    """TX_ARM_TOKEN from the session-start push, else read by a write (B8.4a)."""
+    t = value(pairs or [], TX_ARM_TOKEN)
+    if t is None:
+        t = value(h.write([(TX_ARM_TOKEN, 0)]), TX_ARM_TOKEN)
+    return ctx.got(t, "TX_ARM_TOKEN", "no session-start push and no answer to a write of 0x0200")
 
 
 def value(pairs, addr):

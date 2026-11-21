@@ -5,7 +5,7 @@ An executable model of a G7250 running the new firmware, built from the specific
 tested before and alongside the real firmware.
 
 - Source of truth: `product/spec/` (branch `spec/draft` at `0e075f2`: parts A and B, Tables
-  A1-1 to A1-4, A3-0, B2-1, B4-1, B8-2, B8-3, Annex M, Annex P) and the cleared HIS at `9d10e72`
+  A1-1 to A1-4, A3-0, B2-1, B4-1, B8-2, B8-3, Annex M, Annex P) and the cleared HIS at `d07627e`
   (HIS 85 safe state). Never the reverse-engineering side.
 - Language: Rust, no dependencies (SHA-256, HMAC-SHA256 and CRC-32 are in `src/crypto.rs`,
   checked against FIPS 180-4, RFC 4231 and the CRC-32 check value). Chosen by ON8ST on

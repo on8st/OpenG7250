@@ -46,8 +46,14 @@ class Net:
         h = self.hosts[idx]
         ip = h.get("bind", h["ip"])
         lo_hi = h.get("ports")
+        if port and lo_hi and not lo_hi[0] <= port <= lo_hi[1]:
+            raise Skip(f"source port {port} is outside hosts[{idx}].ports {lo_hi}: not mapped by the runner")
         if port or not lo_hi:
-            s.bind((ip, port))
+            try:
+                s.bind((ip, port))
+            except OSError as e:
+                where = "hosts[%d].bind" % idx if "bind" in h else "hosts[%d].ip (no bind given)" % idx
+                raise Skip(f"cannot bind {ip}:{port} from {where}: {e}")
             return s.getsockname()[1]
         for p in range(lo_hi[0], lo_hi[1] + 1):
             try:
@@ -59,6 +65,8 @@ class Net:
 
     def dest(self, port: int, kind: str = "unicast") -> tuple[str, int]:
         if kind == "unicast":
+            if self.connect and port not in self.connect:
+                raise Skip(f"radio port {port} not in radio.connect")
             return self.connect.get(port, (self.radio_ip, port))
         if kind in self.send_to and port in self.send_to[kind]:
             return self.send_to[kind][port]
