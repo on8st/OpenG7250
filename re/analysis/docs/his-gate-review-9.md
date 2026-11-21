@@ -104,3 +104,25 @@ reviews 1–8, as README.md does.
 
 **CHANGES**: S1 only. Applying (b) is enough to clear on a diff check of
 the two sentences and the 90 row; (a) is better.
+
+## S1 diff check (diff 7647425..ec88e75: his, ROADMAP)
+
+| Item | Result |
+| --- | --- |
+| S1 (10) | Applied as option (b). Both statements are MEDIUM, with the citations marked "not checked", and the measurement in 90 is named as the confirmation. |
+| S1 (90) | The row says "MEDIUM, citation not checked", so it is no stronger than 10. OK. |
+| Nit (ROADMAP) | Fixed: it points to review 9 and reviews 1–8. |
+
+No other change, and no stock detail is added.
+
+One remark, which needs no change. The 90 measurement confirms the end
+result: the pattern survives reset plus the stage before 0x08020000. It
+cannot tell the hardware's retention apart from that stage leaving the range
+alone. A survived pattern confirms both. A lost pattern does not by itself
+show which of the two caused it. A later reader of the result should keep
+that in mind; it does not have to be in the HIS now.
+
+### Verdict (review 9, final)
+
+**CLEARED** at 72591aa (his/next; ec88e75 adds only the cherry-picked
+review record).
