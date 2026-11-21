@@ -1,6 +1,7 @@
 # 0049 — Link-local probe on socket 0, defence by giving the address up
 
-- Status: proposed (to the repository owner, ON8ST); answers firmware questions of 2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers firmware
+  questions of 2026-11-21
 - Date: 2026-11-21
 - Amended by 0057 (start-up bound 17 s; MACRAW failure).
 - Builds on: 0008, 0017 (socket budget), 0035, 0041, 0048; [RFC3927], [RFC2131], [CH394].
@@ -11,7 +12,7 @@
 when it sees another device with its address, without saying how or when. All eight sockets are
 in use.
 
-## Decision (proposed)
+## Decision
 
 1. **Q1** Yes: when a link-local address is chosen while running (after a lease end, DHCPNAK or
    conflict, each an address change of A1.11a that ends the session anyway), the probe runs on

@@ -138,7 +138,7 @@ their values need the radio and are named in Annex P, so the radio rejects every
 stays in bypass until its values are measured (0032). Two fault classes: host-clearable and
 reset-only. (0007, 0015)
 
-Added by the rc1 review (0022, proposed): while keyed, antenna, ATU, filter, preamp and
+Added by the rc1 review (0022): while keyed, antenna, ATU, filter, preamp and
 attenuator relays never switch, from any source; a TX-frequency change that leaves the range
 or needs another RF-path state unkeys first. A takeover is an ordered procedure: the old
 session ends (unkey, disarm, mode class and keyed timeout reset, limits back to the
@@ -149,7 +149,7 @@ unkey. Every fault code has a class; a class 2 fault can only be cleared by a re
 
 ### 4.2a Added up to spec rc4
 
-From the later review rounds (0022 §33–§88, 0021 §27–§47, proposed):
+From the later review rounds (0022 §33–§88, 0021 §27–§47):
 
 - **Keying.** The radio keys only on a new request edge when every condition holds; a refused
   request is never latched. At every key the RF path (filters, band relays, ATU, antenna) is
@@ -220,7 +220,7 @@ the Annex P values are measured (0036). The firmware is written in Rust on Embas
 
 AetherSDR work runs alongside: the G7250 backend receives from M1 and transmits from M4; it is
 written in C++/Qt by a separate product-side session after firmware milestone F2 and offered
-upstream through the RFC (0038, proposed).
+upstream through the RFC (0038).
 
 ## 7. Out of scope
 
@@ -252,7 +252,7 @@ upstream through the RFC (0038, proposed).
 
 - **Firmware management tool.** Firmware is managed from the host: the CLI `g7250ctl`
   (`product/tools/g7250ctl/`, Rust, sharing the protocol crate with the firmware; the
-  reference model is an independent Rust implementation, 0037 proposed) is the reference
+  reference model is an independent Rust implementation, 0037) is the reference
   implementation of the management protocol; AetherSDR's firmware page follows on the same
   protocol (0026). The first install from stock goes once through the controller (0028).
 
@@ -277,6 +277,7 @@ upstream through the RFC (0038, proposed).
 - **Sources still to read.** The TCI 2.1 PDF and its terms of use (before part C), the
   Radioddity product page, the HDSDR network tutorial and the Temporarily Offline video
   (`sources.md`).
-- **Decisions.** 0001–0032 and 0036 are accepted; 0033–0035, 0037 and 0038 are proposed
+- **Decisions.** 0001–0059 and 0061 are accepted (0033–0035 and 0037–0059 on
+  2026-11-21); 0060 (DDC0 frame values from the factory calibration) is proposed
   (`product-handover.md`). What remains for the product are the values of Annex P, which
   need the radio.

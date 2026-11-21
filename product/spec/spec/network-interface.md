@@ -384,7 +384,13 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   Whether the vendor bootloader itself uses a sector of the application area as a staging
   area (sector 6 is suspected) is an open check of [HIS] HIS 15 rule 5, settled by the drill
   F1 (P-SYS-5); the slot layout is a firmware design choice that MUST take its answer into
-  account.
+  account. **Store location** (0061): the non-volatile store of this firmware (configuration
+  C-4, calibration set A1.12, boot record, boot counter B10.2 item 5) is kept in flash sectors
+  6 and 7 (the top 256 KiB of the main flash, [HIS] HIS 15), used in turn so that a compaction never erases the only
+  copy. F1 checks sector 6 (P-SYS-5): if the vendor bootloader only uses it as staging during
+  a vendor update, the store there is overwritten by an update that replaces this firmware
+  anyway, which is acceptable (0024 R5); if it acts on sector 6 at every start, the store
+  location is decided again.
 - An image older than the running one MUST be refused unless the request carries an explicit
   "downgrade" flag; a downgrade is logged; configuration the older image does not understand
   is kept but not used, and the reply says so (U-8; 0008, Resolved 3).
@@ -744,7 +750,7 @@ form its calibration set. It is written over this channel only.
    status 58 during a firmware update. A set is validated as a whole: an unknown parameter id,
    a value that does not decode, or a value beyond the hardware rating gets status 48 and
    changes nothing.
-2. The set is stored in this firmware's own flash with a check value (A1.6 C-4); it is kept by
+2. The set is stored in this firmware's own flash (the store of A1.8, "Store location") with a check value (A1.6 C-4); it is kept by
    `FACTORY_RESET` (Table A1-4) and by updates of this firmware, and lost by a return to stock
    (A1.8a item 3), so a host SHOULD read and keep it before one. Every write is logged with its
    id, date and source (A1.7).
@@ -2863,7 +2869,7 @@ B10.2 **Arm handshake** (0007, Decision 1, option 1C):
    every token from it, so that no token of one boot repeats the last token of the boot before;
    a random part from the source of A1.10 MAY be added where HIS-20 gives one (0022 §73 item
    4). The boot counter lives in the same non-volatile store as the configuration and the
-   calibration set (A1.6 C-4, A1.12); a firmware without that store MUST keep record `tx`
+   calibration set (A1.6 C-4, A1.12; A1.8 "Store location"); a firmware without that store MUST keep record `tx`
    bit 4 = 0, so that no arm can be accepted (0039). A correct arm write
    while already armed with the same token is a no-op: it is answered and does not raise the
    generation (0020 §7).
@@ -3513,6 +3519,18 @@ FPGA configuration frame) is set (B6.1; 0042), and once it is, the receive front
 P-RF-1 and P-RF-5: until those are set, reception may be degraded or, if no chain B frame is
 known, unavailable; a host sees this as a weak or silent DDC0 stream, not as an error (B6).
 
+**P-RX-2 route** (0060). The values of P-RX-2 are taken from the unit's factory calibration:
+the 0x01 frames the factory firmware writes in receive on that unit, at every rate this
+firmware offers and at two or more receive frequencies, captured on PE0–PE10 with passive
+probes under the signal-generator rule ([HIS] HIS 90), or read from the read-only EEPROM once
+the HIS describes where they are kept ([HIS] HIS 15 rule 3; HIS-02). A byte that changes with
+a setting other than rate and frequency is not reused until its dependence is known; a rate
+without a captured frame is not offered. P-RX-2 counts as set only after the confirmation of
+T-B6-28 on that unit (no transmit when the frame is written; tuning word and frequency; I/Q
+order and spectral inversion; level per rate; repeat after a power cycle), and is written
+into that unit's calibration set (A1.12) only with values that passed it. Until then the
+freeze rule and the DDC0 gate of B6.1 apply unchanged.
+
 Table P-1 — Pending hardware parameters
 
 | Id | Parameter | Used in | HIS | Safe placeholder until set |
@@ -3543,13 +3561,13 @@ Table P-1 — Pending hardware parameters
 | P-SYS-2 | Reset cause (power-on, software, watchdog), and whether the log survives a warm reset | A1.7, Table B8-3 `WDT_RESET_AT_START`, Annex M tag 17 | HIS-13, HIS-18 | reset cause reported as 0 (unknown); the log is lost at every reset |
 | P-SYS-3 | Power-up path without the controller (HIS 20 H1/H2) | part A scope (0029) | HIS-17 | none; observation T0-P2 |
 | P-SYS-4 | Behaviour of the stock controller's panel with a silent main unit | part A scope (0023) | HIS-17 | CTRL idle ([HIS] HIS 70) |
-| P-SYS-5 | Drill F1: the vendor bootloader starts an image of this firmware, and the vendor path installs the stock firmware into an empty application area; whether the vendor bootloader uses an application sector as staging ([HIS] HIS 15 rule 5) | A1.8 (slot layout), A1.8a items 3, 9 (0028) | HIS-19 | no first install before F1; foreign `UPDATE_BEGIN` gets status 56 |
+| P-SYS-5 | Drill F1: the vendor bootloader starts an image of this firmware, and the vendor path installs the stock firmware into an empty application area; whether the vendor bootloader uses an application sector as staging, sector 6 in particular, which holds half of the store ([HIS] HIS 15 rule 5) | A1.8 (slot layout, store location; 0061), A1.8a items 3, 9 (0028) | HIS-19 | no first install before F1; foreign `UPDATE_BEGIN` gets status 56 |
 | P-SYS-6 | Power draw in idle, for a later standby (0029) | part A scope | — | quiet idle only |
 | P-SYS-7 | Start mode of the independent watchdog (IWDG1_SW option byte, [HIS] HIS 10, HIS 90) | A1.8a item 3 (installer), firmware | HIS-13 | the firmware and the installer service the watchdog whenever it may run |
 | P-SYS-8 | SEND and TUNER interfaces on the main unit: whether and how the firmware drives or reads them | A3.6, A3.7, B4.8 `atu` bit 4, `regmap_groups` bit 7 | HIS-09 | released (inactive) and not offered |
 | P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`), [HIS] HIS 10, HIS 90 (`72591aa`: a system reset does not clear SRAM and AXI SRAM has a 64-bit ECC word, both MEDIUM; whether the stage before 0x08020000 writes the firmware's region 0x2401FFE0–0x2401FFFF is not known). Radio check: write a pattern, then a software reset (`RESTART`) and a watchdog reset, and read it back in the boot stage | A3.5 "Counters", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters are kept as far as the hardware keeps them, and nothing relies on them |
 | P-RX-1 | Physical receive paths behind the two receive tuning words ([HIS] HIS 80) | B2, B3, 0004 | HIS-02 | one DDC |
-| P-RX-2 | FPGA configuration frame (command 0x01, [HIS] HIS 80): meaning and safe values of the status byte 0 and of bytes 9–18 (per-rate calibration among them), position of the spectral-inversion flag; which tuning word (offset 1 or 5) is DDC0; I/Q order of the 0x04 samples; bus set-up, strobe width and turnaround | B6.1, B6.7, B4.8 `streams` | HIS-01, HIS-02 | DDC0 not offered (`streams` bit 0 = 0, `STREAM_STATUS` reason 2); no configuration frame written outside the A3.6 safe state |
+| P-RX-2 | FPGA configuration frame (command 0x01, [HIS] HIS 80): meaning and safe values of the status byte 0 and of bytes 9–18 (per-rate calibration among them), position of the spectral-inversion flag; which tuning word (offset 1 or 5) is DDC0; I/Q order of the 0x04 samples; bus set-up, strobe width and turnaround. Set from the unit's factory calibration, confirmed on the radio ("P-RX-2 route" below; 0060). Encoding: flags (u8: bit 0 I and Q swapped, bit 1 spectrum inverted), tuning-word offset (u8: 1 or 5), then per offered rate: rate index (u8), byte 0 (u8), bytes 9–18 (10 bytes) | B6.1, B6.7, B4.8 `streams` | HIS-01, HIS-02 | DDC0 not offered (`streams` bit 0 = 0, `STREAM_STATUS` reason 2); no configuration frame written outside the A3.6 safe state |
 | P-TX-1 | The third tuning word as the transmit word ([HIS] HIS 80, HYPOTHESIS) | B10 (firmware) | HIS-02 | not applicable while TX is disabled |
 | P-L2-1 | Level 2: receiver bandwidth for `IF_LIMITS`, TCI `KEYER` jitter budget | part C C3, C4 | HIS-01, G6 | level 2 not offered before G6 |
 | P-L2-2 | Level 2: stream budget and socket buffer split | part C C6 | HIS-14, HIS-18, G6 | level 2 not offered before G6 |
@@ -3924,6 +3942,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B6-25 | Each stream comes from its local port of B2.4a. |
 | T-B6-26 | A run bit with no DDC-specific packet from that host sends High Priority status but no DDC0 I&Q, `STREAM_STATUS` DDC0 reason 1; a DDC-specific packet with byte 7 bit [0] set then starts DDC0 (B5.2). |
 | T-B6-27 | Before P-RX-2 is set: record `streams` bit 0 = 0; a session that enables DDC0 gets `STREAM_STATUS` DDC0 not running with reason 2 and no DDC0 packets; discovery, `CAP_REQUEST` and the management channel answer as usual; with P-RX-2 set (reference model) DDC0 runs (B6.1; 0042). |
+| T-B6-28 | On the radio, before P-RX-2 counts as set, with a test build, the RF section in the A3.6 safe state, a dummy load on both antenna ports and the generator under the signal-generator rule ([HIS] HIS 90), at every offered rate with the frame values taken from the factory calibration: writing the frame keys nothing (no forward power above `P_rf_off`, SEND released); a tone at f₀ + Δ with DDC0 tuned to f₀ appears at +Δ within 10 Hz + 1 ppm; with the P-RX-2 flags applied, f₀ + Δ appears above the centre and f₀ − Δ below it, each image at least 30 dB down; the same tone gives the same level within 1 dB at every rate; the results repeat after a power cycle (Annex P "P-RX-2 route"; 0060). |
 
 ### Field table and register map (B7, B8)
 

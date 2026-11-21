@@ -1,7 +1,7 @@
 # 0057 — Link-local without MACRAW, and the start-up bound corrected to 17 s
 
-- Status: proposed (to the repository owner, ON8ST); answers two firmware items, 2026-11-21
-  (b6f9e11)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers two firmware
+  items, 2026-11-21 (b6f9e11)
 - Date: 2026-11-21
 - Amends: 0048 (15 s → 17 s), 0049.
 
@@ -13,7 +13,7 @@
    By the RFC 3927 section 9 constants the claim with both announcements takes up to 9 s, so
    6 s of DHCP plus the claim reaches 15 s before the sockets open; the emulator saw 13.7–15.2 s.
 
-## Decision (proposed)
+## Decision
 
 1. Option (a), made visible: after three tries 10 ms apart the radio uses the chosen link-local
    address without a complete probe, so the management channel stays reachable; IP_CONFLI still

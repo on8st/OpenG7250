@@ -1,6 +1,6 @@
 # 0042 — DDC0 is not offered until the FPGA configuration frame is understood
 
-- Status: proposed (to the repository owner, ON8ST)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session)
 - Date: 2026-11-21
 - Builds on: 0004 (one DDC), 0035 (Annex P, freeze rule); [HIS] HIS 80, HIS 85, HIS 90
   (`5292ba8`, gate review 8).
@@ -15,7 +15,7 @@ write while it is not understood must happen with the RF section in its safe sta
 unit's factory calibration values would be another route; it needs a decision by ON8ST and is
 not taken here.
 
-## Decision (proposed)
+## Decision
 
 1. New Annex P parameter P-RX-2: the configuration frame's status byte and bytes 9–18, the
    spectral-inversion flag, the DDC0 tuning word, the I/Q order and the bus timing.
@@ -26,7 +26,7 @@ not taken here.
 4. P-RX-2 is also part of the TX gate of the freeze rule, because the frame may hold a transmit
    enable.
 5. Not decided here: whether the unit's factory calibration values may be reused for bytes 9–18
-   (ON8ST).
+   (ON8ST). Decided by 0060 (proposed): reused, confirmed by measurement on the radio.
 
 ## Addendum: stream reason order (firmware question, 2026-11-21)
 

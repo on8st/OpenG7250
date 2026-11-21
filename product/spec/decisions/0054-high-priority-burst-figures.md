@@ -1,7 +1,7 @@
 # 0054 — High Priority bursts the radio must take without loss
 
-- Status: proposed (to the repository owner, ON8ST); answers a firmware point on T-B5-20,
-  2026-11-21 (cb92100)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers a firmware
+  point on T-B5-20, 2026-11-21 (cb92100)
 - Date: 2026-11-21
 - Builds on: 0053 (buffer split); [CH394]; Annex P P-NET-1.
 
@@ -11,7 +11,7 @@ Reading one 1444-byte datagram over SPI at about 17 MHz takes about 0.7 ms; on a
 it arrives in about 0.12 ms. Port 1027 holds two High Priority packets (0053). Ten packets truly
 back to back at wire speed overflow it whatever the firmware does, so T-B5-20 needed figures.
 
-## Decision (proposed)
+## Decision
 
 1. On port 1027 the radio MUST process without loss (a) two packets back to back at wire speed
    when no third arrives within 2 ms of the first, and (b) any sequence with at least 1 ms between

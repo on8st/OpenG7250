@@ -1,7 +1,7 @@
 # 0041 — DHCP exchanges borrow the management socket, at most 2 s at a time
 
-- Status: proposed (to the repository owner, ON8ST); answers a firmware question of 2026-11-21
-  (f22aa3b, DHCP per A1.11)
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers a firmware
+  question of 2026-11-21 (f22aa3b, DHCP per A1.11)
 - Date: 2026-11-21
 - Builds on: 0008 (socket budget), 0017, 0020 §24 (host retransmission), 0035 (DHCP with
   link-local fallback).
@@ -14,7 +14,7 @@ while it is link-local (4 s, backing off to every 64 s) and lends the socket for
 exchange. A host retransmits a management request every 500 ms, up to 5 times (A1.4), so it
 gives up after about 2.5 s: a 3 s borrow can make a request fail outright.
 
-## Decision (proposed)
+## Decision
 
 1. Every DHCP exchange after power-on (renewal, rebinding, and the retries while no lease is
    held) borrows the management socket, listening on UDP port 68. The firmware's reading is

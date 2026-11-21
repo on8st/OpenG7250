@@ -47,6 +47,13 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
   DUC I&Q discarded and stream reason 14 while not calibrated; `BAD_TOKEN` first; smaller fixes
   (SF-06, 09, 10, 11, 13, 16, 18). Tests T-A1-63..65, T-B10-42.
 
+- 0040–0059, answers to firmware and testbench questions: see `product-handover.md`.
+- 2026-11-21: ON8ST accepted 0033–0035 and 0037–0059; every decision 0001–0059 is now
+  accepted.
+- 0060 (proposed): P-RX-2 from the unit's factory calibration, confirmed on the radio; encoding
+  in Table P-1; Annex P "P-RX-2 route"; T-B6-28; HIS-02 question on the EEPROM.
+- 0061: the store is in flash sectors 6 and 7 (A1.8 "Store location", A1.12, P-SYS-5).
+
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 
 - ON8ST accepted 0025 and 0026 (2026-11-20). `product/tools/g7250ctl/` and `product/refmodel/`

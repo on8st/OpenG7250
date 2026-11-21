@@ -1,7 +1,7 @@
 # 0046 — CW keyer timing, weight, strict spacing and iambic modes
 
-- Status: proposed (to the repository owner, ON8ST); answers a spec gap found by the firmware
-  (B10.5a, B10.5b, Table B10-1), 2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers a spec gap
+  found by the firmware (B10.5a, B10.5b, Table B10-1), 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0007 Decision 6, 0022 §25, §36, §82; [P2] DUC specific packet bytes 5, 9, 10;
   [ITU-M1677].
@@ -12,7 +12,7 @@
 bits (iambic, mode B, strict character spacing), but not what they do. The firmware chose
 dit = 1200 / wpm ms and its own reading of the weight.
 
-## Decision (proposed)
+## Decision
 
 1. **Unit** *T* = 1200 / *S* ms, *S* the keyer speed in words per minute counted on the 50-unit
    word PARIS; *S* honoured 1–60, 0 does not key, above 60 used as 60 (logged, counted).

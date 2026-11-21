@@ -868,18 +868,18 @@ piHPSDR was read only for this one field; no code was copied.
 - **Q-O3 Arm in the user interface.** Should arming be an explicit user action per session
   (a "TX arm" button), or may the backend arm automatically when the user first keys? 0007
   requires the handshake but not who triggers it. An explicit action is the safer default.
-  **Answered by 0021 §30 (proposed):** an explicit action. AetherSDR MUST arm only on an
+  **Answered by 0021 §30:** an explicit action. AetherSDR MUST arm only on an
   explicit arm action in its own user interface or on a valid `G7250_TX_ARM` from a TCI
   client, never on a TX request from TCI, CAT, rigctl or its own user interface (part C
   C5.5.7).
 - **Q-O4 Management client.** A separate tool, or a page in AetherSDR (0008 allows both,
-  with a go)? **Answered by 0026 (proposed):** both, in this order. The standalone CLI
+  with a go)? **Answered by 0026:** both, in this order. The standalone CLI
   `g7250ctl` is the reference implementation of the spec part A management protocol; a firmware
   page in AetherSDR (install new firmware, return to stock, show version and state) follows on
   the same protocol (spec A1.1a).
 - **Q-O5 TCI identity on level 1.** AetherSDR sends `device:AetherSDR` for WSJT-X reasons
   (`TciProtocol.cpp:370–377`). Should the G7250 profile (part C) fix the device name, or
-  leave it to the host? **Answered by 0021 §5 (proposed):** level 2 MUST send `G7250`; level 1
+  leave it to the host? **Answered by 0021 §5:** level 2 MUST send `G7250`; level 1
   SHOULD send `G7250` and MAY keep `AetherSDR`.
 
 ### For the spec (part B), raised by this survey — answered

@@ -77,7 +77,7 @@ Contributed code is GPL-3.0, matching AetherSDR.
   (on8st/OpenG7250, branch `spec/draft`). Check that this is the location you want to show.
 - The issue appears under your GitHub account and makes the project public in the AetherSDR
   community.
-- Suggested timing (0038, proposed): after firmware milestone F2, so the RFC can point at
+- Suggested timing (0038): after firmware milestone F2, so the RFC can point at
   running firmware; the backend is then written by a separate product-side session.
 - Since this draft: transmit is armable only once calibrated (`NOT_CALIBRATED`, 0035, 0036);
   ATU and antenna selection unavailable until measured (0032); no local KEY (0030). Mention in
