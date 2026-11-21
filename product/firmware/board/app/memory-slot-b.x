@@ -4,7 +4,10 @@ MEMORY
 {
   FLASH : ORIGIN = 0x08080000, LENGTH = 256K
   /* AXI SRAM; 128 KiB is present whatever the TCM/AXI sharing option ([HIS] HIS 15). */
-  RAM   : ORIGIN = 0x24000000, LENGTH = 128K
+  RAM   : ORIGIN = 0x24000000, LENGTH = 128K - 32
+  /* The top 32 bytes of that AXI SRAM: values kept over a reset without power loss
+     (TRIP_COUNT, board/common persist.rs); outside RAM above, so no data, bss or stack. */
+  PERSIST : ORIGIN = 0x2401FFE0, LENGTH = 32
   /* SRAM4 (D3 domain, 16 KiB, RM0468): the only RAM the BDMA reaches, so the only place for
      SPI6 DMA buffers. The Backup SRAM at 0x38800000 is never used ([HIS] HIS 15 rule 4). */
   SRAM4 : ORIGIN = 0x38000000, LENGTH = 16K
@@ -19,6 +22,14 @@ SECTIONS
     . = ALIGN(32);
   } > SRAM4
 } INSERT AFTER .uninit;
+/* Kept over a reset, never initialised by the start code (persist.rs checks it). */
+SECTIONS
+{
+  .persist (NOLOAD) : ALIGN(4)
+  {
+    KEEP(*(.persist .persist.*));
+  } > PERSIST
+} INSERT AFTER .sram4;
 /* Keep the stack limit and heap start in RAM, not after .sram4 (cortex-m-rt takes `.`). */
 _stack_end = ALIGN(__euninit, 4);
 __sheap = _stack_end;

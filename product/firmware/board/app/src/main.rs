@@ -116,6 +116,9 @@ fn clock_config() -> embassy_stm32::Config {
 async fn main(spawner: Spawner) {
     early_init();
     let cause = reset::read(true);
+    // TRIP_COUNT over resets without power loss (A3.5; Table B8-2): before anything else reads
+    // or writes the persist block.
+    let (trips, kept) = g7250_board::persist::start(cause.power_on || cause.brown_out);
 
     // The boot stage set the core supply once; the HAL init must not write it (vendored patch
     // "supply-once") and runs only if it holds the board's configuration and is ready.
@@ -153,6 +156,7 @@ async fn main(spawner: Spawner) {
         }
     );
     println!("app: reset cause {}", cause.name());
+    println!("app: TRIP_COUNT {} ({})", trips, if kept { "kept over the reset" } else { "power-on or not found: from 0" });
     if cause.is_watchdog() {
         // 0007 sub-decision 5 "Entry": a watchdog reset seen at start-up is a fault.
         println!("app: FAULT watchdog reset seen at start-up");

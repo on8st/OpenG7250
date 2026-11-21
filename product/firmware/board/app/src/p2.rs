@@ -283,6 +283,9 @@ impl P2 {
         // LIMIT_STATUS and TRIP_COUNT are event registers (Table B8-2).
         let (ls, tc) = (self.key.limit_status(), self.key.trips);
         if (ls, tc) != (self.regs.limit_status, self.regs.trip_count) {
+            if tc != self.regs.trip_count {
+                g7250_board::persist::set_trip_count(tc);
+            }
             (self.regs.limit_status, self.regs.trip_count) = (ls, tc);
             if let Some(dest) = self.session.register_destination() {
                 self.send_regs(chip, dest, &[(regmap::addr::LIMIT_STATUS, ls), (regmap::addr::TRIP_COUNT, tc)]);

@@ -10,6 +10,7 @@ pub use stm32_metapac as pac;
 
 pub mod console;
 pub mod flash;
+pub mod persist;
 pub mod reset;
 pub mod safe;
 pub mod start_state;

@@ -3,8 +3,10 @@
 MEMORY
 {
   FLASH : ORIGIN = 0x08020000, LENGTH = 128K
-  /* AXI SRAM; 128 KiB is present whatever the TCM/AXI sharing option ([HIS] HIS 15). */
-  RAM   : ORIGIN = 0x24000000, LENGTH = 128K
+  /* AXI SRAM; 128 KiB is present whatever the TCM/AXI sharing option ([HIS] HIS 15). The top
+     32 bytes (0x2401FFE0) are the application's persist block (board/common persist.rs),
+     kept over a reset: the boot stage's data, bss and stack stay below it. */
+  RAM   : ORIGIN = 0x24000000, LENGTH = 128K - 32
 }
 
 /* Image header at offset 0x400, after the vector table (g7250-layout HEADER_OFFSET). */
