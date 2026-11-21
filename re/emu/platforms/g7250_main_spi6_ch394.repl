@@ -1,13 +1,14 @@
-// g7250_main_spi6_ch394.repl — functional CH394 Ethernet on SPI6.
-//
-// The clean-room CH394 model (models/csharp/G7250Slaves.cs `G7250Ch394`,
-// compiled in first via `i @...`) as an SPI6 slave, with its chip-select wired:
-// CS# is GPIOG pin 15 (PG15, idles high, asserted low per transaction), so the
-// model frames W5500 register transfers on the CS# edge (Renode fires
-// FinishTransmission per byte, which cannot delimit a frame). The model logs the
-// source IP when the firmware programs SIPR — the chip-side A1.12 confirmation
-// (forced default 192.168.3.199). Load AFTER g7250_main.repl AND the `i` include.
+// g7250_main_spi6_ch394.repl — CH394 Ethernet controller on SPI6
+// (models/csharp/G7250Ch394.cs, docs/CH394-model.md; pins from his/40):
+// CS# PG15 (input 0, frames the W5500-style SPI transfers), RST# PB5 (input 1,
+// low resets the chip), INT# PC13 (output, active low). No network link here
+// (bridgePort 0); product runs load the chip with the runner's bridge port.
+// Load after g7250_main.repl and `i @models/csharp/G7250Ch394.cs`.
 ch394: Antmicro.Renode.Peripherals.SPI.G7250Ch394 @ spi6
+    IRQ -> gpioPortC@13
 
 gpioPortG:
     15 -> ch394@0
+
+gpioPortB:
+    5 -> ch394@1

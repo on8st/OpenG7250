@@ -157,5 +157,6 @@ also gets a product-style test. Total about 11–15 sessions.
 | 2 PA (bus/pin level) | done; stock metering feed removed | 9e53770 |
 | 1f stock-only shims | done: none left in the models; the fused GPIOE+FPGA port is loaded only for stock runs (`--fpga`) and is replaced in step 2 FPGA | this table |
 | 1d MDMA | done | e2b86f4 |
-| 2 FPGA | done (his/80 only; stock regression at a reduced DRDY rate) | (this commit) |
-| 3 product runner (g7250-testlist v1) | after 2 FPGA; format being agreed with the testbench side | |
+| 2 FPGA | done (his/80 only; stock regression at a reduced DRDY rate) | 594f400 |
+| 3 product runner (g7250-testlist v1.3) | core, network bridge, fixtures hw.observe/trace/input, power.cycle, ctrl.set: done (`docs/PRODUCT-RUNNER.md`); reset.wdt, link.set, sensor.set and later fixtures open | (this commit) |
+| 1g BDMA + DMAMUX2 + SPI DMA requests | new: found in step 3 (SPI6 data by DMA reads zeros) | |

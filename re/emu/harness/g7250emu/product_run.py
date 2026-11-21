@@ -48,6 +48,7 @@ OUT_ROOT = P(".private", "product-runs")
 GENERIC = [
     ("cs", P("models", "csharp", "G7250Slaves.cs")),
     ("repl", P("platforms", "g7250_main_i2c1_func.repl")),
+    ("cs", P("models", "csharp", "G7250Ch394.cs")),
     ("repl", P("platforms", "g7250_main_spi6_ch394.repl")),
     ("cs", P("models", "csharp", "G7250Mdma.cs")),
     ("repl", P("platforms", "g7250_main_mdma.repl")),
@@ -150,7 +151,7 @@ def not_modelled(log_path):
             o = _OURS.search(ln)
             if o:
                 item = o.group(1)
-        if not item:
+        if not item and "Unhandled bits" not in ln:   # ignored configuration bits are not a missing register
             u = _UNHANDLED.search(ln)
             if u and u.group(1) in _RENODE_NAMES:
                 item = periph_name(_RENODE_NAMES[u.group(1)] + int(u.group(2), 16))
@@ -203,6 +204,47 @@ def build_resc(elf, out, run_s, bench):
     return "\n".join(lines) + "\n"
 
 
+CH394_REPL = P("platforms", "g7250_main_spi6_ch394.repl")
+
+
+def build_product_resc(elf, out, console, log, ch_port, agent_port):
+    """A product boot for a g7250-testlist run: the generic models, the CH394
+    with the runner's network bridge and the bench agent; runs until the
+    runner quits it."""
+    vtor, sp, pc = elf_entry(elf)
+    lines = ['mach create "product"',
+             'machine LoadPlatformDescription @%s' % P("platforms", "g7250_main.repl")]
+    for kind, val in GENERIC:
+        if kind == "repl" and val == CH394_REPL:
+            rp = os.path.join(out, "ch394.repl")
+            open(rp, "w").write("ch394: Antmicro.Renode.Peripherals.SPI.G7250Ch394 @ spi6\n"
+                                "    bridgePort: %d\n    IRQ -> gpioPortC@13\n\n"
+                                "gpioPortG:\n    15 -> ch394@0\n\ngpioPortB:\n    5 -> ch394@1\n" % ch_port)
+            lines.append("machine LoadPlatformDescription @%s" % rp)
+            continue
+        lines.append({"cs": "i @%s", "repl": "machine LoadPlatformDescription @%s",
+                      "str": 'machine LoadPlatformDescriptionFromString "%s"', "cmd": "%s"}[kind] % val)
+    ap_ = os.path.join(out, "agent.repl")
+    open(ap_, "w").write("agent: Antmicro.Renode.Peripherals.SPI.G7250BenchAgent @ spi1\n    agentPort: %d\n\n"
+                         "gpioPortA:\n    11 -> agent@0\n\ngpioPortH:\n    12 -> agent@1\n\n"
+                         "gpioPortD:\n    13 -> agent@2\n\ngpioPortG:\n    2 -> agent@3\n    5 -> agent@4\n" % agent_port)
+    lines += ['i @%s' % P("models", "csharp", "G7250BenchAgent.cs"),
+              'machine LoadPlatformDescription @%s' % ap_]
+    lines += platform_extras.all_tag_commands(exclude=("MDMA",))
+    lines += [
+        'nvic Frequency 275000000',
+        'logFile @%s' % log,
+        'logLevel 2',
+        'sysbus.usart1 CreateFileBackend @%s true' % console,
+        'sysbus LoadELF @%s' % elf,
+        'cpu VectorTableOffset 0x%08X' % vtor,
+        'cpu SP 0x%08X' % sp,
+        'cpu PC 0x%08X' % (pc & ~1),
+        'start',
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def evaluate(tests, console, nm):
     res = []
     for t in tests:
@@ -237,13 +279,19 @@ def main():
     ap.add_argument("--selftest", action="store_true",
                     help="own self-test program: simple console test list and the bench-only request source")
     ap.add_argument("--host-timeout", type=float, default=600.0)
+    ap.add_argument("-o", "--output", help="result file (default: <run dir>/result.json)")
+    ap.add_argument("--scope", default="v1.0")
     args = ap.parse_args()
     if not os.path.isfile(bootcore.RENODE):
         sys.exit("Renode not found (install the pinned portable in tools/)")
     spec = json.load(open(args.tests))
+    if spec.get("format") == "g7250-testlist":
+        import testlist_run
+        run_id = args.run_id or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        sys.exit(testlist_run.run(sys.modules[__name__], os.path.abspath(args.elf), os.path.abspath(args.tests),
+                                  run_id, scope=args.scope, out_path=args.output))
     if not args.selftest:
-        # product runs use the testbench format g7250-testlist v1 (step 3, being agreed)
-        sys.exit("product test lists (g7250-testlist v1) are not supported yet; use --selftest for own programs")
+        sys.exit("unknown test list format (expected g7250-testlist, or --selftest for own programs)")
     run_s = float(spec.get("run_s", 5))
     run_id = args.run_id or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = os.path.join(OUT_ROOT, run_id)

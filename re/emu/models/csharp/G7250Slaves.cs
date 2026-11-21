@@ -77,55 +77,7 @@ namespace Antmicro.Renode.Peripherals.I2C
 
 namespace Antmicro.Renode.Peripherals.SPI
 {
-    // CH394 Ethernet controller (W5500-register-compatible) on SPI6. Clean-room,
-    // mirrors models/devices/ch394.py. W5500 SPI frame: [addrHi][addrLo][control]
-    // then data; control = (BSB<<3)|(RWB<<2)|OM, RWB bit2 = 1 write / 0 read.
-    // We keep a flat per-(block,address) register file and auto-increment within
-    // a frame. We log the source IP (SIPR, common block BSB=0, 0x0F..0x12) when
-    // the firmware programs it — the A1.12 check that the forced default IP
-    // 192.168.3.199 actually reaches the chip.
-    public class G7250Ch394 : ISPIPeripheral, Antmicro.Renode.Core.IGPIOReceiver
-    {
-        private readonly byte[,] regs = new byte[0x20, 0x200];
-        private int phase, bsb, addr; private bool write;
-        private const int SIPR = 0x0F;
-
-        public void Reset() { phase = 0; }
-
-        public byte Transmit(byte data)
-        {
-            byte outb = 0;
-            if(phase == 0) { addr = data << 8; phase = 1; }
-            else if(phase == 1) { addr |= data; phase = 2; }
-            else if(phase == 2)
-            {
-                bsb = (data >> 3) & 0x1F;
-                write = ((data >> 2) & 1) != 0;
-                phase = 3;
-            }
-            else
-            {
-                int a = addr & 0x1FF;
-                if(write) { regs[bsb, a] = data; }
-                else { outb = regs[bsb, a]; }
-                // log the source IP once the 4th SIPR byte is written
-                if(write && bsb == 0 && addr >= SIPR && addr <= SIPR + 3 && addr == SIPR + 3)
-                {
-                    this.Log(LogLevel.Info, "[CH394 model] source IP set to {0}.{1}.{2}.{3}",
-                             regs[0, SIPR], regs[0, SIPR + 1], regs[0, SIPR + 2], regs[0, SIPR + 3]);
-                }
-                addr++;
-            }
-            return outb;
-        }
-
-        public void OnGPIO(int number, bool value)
-        {
-            if(number == 0 && !value) { phase = 0; } // CS# asserted low: new frame
-        }
-
-        public void FinishTransmission() { } // frame boundary comes from CS#, not per-byte
-    }
+    // The CH394 model moved to models/csharp/G7250Ch394.cs (step 3).
 }
 
 namespace Antmicro.Renode.Peripherals.Miscellaneous

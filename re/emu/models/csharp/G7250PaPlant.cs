@@ -37,6 +37,7 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         private readonly IMachine machine;
         private readonly int[] dac = new int[9];
+        private readonly bool[] written = new bool[9];
         private readonly byte[] word = new byte[2];
         private int nbytes;
         private bool ldPrev, rstPrev = true, warned;
@@ -50,7 +51,7 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         public void Reset()
         {
-            for(int i = 0; i < dac.Length; i++) dac[i] = 0;
+            for(int i = 0; i < dac.Length; i++) { dac[i] = 0; written[i] = false; }
             nbytes = 0;
             Publish();
         }
@@ -60,6 +61,8 @@ namespace Antmicro.Renode.Peripherals.SPI
         public void SetNtcPinVolts(double v) { ntc = v; Publish(); }
         public void SetRfPinVolts(double fwd, double rev) { forward = fwd; reflected = rev; Publish(); }
         public int GetDacCode(int channel) { return channel >= 1 && channel <= 8 ? dac[channel] : -1; }
+        // last latched word value per channel, -1 if never written since reset
+        public int GetDacWord(int channel) { return channel >= 1 && channel <= 8 && written[channel] ? dac[channel] : -1; }
         public double Idd { get { return ComputeIdd(); } }
 
         public byte Transmit(byte data)
@@ -86,7 +89,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                     byte hi = word[(nbytes - 2) & 1], lo = word[(nbytes - 1) & 1];
                     int ch = Reverse4((hi >> 2) & 0xF);
                     int val = ((hi & 3) << 8) | lo;
-                    if(ch >= 1 && ch <= 8) dac[ch] = val;
+                    if(ch >= 1 && ch <= 8) { dac[ch] = val; written[ch] = true; }
                     this.Log(LogLevel.Debug, "DAC ch {0} = {1}, Idd {2:F3} A", ch, val, ComputeIdd());
                     nbytes = 0;
                     Publish();

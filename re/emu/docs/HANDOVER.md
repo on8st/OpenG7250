@@ -42,8 +42,11 @@ being D2b. One targeted check per item:
 
 `m1_run.py` loads the MDMA, PA, DMA and USART2 models for every Main boot.
 The product test bench (`docs/PRODUCT-TESTBENCH-PLAN.md`, branch `emu/bench`)
-uses the generic ones only: `harness/g7250emu/product_run.py`, own self-test
-programs in `firmware-tests/bench/`.
+uses the generic ones only: `harness/g7250emu/product_run.py` runs a product
+ELF against a test-bench list (g7250-testlist v1.3) with the network bridge and
+fixtures (`docs/PRODUCT-RUNNER.md`); own self-test programs in
+`firmware-tests/bench/`; `testbench_dir` in `local.config` points at the test
+bench.
 
 ## HIS work done with the emulator
 

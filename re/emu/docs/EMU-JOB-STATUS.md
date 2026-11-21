@@ -86,6 +86,12 @@ inserted is a valid real state); it does not block the GUI loop. CLOSED.
 - Step 2 (PA): the PA plant works at bus and pin level and drives the ADC1
   inputs; the stock metering feed into a fixed RAM buffer is removed. The stock
   Main still trims all three bias stages and reaches its superloop.
+- Step 1d: generic MDMA. Step 2 (FPGA): GPIOE + FPGA from his/80 only.
+- Step 3: product runner against g7250-testlist v1.3 (docs/PRODUCT-RUNNER.md):
+  CH394 with UDP sockets and a network bridge (address mapping, pcapng), bench
+  agent (hw.observe, hw.trace, hw.input), power.cycle, ctrl.set; self-check with
+  a stand-in bench in m1_smoke [7]. Found: SPI6 data by BDMA is not delivered
+  (step 1g).
 - Runner skeleton harness/g7250emu/product_run.py and own self-test programs in
   firmware-tests/bench (smoke, dma_test, usart_test, adc_test), run in m1_smoke [6].
 
