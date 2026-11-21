@@ -9,3 +9,5 @@ publish.workspace = true
 
 [dependencies]
 g7250-proto = { path = "../proto" }
+g7250-safety = { path = "../safety" }
+heapless = "0.9.4"

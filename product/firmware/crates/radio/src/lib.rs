@@ -6,3 +6,6 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod mgmt;
+pub mod record;
+pub mod regmap;
+pub mod session;

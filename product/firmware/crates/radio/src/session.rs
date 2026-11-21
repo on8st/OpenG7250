@@ -1,0 +1,374 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 ON8ST
+//! G7250-P2 session, ownership and watchdog (spec B5; A2.2-A2.4; 0007 sub-decisions 2, 3).
+//!
+//! C&C packets are General (port 1024, byte 4 = 0x00, at least 60 bytes), DDC-specific (1025,
+//! 1444), DUC-specific (1026, 60) and High Priority (1027, 1444) (B5.6; B11.3). The session
+//! starts with the run bit (High Priority byte 4 bit [0]) while none runs; the owner is the
+//! source IP address and UDP port (B5.5). Memory-mapped packets are not C&C (B4.5, B5.6).
+
+pub type Addr = ([u8; 4], u16);
+
+/// Which C&C packet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CnC {
+    General,
+    DdcSpecific,
+    DucSpecific,
+    HighPriority,
+}
+
+impl CnC {
+    /// Minimum payload length (Table B11-1); shorter packets are discarded whole (B11.3).
+    pub const fn min_len(self) -> usize {
+        match self {
+            CnC::General | CnC::DucSpecific => 60,
+            CnC::DdcSpecific | CnC::HighPriority => 1444,
+        }
+    }
+}
+
+/// The General packet fields this firmware acts on now (Table B7-1; B5.1a item 2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct General {
+    /// Bytes 31-32: host port for register packets; 0 = the owner's source port (B8.1).
+    pub reg_port: u16,
+    /// Byte 37 bit [3]: phase word (B3.8).
+    pub phase_word: bool,
+    /// Byte 38 bit [0]: hardware timer (B5.6).
+    pub timer: bool,
+    /// Byte 39: data format; only 0 (Big-Endian, 3-byte I&Q) is offered (B3.7).
+    pub format: u8,
+    /// Byte 58 bit [0]: PA enable (B10.10).
+    pub pa_enable: bool,
+}
+
+impl General {
+    pub fn parse(p: &[u8]) -> Self {
+        General {
+            reg_port: u16::from_be_bytes([p[31], p[32]]),
+            phase_word: p[37] & 0x08 != 0,
+            timer: p[38] & 0x01 != 0,
+            format: p[39],
+            pa_enable: p[58] & 0x01 != 0,
+        }
+    }
+}
+
+/// Why a session ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndReason {
+    /// Run bit cleared by the owner (B5.4): counters back to 0.
+    Stop,
+    /// No C&C from the owner for 1 s (B5.6).
+    Watchdog,
+    /// C&C from another host (B5.7); the new owner is in `Event::Started`.
+    Takeover,
+    /// Link down or below 100 Mbit/s (B5.8).
+    LinkDown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// A session started. `restart`: the same host as the last owner after a stop, watchdog or
+    /// link loss, with its RX-side settings carried over (B5.4 item 1). `takeover`: it took the
+    /// radio from a running owner (B5.7).
+    Started { owner: Addr, restart: bool, takeover: bool },
+    Ended { owner: Addr, reason: EndReason },
+    /// A run bit on a link below 100 Mbit/s: no session; answer with `LINK_STATUS` and
+    /// `STREAM_STATUS` (B5.8).
+    Refused { from: Addr },
+}
+
+/// Packets kept in the set-up phase, per source (B5.1a item 1).
+#[derive(Clone, Copy, Debug)]
+struct Kept {
+    from: Addr,
+    heard_ms: u64,
+    general: Option<General>,
+    ddc: bool,
+    duc: bool,
+}
+
+const KEPT: usize = 4;
+/// Watchdog: standby after 1 s without C&C from the owner; tolerance 1000-1100 ms (B5.6).
+pub const WATCHDOG_MS: u64 = 1000;
+
+pub struct Session {
+    owner: Option<Addr>,
+    last_cnc_ms: u64,
+    kept: [Option<Kept>; KEPT],
+    /// The last owner whose session ended by stop, watchdog or link loss, with its General
+    /// fields (restart, B5.4 item 1). Cleared by a reset or a change of address.
+    last_owner: Option<(Addr, Option<General>)>,
+    /// General fields in force for the current session.
+    pub general: Option<General>,
+    /// Count of C&C packets discarded as short (B11.3).
+    pub short_discarded: u64,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Session {
+    pub const fn new() -> Self {
+        Session { owner: None, last_cnc_ms: 0, kept: [None; KEPT], last_owner: None, general: None, short_discarded: 0 }
+    }
+
+    pub fn owner(&self) -> Option<Addr> {
+        self.owner
+    }
+
+    pub fn running(&self) -> bool {
+        self.owner.is_some()
+    }
+
+    /// Discovery byte 4 (B3.4): 0x03 while running and the request is not from the owner.
+    pub fn discovery_in_use(&self, from: Addr) -> bool {
+        self.owner.is_some_and(|o| o != from)
+    }
+
+    /// Where register packets for the owner go (B8.1): General bytes 31-32 if non-zero, else
+    /// the owner's source port.
+    pub fn register_destination(&self) -> Option<Addr> {
+        let o = self.owner?;
+        match self.general {
+            Some(g) if g.reg_port != 0 => Some((o.0, g.reg_port)),
+            _ => Some(o),
+        }
+    }
+
+    fn keep(&mut self, from: Addr, kind: CnC, p: &[u8], now: u64) {
+        let i = self.kept.iter().position(|k| k.is_some_and(|k| k.from == from)).unwrap_or_else(|| {
+            self.kept.iter().position(|k| k.is_none()).unwrap_or_else(|| {
+                // Evict the least recently heard (B5.1a item 1).
+                (0..KEPT).min_by_key(|&i| self.kept[i].map_or(0, |k| k.heard_ms)).unwrap()
+            })
+        });
+        let mut k = match self.kept[i] {
+            Some(k) if k.from == from => k,
+            _ => Kept { from, heard_ms: now, general: None, ddc: false, duc: false },
+        };
+        k.heard_ms = now;
+        match kind {
+            CnC::General => k.general = Some(General::parse(p)),
+            CnC::DdcSpecific => k.ddc = true,
+            CnC::DucSpecific => k.duc = true,
+            CnC::HighPriority => {}
+        }
+        self.kept[i] = Some(k);
+    }
+
+    fn take_kept(&mut self, from: Addr) -> Option<Kept> {
+        let k = self.kept.iter().flatten().find(|k| k.from == from).copied();
+        // Kept packets of every other source are discarded when a session starts (item 3).
+        self.kept = [None; KEPT];
+        k
+    }
+
+    /// A C&C packet from `from`. `link_ok`: link up at 100 Mbit/s or more (B5.8). Returns the
+    /// events in order (at most two: an end, then a start).
+    pub fn on_cnc(&mut self, from: Addr, kind: CnC, p: &[u8], now: u64, link_ok: bool) -> heapless::Vec<Event, 2> {
+        let mut ev = heapless::Vec::new();
+        if p.len() < kind.min_len() {
+            self.short_discarded += 1;
+            return ev;
+        }
+        let run = kind == CnC::HighPriority && p[4] & 0x01 != 0;
+        match self.owner {
+            Some(o) if o == from => {
+                self.last_cnc_ms = now;
+                match kind {
+                    CnC::General => self.general = Some(General::parse(p)),
+                    CnC::HighPriority if !run => {
+                        self.end(EndReason::Stop, &mut ev);
+                    }
+                    _ => {}
+                }
+            }
+            Some(_) => {
+                // Takeover by any C&C packet of another host (B5.7); the packet counts for the
+                // new session (A2.4 step 5).
+                self.end(EndReason::Takeover, &mut ev);
+                self.start(from, kind, p, now, false, true, &mut ev);
+            }
+            None => {
+                if run {
+                    if !link_ok {
+                        let _ = ev.push(Event::Refused { from });
+                        return ev;
+                    }
+                    let restart = self.last_owner.is_some_and(|(a, _)| a == from);
+                    self.start(from, kind, p, now, restart, false, &mut ev);
+                } else {
+                    // Set-up phase (B5.1a).
+                    self.keep(from, kind, p, now);
+                }
+            }
+        }
+        ev
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start(&mut self, from: Addr, kind: CnC, p: &[u8], now: u64, restart: bool, takeover: bool, ev: &mut heapless::Vec<Event, 2>) {
+        let kept = self.take_kept(from);
+        // Carried over from the same host's ended session (B5.4 item 1), except byte 38 bit [0]
+        // and byte 58 bit [0]; then the kept set-up packets on top (B5.1a item 2).
+        let mut general = None;
+        if restart {
+            if let Some((_, Some(g))) = self.last_owner {
+                general = Some(General { timer: false, pa_enable: false, ..g });
+            }
+        }
+        if let Some(k) = kept {
+            if let Some(g) = k.general {
+                general = Some(g);
+            }
+        }
+        if kind == CnC::General {
+            general = Some(General::parse(p));
+        }
+        self.general = general;
+        self.owner = Some(from);
+        self.last_cnc_ms = now;
+        let _ = ev.push(Event::Started { owner: from, restart, takeover });
+    }
+
+    fn end(&mut self, reason: EndReason, ev: &mut heapless::Vec<Event, 2>) {
+        if let Some(o) = self.owner.take() {
+            self.last_owner = match reason {
+                EndReason::Stop | EndReason::Watchdog | EndReason::LinkDown => Some((o, self.general)),
+                EndReason::Takeover => None,
+            };
+            self.general = None;
+            let _ = ev.push(Event::Ended { owner: o, reason });
+        }
+    }
+
+    /// Call often (every few ms). `timer_effective`: General byte 38 bit [0] OR armed, enabled
+    /// before any General packet (B5.6).
+    pub fn tick(&mut self, now: u64, timer_effective: bool, link_ok: bool) -> Option<Event> {
+        let mut ev = heapless::Vec::<Event, 2>::new();
+        if self.owner.is_some() && !link_ok {
+            self.end(EndReason::LinkDown, &mut ev);
+        } else if self.owner.is_some() && timer_effective && now.saturating_sub(self.last_cnc_ms) >= WATCHDOG_MS {
+            self.end(EndReason::Watchdog, &mut ev);
+        }
+        ev.first().copied()
+    }
+
+    /// The radio's address changed, or any other reason that makes the network session not the
+    /// same (B5.4 item 3): nothing is carried over.
+    pub fn forget(&mut self) {
+        self.last_owner = None;
+        self.kept = [None; KEPT];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const A: Addr = ([192, 168, 1, 5], 50000);
+    const B: Addr = ([192, 168, 1, 6], 50001);
+
+    fn hp(run: bool) -> std::vec::Vec<u8> {
+        let mut p = std::vec![0u8; 1444];
+        p[4] = run as u8;
+        p
+    }
+    fn general(timer: bool, reg_port: u16) -> std::vec::Vec<u8> {
+        let mut p = std::vec![0u8; 60];
+        p[38] = timer as u8;
+        p[31..33].copy_from_slice(&reg_port.to_be_bytes());
+        p
+    }
+
+    #[test]
+    fn run_starts_stop_ends_and_short_packets_are_discarded() {
+        let mut s = Session::new();
+        assert!(s.on_cnc(A, CnC::HighPriority, &hp(true)[..1443], 0, true).is_empty());
+        assert_eq!(s.short_discarded, 1);
+        assert!(!s.running());
+        let e = s.on_cnc(A, CnC::HighPriority, &hp(true), 0, true);
+        assert_eq!(e.as_slice(), &[Event::Started { owner: A, restart: false, takeover: false }]);
+        assert!(!s.discovery_in_use(A));
+        assert!(s.discovery_in_use(B));
+        assert!(s.discovery_in_use((A.0, 1234))); // same IP, other port
+        let e = s.on_cnc(A, CnC::HighPriority, &hp(false), 10, true);
+        assert_eq!(e.as_slice(), &[Event::Ended { owner: A, reason: EndReason::Stop }]);
+        assert!(!s.running());
+    }
+
+    #[test]
+    fn setup_phase_counts_for_its_own_host_only() {
+        let mut s = Session::new();
+        s.on_cnc(A, CnC::General, &general(true, 7000), 0, true);
+        s.on_cnc(B, CnC::General, &general(false, 9000), 0, true);
+        assert!(!s.running());
+        s.on_cnc(A, CnC::HighPriority, &hp(true), 5, true);
+        assert_eq!(s.general.unwrap().reg_port, 7000);
+        assert!(s.general.unwrap().timer);
+        assert_eq!(s.register_destination(), Some((A.0, 7000)));
+    }
+
+    #[test]
+    fn takeover_by_any_cnc_from_another_host() {
+        let mut s = Session::new();
+        s.on_cnc(A, CnC::HighPriority, &hp(true), 0, true);
+        let e = s.on_cnc(B, CnC::DucSpecific, &[0u8; 60], 10, true);
+        assert_eq!(
+            e.as_slice(),
+            &[Event::Ended { owner: A, reason: EndReason::Takeover }, Event::Started { owner: B, restart: false, takeover: true }]
+        );
+        assert_eq!(s.owner(), Some(B));
+        // The owner's IP on a new port is a takeover too (0007 Resolved 4).
+        let e = s.on_cnc((B.0, 1), CnC::General, &general(true, 0), 20, true);
+        assert_eq!(e.len(), 2);
+    }
+
+    #[test]
+    fn watchdog_1s_only_when_effective() {
+        let mut s = Session::new();
+        s.on_cnc(A, CnC::HighPriority, &hp(true), 0, true);
+        assert_eq!(s.tick(999, true, true), None);
+        s.on_cnc(A, CnC::General, &general(true, 0), 500, true); // feeds
+        assert_eq!(s.tick(1499, true, true), None);
+        assert_eq!(s.tick(1500, true, true), Some(Event::Ended { owner: A, reason: EndReason::Watchdog }));
+        // Timer disabled by the host (not armed): no watchdog standby.
+        let mut s = Session::new();
+        s.on_cnc(A, CnC::HighPriority, &hp(true), 0, true);
+        assert_eq!(s.tick(5000, false, true), None);
+        // Packets of other hosts never feed it: they take over instead.
+    }
+
+    #[test]
+    fn restart_by_the_same_host_carries_rx_settings_not_the_timer() {
+        let mut s = Session::new();
+        s.on_cnc(A, CnC::General, &general(true, 7000), 0, true);
+        s.on_cnc(A, CnC::HighPriority, &hp(true), 1, true);
+        s.tick(2000, true, true); // watchdog standby
+        let e = s.on_cnc(A, CnC::HighPriority, &hp(true), 3000, true);
+        assert_eq!(e.as_slice(), &[Event::Started { owner: A, restart: true, takeover: false }]);
+        let g = s.general.unwrap();
+        assert_eq!(g.reg_port, 7000);
+        assert!(!g.timer, "byte 38 bit 0 is not carried over (B5.4 item 2)");
+        // Another host after that end gets nothing carried over.
+        s.on_cnc(A, CnC::HighPriority, &hp(false), 3100, true);
+        let e = s.on_cnc(B, CnC::HighPriority, &hp(true), 3200, true);
+        assert_eq!(e.as_slice(), &[Event::Started { owner: B, restart: false, takeover: false }]);
+        assert_eq!(s.general, None);
+    }
+
+    #[test]
+    fn slow_link_refuses_and_link_loss_ends() {
+        let mut s = Session::new();
+        assert_eq!(s.on_cnc(A, CnC::HighPriority, &hp(true), 0, false).as_slice(), &[Event::Refused { from: A }]);
+        assert!(!s.running());
+        s.on_cnc(A, CnC::HighPriority, &hp(true), 0, true);
+        assert_eq!(s.tick(10, true, false), Some(Event::Ended { owner: A, reason: EndReason::LinkDown }));
+    }
+}
