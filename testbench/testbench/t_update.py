@@ -21,6 +21,9 @@ from .p2 import (PORT_REG, STREAM_STATUS, TX_MODE_CLASS, Host, parse_regs, value
 from .update import HW_ID, SECTOR, Updater, header, image, layout, version_of
 
 SMALL = 2048 + 100  # five blocks, the last one short
+# Keep it a multiple of neither 512 (a short last block) nor 32 (a partial last flash word): the
+# partial word found a firmware bug on fw-6ca08d1 (the last 4 bytes never programmed, VERIFY 55).
+assert SMALL % 512 and SMALL % 32, "SMALL must leave a short last block and a partial last flash word"
 
 
 def secret(ctx) -> bytes:
