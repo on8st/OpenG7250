@@ -481,6 +481,21 @@ A test with target `emulator` is also run against the reference model. A test wi
      packets at k × 1000 us) and later for the CW paddle schedules (T-B10-33, -43 to -46);
      where not offered, host pacing stays, with its guards. `time_scale` is then not needed
      for these tests.
-6. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
+6. Proposed by the emulator side (v1.8), accepted by the bench with its flash controller
+   model: `flash.log {action: "start"|"read"|"stop", from?}` → `{"t_us", "count", "dropped",
+   "from", "next", "entries"}`, emulated time, paged (5000 per read), capped (100 000, dropped
+   fails), surviving `power.cycle`, every entry with `boot`. Entries: `erase` (bank, sector,
+   address, len 131072, t_end_us, result), `bank_erase`, `program` (one per run of back-to-back
+   32-byte flash words at increasing addresses in one sector; a partial word on its own with
+   `"partial": true`), `option_write` (always `"refused"`), and, asked by the bench, `ecc`
+   (`type` single or double, address) when a read finds an ECC error. Results `ok`, `cut`
+   (by `power.cut`; a torn word then reads with a double error), `error:<flag>` (the RM0468
+   flag names). With it `flash.fault {after_words, flag}` and `power.cut {after_flash_words |
+   during_erase}`. One bank, eight 128 KiB sectors; sectors 6 and 7 are 0x080C0000-0x080FFFFF.
+   The bench applies run-wide rules in every test where `flash.log` is offered: no erase or
+   program of sector 0, no option-byte write, nothing outside the main flash (a test that
+   starts `flash.log` itself opts out). Sector 1 and the store sectors are judged by their own
+   tests (T-A1-56, T-A1-77, T-A1-78; 0061).
+7. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
    runs, the 0x04 reads are six strobes per sample; such a trace is meant for a short test
    only, and the runner may drop events (which fails the test) if it cannot keep up.

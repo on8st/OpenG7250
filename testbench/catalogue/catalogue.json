@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "c236385",
-  "sha256_of_inputs": "16cab1bf57f4ebed8266daba0e10e9fceacad232954d86946b72d79481ae5031"
+  "commit": "4fe1b69",
+  "sha256_of_inputs": "e75dc17f9979ad7c9468523f17b636f46b28d9f3f1b192e04a40c9430eeae3d8"
  },
  "his": {
   "commit": "72591aa"
@@ -1566,6 +1566,49 @@
    "tx_part": false,
    "notes": [
     "MACRAW failing: macraw.fail where offered (proposed), else a runner without MACRAW; console line not checked"
+   ]
+  },
+  {
+   "id": "T-A1-77",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "During a complete update to an image of this firmware (`UPDATE_BEGIN` to the confirmed trial boot), and during an aborted one, flash.log shows no erase or write in sectors 6 and 7 other than store writes or compactions (whole store records of the store format, no erase of the only live store sector), and none outside the staging slot and the store (emulator, flash.log; A1.8 \"Slot size and the store\"; 0061).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "flash.log"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "needs the update client (Table M-4 package) in the bench and the slot layout; flash.log v1.8"
+   ]
+  },
+  {
+   "id": "T-A1-78",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "`UPDATE_BEGIN` for an image of this firmware, linked for the other slot, with a length one byte more than that slot (slot size from the firmware's layout) gets 61 and nothing is written; with a length equal to the slot size it is accepted; with the wrong hardware id it gets 51 and for the running slot 63, whatever its length (emulator or reference model; A1.8; 0043, 0061).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "needs the update client (Table M-4 package) in the bench and the slot size of the firmware layout"
    ]
   },
   {

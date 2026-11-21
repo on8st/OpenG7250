@@ -170,7 +170,25 @@ def run_one(tid: str, ctx: Ctx) -> dict:
                 ctx.trace_start_t_us = (rep or {}).get("t_us") if isinstance(rep, dict) else None
             except Skip:
                 pass
+        flash = "flash.log" in ctx.endpoint.get("fixtures", []) and not getattr(fn, "flash_log_own", False)
+        if flash:  # v1.8: run-wide flash rules from the start of each test
+            try:
+                ctx.fixture("flash.log", action="start")
+            except Skip:
+                flash = False
         fn(ctx)
+        if flash:
+            from .flash import check_flash
+            entries: list = []
+            for _ in range(1000):
+                r = ctx.fixture("flash.log", action="read", **{"from": len(entries)}) or {}
+                entries += r.get("entries", [])
+                if len(entries) >= r.get("count", 0):
+                    if r.get("dropped"):
+                        ctx.check("flash.log: no entries dropped", False, f"dropped {r.get('dropped')}")
+                    break
+            for name, ok_, detail in check_flash(entries):
+                ctx.check(name, ok_, detail)
         ok = all(c["ok"] for c in ctx.checks) and ctx.checks
         res["status"] = "pass" if ok else "fail"
         if not ctx.checks:
