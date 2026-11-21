@@ -10903,6 +10903,28 @@
    "pending": []
   },
   {
+   "id": "T-EMU-IDLE",
+   "origin": "testbench",
+   "part": "A-B",
+   "title": "Information for the emulator's idle analysis, not judged: with no session and no traffic, GET_STATS (all counters) before and after 60 s of radio time (time.advance), with the emulated t_us before and after and the wall time.",
+   "reqs": [
+    "B11"
+   ],
+   "needs": [
+    "time.advance"
+   ],
+   "notes": [
+    "TX frozen until the calibration set is complete (Annex P; 0035, 0036)"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "tx_part": false,
+   "pending": []
+  },
+  {
    "id": "T-B6-L01",
    "origin": "testbench",
    "part": "A-B",

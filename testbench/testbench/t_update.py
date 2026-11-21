@@ -669,3 +669,30 @@ def t_a1_84(ctx: Ctx):
         ctx.eq("with the other slot bad: 55 and nothing changes", (r["status"] if r else None, u.identify().get(23, b"")[:1]),
                (55, bytes([run])))
     ctx.notes.append("the other slot empty: only on a fresh radio; armed (50): T-A1-05")
+
+
+@test("T-EMU-IDLE")
+def t_emu_idle(ctx: Ctx):
+    """Information for the emulator's idle analysis, not judged: GET_STATS before and after 60 s
+    of radio time with no session and no traffic (the bench sends nothing during time.advance)."""
+    need_clock(ctx)
+    from .mgmt import stats
+
+    def emu_t():
+        return (ctx.fixture("hw.observe") or {}).get("t_us") if "hw.observe" in ctx.endpoint.get("fixtures", []) else None
+
+    def dump(st):
+        return ", ".join(f"{k}={st[k]}" for k in sorted(st)) if st else "no GET_STATS answer"
+
+    with Mgmt(ctx.net) as c:
+        before = stats(c)
+    t0, w0 = emu_t(), time.monotonic()
+    ctx.fixture("time.advance", _timeout=120, us=60_000_000)
+    w1, t1 = time.monotonic(), emu_t()
+    with Mgmt(ctx.net) as c:
+        after = stats(c)
+    ctx.check("information (not judged): GET_STATS before the 60 s", True, dump(before))
+    ctx.check("information (not judged): GET_STATS after the 60 s", True, dump(after))
+    ctx.check("information (not judged): emulated t_us before and after, wall time of the advance", True,
+              f"t_us {t0} -> {t1} ({(t1 - t0) / 1e6:.3f} s emulated), wall {w1 - w0:.3f} s"
+              if t0 is not None and t1 is not None else f"no hw.observe t_us; wall {w1 - w0:.3f} s")

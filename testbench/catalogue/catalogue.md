@@ -4,7 +4,7 @@ Spec `spec/draft` at `f00162e`, HIS `069ea0b`. Target: the minimum environment (
 
 | Scope | host | emulator | needs-radio |
 |---|---|---|---|
-| v1.0 | 183 | 211 | 117 |
+| v1.0 | 183 | 212 | 117 |
 | after-G6 | 20 | 8 | 0 |
 | not-v1.0 | 1 | 4 | 0 |
 | from-M2 | 0 | 1 | 0 |
@@ -554,6 +554,7 @@ Spec `spec/draft` at `f00162e`, HIS `069ea0b`. Target: the minimum environment (
 | T-B10-L07 | v1.0 | emulator | host |  |  |  | A3.9b, B8.4, B8.4a, Annex P | TX frozen: `ATU_TUNE` = 0 from the owner is accepted as a no-op, answered with (0x0400, 0) and no `WRITE_STATUS` (B8.4); `ATU_STATE` read by a write reads 5 (unknown) with `READ_ONLY` (B8.4a); a start (1) is rejected with `NOT_CALIBRATED` and not latched; from a non-owner `NOT_OWNER` (A3.9b item 1; 0032; Annex P). |
 | T-B10-L13 | v1.0 | emulator | host |  |  |  | A3.6a, B5.4, B10, B10.10, Table B8-2 | TX frozen: `TX_STATE` bit 4 (PA disabled by the host) reads 1 while General byte 58 bit [0] is 0 and 0 once the owner sets it; a same-host restart by a High Priority packet only (byte 58 bit [0] not carried over, B5.4) and a takeover clear it again (A3.6a, Table A3-4); bit 0 and the source [11:8] stay 0, also under a PTT edge (B10, B10.10; Table B8-2). |
 | T-B10-L09 | v1.0 | emulator | host |  | hw.observe |  | B8.4, Table B8-2, A3.6, HIS 85 | TX frozen: `TX_MODE_CLASS`, `KEYED_TIMEOUT`, `LIMIT_TX_TIME` and `LIMIT_FWD_POWER` writes are answered as in Table B8-2 (accepted values, `BAD_VALUE`, `LOOSER_LIMIT`, 0 = back to the persistent value) and are reset at the session end; none moves a pin of the RF section. |
+| T-EMU-IDLE | v1.0 | emulator | host |  | time.advance |  | B11 | Information for the emulator's idle analysis, not judged: with no session and no traffic, GET_STATS (all counters) before and after 60 s of radio time (time.advance), with the emulated t_us before and after and the wall time. |
 | T-B6-L01 | v1.0 | emulator | host |  | hw.trace |  | B6.1, 0042, HIS 80 | FPGA bus ([HIS] HIS 80) during a session: no command 0x05, 0x06, 0x09 or 0x0A; a 0x01 frame only with the RF section in the safe state (B6.1; 0042); D0-D7 back to outputs only after STB is low. Needs hw.trace with PE0-PE10. |
 | T-B10-L11 | v1.0 | emulator | host |  | hw.observe, power.cycle, net.hosts |  | A3.6, A3.6a, B10, 0029, 0031, 0032, HIS 85 | TX frozen: the HIS 85 safe state is held, traced from power-on, through idle, a session with PTT held, a takeover, a watchdog standby and a power cycle: no T/R line leaves its RX level, chain A bit 7 is never set, bias channels 2, 7, 8 are never non-zero, the ATU latches and the codec are untouched. |
 

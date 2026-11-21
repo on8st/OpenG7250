@@ -315,6 +315,9 @@ BENCH_TESTS = [
      "`LIMIT_FWD_POWER` writes are answered as in Table B8-2 (accepted values, `BAD_VALUE`, "
      "`LOOSER_LIMIT`, 0 = back to the persistent value) and are reset at the session end; none "
      "moves a pin of the RF section.", ["B8.4", "Table B8-2", "A3.6", "HIS 85"], ["hw.observe"]),
+    ("T-EMU-IDLE", "Information for the emulator's idle analysis, not judged: with no session and no "
+     "traffic, GET_STATS (all counters) before and after 60 s of radio time (time.advance), with "
+     "the emulated t_us before and after and the wall time.", ["B11"], ["time.advance"]),
     ("T-B6-L01", "FPGA bus ([HIS] HIS 80) during a session: no command 0x05, 0x06, 0x09 or 0x0A; a "
      "0x01 frame only with the RF section in the safe state (B6.1; 0042); D0-D7 back to outputs "
      "only after STB is low. Needs hw.trace with PE0-PE10.", ["B6.1", "0042", "HIS 80"], ["hw.trace"]),
