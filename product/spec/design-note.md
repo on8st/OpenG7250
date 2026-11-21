@@ -277,6 +277,7 @@ upstream through the RFC (0038).
 - **Sources still to read.** The TCI 2.1 PDF and its terms of use (before part C), the
   Radioddity product page, the HDSDR network tutorial and the Temporarily Offline video
   (`sources.md`).
-- **Decisions.** 0001–0059 are accepted (0033–0035 and 0037–0059 on
-  2026-11-21; `product-handover.md`). What remains for the product are the values of Annex P, which
+- **Decisions.** 0001–0059 and 0061 are accepted (0033–0035 and 0037–0059 on
+  2026-11-21); 0060 (DDC0 frame values from the factory calibration) is proposed
+  (`product-handover.md`). What remains for the product are the values of Annex P, which
   need the radio.

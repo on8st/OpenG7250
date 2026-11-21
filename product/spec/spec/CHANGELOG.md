@@ -50,6 +50,9 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
 - 0040–0059, answers to firmware and testbench questions: see `product-handover.md`.
 - 2026-11-21: ON8ST accepted 0033–0035 and 0037–0059; every decision 0001–0059 is now
   accepted.
+- 0060 (proposed): P-RX-2 from the unit's factory calibration, confirmed on the radio; encoding
+  in Table P-1; Annex P "P-RX-2 route"; T-B6-28; HIS-02 question on the EEPROM.
+- 0061: the store is in flash sectors 6 and 7 (A1.8 "Store location", A1.12, P-SYS-5).
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 
