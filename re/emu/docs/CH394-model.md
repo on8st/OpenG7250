@@ -42,7 +42,6 @@ timing.
 
 `firmware-tests/bench/net_test.c` with the runner self-check
 (`docs/PRODUCT-RUNNER.md`): link status, UDP socket open, echo through the
-bridge from three hosts and as a broadcast. The stock Main still programs its
-forced default address (B2, A5); it moves its SPI6 data through the BDMA,
-which is not delivered yet (step 1g), so its socket set-up does not complete
-on this model, as before.
+bridge from three hosts and as a broadcast. Since step 1g the stock Main's own driver
+reads the chip through SPI6 and the BDMA: chip version, MAC, and its UDP socket
+opens.

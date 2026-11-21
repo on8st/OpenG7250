@@ -23,6 +23,9 @@ REPL_I2C1_MOCK = os.path.join(REPO, "platforms", "g7250_main_i2c1_mock.repl")
 REPL_I2C1_FUNC = os.path.join(REPO, "platforms", "g7250_main_i2c1_func.repl")
 REPL_SPI6_CH394 = os.path.join(REPO, "platforms", "g7250_main_spi6_ch394.repl")
 CS_CH394 = os.path.join(REPO, "models", "csharp", "G7250Ch394.cs")
+CS_SPI = os.path.join(REPO, "models", "csharp", "G7250Spi.cs")
+CS_BDMA = os.path.join(REPO, "models", "csharp", "G7250Bdma.cs")
+REPL_SPI6_DMA = os.path.join(REPO, "platforms", "g7250_main_spi6_dma.repl")
 REPL_FPGA = os.path.join(REPO, "platforms", "g7250_main_fpga.repl")
 CS_GPIOE = os.path.join(REPO, "models", "csharp", "G7250Gpioe.cs")
 CS_SLAVES = os.path.join(REPO, "models", "csharp", "G7250Slaves.cs")
@@ -64,6 +67,12 @@ def build_resc(image_path, log_path, fpga=False):
         'machine LoadPlatformDescription @%s' % REPL_I2C1_FUNC,
         # functional CH394 Ethernet on SPI6 (CS# = PG15) so the forced default
         # IP is programmed into the chip (A1.12 confirmed chip-side).
+        # SPI6 with DMA through DMAMUX2 and the BDMA (step 1g; docs/SPI-model.md)
+        'i @%s' % CS_SPI,
+        'i @%s' % CS_BDMA,
+        'sysbus Unregister sysbus.spi6',
+        'sysbus Unregister sysbus.bdma',
+        'machine LoadPlatformDescription @%s' % REPL_SPI6_DMA,
         'i @%s' % CS_CH394,
         'machine LoadPlatformDescription @%s' % REPL_SPI6_CH394,
         # give the NVIC the SysTick input clock so the 1 ms HAL tick advances

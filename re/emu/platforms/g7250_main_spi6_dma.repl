@@ -1,0 +1,28 @@
+// g7250_main_spi6_dma.repl: SPI6 with DMA through DMAMUX2 and the BDMA
+// (step 1g; docs/SPI-model.md, docs/BDMA-model.md). SPI6 is in the D3 domain,
+// whose DMA is the BDMA, reached through DMAMUX2 (ST RM0468: spi6_rx_dma =
+// DMAMUX2 request 11, spi6_tx_dma = 12; SPI6 interrupt 86, BDMA channel
+// interrupts 129-136).
+//
+// Load procedure (the runners do this), before the CH394 is attached to spi6:
+//   i @models/csharp/G7250Spi.cs
+//   i @models/csharp/G7250Bdma.cs
+//   sysbus Unregister sysbus.spi6
+//   sysbus Unregister sysbus.bdma
+//   machine LoadPlatformDescription @platforms/g7250_main_spi6_dma.repl
+// DMAMUX2 is Renode's STM32_DMAMUX model (as DMAMUX1).
+bdma: DMA.G7250Bdma @ sysbus <0x58025400, +0x400>
+    [0-7] -> nvic@[129-136]
+
+dmamux2: Miscellaneous.STM32_DMAMUX @ sysbus 0x58025800
+    numberOfInputRequestChannels: 32
+    numberOfOutputRequestChannels: 8
+    numberOfRequestGeneratorChannels: 8
+    [0-7] -> bdma@[0-7]
+
+spi6: SPI.G7250Spi @ sysbus <0x58001400, +0x400>
+    spiName: "SPI6"
+    fifoDepth: 8
+    IRQ -> nvic@86
+    RxDma -> dmamux2@11
+    TxDma -> dmamux2@12

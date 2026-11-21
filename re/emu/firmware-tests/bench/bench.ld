@@ -9,6 +9,7 @@ MEMORY
   FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
   RAM   (rwx) : ORIGIN = 0x24000000, LENGTH = 320K
   D2RAM (rw)  : ORIGIN = 0x30000000, LENGTH = 32K
+  D3RAM (rw)  : ORIGIN = 0x38000000, LENGTH = 16K
 }
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 ENTRY(reset_handler)
@@ -20,4 +21,5 @@ SECTIONS
   .data : { . = ALIGN(4); _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } > RAM AT > FLASH
   .bss : { . = ALIGN(4); _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } > RAM
   .dmabuf (NOLOAD) : { . = ALIGN(32); *(.dmabuf*) } > D2RAM
+  .d3buf (NOLOAD) : { . = ALIGN(32); *(.d3buf*) } > D3RAM
 }

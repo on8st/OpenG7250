@@ -136,8 +136,6 @@ error there because that program does not speak the product protocol.
 
 ## Known gaps
 
-- **SPI6 through the BDMA.** The CH394 is on SPI6 in the D3 domain, whose DMA
-  is the BDMA (via DMAMUX2). Renode 1.17's BDMA and SPI DMA requests do not
-  deliver: an image that moves SPI6 data by DMA reads zeros. Polled SPI works
-  (the self-check). Planned as step 1g.
+- SPI6 through the BDMA: done in step 1g (`docs/SPI-model.md`,
+  `docs/BDMA-model.md`); SPI1 and SPI2 still use Renode's model (polled).
 - `link.set`, `sensor.set` and the later fixtures, above.

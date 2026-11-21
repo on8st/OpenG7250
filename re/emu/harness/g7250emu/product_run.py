@@ -48,6 +48,12 @@ OUT_ROOT = P(".private", "product-runs")
 GENERIC = [
     ("cs", P("models", "csharp", "G7250Slaves.cs")),
     ("repl", P("platforms", "g7250_main_i2c1_func.repl")),
+    # SPI6 with DMA through DMAMUX2 and the BDMA (step 1g)
+    ("cs", P("models", "csharp", "G7250Spi.cs")),
+    ("cs", P("models", "csharp", "G7250Bdma.cs")),
+    ("cmd", "sysbus Unregister sysbus.spi6"),
+    ("cmd", "sysbus Unregister sysbus.bdma"),
+    ("repl", P("platforms", "g7250_main_spi6_dma.repl")),
     ("cs", P("models", "csharp", "G7250Ch394.cs")),
     ("repl", P("platforms", "g7250_main_spi6_ch394.repl")),
     ("cs", P("models", "csharp", "G7250Mdma.cs")),
