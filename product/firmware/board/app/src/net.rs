@@ -34,6 +34,23 @@ use g7250_radio::mgmt::{Ctx, Server};
 /// is measured (P-NET-1). SPI6 kernel clock is PCLK4 = 64 MHz here; 64 / 4 = 16 MHz.
 const SPI_HZ: u32 = 16_000_000;
 const SOCK_DISCOVERY: u8 = 0;
+/// A failed flash operation (error flag, or not done within 2 x t_erase_max) raises
+/// INTERNAL_ERROR (class 2) and is logged; every fault entered is logged once (A3.5; A1.7).
+fn flash_failures(server: &mut Server) {
+    let now = Instant::now().as_millis();
+    if let Some(sr) = g7250_board::flash::take_failure() {
+        let how = if sr == g7250_board::flash::TIMEOUT { "did not end within 2 x t_erase_max" } else { "ended with an error flag" };
+        server.log.push(now, format_args!("flash operation failed: {how} (FLASH_SR1 {sr:#010x})"));
+        crate::fault::raise(g7250_safety::fault::code::INTERNAL_ERROR);
+    }
+    let codes = crate::fault::take_unlogged();
+    for c in 1..32u8 {
+        if codes & (1 << c) != 0 {
+            server.log.push(now, format_args!("fault {} entered (class {}): TX locked until reset, RX goes on", c, g7250_safety::fault::class_of(c)));
+        }
+    }
+}
+
 /// Longest idle sleep of the net loop with no session (INT# wakes it at once): the link check,
 /// the trial's 10 s confirmation (checked once a second) and the 10 min update abandonment.
 const IDLE_MAX_MS: u64 = 1000;
@@ -692,6 +709,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         read_hp(&mut chip, &mut p2, &mut rx, &mut hp_rx, &mut steps);
         // Session watchdog and status first, on every pass, so that no branch below can delay
         // the standby beyond B5.6's 1100 ms (T-B5-10).
+        flash_failures(&mut server);
+        p2.sync_faults(&mut chip, Instant::now().as_millis());
         let t = Instant::now();
         p2.tick(&mut chip, Instant::now().as_millis());
         step(&mut steps, 0, t);
@@ -923,7 +942,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                     };
                     // A datagram longer than the buffer arrives cut off; the header still decides
                     // (A1.4: 19 for a declared length above 1000, else 17 for the length mismatch).
-                    let reply = server.handle((d.src_ip, d.src_port), &mrx[..d.len], &mut ctx, &mut mtx);
+                    let mut reply = server.handle((d.src_ip, d.src_port), &mrx[..d.len], &mut ctx, &mut mtx);
+                    let mut store_failed = false;
                     let effects = server.take_effects();
                     // Store writes before the reply (A1.6: stored with a check value before it
                     // counts); network changes and resets after it (A1.6, A1.9).
@@ -949,9 +969,21 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                             Ok(Some(later)) => {
                                 let _ = after.push(later);
                             }
-                            Err(msg) => println!("net: FAULT store write failed ({})", msg),
+                            Err(msg) => {
+                                // B2.3 "flash work that fails" (0065 point 2): the store keeps
+                                // its old values (mgmt_init changes nothing before the write
+                                // succeeds), the reply becomes 55, logged; INTERNAL_ERROR below.
+                                println!("net: FAULT store write failed ({})", msg);
+                                server.log.push(Instant::now().as_millis(), format_args!("store write failed ({msg}); old values kept"));
+                                store_failed = true;
+                            }
                         }
                     }
+                    if store_failed && reply.is_some() {
+                        reply = server.fail_reply((d.src_ip, d.src_port), m::Status::VerificationFailed, &mut mtx);
+                    }
+                    flash_failures(&mut server);
+                    p2.sync_faults(&mut chip, Instant::now().as_millis());
                     if let Some(n) = reply {
                         let _ = chip.udp_send(SOCK_MGMT, d.src_ip, d.src_port, &mtx[..n]);
                     }
@@ -1074,7 +1106,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         let d = dhcpc.as_ref().map_or(u64::MAX, |d| d.next_due());
                         d.clamp(now + 1, now + IDLE_MAX_MS)
                     };
-                    let _ = embassy_futures::select::select(int.wait_for_low(), Timer::at(embassy_time::Instant::from_millis(due))).await;
+                    let _ = embassy_futures::select::select3(int.wait_for_low(), Timer::at(embassy_time::Instant::from_millis(due)), crate::fault::WAKE.wait()).await;
                 }
             }
             Err(e) => {

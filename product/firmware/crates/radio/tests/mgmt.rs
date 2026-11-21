@@ -481,6 +481,22 @@ fn update_commands_through_the_updater() {
 }
 
 #[test]
+fn a_store_write_that_fails_turns_the_reply_into_55_also_for_a_repeat() {
+    // B2.3 "flash work that fails" (0065 point 2; T-A1-85): the board's store write fails after
+    // the command was accepted; the reply, and a repeat of the request, are 55 with no payload.
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let set = [0, 0, 0, 1, 0];
+    let mut out = [0u8; mgmt::MAX_REPLY];
+    let (st, _) = authed(&mut w, &mut s, HOST, 10, Command::SetCalibration, &set, 0);
+    assert_eq!(st, Status::Ok);
+    let n = s.fail_reply(HOST, Status::VerificationFailed, &mut out).unwrap();
+    let r = mgmt::parse_reply(&out[..n]).unwrap();
+    assert_eq!((r.status, r.payload.len(), r.header.request_id), (Some(Status::VerificationFailed), 0, 11));
+}
+
+#[test]
 fn rollback_is_logged_with_slots_and_versions() {
     // T-A1-84 (0064 point 3.3): reply 0, the log line, then a commanded reset; 58 during a
     // trial boot.

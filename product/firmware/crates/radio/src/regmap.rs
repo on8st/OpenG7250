@@ -149,7 +149,8 @@ pub struct RegMap {
     /// General byte 38 bit [0] as last written; `None` before any General packet (B5.6).
     pub watchdog_written: Option<bool>,
     pub armed: bool,
-    pub fault_flags: u32,
+    /// The fault state (A3.5): a copy of the radio's latch, set by the board each pass.
+    pub faults: g7250_safety::fault::Faults,
     pub trip_count: u32,
     /// `LIMIT_STATUS`, from the key path.
     pub limit_status: u32,
@@ -174,7 +175,7 @@ impl RegMap {
             keyed_timeout_ms: 500,
             watchdog_written: None,
             armed: false,
-            fault_flags: 0,
+            faults: g7250_safety::fault::Faults::new(),
             trip_count: 0,
             limit_status: 0,
             limit_tx_time: 0,
@@ -229,9 +230,12 @@ impl RegMap {
             TX_MODE_CLASS => self.tx_mode_class as u32,
             KEYED_TIMEOUT => self.keyed_timeout_ms,
             WATCHDOG_STATE => self.watchdog_state(),
-            SAFETY_STATE | FAULT_CODE | FAULT_CLASS | LIMIT_INHIBIT => 0,
+            SAFETY_STATE => self.faults.safety_state(),
+            FAULT_CODE => self.faults.first_code(),
+            FAULT_CLASS => self.faults.class(),
+            LIMIT_INHIBIT => 0,
             LIMIT_STATUS => self.limit_status,
-            FAULT_FLAGS => self.fault_flags,
+            FAULT_FLAGS => self.faults.flags(),
             TRIP_COUNT => self.trip_count,
             FAULT_CLEAR => 0,
             LIMIT_TX_TIME => self.tx_time_in_force(),
@@ -339,12 +343,12 @@ impl RegMap {
                 Err(e) => Some(e),
             },
             FAULT_CLEAR => {
-                // No fault can be set in this build; with FAULT_FLAGS = 0 a write of 0 is
-                // NOT_CLEARABLE, any other value BAD_VALUE (B8.4; 0039).
-                if self.fault_flags == 0 {
-                    Some(if v == 0 { WriteReject::NotClearable } else { WriteReject::BadValue })
-                } else {
-                    Some(WriteReject::NotClearable)
+                // A3.5 "Clearing" (B8.4; 0039): the latch's rules. Only class 2 codes can be set
+                // in this build, so every clear is refused; nothing is cleared.
+                match self.faults.clone().clear(v) {
+                    Ok(()) => None,
+                    Err(g7250_safety::fault::ClearReject::NotClearable) => Some(WriteReject::NotClearable),
+                    Err(g7250_safety::fault::ClearReject::BadValue) => Some(WriteReject::BadValue),
                 }
             }
             LIMIT_TX_TIME => {
@@ -504,6 +508,13 @@ mod tests {
         let a = run(&mut m, &mut tx, true, &[(FAULT_CLEAR, 0), (FAULT_CLEAR, 7)]);
         assert_eq!(a.pairs[1].1 & 0xFF, WriteReject::NotClearable as u32);
         assert_eq!(a.pairs[3].1 & 0xFF, WriteReject::BadValue as u32);
+        // A class 2 fault (A3.5): the registers report it, and FAULT_CLEAR is NOT_CLEARABLE.
+        m.faults.raise(g7250_safety::fault::code::INTERNAL_ERROR);
+        assert_eq!((m.read(SAFETY_STATE, &tx), m.read(FAULT_CODE, &tx), m.read(FAULT_FLAGS, &tx), m.read(FAULT_CLASS, &tx)), (Some(1), Some(19), Some(1 << 19), Some(2)));
+        let a = run(&mut m, &mut tx, true, &[(FAULT_CLEAR, 19)]);
+        assert_eq!(a.pairs[1].1 & 0xFF, WriteReject::NotClearable as u32);
+        assert_eq!(m.read(FAULT_FLAGS, &tx), Some(1 << 19));
+        m.faults = g7250_safety::fault::Faults::new();
         // Session end resets the session values.
         m.session_end();
         assert_eq!((m.tx_mode_class, m.read(LIMIT_TX_TIME, &tx)), (0, Some(300_000)));

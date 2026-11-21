@@ -5,6 +5,7 @@
 //! rejected with `NOT_CALIBRATED` until the measured values are in the spec).
 #![cfg_attr(not(test), no_std)]
 
+pub mod fault;
 pub mod fpga_gate;
 pub mod rx_frame;
 pub mod cw;

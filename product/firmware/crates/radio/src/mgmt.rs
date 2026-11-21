@@ -353,6 +353,21 @@ impl Server {
         Some(len)
     }
 
+    /// The reply just built for `src` (the newest in the repeat cache) becomes `status` with no
+    /// payload, in `out` and in the cache, so that a repeat gets the same: a store write that
+    /// failed after the command was accepted (B2.3 "flash work that fails": 55, the old values
+    /// kept; 0065 point 2). Returns the new length.
+    pub fn fail_reply(&mut self, src: Addr, status: Status, out: &mut [u8; mgmt::MAX_REPLY]) -> Option<usize> {
+        let i = self.repeat.iter().enumerate().filter_map(|(i, s)| s.filter(|s| s.addr == src).map(|s| (i, s.at_ms))).max_by_key(|x| x.1)?.0;
+        let s = self.repeat[i]?;
+        let len = mgmt::build_reply(out, s.id, s.command, status, &[]).ok()?;
+        let mut st = s;
+        st.len = len as u16;
+        st.reply[..len].copy_from_slice(&out[..len]);
+        self.repeat[i] = Some(st);
+        Some(len)
+    }
+
     fn source_ok(&mut self, src: Addr, identify: bool, ctx: &Ctx<'_>) -> bool {
         let ok = !is_broadcast_source(src.0, ctx.own_ip, ctx.own_mask)
             && (identify || (netcfg::valid_mask(ctx.own_mask) && netcfg::in_subnet(ctx.own_ip, ctx.own_mask, src.0)));

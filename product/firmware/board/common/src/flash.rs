@@ -46,11 +46,55 @@ const CR_START: u32 = 1 << 7;
 /// FLASH_SR1: BSY bit 0, WBNE bit 1, QW bit 2; error flags bits 17-26.
 const SR_BUSY: u32 = (1 << 0) | (1 << 1) | (1 << 2);
 const SR_ERRORS: u32 = 0x07EE_0000;
-/// Returned instead of SR when the poll bound ran out.
+/// Returned instead of SR when the operation did not end within [`LIMIT_MS`].
 pub const TIMEOUT: u32 = 1 << 31;
 const FAILED: u32 = SR_ERRORS | TIMEOUT;
-/// Polls before giving up: far above any datasheet erase maximum at 64 MHz from RAM.
-const POLLS: u32 = 400_000_000;
+/// `t_erase_max`: the maximum 128 KiB sector erase time of the MCU fitted, from its datasheet
+/// ([STM32H72x]; B2.3; 0065 point 1).
+/// PENDING: the datasheet value is not in the repository yet (the public PDF could not be fetched
+/// here); this placeholder is NOT a datasheet figure, chosen long so that a slow but good erase
+/// is not taken as a failure. Replace it with the datasheet maximum.
+pub const T_ERASE_MAX_MS: u32 = 4_000;
+/// An erase or program that does not end within 2 x `t_erase_max` has failed (B2.3 "flash work
+/// that fails"; 0065 point 2).
+pub const LIMIT_MS: u32 = 2 * T_ERASE_MAX_MS;
+/// The same limit in core cycles (SYSCLK is HSI 64 MHz, no PLL); measured with the DWT cycle
+/// counter, which wraps after 67 s, far above the limit.
+const LIMIT_CYCLES: u32 = LIMIT_MS * (crate::console::HSI_HZ / 1000);
+const _: () = assert!((LIMIT_MS as u64) * (crate::console::HSI_HZ as u64 / 1000) < u32::MAX as u64 / 2);
+/// DWT cycle counter (ARMv7-M): DEMCR.TRCENA (bit 24), DWT_CTRL.CYCCNTENA (bit 0), CYCCNT, and
+/// the Cortex-M7 DWT lock access register.
+const DEMCR: u32 = 0xE000_EDFC;
+const DWT_CTRL: u32 = 0xE000_1000;
+const DWT_CYCCNT: u32 = 0xE000_1004;
+const DWT_LAR: u32 = 0xE000_1FB0;
+
+/// A flash operation failed (error flag or timeout) since the last [`take_failure`]; the caller
+/// raises `INTERNAL_ERROR` and logs it (0065 point 2).
+static FAILURE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The final FLASH_SR1 (or [`TIMEOUT`]) of a failed operation since the last call, if any.
+pub fn take_failure() -> Option<u32> {
+    match FAILURE.swap(0, core::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        sr => Some(sr),
+    }
+}
+
+fn note_failure(sr: u32) {
+    FAILURE.store(sr, core::sync::atomic::Ordering::Relaxed); // never 0: an error flag or TIMEOUT
+}
+
+/// Start the DWT cycle counter (idempotent).
+fn cycle_counter_on() {
+    use core::ptr::{read_volatile as rd, write_volatile as wr};
+    // SAFETY: core debug registers, always present on the Cortex-M7; only the counter is enabled.
+    unsafe {
+        wr(DEMCR as *mut u32, rd(DEMCR as *const u32) | (1 << 24));
+        wr(DWT_LAR as *mut u32, 0xC5AC_CE55);
+        wr(DWT_CTRL as *mut u32, rd(DWT_CTRL as *const u32) | 1);
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FlashError {
@@ -154,11 +198,10 @@ unsafe fn wait_and_lock(clear_bits: u32) -> u32 {
     use core::ptr::{read_volatile as rd, write_volatile as wr};
     unsafe {
         let mut sr = rd(FLASH_SR1 as *const u32);
-        let mut n: u32 = 0;
+        let t0 = rd(DWT_CYCCNT as *const u32);
         while sr & SR_BUSY != 0 {
             wr(IWDG1_KR as *mut u32, 0xAAAA);
-            n += 1;
-            if n > POLLS {
+            if rd(DWT_CYCCNT as *const u32).wrapping_sub(t0) > LIMIT_CYCLES {
                 sr = TIMEOUT;
                 break;
             }
@@ -224,10 +267,12 @@ impl FlashIo for RawFlash {
                 w[i] = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
             }
             let a = addr + k as u32 * FLASH_WORD;
+            cycle_counter_on();
             // SAFETY: the guard allowed [addr, addr+len) for this writer; the routine runs from
             // RAM and touches only FLASH bank 1, the target word and IWDG1.
             let sr = cortex_m::interrupt::free(|_| unsafe { flash_program_from_ram(a, &w) });
             if sr & FAILED != 0 {
+                note_failure(sr);
                 return Err(FlashError::Hw(sr));
             }
         }
@@ -240,8 +285,14 @@ impl FlashIo for RawFlash {
         if snb == 0 || snb > 7 {
             return Err(FlashError::Guard); // never sector 0 (also refused by the guard)
         }
+        cycle_counter_on();
         // SAFETY: as above, for one whole sector the guard allowed.
         let sr = cortex_m::interrupt::free(|_| unsafe { flash_erase_from_ram(snb) });
-        if sr & FAILED != 0 { Err(FlashError::Hw(sr)) } else { Ok(()) }
+        if sr & FAILED != 0 {
+            note_failure(sr);
+            Err(FlashError::Hw(sr))
+        } else {
+            Ok(())
+        }
     }
 }

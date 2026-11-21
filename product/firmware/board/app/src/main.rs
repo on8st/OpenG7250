@@ -7,6 +7,7 @@
 #![no_std]
 #![no_main]
 
+mod fault;
 mod fpga;
 mod net;
 mod p2;
@@ -73,8 +74,10 @@ async fn watchdog(mut wd: IndependentWatchdog<'static, embassy_stm32::peripheral
         // Not transmitting (TX is never armed in this build): the safe state must hold. If it
         // does not, put it back; the fault path comes with the safety core (F3).
         if !safe::holds() {
+            // A3.5: a TX path not blocked (drop event 13), class 2, latched until a reset; the
+            // safe state is put back at once (HIS 85).
             safe::reassert();
-            update::set_class2_fault();
+            fault::raise(g7250_safety::fault::code::TX_PATH_NOT_BLOCKED);
             println!("app: FAULT safe state found not held; re-applied");
         }
         wd.pet();

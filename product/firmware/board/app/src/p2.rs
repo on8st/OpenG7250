@@ -287,7 +287,7 @@ impl P2 {
         ArmContext {
             run: self.session.running(),
             watchdog_ok: self.regs.watchdog_effective(),
-            in_fault: false,
+            in_fault: self.regs.faults.active(),
             inhibit: false,
             ptt_bit: self.session.ptt,
             level1_active: true,
@@ -307,7 +307,7 @@ impl P2 {
             None => self.key.tx_in_range(),
         };
         KeyContext {
-            in_fault: false,
+            in_fault: self.regs.faults.active(),
             freq_in_range: in_range,
             rf_path_ready: false,
             encoding_mismatch: self.session.general.is_some_and(|g| !g.phase_word),
@@ -767,6 +767,34 @@ impl P2 {
     /// Unkey and drop the arm with `MAINTENANCE` (Table A3-1 event 11) before flash work or a
     /// commanded reset (A1.6, A1.9; B2.3 "Flash work", 0055); the new arm state and token are
     /// pushed to the owner. Nothing changes while not armed (A3.2).
+    /// The fault latch (A3.5) into the registers: on a change, an entry unkeys and drops the arm
+    /// (`FAULT`), and `SAFETY_STATE`, `FAULT_CODE`, `FAULT_FLAGS` and `FAULT_CLASS` are pushed to
+    /// the owner (B8; on change). Called every pass.
+    pub fn sync_faults(&mut self, chip: &mut Chip, now: u64) {
+        let f = crate::fault::now();
+        if f == self.regs.faults {
+            return;
+        }
+        self.regs.faults = f;
+        if f.active() {
+            let mut rf = crate::BoardRf;
+            if self.tx.drop(DropReason::Fault, &mut rf) {
+                self.key.arm_dropped();
+                self.regs.armed = false;
+                if let Some(dest) = self.session.register_destination() {
+                    let p = [(regmap::addr::TX_ARM_STATE, self.tx.arm_state_reg()), (regmap::addr::TX_ARM_TOKEN, self.tx.token())];
+                    self.send_regs(chip, dest, &p);
+                }
+                self.sync_tx_state(chip, now);
+            }
+        }
+        if let Some(dest) = self.session.register_destination() {
+            use regmap::addr::{FAULT_CLASS, FAULT_CODE, FAULT_FLAGS, SAFETY_STATE};
+            let p = [(SAFETY_STATE, f.safety_state()), (FAULT_CODE, f.first_code()), (FAULT_FLAGS, f.flags()), (FAULT_CLASS, f.class())];
+            self.send_regs(chip, dest, &p);
+        }
+    }
+
     pub fn disarm_for_maintenance(&mut self, chip: &mut Chip, now: u64) {
         let mut rf = crate::BoardRf;
         if self.tx.drop(DropReason::Maintenance, &mut rf) {
