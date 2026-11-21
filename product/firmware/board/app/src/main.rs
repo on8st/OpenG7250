@@ -214,6 +214,20 @@ fn hold_without_hal(o: g7250_safety::supply::Outcome) -> ! {
     }
 }
 
+/// Steps 4-5 of a commanded reset (A1.9): relays to the A3.6 state, for a factory reset the
+/// Table A1-4 items in the store (A1.6a), then the reset.
+pub fn safe_reset(mgmt: &mut mgmt_init::MgmtInit, factory: bool) -> ! {
+    safe::reassert();
+    if factory {
+        if let Err(e) = mgmt_init::factory_reset_store(mgmt) {
+            println!("app: FAULT factory reset of the store failed ({})", e);
+        }
+    }
+    println!("app: commanded reset{}", if factory { " (factory reset)" } else { "" });
+    console::flush();
+    cortex_m::peripheral::SCB::sys_reset()
+}
+
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     cortex_m::interrupt::disable();

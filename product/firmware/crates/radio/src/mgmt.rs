@@ -13,6 +13,10 @@
 //! Not yet: the write commands (step 4). Until then no secret can be set, so every
 //! authenticated request fails with 33, and a command not built yet is answered with 56.
 
+pub mod write;
+
+pub use write::{Effect, Log};
+
 use g7250_proto::mgmt::{self, auth, Command, Incoming, Status};
 use g7250_proto::netcfg;
 use g7250_proto::ratelimit::RateLimit;
@@ -83,6 +87,10 @@ pub struct Ctx<'a> {
     pub rng: &'a mut dyn FnMut(&mut [u8; 16]) -> bool,
     /// Set if a secret is stored.
     pub secret: Option<&'a [u8; 32]>,
+    /// A G7250-P2 session runs (status 57 for calibration and region writes).
+    pub p2_session: bool,
+    /// TX armed or keyed on any level (status 50).
+    pub armed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -121,6 +129,15 @@ pub struct Server {
     net_up_ms: Option<u64>,
     window_used: bool,
     pub stats: Stats,
+    /// Write session holder and the time of its last refresh (A1.10).
+    writer: Option<(Addr, u64)>,
+    /// A commanded reset is under way (A1.9 "One commanded reset at a time").
+    reset_pending: bool,
+    /// The challenge the current authenticated request used (`CHANGE_SECRET` mask, Table M-1).
+    used_challenge: [u8; 16],
+    /// Effects of the last request for the board (store, network, reset), in order.
+    pub effects: heapless::Vec<Effect, 4>,
+    pub log: Log,
 }
 
 fn is_broadcast_source(ip: [u8; 4], own: [u8; 4], mask: [u8; 4]) -> bool {
@@ -157,6 +174,11 @@ impl Server {
                 discovery_from_port_1024: 0,
                 set_ip_ignored: 0,
             },
+            writer: None,
+            reset_pending: false,
+            used_challenge: [0; 16],
+            effects: heapless::Vec::new(),
+            log: Log::new(),
         }
     }
 
@@ -168,6 +190,11 @@ impl Server {
     }
 
     /// First-secret window: open, seconds left (A1.10; IDENTIFY tag 12).
+    /// Clear the effects of the previous request (call before `handle`).
+    pub fn take_effects(&mut self) -> heapless::Vec<Effect, 4> {
+        core::mem::take(&mut self.effects)
+    }
+
     pub fn window(&self, now_ms: u64, secret_set: bool) -> (bool, u16) {
         match self.net_up_ms {
             Some(t0) if !secret_set && !self.window_used => {
@@ -304,15 +331,18 @@ impl Server {
             }
             let Some(trailer) = req.trailer else { return (Status::AuthRequired, 0) };
             let ok = match (ctx.secret, self.take_challenge(src, now)) {
-                (Some(secret), Some(ch)) => auth::verify(secret, &ch, req.signed, trailer),
+                (Some(secret), Some(ch)) => {
+                    self.used_challenge = ch;
+                    auth::verify(secret, &ch, req.signed, trailer)
+                }
                 _ => false,
             };
             if !ok {
                 self.auth_failed(src.0, now);
+                self.log.push(now, format_args!("auth failure from {}.{}.{}.{}:{}", src.0[0], src.0[1], src.0[2], src.0[3], src.1));
                 return (Status::AuthFailed, 0);
             }
-            // Authenticated writes come with step 4.
-            return (Status::NotSupported, 0);
+            return self.write(src, cmd, req, ctx, p);
         }
         match cmd {
             Command::Identify => {
@@ -343,6 +373,14 @@ impl Server {
             }
             Command::GetConfig => copy(p, ctx.config),
             Command::GetCalibration => copy(p, ctx.calibration),
+            Command::SetFirstSecret => self.set_first_secret(src, req.payload, ctx),
+            Command::ReadLog => self.read_log(req.payload, p),
+            Command::UpdateStatus => {
+                // No update path in this build: idle, nothing received (Table M-1).
+                let u = mgmt::payload::UpdateStatus { state: 0, received: 0, count: 0, sectors_written: 0 };
+                p[..10].copy_from_slice(&u.encode());
+                (Status::Ok, 10)
+            }
             // Unauthenticated but not built yet: SET_FIRST_SECRET (step 4), READ_LOG,
             // UPDATE_STATUS (with the update path).
             _ => (Status::NotSupported, 0),

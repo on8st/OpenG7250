@@ -131,3 +131,67 @@ impl MgmtInit {
         MgmtInit { store, secret, config, calibration, identify }
     }
 }
+
+/// Carry out a store effect of a management write before the reply; returns the effects that
+/// must wait for the reply (network change, reset).
+pub fn apply_stored(m: &mut MgmtInit, e: g7250_radio::mgmt::Effect) -> Result<Option<g7250_radio::mgmt::Effect>, &'static str> {
+    use g7250_radio::mgmt::Effect;
+    match e {
+        Effect::SetSecret(s) => {
+            let st = m.store.as_mut().ok_or("no store")?;
+            st.put(Kind::Secret, 1, &s).map_err(|_| "secret")?;
+            m.secret = Some(s);
+            m.identify.secret_set = true;
+            Ok(None)
+        }
+        Effect::SetConfig(v) => {
+            let st = m.store.as_mut().ok_or("no store")?;
+            st.put(Kind::Config, 1, &v).map_err(|_| "configuration")?;
+            m.config.clear();
+            let _ = m.config.extend_from_slice(&v);
+            Ok(None)
+        }
+        Effect::SetCalibration(v) => {
+            let st = m.store.as_mut().ok_or("no store")?;
+            st.put(Kind::Calibration, 1, &v).map_err(|_| "calibration")?;
+            let id = m::auth::sha256(&v);
+            m.calibration.clear();
+            let _ = m.calibration.extend_from_slice(&id);
+            let _ = m.calibration.extend_from_slice(&v);
+            m.identify.calibration_id = id;
+            m.identify.calibration_date = u32::from_be_bytes([v[0], v[1], v[2], v[3]]);
+            Ok(None)
+        }
+        Effect::ClearCalibration => {
+            let st = m.store.as_mut().ok_or("no store")?;
+            st.compact_without(|k| k == Kind::Calibration).map_err(|_| "calibration")?;
+            m.calibration.clear();
+            let _ = m.calibration.extend_from_slice(&[0u8; 37]);
+            m.identify.calibration_id = [0; 32];
+            m.identify.calibration_date = 0;
+            Ok(None)
+        }
+        later @ (Effect::ApplyNetwork | Effect::Restart | Effect::FactoryReset) => Ok(Some(later)),
+    }
+}
+
+/// The network configuration C-1 from the stored Table M-3 items.
+pub fn network_from_config(cfg: &[u8]) -> g7250_proto::netcfg::NetConfig {
+    use g7250_proto::netcfg::{Mode, NetConfig};
+    let c = Config::decode(cfg).unwrap_or_default();
+    match (c.address_mode, c.address, c.netmask) {
+        (Some(1), Some(ip), Some(mask)) => NetConfig { mode: Mode::Static, ip, mask, gateway: c.gateway.unwrap_or([0; 4]) },
+        _ => NetConfig::FACTORY,
+    }
+}
+
+/// Table A1-4 in the store: configuration (C-1, C-2, C-6, C-7) back to the factory values and the
+/// secret cleared, by leaving them out of a compaction; twice, so that no copy of the secret is
+/// left in the other sector. Calibration set and boot counter are kept.
+pub fn factory_reset_store(m: &mut MgmtInit) -> Result<(), &'static str> {
+    let st = m.store.as_mut().ok_or("no store")?;
+    let drop = |k: Kind| k == Kind::Secret || k == Kind::Config;
+    st.compact_without(drop).map_err(|_| "factory reset")?;
+    st.compact_without(drop).map_err(|_| "factory reset")?;
+    Ok(())
+}

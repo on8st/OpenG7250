@@ -492,11 +492,56 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         calibration: &mgmt.calibration,
                         rng: &mut rng,
                         secret: mgmt.secret.as_ref(),
+                        p2_session: p2.session.running(),
+                        armed: p2.tx.state() != g7250_safety::tx::ArmState::Disarmed,
                     };
                     // A datagram longer than the buffer arrives cut off; the header still decides
                     // (A1.4: 19 for a declared length above 1000, else 17 for the length mismatch).
-                    if let Some(n) = server.handle((d.src_ip, d.src_port), &mrx[..d.len], &mut ctx, &mut mtx) {
+                    let reply = server.handle((d.src_ip, d.src_port), &mrx[..d.len], &mut ctx, &mut mtx);
+                    let effects = server.take_effects();
+                    // Store writes before the reply (A1.6: stored with a check value before it
+                    // counts); network changes and resets after it (A1.6, A1.9).
+                    let mut after: heapless::Vec<g7250_radio::mgmt::Effect, 4> = heapless::Vec::new();
+                    for e in effects {
+                        match crate::mgmt_init::apply_stored(&mut mgmt, e) {
+                            Ok(None) => {}
+                            Ok(Some(later)) => {
+                                let _ = after.push(later);
+                            }
+                            Err(msg) => println!("net: FAULT store write failed ({})", msg),
+                        }
+                    }
+                    if let Some(n) = reply {
                         let _ = chip.udp_send(SOCK_MGMT, d.src_ip, d.src_port, &mtx[..n]);
+                    }
+                    for e in after {
+                        match e {
+                            g7250_radio::mgmt::Effect::ApplyNetwork => {
+                                let want = crate::mgmt_init::network_from_config(&mgmt.config);
+                                let now = Instant::now().as_millis();
+                                p2.address_changed(&mut chip, now);
+                                let _ = chip.udp_close(SOCK_DISCOVERY);
+                                let (c, s, dc) = configure(&mut chip, mac, want).await;
+                                cfg = c;
+                                dhcpc = dc;
+                                dhcp_borrowed = false;
+                                print_cfg(&cfg, s);
+                                if crate::p2::P2::open(&mut chip).is_err() || chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
+                                    println!("net: FAULT cannot reopen the P2 and management ports");
+                                    return;
+                                }
+                            }
+                            g7250_radio::mgmt::Effect::Restart | g7250_radio::mgmt::Effect::FactoryReset => {
+                                // Commanded reset (A1.9): unkey and disarm (never armed in this
+                                // build), RF gone (never keyed), reply sent (above), relays to the
+                                // A3.6 state, then the reset. A factory reset writes the items of
+                                // Table A1-4 only now, between steps 4 and 5 (A1.6a).
+                                let factory = e == g7250_radio::mgmt::Effect::FactoryReset;
+                                Timer::after_millis(20).await; // let the reply leave the CH394
+                                crate::safe_reset(&mut mgmt, factory);
+                            }
+                            _ => {}
+                        }
                     }
                     continue;
                 }

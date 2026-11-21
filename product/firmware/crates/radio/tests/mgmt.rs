@@ -11,11 +11,12 @@ struct World {
     id: Identify<'static>,
     n: u8,
     secret: Option<[u8; 32]>,
+    p2: bool,
 }
 
 impl World {
     fn new() -> Self {
-        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None }
+        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false }
     }
     fn call(&mut self, srv: &mut Server, src: ([u8; 4], u16), d: &[u8], now: u64) -> Option<(u32, Status, Vec<u8>)> {
         let mut n = self.n;
@@ -33,6 +34,8 @@ impl World {
             calibration: &[0u8; 37],
             rng: &mut rng,
             secret: self.secret.as_ref(),
+            p2_session: self.p2,
+            armed: false,
         };
         let mut out = [0u8; mgmt::MAX_REPLY];
         let r = srv.handle(src, d, &mut ctx, &mut out).map(|len| {
@@ -76,7 +79,8 @@ fn reads_return_their_payloads() {
     let names: Vec<_> = mgmt::payload::stats(&st.2).map(|e| e.unwrap().0.to_vec()).collect();
     assert!(names.contains(&b"mgmt_requests".to_vec()));
     // Not built yet: answered with 56; framing errors with their codes.
-    assert_eq!(w.call(&mut s, HOST, &req(4, Command::ReadLog, &[0, 0, 0, 0]), 0).unwrap().1, Status::NotSupported);
+    assert_eq!(w.call(&mut s, HOST, &req(4, Command::ReadLog, &[0, 0, 0, 0]), 0).unwrap().1, Status::Ok);
+    assert_eq!(w.call(&mut s, HOST, &req(6, Command::ReadLog, &[]), 0).unwrap().1, Status::Malformed);
     let mut bad = req(5, Command::Identify, &[]);
     bad[4] = 9;
     assert_eq!(w.call(&mut s, HOST, &bad, 0).unwrap().1, Status::UnsupportedVersion);
@@ -128,8 +132,8 @@ fn authenticated_with_secret_and_challenge_reaches_the_command() {
     let ch: [u8; 16] = ch.try_into().unwrap();
     let mut b = [0u8; 1000];
     let n = mgmt::build_request(&mut b, 2, Command::SetConfig, &[], Some((&[7; 32], &ch))).unwrap();
-    // Verified; writes are not built yet: 56.
-    assert_eq!(w.call(&mut s, HOST, &b[..n], 100).unwrap().1, Status::NotSupported);
+    // Verified; an empty SET_CONFIG changes nothing and answers every item.
+    assert_eq!(w.call(&mut s, HOST, &b[..n], 100).unwrap().1, Status::Ok);
     // The challenge is used up: the same request with a new id fails.
     let n = mgmt::build_request(&mut b, 3, Command::SetConfig, &[], Some((&[7; 32], &ch))).unwrap();
     assert_eq!(w.call(&mut s, HOST, &b[..n], 200).unwrap().1, Status::AuthFailed);
@@ -170,4 +174,125 @@ fn reply_caps() {
     r[6] = 2;
     assert!(w.call(&mut s, HOST, &r, 0).is_none());
     assert_eq!(s.stats.mgmt_dropped_not_request, 1);
+}
+
+fn authed(w: &mut World, s: &mut Server, src: ([u8; 4], u16), id: u32, cmd: Command, payload: &[u8], now: u64) -> (Status, Vec<u8>) {
+    let ch = w.call(s, src, &req(id, Command::GetChallenge, &[]), now).unwrap().2;
+    let ch: [u8; 16] = ch.try_into().unwrap();
+    let mut b = [0u8; 1000];
+    let n = mgmt::build_request(&mut b, id + 1, cmd, payload, Some((w.secret.as_ref().unwrap(), &ch))).unwrap();
+    let r = w.call(s, src, &b[..n], now + 1).unwrap();
+    (r.1, r.2)
+}
+
+#[test]
+fn first_secret_only_in_the_window() {
+    use g7250_radio::mgmt::Effect;
+    let mut s = Server::new();
+    let mut w = World::new();
+    // Network not up: window closed.
+    assert_eq!(w.call(&mut s, HOST, &req(1, Command::SetFirstSecret, &[7; 32]), 0).unwrap().1, Status::FirstSecretClosed);
+    s.network_up(0);
+    s.take_effects();
+    assert_eq!(w.call(&mut s, HOST, &req(2, Command::SetFirstSecret, &[7; 31]), 10).unwrap().1, Status::Malformed);
+    assert_eq!(w.call(&mut s, HOST, &req(3, Command::SetFirstSecret, &[7; 32]), 20).unwrap().1, Status::Ok);
+    assert_eq!(s.take_effects().as_slice(), &[Effect::SetSecret([7; 32])]);
+    // Used up: a second claim is refused even before the secret is stored.
+    assert_eq!(w.call(&mut s, HOST, &req(4, Command::SetFirstSecret, &[8; 32]), 30).unwrap().1, Status::FirstSecretClosed);
+    // The claim is logged with its source.
+    let log = w.call(&mut s, HOST, &req(5, Command::ReadLog, &[0, 0, 0, 0]), 40).unwrap().2;
+    let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
+    assert!(e.iter().any(|t| t.contains("first secret set by 192.168.1.5:50000")), "{e:?}");
+}
+
+#[test]
+fn write_session_one_holder_restart_exempt() {
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let other = ([192, 168, 1, 9], 40000);
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::ClearLog, &[], 0).0, Status::Ok);
+    // Another host's write within 60 s: busy.
+    assert_eq!(authed(&mut w, &mut s, other, 20, Command::ClearLog, &[], 1000).0, Status::Busy);
+    // RESTART is exempt.
+    assert_eq!(authed(&mut w, &mut s, other, 30, Command::Restart, &[], 2000).0, Status::Ok);
+    // One commanded reset at a time: a second RESTART gets 1, a FACTORY_RESET 35.
+    assert_eq!(authed(&mut w, &mut s, HOST, 40, Command::Restart, &[], 3000).0, Status::InProgress);
+    assert_eq!(authed(&mut w, &mut s, HOST, 50, Command::FactoryReset, &[], 4000).0, Status::Busy);
+    // After 60 s idle the other host may write.
+    let mut s = Server::new();
+    assert_eq!(authed(&mut w, &mut s, HOST, 60, Command::ClearLog, &[], 0).0, Status::Ok);
+    assert_eq!(authed(&mut w, &mut s, other, 70, Command::ClearLog, &[], 61_000).0, Status::Ok);
+    // END_WRITE_SESSION releases it.
+    assert_eq!(authed(&mut w, &mut s, other, 80, Command::EndWriteSession, &[], 62_000).0, Status::Ok);
+    assert_eq!(authed(&mut w, &mut s, HOST, 90, Command::ClearLog, &[], 62_100).0, Status::Ok);
+}
+
+#[test]
+fn change_secret_unmasks_with_the_request_challenge() {
+    use g7250_radio::mgmt::Effect;
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let ch = w.call(&mut s, HOST, &req(1, Command::GetChallenge, &[]), 0).unwrap().2;
+    let ch: [u8; 16] = ch.try_into().unwrap();
+    let wire = mgmt::auth::change_secret_mask(&[7; 32], &ch, &[9; 32]);
+    let mut b = [0u8; 1000];
+    let n = mgmt::build_request(&mut b, 2, Command::ChangeSecret, &wire, Some((&[7; 32], &ch))).unwrap();
+    s.take_effects();
+    assert_eq!(w.call(&mut s, HOST, &b[..n], 1).unwrap().1, Status::Ok);
+    assert_eq!(s.take_effects().as_slice(), &[Effect::SetSecret([9; 32])]);
+}
+
+#[test]
+fn set_config_validated_as_a_whole() {
+    use g7250_proto::mgmt::payload::Config;
+    use g7250_radio::mgmt::Effect;
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let enc = |c: &Config| {
+        let mut b = [0u8; 256];
+        let n = c.encode(&mut b).unwrap();
+        b[..n].to_vec()
+    };
+    // Static without an address: invalid.
+    let c = Config { address_mode: Some(1), ..Default::default() };
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::SetConfig, &enc(&c), 0).0, Status::InvalidConfig);
+    // Looser than built-in: 49.
+    let c = Config { max_tx_time_ms: Some(400_000), ..Default::default() };
+    assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::SetConfig, &enc(&c), 10).0, Status::NotAllowed);
+    // S2 needs the calibration set: 62.
+    let c = Config { swr_s2_x100: Some(250), ..Default::default() };
+    assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::SetConfig, &enc(&c), 20).0, Status::NeedsCalibration);
+    // Level 2 and region 1 are not in this version.
+    let c = Config { default_level: Some(2), ..Default::default() };
+    assert_eq!(authed(&mut w, &mut s, HOST, 40, Command::SetConfig, &enc(&c), 30).0, Status::InvalidConfig);
+    // A valid static address: stored, applied after the reply, every item answered.
+    s.take_effects();
+    let c = Config { address_mode: Some(1), address: Some([192, 168, 1, 50]), netmask: Some([255, 255, 255, 0]), gateway: Some([192, 168, 1, 1]), ..Default::default() };
+    let (st, p) = authed(&mut w, &mut s, HOST, 50, Command::SetConfig, &enc(&c), 40);
+    assert_eq!(st, Status::Ok);
+    let back = Config::decode(&p).unwrap();
+    assert_eq!(back.address, Some([192, 168, 1, 50]));
+    assert_eq!(back.address_mode, Some(1));
+    assert_eq!(back.netmask, Some([255, 255, 255, 0]), "every item after the change");
+    let fx = s.take_effects();
+    assert!(matches!(fx[0], Effect::SetConfig(_)));
+    assert_eq!(fx[1], Effect::ApplyNetwork);
+}
+
+#[test]
+fn calibration_refused_during_a_p2_session() {
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    w.p2 = true;
+    let set = [0, 0, 0, 1, 0];
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::SetCalibration, &set, 0).0, Status::P2SessionRuns);
+    w.p2 = false;
+    let (st, p) = authed(&mut w, &mut s, HOST, 20, Command::SetCalibration, &set, 10);
+    assert_eq!((st, p.len(), p[32]), (Status::Ok, 33, 0));
+    // Return to stock and vendor recovery: always 56.
+    assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::ReturnToStock, &[], 20).0, Status::NotSupported);
 }
