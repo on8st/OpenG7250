@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "ed328d4",
-  "sha256_of_inputs": "bc523609842b44796b9de4e2da98eae736353ac018d3a58e0adc15988b5b164e"
+  "commit": "f00162e",
+  "sha256_of_inputs": "d4230149801992772d52411950d01000356f2a39744136ca2cc042d07bd4a6b9"
  },
  "his": {
   "commit": "72591aa"
@@ -4860,11 +4860,14 @@
    "id": "T-B5-22",
    "origin": "spec",
    "part": "A-B",
-   "title": "With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run (\"idle\"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on (B2.3 \"Flash work\"; 0065).",
+   "title": "With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run (\"idle\"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on; a pin of Table A3-6b forced to the other level during a stretched erase gives `TX_PATH_NOT_BLOCKED` no later than 20 ms after the erase ends, and one forced and released within the erase gives no fault unless the firmware's samples in its wait loop saw it for 10 ms (B2.3 \"Flash work\"; A3.6b; 0065, 0066).",
    "reqs": [
     "B5",
     "A3.6",
-    "B2.3"
+    "A3",
+    "B2.3",
+    "A3.6b",
+    "Table A3-6"
    ],
    "scope": "v1.0",
    "target": "emulator",

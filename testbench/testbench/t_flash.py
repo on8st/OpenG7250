@@ -164,6 +164,48 @@ def t_b5_22(ctx: Ctx):
     ctx.check("after it RX goes on (a session gets status packets)", rx_works(ctx), "no status packet")
     with Host(ctx.net) as h:
         ctx.check("after it discovery goes on", bool(h.discover(0.5)), "no discovery reply")
+    if "gpio.force" in ctx.endpoint.get("fixtures", []):
+        erase_force_cases(ctx, s, t_max)
+    else:
+        ctx.notes.append("TX path check across an erase (f00162e) not run: no gpio.force")
+
+
+def erase_force_cases(ctx, s: bytes, t_max: int):
+    """0066 addendum (f00162e): a Table A3-6 pin forced during a stretched erase gives
+    TX_PATH_NOT_BLOCKED no later than 20 ms after the erase ends; forced and released within the
+    erase (5 ms, under the 10 ms of the check) gives no fault. The erase comes from an update
+    (UPDATE_BEGIN and its first block erase the staging slot); the fault time is the uptime of
+    its log entry, in the same clock as flash.log."""
+    from .mgmt import read_log
+    from .t_a3 import fault16, faults
+    from .t_update import facts, newer, pkg, restart
+    for case, kw in (("held", dict(level=0, target="idr", from_us=200_000)),
+                     ("a 5 ms pulse", dict(level=0, target="idr", from_us=200_000, duration_us=5000))):
+        with mg(ctx, s) as u:
+            run, other, ver, lay = facts(ctx, u)
+            n0 = max([e[0] for e in read_log(u.c)], default=-1)
+            flog_start(ctx)
+            img = image(2148, seed=523)
+            u.begin(pkg(img, newer(ver), other))
+            ctx.fixture("gpio.force", pin="PF4", **kw)  # 200 ms into a t_erase_max erase
+            u.blocks(img)
+            time.sleep(t_max / 1e6 + 0.5)
+            er = [e for e in flog(ctx) if e.get("op") == "erase"]
+            code, flags = faults(ctx)
+            ents = [e for e in read_log(u.c) if e[0] > n0 and "PF4" in e[2]]
+            if case == "held":
+                ctx.fixture("gpio.force", pin="PF4", level=None, target="idr")
+                if ctx.check("held: an erase ran while PF4 was forced", bool(er), "no erase in flash.log"):
+                    end = er[0].get("t_end_us", 0)
+                    up_us = ents[0][1] * 1000 if ents else None
+                    ctx.check("held: TX_PATH_NOT_BLOCKED no later than 20 ms after the erase ends (log uptime vs t_end_us)",
+                              fault16(code, flags) and up_us is not None and up_us - end <= 20_000,
+                              f"FAULT_CODE {code}, fault at {up_us} us, erase end {end} us")
+            else:
+                ctx.check("a 5 ms force within the erase gives no fault", not fault16(code, flags),
+                          f"FAULT_CODE {code}, FAULT_FLAGS {flags}")
+            u.req("UPDATE_ABORT")
+            restart(ctx, u)
 
 
 @test("T-A1-85")
