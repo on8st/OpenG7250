@@ -56,4 +56,5 @@
 | 0052 | 0052 — DHCP messages while link-local carry the link-local source address | 0 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0053 | 0053 — Normative socket buffer split (Table B2-2), sizes powers of two | 0 | 2 | network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
 | 0054 | 0054 — High Priority bursts the radio must take without loss | 0 | 2 | network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
+| 0055 | 0055 — Flash work: exempt from the burst rule, never while armed or keyed | 0 | 3 | network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
 
