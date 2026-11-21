@@ -31,3 +31,19 @@ chose.
 
 Follow-up for the emu session: update the status in `his/README.md` to
 6e2208a and review 7.
+
+## Advisory check (diff 6e2208a..d07627e, his)
+
+| Item | Result |
+| --- | --- |
+| B1 (40) | Applied. 62 MHz is stated as the chip limit only; the board link is not measured; about 17 MHz (MEDIUM) is the safe bound until it is. |
+| B2 (40) | Applied. The citation is now chapter 1, features list, with the quoted line. Saying openly that the page number is not checked is acceptable: the chapter and the quote are enough to find the statement, and the tag stays a datasheet VERIFIED. |
+
+No other change. Nothing about what stock does is added.
+
+### Verdict (review 7, final)
+
+**CLEARED** at d07627e (his/next).
+
+Follow-up for the emu session: update the status in `his/README.md` to
+d07627e and review 7.
