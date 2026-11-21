@@ -55,8 +55,8 @@ def testbench_dir(repo):
 class Boot:
     """One emulator process with its bridge, agent and fixture server."""
 
-    def __init__(self, pr, elf, out):
-        self.pr, self.elf, self.out = pr, elf, out
+    def __init__(self, pr, elf, out, boot="standin"):
+        self.pr, self.elf, self.out, self.boot = pr, elf, out, boot
         os.makedirs(out, exist_ok=True)
         self.bridge = benchnet.Bridge(os.path.join(out, "network.pcapng"))
         self.agent = benchnet.Agent(out)
@@ -72,7 +72,7 @@ class Boot:
         open(console, "w").close()
         resc = os.path.join(self.out, "run.resc")
         open(resc, "w").write(self.pr.build_product_resc(self.elf, self.out, console, self.log,
-                                                         self.bridge.ch_port, self.agent.port))
+                                                         self.bridge.ch_port, self.agent.port, self.boot))
         self.proc = subprocess.Popen([self.pr.bootcore.RENODE, "--disable-xwt", "--console",
                                       "-e", "path add @%s" % self.pr.REPO, "-e", "include @%s" % resc],
                                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -108,6 +108,8 @@ class Boot:
         while self.bridge.radio_ip is None and time.time() - t0 < BOOT_WALL_TIMEOUT:
             if self.proc.poll() is not None:
                 return "emulator exited during boot"
+            if time.time() - t0 > 2.0 and self.agent.ask("halted") == "halted 1":
+                return "no image started (boot: %s)" % self.pr.BOOT_MODES[self.boot][1]
             time.sleep(0.1)
         if self.bridge.radio_ip is None:
             return "the image configured no IP address on the Ethernet controller within %.0f s" % BOOT_WALL_TIMEOUT
@@ -156,7 +158,7 @@ def run_bench(tbdir, endpoint_path, test, agent, wall_cap):
     return entries, err, emu, wall
 
 
-def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None):
+def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"):
     spec = json.load(open(tests_path))
     tbdir = testbench_dir(pr.REPO)
     root = os.path.join(pr.OUT_ROOT, run_id)
@@ -186,24 +188,24 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None):
             results.append({"id": t["id"], "status": "error", "reason": "runner: no test-bench directory (testbench_dir)"})
             continue
         tdir = os.path.join(root, t["id"]) if not per_list else os.path.join(root, "list")
-        boot = shared if per_list and shared else Boot(pr, elf, tdir)
+        bt = shared if per_list and shared else Boot(pr, elf, tdir, boot)
         if per_list:
-            shared = boot
-        why = boot.wait_ready()
+            shared = bt
+        why = bt.wait_ready()
         if why:
             results.append({"id": t["id"], "status": "error", "reason": why})
             if not per_list:
-                boot.close()
+                bt.close()
             continue
-        ep = boot.bridge.endpoint(boot.fixtures.port, offered)
+        ep = bt.bridge.endpoint(bt.fixtures.port, offered)
         ep["minor"] = FORMAT_MINOR
         ep_path = os.path.join(tdir, "endpoint.json")
         json.dump(ep, open(ep_path, "w"), indent=2)
         wall_cap = 30.0 * float(t.get("timeout_s", 30)) + 120.0
-        entries, err, emu, wall = run_bench(tbdir, ep_path, t, boot.agent, wall_cap)
-        nm = pr.not_modelled(boot.log) if os.path.isfile(boot.log) else []
+        entries, err, emu, wall = run_bench(tbdir, ep_path, t, bt.agent, wall_cap)
+        nm = pr.not_modelled(bt.log) if os.path.isfile(bt.log) else []
         if not per_list:
-            boot.close()
+            bt.close()
         got = {e.get("id"): e for e in entries}
         e = got.get(t["id"])
         if e is None:
@@ -214,8 +216,8 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None):
         e["wall_s"] = round(wall, 3)
         rel = os.path.relpath(tdir, root)
         arts = {"console": os.path.join(rel, "console.txt"), "network": os.path.join(rel, "network.pcapng")}
-        if boot.agent.traces:
-            arts["trace"] = [os.path.join(rel, os.path.basename(x)) for x in boot.agent.traces]
+        if bt.agent.traces:
+            arts["trace"] = [os.path.join(rel, os.path.basename(x)) for x in bt.agent.traces]
         e["artifacts"] = arts
         if nm and e.get("status") in ("fail", "error"):
             e["status"] = "error"
@@ -242,6 +244,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None):
         "subject": {"kind": "emulator", "elf_sha256": _sha256(elf)},
         "runner": {"name": "product_run.py", "version": "1.%d" % FORMAT_MINOR, "emulator_commit": commit},
         "testbench": {"commit": tbcommit},
+        "environment": {"boot": pr.BOOT_MODES[boot][1]},
         "started": started,
         "finished": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "results": results, "summary": summary,
@@ -250,6 +253,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None):
     json.dump(result, open(out_path, "w"), indent=2)
     for r in results:
         print("  %-7s %s %s" % (r.get("status", "?").upper(), r["id"], r.get("reason", "")))
+    print("boot: %s" % pr.BOOT_MODES[boot][1])
     print("PRODUCT RUN %s: %s -> %s" % (run_id, " ".join("%s=%d" % kv for kv in summary.items()),
                                         os.path.relpath(out_path, pr.REPO)))
     if summary["error"]:

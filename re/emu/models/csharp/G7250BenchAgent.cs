@@ -274,6 +274,9 @@ namespace Antmicro.Renode.Peripherals.SPI
                 {
                     case "time": return "time " + NowUs();
                     case "wdt": return WatchdogReset();
+                    case "halted":
+                        foreach(var cpu in machine.SystemBus.GetCPUs()) if(!cpu.IsHalted) return "halted 0";
+                        return "halted 1";
                     case "observe": return "obs " + Observe();
                     case "input": return w.Length == 3 ? Input(w[1], int.Parse(w[2], CultureInfo.InvariantCulture)) : "err usage";
                     case "trace":

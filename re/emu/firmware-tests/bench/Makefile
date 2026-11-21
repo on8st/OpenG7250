@@ -18,5 +18,9 @@ $(OUT):
 $(OUT)/%.elf: %.c start.c bench.h bench.ld | $(OUT)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< start.c -o $@
 
+# programs run as product-style images at 0x08020000 (runner self-check)
+$(OUT)/net_test.elf: net_test.c start.c bench.h bench_app.ld | $(OUT)
+	$(CC) $(CFLAGS) $(ARCH) -T bench_app.ld -nostdlib -Wl,--gc-sections net_test.c start.c -o $@
+
 clean:
 	rm -f $(PROGS:%=$(OUT)/%.elf)

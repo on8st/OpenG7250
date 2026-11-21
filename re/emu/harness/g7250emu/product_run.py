@@ -185,10 +185,13 @@ def elf_entry(path):
 
 
 def build_resc(elf, out, run_s, bench):
-    vtor, sp, pc = elf_entry(elf)
+    vtor, sp, pc = elf_entry(elf)   # own self-test programs boot from their own vector table
     lines = ['mach create "product"',
              'machine LoadPlatformDescription @%s' % P("platforms", "g7250_main.repl")]
     for kind, val in GENERIC + (BENCH if bench else []):
+        if kind == "repl" and val == IWDG_REPL:
+            lines.append("machine LoadPlatformDescription @%s" % iwdg_repl(out, vtor))
+            continue
         lines.append({"cs": "i @%s", "repl": "machine LoadPlatformDescription @%s",
                       "str": 'machine LoadPlatformDescriptionFromString "%s"', "cmd": "%s"}[kind] % val)
     lines += platform_extras.all_tag_commands(exclude=("MDMA",))
@@ -199,9 +202,7 @@ def build_resc(elf, out, run_s, bench):
         'sysbus.usart1 CreateFileBackend @%s true' % os.path.join(out, "console.txt"),
         'sysbus.usart2 CreateFileBackend @%s true' % os.path.join(out, "usart2.bin"),
         'sysbus LoadELF @%s' % elf,
-        'cpu VectorTableOffset 0x%08X' % vtor,
-        'cpu SP 0x%08X' % sp,
-        'cpu PC 0x%08X' % (pc & ~1),
+        'sysbus.watchdog PowerOnBoot',
         'emulation RunFor "%s"' % str(datetime.timedelta(seconds=run_s)),
         'quit',
     ]
@@ -209,16 +210,35 @@ def build_resc(elf, out, run_s, bench):
 
 
 CH394_REPL = P("platforms", "g7250_main_spi6_ch394.repl")
+IWDG_REPL = P("platforms", "g7250_main_iwdg.repl")
+
+# Reset path of product runs (docs/PRODUCT-RUNNER.md, "Boot"): the radio's
+# first 128 KiB hold the vendor bootloader, which the emulator does not have.
+BOOT_MODES = {
+    # stand-in for the vendor bootloader: assumption "F1 passes" (HIS-19 open)
+    "standin": (0x08020000, "standin-0x08020000"),
+    # F1 fails: BOOT_ADD0 = 0x08000000 and an empty first sector, nothing starts
+    "none": (0x08000000, "none-empty-0x08000000"),
+}
 
 
-def build_product_resc(elf, out, console, log, ch_port, agent_port):
+def iwdg_repl(out, boot_address):
+    rp = os.path.join(out, "iwdg.repl")
+    open(rp, "w").write("watchdog: Timers.G7250Iwdg @ sysbus <0x58004800, +0x400>\n"
+                        "    bootAddress: 0x%08X\n" % boot_address)
+    return rp
+
+
+def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standin"):
     """A product boot for a g7250-testlist run: the generic models, the CH394
     with the runner's network bridge and the bench agent; runs until the
-    runner quits it."""
-    vtor, sp, pc = elf_entry(elf)
+    runner quits it. Power-on and every reset boot per BOOT_MODES[boot]."""
     lines = ['mach create "product"',
              'machine LoadPlatformDescription @%s' % P("platforms", "g7250_main.repl")]
     for kind, val in GENERIC:
+        if kind == "repl" and val == IWDG_REPL:
+            lines.append("machine LoadPlatformDescription @%s" % iwdg_repl(out, BOOT_MODES[boot][0]))
+            continue
         if kind == "repl" and val == CH394_REPL:
             rp = os.path.join(out, "ch394.repl")
             open(rp, "w").write("ch394: Antmicro.Renode.Peripherals.SPI.G7250Ch394 @ spi6\n"
@@ -241,9 +261,7 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port):
         'logLevel 2',
         'sysbus.usart1 CreateFileBackend @%s true' % console,
         'sysbus LoadELF @%s' % elf,
-        'cpu VectorTableOffset 0x%08X' % vtor,
-        'cpu SP 0x%08X' % sp,
-        'cpu PC 0x%08X' % (pc & ~1),
+        'sysbus.watchdog PowerOnBoot',
         'start',
     ]
     return "\n".join(lines) + "\n"
@@ -285,6 +303,9 @@ def main():
     ap.add_argument("--host-timeout", type=float, default=600.0)
     ap.add_argument("-o", "--output", help="result file (default: <run dir>/result.json)")
     ap.add_argument("--scope", default="v1.0")
+    ap.add_argument("--boot", choices=sorted(BOOT_MODES), default="standin",
+                    help="reset path: standin = vendor-bootloader stand-in starts the image at 0x08020000 "
+                         "(assumption F1 passes, HIS-19 open); none = F1 fails, nothing starts")
     args = ap.parse_args()
     if not os.path.isfile(bootcore.RENODE):
         sys.exit("Renode not found (install the pinned portable in tools/)")
@@ -293,7 +314,7 @@ def main():
         import testlist_run
         run_id = args.run_id or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         sys.exit(testlist_run.run(sys.modules[__name__], os.path.abspath(args.elf), os.path.abspath(args.tests),
-                                  run_id, scope=args.scope, out_path=args.output))
+                                  run_id, scope=args.scope, out_path=args.output, boot=args.boot))
     if not args.selftest:
         sys.exit("unknown test list format (expected g7250-testlist, or --selftest for own programs)")
     run_s = float(spec.get("run_s", 5))

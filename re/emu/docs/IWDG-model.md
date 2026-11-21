@@ -1,7 +1,9 @@
 # IWDG1 and reset-flag model (Main)
 
 `models/csharp/G7250Iwdg.cs`, loaded as `sysbus.watchdog` by `product_run.py`
-(`platforms/g7250_main_iwdg.repl`, boot address 0x08000000) and `m1_run.py`
+(boot address per the run's reset path: 0x08020000 for the vendor-bootloader
+stand-in, 0x08000000 for `--boot none` and the own self-test programs; see
+`docs/PRODUCT-RUNNER.md`, "Boot") and `m1_run.py`
 (`platforms/g7250_main_iwdg_stock.repl`, boot address 0x08020000: the stock
 application, the emulator has no bootloader). It replaces Renode 1.17's
 `STM32_IndependentWatchdog`, which cannot tell the firmware why it was reset.
@@ -20,9 +22,10 @@ behaviour.
   power-on value PORRSTF | BORRSTF | PINRSTF | D1RSTF (0x00E80000); an IWDG1
   reset adds IWDG1RSTF | PINRSTF; any other MCU reset (software, SYSRESETREQ)
   adds SFT1RSTF | PINRSTF; the flags are sticky until RMVF is written.
-- After every MCU reset the core boots from the boot address (option byte
-  BOOT_ADD0, default 0x08000000): VTOR, SP and PC from its vector table. RAM
-  keeps its contents (a system reset does not clear SRAM).
+- At power-on (`PowerOnBoot`, called by the runner) and after every MCU reset
+  the core boots from the boot address: VTOR, SP and PC from its vector table;
+  an empty vector table (erased or absent flash) leaves the core halted. RAM
+  keeps its contents over a reset (a system reset does not clear SRAM).
 - `WatchdogReset()` (fixture `reset.wdt`) resets the MCU as an IWDG1 timeout;
   `LastResetCause` (`power`, `wdt`, `software`) feeds the `reset` trace event.
 

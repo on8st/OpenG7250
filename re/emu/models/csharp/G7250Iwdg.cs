@@ -14,8 +14,11 @@
 //   after any other reset (software, SYSRESETREQ)   SFT1RSTF | PINRSTF
 //   RMVF (bit 16) written 1 clears the flags.
 // The fixture reset.wdt (WatchdogReset) resets the MCU as an IWDG1 timeout.
-// After every MCU reset the core boots from bootAddress (BOOT_ADD0 default
-// 0x08000000): VTOR, SP and PC are taken from the vector table there.
+// After every MCU reset (and at power-on, PowerOnBoot) the core boots from
+// bootAddress: VTOR, SP and PC are taken from the vector table there; an empty
+// vector table (erased or absent flash) leaves the core halted. The runner sets
+// bootAddress: the hardware's BOOT_ADD0 default 0x08000000, or 0x08020000 for
+// the vendor-bootloader stand-in of product runs (docs/PRODUCT-RUNNER.md).
 // Not modelled: hardware start by option byte, freeze in debug/stop/standby,
 // LSI accuracy, IWDG2 (dual core), the window early-warning of WWDG.
 using System;
@@ -108,12 +111,23 @@ namespace Antmicro.Renode.Peripherals.Timers
         // after a reset the core boots from the boot address (option byte
         // BOOT_ADD0, default 0x0800 -> 0x08000000): VTOR, SP and PC from its
         // vector table, as the hardware does
+        // the runner calls this once after loading the image (power-on boot)
+        public void PowerOnBoot() { Boot(); }
+
         private void Boot()
         {
             var bus = machine.SystemBus;
             foreach(var cpu in bus.GetCPUs())
             {
                 uint sp = bus.ReadDoubleWord(bootAddress), pc = bus.ReadDoubleWord(bootAddress + 4);
+                if(pc == 0 || pc == 0xFFFFFFFF || sp == 0 || sp == 0xFFFFFFFF)
+                {
+                    // no vector table there (erased or absent flash): nothing starts
+                    this.Log(LogLevel.Warning, "boot: no image at 0x{0:X8} (empty vector table); the core stays halted", bootAddress);
+                    cpu.IsHalted = true;
+                    continue;
+                }
+                cpu.IsHalted = false;
                 try
                 {
                     var t = cpu.GetType();

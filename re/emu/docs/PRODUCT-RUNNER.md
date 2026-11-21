@@ -7,13 +7,32 @@ of the test bench and writes the result file. Format: `testbench/docs/testlist-f
 6db1746), product-side material that the emulator side may read.
 
 ```
-python3 harness/g7250emu/product_run.py <image.elf> <tests.json> [-o result.json] [--run-id ID] [--scope v1.0]
+python3 harness/g7250emu/product_run.py <image.elf> <tests.json> [-o result.json] [--run-id ID] [--scope v1.0] [--boot standin|none]
 ```
 
 The test bench directory comes from `testbench_dir = <dir>` in `local.config`
 (git-ignored) or the env `G7250_TESTBENCH`: the directory where
 `python3 -m testbench run ...` works. The runner starts it as a subprocess and
 never imports it.
+
+## Boot (reset path)
+
+On the radio, 0x08000000–0x0801FFFF holds the vendor bootloader (never written,
+his/15) and the product image starts with its own boot stage at 0x08020000
+(product decision 0028). Whether the vendor bootloader starts an image it did
+not write is HIS-19, open until the F1 drill on the radio. The emulator has no
+vendor bootloader, so a product run states its reset path:
+
+| `--boot` | At power-on and after every reset (watchdog, software) | `environment.boot` in the result |
+| --- | --- | --- |
+| `standin` (default) | **stand-in for the vendor bootloader:** the core takes VTOR, SP and PC from the vector table at 0x08020000, nothing else (no checks, no delays, no vendor behaviour). Assumption: **F1 passes** (HIS-19 open) | `standin-0x08020000` |
+| `none` | F1 fails: BOOT_ADD0 = 0x08000000 and an empty first sector; the core finds no vector table and stays halted. Every test reports `error` "no image started" | `none-empty-0x08000000` |
+
+The stand-in and the halt live in the watchdog model's boot path
+(`docs/IWDG-model.md`), so power-on, `reset.wdt`, a real watchdog timeout and
+a software reset all take the same path. The own self-test programs
+(`--selftest`) boot from their own vector table at 0x08000000. The runner
+self-check program `net_test` is linked at 0x08020000.
 
 ## What one run does
 
