@@ -488,3 +488,24 @@ fn t_b5_21_no_flash_work_while_armed() {
     assert_eq!(authed(&mut w, &mut s, HOST, 40, Command::SetConfig, &b[..n], 400).0, Status::Ok);
     assert!(matches!(s.take_effects().as_slice(), [Effect::SetConfig(_)]));
 }
+
+#[test]
+fn t_b5_21_status_50_takes_its_place_in_the_a1_3_order() {
+    // Table A1-3: ... 36, 35, 58, 57, 50, then the command-specific codes; 17 before all of them.
+    let mut s = Server::new();
+    let mut w = World::new();
+    s.network_up(0);
+    w.armed = true;
+    // SET_FIRST_SECRET while armed: malformed 17 before 50.
+    assert_eq!(w.call(&mut s, HOST, &req(1, Command::SetFirstSecret, &[7; 31]), 10).unwrap().1, Status::Malformed);
+    // With a secret set (window closed): 36, not 50.
+    w.secret = Some([7; 32]);
+    assert_eq!(w.call(&mut s, HOST, &req(2, Command::SetFirstSecret, &[7; 32]), 20).unwrap().1, Status::FirstSecretClosed);
+    // CHANGE_SECRET malformed while armed: 17.
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::ChangeSecret, &[9; 31], 100).0, Status::Malformed);
+    // SET_CALIBRATION during a P2 session while armed: 57, not 50; malformed: 17 first.
+    w.p2 = true;
+    assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::SetCalibration, &[0, 0, 0, 1, 0], 200).0, Status::P2SessionRuns);
+    assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::SetCalibration, &[], 300).0, Status::Malformed);
+    assert!(s.take_effects().iter().all(|e| !matches!(e, g7250_radio::mgmt::Effect::SetSecret(_) | g7250_radio::mgmt::Effect::SetCalibration(_))));
+}

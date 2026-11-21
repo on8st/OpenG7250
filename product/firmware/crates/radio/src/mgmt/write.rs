@@ -122,11 +122,12 @@ impl Server {
         if !open {
             return (Status::FirstSecretClosed, 0);
         }
+        // Table A1-3 order: 36 (above), 17, then 50.
+        let Ok(secret) = <[u8; 32]>::try_from(payload) else { return (Status::Malformed, 0) };
         // No flash work while TX is armed or keyed (B2.3 "Flash work"; 0055; Table A1-2).
         if ctx.armed {
             return (Status::Armed, 0);
         }
-        let Ok(secret) = <[u8; 32]>::try_from(payload) else { return (Status::Malformed, 0) };
         self.window_used = true;
         let _ = self.effects.push(Effect::SetSecret(secret));
         let (a, b, c, d) = ip(src.0);
@@ -160,10 +161,13 @@ impl Server {
                 self.writer = None;
                 (Status::Ok, 0)
             }
-            // No flash work while TX is armed or keyed (B2.3 "Flash work"; 0055; Table A1-2).
-            Command::ChangeSecret if ctx.armed => (Status::Armed, 0),
             Command::ChangeSecret => {
                 let (Some(old), Ok(v)) = (ctx.secret, <[u8; 32]>::try_from(req.payload)) else { return (Status::Malformed, 0) };
+                // No flash work while TX is armed or keyed (B2.3 "Flash work"; 0055; Table
+                // A1-2), after 17 (Table A1-3 order).
+                if ctx.armed {
+                    return (Status::Armed, 0);
+                }
                 let new = auth::change_secret_mask(old, &self.used_challenge, &v);
                 let _ = self.effects.push(Effect::SetSecret(new));
                 self.log.push(now, format_args!("secret changed by {a}.{b}.{c}.{d}:{}", src.1));
@@ -194,6 +198,10 @@ impl Server {
                 Err(_) => (Status::Malformed, 0),
             },
             Command::SetCalibration | Command::ClearCalibration => {
+                // Table A1-3 order: 17, then 57, then 50.
+                if cmd == Command::SetCalibration && (payload::parse_set_calibration(req.payload).is_err() || req.payload.len() > 1024) {
+                    return (Status::Malformed, 0);
+                }
                 if ctx.p2_session {
                     return (Status::P2SessionRuns, 0);
                 }
@@ -204,9 +212,6 @@ impl Server {
                     let _ = self.effects.push(Effect::ClearCalibration);
                     self.log.push(now, format_args!("calibration cleared by {a}.{b}.{c}.{d}:{}", src.1));
                     return (Status::Ok, 0);
-                }
-                if payload::parse_set_calibration(req.payload).is_err() || req.payload.len() > 1024 {
-                    return (Status::Malformed, 0);
                 }
                 let mut v = heapless::Vec::new();
                 let _ = v.extend_from_slice(req.payload);
