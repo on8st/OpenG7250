@@ -193,6 +193,20 @@ impl<S: SpiDevice> Ch394<S> {
         Ok(b[0])
     }
 
+    /// The sockets of `mask` that hold received data (Sn_RX_RS not 0), as a bit mask. The net
+    /// loop asks this before it sleeps: whether the chip raises INT# again for a datagram left in
+    /// a buffer after its RECV flag was cleared is not stated in CH394DS1, so the loop does not
+    /// rely on it.
+    pub fn rx_pending(&mut self, mask: u8) -> Result<u8, Error<S::Error>> {
+        let mut out = 0;
+        for n in 0..8u8 {
+            if mask & (1 << n) != 0 && self.read_u16(bsb::sock_reg(n), sock::RX_RSR)? != 0 {
+                out |= 1 << n;
+            }
+        }
+        Ok(out)
+    }
+
     /// 16-bit counters change while being read; read until two reads agree (W5500 section 4.2,
     /// Sn_TX_FSR and Sn_RX_RSR notes).
     pub fn read_u16_stable(&mut self, block: u8, addr: u16) -> Result<u16, Error<S::Error>> {

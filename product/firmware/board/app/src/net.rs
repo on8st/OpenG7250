@@ -889,6 +889,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 // goes out in parts, a request waits in its socket (two or three passes), so that
                 // no flash write delays a part beyond 50 ms (0059).
                 if p2.record_pending() {
+                    embassy_futures::yield_now().await;
                     continue;
                 }
                 if dhcp_borrowed {
@@ -1045,8 +1046,15 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 // 2 ms for the housekeeping. Yield once first: with INT# held low (a datagram
                 // left unread on purpose) the wait returns at once, and the other tasks (the
                 // watchdog among them) must still run.
+                // Never sleep with data in a buffer, whatever the chip does with INT#: a pass reads
+                // at most two datagrams per socket and clears RECV on the first, and the chip may
+                // raise RECV (and INT#) only for a new arrival (emulator model; CH394DS1 is
+                // silent). So every socket's Sn_RX_RS is checked first; data left means another
+                // pass at once.
                 embassy_futures::yield_now().await;
-                let _ = embassy_futures::select::select(int.wait_for_low(), Timer::after_millis(2)).await;
+                if chip.rx_pending(0xFF).map_or(true, |m| m == 0) {
+                    let _ = embassy_futures::select::select(int.wait_for_low(), Timer::after_millis(2)).await;
+                }
             }
             Err(e) => {
                 println!("net: receive error {:?}", e);

@@ -260,3 +260,23 @@ fn received_datagrams_raise_int_and_only_they() {
     let d = c.release().0;
     assert_eq!(d.sreg[3][0x02] & 0x04, 0, "INT_RECV cleared by the read");
 }
+
+#[test]
+fn rx_pending_reports_data_left_after_recv_cleared() {
+    // Two datagrams arrive, one is read (which clears RECV): rx_pending still reports the socket,
+    // so the net loop does not sleep with data in the buffer.
+    let mut c = chip();
+    c.udp_open(3, 1027).unwrap();
+    c.udp_open(5, 7250).unwrap();
+    let mut d = c.release().0;
+    d.deliver(3, [10, 0, 0, 1], 5000, &[1, 2, 3]);
+    d.deliver(3, [10, 0, 0, 1], 5000, &[4, 5, 6]);
+    let mut c = Ch394::new(Dev(d));
+    assert_eq!(c.rx_pending(0xFF).unwrap(), 1 << 3);
+    let mut b = [0u8; 8];
+    assert!(c.udp_recv(3, &mut b).unwrap().is_some());
+    assert_eq!(c.rx_pending(0xFF).unwrap(), 1 << 3);
+    assert_eq!(c.rx_pending(!(1 << 3)).unwrap(), 0, "only the sockets of the mask");
+    assert!(c.udp_recv(3, &mut b).unwrap().is_some());
+    assert_eq!(c.rx_pending(0xFF).unwrap(), 0);
+}
