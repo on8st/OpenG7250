@@ -367,7 +367,12 @@ def sock_log_read(ctx) -> list[dict]:
 def mgmt_borrows(entries: list[dict]):
     """(t_us of the last start-up OPEN on port 7251, [(borrow start, borrow end)]): a borrow runs
     from the CLOSE of the socket that has port 7251, through an OPEN of that socket on port 68,
-    to its next OPEN on port 7251 (0041). A CLOSE without the OPEN on 68 (a reset) is no borrow."""
+    to its next OPEN on port 7251 (0041). A CLOSE without the OPEN on 68 (a reset) is no borrow.
+    Entries carry "boot" (1, 2, ...) and t_us restarts at every power-on: only the last boot's
+    entries are compared (the test's power cycle starts it)."""
+    if any("boot" in e for e in entries):
+        last = max(e.get("boot", 0) for e in entries)
+        entries = [e for e in entries if e.get("boot", 0) == last]
     entries = sorted(entries, key=lambda e: e.get("t_us", 0))
     mgmt_sock, opened, start, on68, borrows = None, None, None, False, []
     for e in entries:
@@ -390,7 +395,7 @@ def retry_exchanges(log, linklocal: str) -> list[int]:
     from the link-local address (0052), those less than 2 s apart counted as one exchange (one
     borrow of at most 2 s, 0041)."""
     t = sorted(m["t_us"] for m in log if str(m.get("type", "")).upper().replace("DHCP", "") == "DISCOVER"
-               and str(m.get("src", "")).split(":")[0] == linklocal)
+               and str(m.get("src", "")).split(":")[0] == linklocal and not m.get("t_us_approx"))
     # one exchange: every DISCOVER within 2.5 s of the exchange's first (a borrow lasts at most
     # 2 s, and may hold DISCOVERs 2 s apart); exchanges are at least 3 s apart (gap 4 s -1 s)
     starts: list[int] = []
@@ -401,6 +406,7 @@ def retry_exchanges(log, linklocal: str) -> list[int]:
 
 
 def discovers(log):
+    log = [m for m in log if not m.get("t_us_approx")]  # approximate stamps are not timed
     """t_us of the client's DHCPDISCOVER and DHCPREQUEST messages in a dhcp.log (only a client
     sends these two types, RFC 2131 Table 2)."""
     return [m["t_us"] for m in log if str(m.get("type", "")).upper().replace("DHCP", "") in ("DISCOVER", "REQUEST")]
