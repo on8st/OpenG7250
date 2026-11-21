@@ -468,7 +468,8 @@ and HIS-17.
   holds one 1444-byte P2 packet (plus 8 bytes of header on receive). With no flow control in
   UDP mode [CH394, 12.2.4], a second DUC packet arriving before the first is read would be
   lost. The firmware therefore redistributes the 16 + 16 KB. Indicative split, to be fixed in
-  spec part B or the firmware design (HIS-14, socket mode):
+  spec part B or the firmware design (HIS-14, socket mode). **Fixed by 0053** in spec part B,
+  Table B2-2, which differs from this table:
 
   | Socket | Port | RX buffer | TX buffer |
   |--------|------|-----------|-----------|
