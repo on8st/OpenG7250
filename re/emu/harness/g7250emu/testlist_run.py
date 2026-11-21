@@ -212,7 +212,13 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             if not per_list:
                 bt.close()
             continue
-        ep = bt.bridge.endpoint(bt.fixtures.port, offered)
+        try:
+            ep = bt.bridge.endpoint(bt.fixtures.port, offered)
+        except Exception as ex:  # noqa: BLE001
+            results.append({"id": t["id"], "status": "error", "reason": "runner: %s" % ex})
+            if not per_list:
+                bt.close()
+            continue
         ep["minor"] = FORMAT_MINOR
         ep_path = os.path.join(tdir, "endpoint.json")
         json.dump(ep, open(ep_path, "w"), indent=2)

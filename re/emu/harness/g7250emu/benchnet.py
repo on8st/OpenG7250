@@ -120,15 +120,23 @@ class Bridge:
     def set_radio(self, ip, netmask="255.255.255.0"):
         if netmask == "0.0.0.0":
             netmask = "255.255.255.0"     # SUBR not written yet; updated when it is
-        self.radio_ip, self.netmask = ip, netmask
         net = ipaddress.ip_network("%s/%s" % (ip, netmask), strict=False)
-        hosts_in = [str(h) for h in net.hosts() if str(h) != ip][19:21]
+        hosts_in = []
+        for h in net.hosts():             # the 20th and 21st host of the subnet (no full list for big nets)
+            if str(h) == ip:
+                continue
+            hosts_in.append(str(h))
+            if len(hosts_in) >= 21:
+                break
+        hosts_in = hosts_in[19:21]
         outside = "10.99.0.20" if not ipaddress.ip_address("10.99.0.20") in net else "192.0.2.20"
-        self.hosts = []
+        hosts = []
         for i, hip in enumerate(hosts_in + [outside]):
             lo = HOST_PORT_BASE + 100 * i
-            self.hosts.append({"ip": hip, "in_subnet": i < 2, "bind": "127.0.0.1", "ports": [lo, lo + 99]})
-        self.directed = str(net.broadcast_address)
+            hosts.append({"ip": hip, "in_subnet": i < 2, "bind": "127.0.0.1", "ports": [lo, lo + 99]})
+        # publish the address last: the runner waits for radio_ip
+        self.hosts, self.directed, self.netmask = hosts, str(net.broadcast_address), netmask
+        self.radio_ip = ip
 
     def endpoint(self, control_port, fixtures):
         return {
