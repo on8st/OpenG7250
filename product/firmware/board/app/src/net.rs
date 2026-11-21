@@ -32,7 +32,7 @@ use g7250_radio::mgmt::{Ctx, Server};
 /// is measured (P-NET-1). SPI6 kernel clock is PCLK4 = 64 MHz here; 64 / 4 = 16 MHz.
 const SPI_HZ: u32 = 16_000_000;
 const SOCK_DISCOVERY: u8 = 0;
-const SOCK_MGMT: u8 = 7;
+const SOCK_MGMT: u8 = crate::p2::S7251;
 
 /// SPI device over the HAL bus with a GPIO chip select.
 ///
@@ -115,7 +115,7 @@ pub struct NetPins<'d> {
 
 type Chip = Ch394<CsDevice<'static>>;
 
-fn ip_str(ip: Ip) -> heapless::String<16> {
+pub fn ip_str(ip: Ip) -> heapless::String<16> {
     use core::fmt::Write;
     let mut s = heapless::String::new();
     let _ = write!(s, "{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
@@ -272,7 +272,7 @@ fn print_cfg(c: &NetConfig, s: Source) {
 }
 
 #[embassy_executor::task]
-pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_init::MgmtInit) {
+pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_init::MgmtInit, tx: g7250_safety::tx::TxCore) {
     let mut chip = match bring_up(pins).await {
         Ok(c) => c,
         Err(e) => {
@@ -298,11 +298,21 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let (mut cfg, src) = configure(&mut chip, mac, NetConfig::FACTORY).await;
     print_cfg(&cfg, src);
 
-    if let Err(e) = chip.udp_open(SOCK_DISCOVERY, discovery::PORT) {
-        println!("net: FAULT cannot open port 1024 ({:?})", e);
+    // All P2 sockets of Table B2-1 (1024-1027, 1029, 1035, 7250); 1028 is never opened (0017).
+    if let Err(e) = crate::p2::P2::open(&mut chip) {
+        println!("net: FAULT cannot open the P2 ports ({:?})", e);
         return;
     }
     println!("net: discovery listening on UDP 1024 (board G7250-P2, type {})", discovery::BOARD_TYPE);
+    println!("net: P2 ports 1025 1026 1027 1029 1035 7250 open");
+    let rec = g7250_radio::record::build(&g7250_radio::record::Params {
+        fw_version: g7250_board::FW_VERSION,
+        tx_implemented: g7250_safety::tx::TX_IMPLEMENTED,
+        tx_calibrated: tx.calibrated(),
+        rate_384: false, // P-NET-1: offered only once >= 50 MHz SPI is shown
+    });
+    let mut p2 = crate::p2::P2::new(tx, g7250_radio::regmap::RegMap::new(rec));
+    p2.set_link(link);
     // Management channel on socket 7 (A1.2, A1.3), after DHCP has given the socket back.
     if let Err(e) = chip.udp_open(SOCK_MGMT, m::PORT) {
         println!("net: FAULT cannot open the management port {} ({:?})", m::PORT, e);
@@ -323,13 +333,19 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let mut last_link = link;
     loop {
         match chip.udp_recv(SOCK_DISCOVERY, &mut rx) {
+            // General packet on 1024: byte 4 = 0x00 (B11.4; Table B11-1).
+            Ok(Some(d)) if d.len >= 5 && rx[4] == 0x00 && d.src_port != discovery::PORT => {
+                let now = Instant::now().as_millis();
+                p2.cnc(&mut chip, (d.src_ip, d.src_port), g7250_radio::session::CnC::General, &rx[..d.len], now);
+            }
             Ok(Some(d)) => {
                 let now = Instant::now().as_millis();
                 match discovery::classify(&rx[..d.len], d.src_port) {
                     Port1024::Discovery => {
                         if limit.allow(d.src_ip, d.src_port, now) {
-                            // No P2 session exists in F2, so the radio is never "running" (B3.4).
-                            let r = discovery::reply(&id, Status::Available);
+                            // Byte 4: 0x03 while running for another host (B3.4).
+                            let st = if p2.discovery_from((d.src_ip, d.src_port)) { Status::InUse } else { Status::Available };
+                            let r = discovery::reply(&id, st);
                             if chip.udp_send(SOCK_DISCOVERY, d.src_ip, d.src_port, &r).is_ok() {
                                 answered = answered.wrapping_add(1);
                                 server.stats.discovery_answered += 1;
@@ -355,13 +371,16 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                             } else {
                                 netcfg::after_set_ip(&cfg, ip)
                             };
+                            // A new address ends a running session (A1.6; B3.9;
+                            // SESSION_CHANGED, Table A3-1 event 9) and nothing is carried over.
+                            p2.address_changed(&mut chip, now);
                             let _ = chip.udp_close(SOCK_DISCOVERY);
                             let (c, s) = configure(&mut chip, mac, want).await;
                             cfg = c;
                             print_cfg(&cfg, if s == Source::Static { Source::SetIp } else { s });
-                            // DHCP may have borrowed socket 7 (A1.11): reopen both.
-                            if chip.udp_open(SOCK_DISCOVERY, discovery::PORT).is_err() || chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
-                                println!("net: FAULT cannot reopen ports 1024 and {}", m::PORT);
+                            // DHCP may have borrowed socket 7 (A1.11): reopen everything.
+                            if crate::p2::P2::open(&mut chip).is_err() || chip.udp_open(SOCK_MGMT, m::PORT).is_err() {
+                                println!("net: FAULT cannot reopen the P2 and management ports");
                                 return;
                             }
                         }
@@ -375,11 +394,37 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 server.stats.discovery_dropped_rate = limit.dropped as u64;
             }
             Ok(None) => {
+                // P2 sockets: DDC-specific, DUC-specific, High Priority, DUC I&Q, registers.
+                let mut handled = false;
+                for (sock, kind) in [
+                    (crate::p2::S1025, Some(g7250_radio::session::CnC::DdcSpecific)),
+                    (crate::p2::S1026, Some(g7250_radio::session::CnC::DucSpecific)),
+                    (crate::p2::S1027, Some(g7250_radio::session::CnC::HighPriority)),
+                    (crate::p2::S1029, None),
+                    (crate::p2::S7250, None),
+                ] {
+                    if let Ok(Some(d)) = chip.udp_recv(sock, &mut rx) {
+                        let now = Instant::now().as_millis();
+                        let from = (d.src_ip, d.src_port);
+                        match (sock, kind) {
+                            (_, Some(k)) => p2.cnc(&mut chip, from, k, &rx[..d.len], now),
+                            (crate::p2::S7250, None) => p2.register_packet(&mut chip, from, &rx[..d.len], now),
+                            _ => p2.duc_iq_ignored += 1, // no TX path yet (record tx bit 1 = 0)
+                        }
+                        handled = true;
+                    }
+                }
+                p2.tick(&mut chip, Instant::now().as_millis());
+                if handled {
+                    continue;
+                }
                 // Management channel, socket 7.
                 if let Ok(Some(d)) = chip.udp_recv(SOCK_MGMT, &mut mrx) {
                     let now = Instant::now().as_millis();
                     let mut ident = mgmt.identify;
                     ident.uptime_ms = now as u32;
+                    ident.tx_arm_state = p2.tx.arm_state_reg();
+                    ident.owner = p2.session.owner().unwrap_or(([0; 4], 0));
                     let mut rng = |c: &mut [u8; 16]| crate::nv::rng_fill(c);
                     let mut ctx = Ctx {
                         now_ms: now,
@@ -407,6 +452,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                     if l != last_link {
                         println!("net: link {} Mbit/s", l.speed());
                         last_link = l;
+                        p2.set_link(l); // a session ends on link loss or < 100 Mbit/s (B5.8)
                     }
                 }
                 Timer::after_millis(2).await;

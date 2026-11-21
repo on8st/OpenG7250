@@ -210,7 +210,7 @@ impl RegMap {
     pub fn handle<R: RfActuator>(&mut self, packet: &[u8], c: &mut WriteCtx<'_, R>) -> Answer {
         let mut ans = Answer { pairs: heapless::Vec::new(), record_sent: false, not_owner: false, arm_changed: false };
         for (a, v) in pairs(packet) {
-            let mut push = |ans: &mut Answer, p: Pair| {
+            let push = |ans: &mut Answer, p: Pair| {
                 let _ = ans.pairs.push(p);
             };
             // CAP_REQUEST is accepted from any host (B4.4, B8.5).

@@ -58,6 +58,28 @@ gets 32 (no trailer) or 33 (no secret can be set yet); `SET_FIRST_SECRET`, `READ
 `UPDATE_STATUS` and all writes get 56 until step 4. `GET_CHALLENGE` gets 56 if the RNG does not
 deliver (HSI48 or RNG not modelled).
 
+## Step 3: P2 session, capability record, register map
+
+Console after the discovery line: `net: P2 ports 1025 1026 1027 1029 1035 7250 open`; per session
+`p2: session of <ip>:<port> started[ (restart)][ (takeover)]` and `p2: session of … ended (Stop |
+Watchdog | Takeover | LinkDown | address change)`.
+
+Built: all eight sockets of Table B2-1 (1028 never); General on 1024 (byte 4 = 0x00, ≥ 60
+bytes), DDC-specific 1025, DUC-specific 1026, High Priority 1027 (≥ 1444 bytes; shorter C&C
+discarded, B11.3); set-up phase (B5.1a), run bit start, owner IP + port, stop, takeover by any
+C&C of another host, watchdog 1 s (only when General byte 38 bit 0 is set or no General yet),
+restart by the same host (B5.4), refusal below 100 Mbit/s (B5.8); discovery byte 4 = 0x03 for
+other hosts while running; REDISCOVERY drop. Register map on 7250 (B8): `CAP_REQUEST` from any
+host → echo + whole record (207 registers) in one packet, the unasked record once per session,
+every register of Table B8-2 readable by write, the write rules of B8.4/B8.5 (non-owner
+`NOT_OWNER` once per 100 ms, no answer to source port 7250). High Priority status (60 bytes,
+from 1025) every 50 ms while running; all fields 0 except the sequence number.
+
+Not yet: DDC0 I&Q (B6; `STREAM_STATUS` DDC0 reason 1), DUC I&Q (ignored), ADC words in the
+status packet, the three-times notice to an old owner (sent once, and only when it was armed),
+`LINK_STATUS` bit 17. TX: arm refused with 11 `TX_NOT_IMPLEMENTED` (record `tx` bit 1 = 0), as
+agreed until the key path exists.
+
 ## Store: watchdog- and power-loss-safe compaction
 
 Image: `out/test/g7250-compact.elf` (test build: compacts the store at every start; never for
