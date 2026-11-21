@@ -82,6 +82,7 @@ Both run with `cargo test` (build.sh, "host tests").
 - The RF pins and peripherals that the key sequence needs are added to the allowed lists of
   `forbidden.rs:180`, each with its HIS citation, and no other entry.
 - `fpga_gate::CLEARED` is set only from a cleared HIS 80 parameter set.
-- The net loop empties socket 4 (DUC I&Q, port 1029) on every pass instead of reading one
-  datagram. Its 4 KiB CH394 buffer holds two packets, about 2.5 ms at 192 ksps (Table B2-2;
-  0053).
+- Done: the net loop empties socket 4 (DUC I&Q, port 1029) and socket 3 (High Priority) on
+  every pass, two datagrams each, which is what their 4 KiB holds (Table B2-2; 0053;
+  `HP_DUC_PER_PASS`). Before the DUC goes live, measure the pass time with the DUC stream on:
+  the socket must be read within about 2.5 ms (two packets at 192 ksps).

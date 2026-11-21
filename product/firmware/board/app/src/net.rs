@@ -34,6 +34,9 @@ use g7250_radio::mgmt::{Ctx, Server};
 /// is measured (P-NET-1). SPI6 kernel clock is PCLK4 = 64 MHz here; 64 / 4 = 16 MHz.
 const SPI_HZ: u32 = 16_000_000;
 const SOCK_DISCOVERY: u8 = 0;
+/// The most datagrams read from the High Priority and the DUC I&Q socket in one pass: what their
+/// 4 KiB holds (two 1452-byte packets), so that each pass empties them (T-B5-20).
+const HP_DUC_PER_PASS: usize = 2;
 /// Socket receive and transmit buffers, KiB, sockets 0-7 = ports 1024, 1025, 1026, 1027, 1029,
 /// 1035, 7250, 7251 (from 0004 "CH394Q buffer split", B2.3; the normative split goes to part B).
 /// - 1027 (High Priority) receives 4 KiB: two packets back to back (a stop and a new run,
@@ -645,14 +648,19 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
             Ok(None) => {
                 // P2 sockets: DDC-specific, DUC-specific, High Priority, DUC I&Q, registers.
                 let mut handled = false;
-                for (sock, kind) in [
-                    (crate::p2::S1025, Some(g7250_radio::session::CnC::DdcSpecific)),
-                    (crate::p2::S1026, Some(g7250_radio::session::CnC::DucSpecific)),
-                    (crate::p2::S1027, Some(g7250_radio::session::CnC::HighPriority)),
-                    (crate::p2::S1029, None),
-                    (crate::p2::S7250, None),
+                // Datagrams read per socket and pass. The High Priority and DUC I&Q sockets hold
+                // only two packets each (Table B2-2; 0053): they are emptied (up to the most that
+                // fits) on every pass, so a burst is read within the time two packets take to
+                // arrive (T-B5-20); the others take one per pass.
+                for (sock, kind, per_pass) in [
+                    (crate::p2::S1025, Some(g7250_radio::session::CnC::DdcSpecific), 1),
+                    (crate::p2::S1026, Some(g7250_radio::session::CnC::DucSpecific), 1),
+                    (crate::p2::S1027, Some(g7250_radio::session::CnC::HighPriority), HP_DUC_PER_PASS),
+                    (crate::p2::S1029, None, HP_DUC_PER_PASS),
+                    (crate::p2::S7250, None, 1),
                 ] {
-                    if let Ok(Some(d)) = chip.udp_recv(sock, &mut rx) {
+                    for _ in 0..per_pass {
+                        let Ok(Some(d)) = chip.udp_recv(sock, &mut rx) else { break };
                         let now = Instant::now().as_millis();
                         let from = (d.src_ip, d.src_port);
                         match (sock, kind) {
