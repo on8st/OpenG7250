@@ -1,0 +1,11 @@
+[package]
+name = "g7250-store"
+description = "Non-volatile store of the G7250 main firmware in flash sector 7: boot record, boot counter, configuration, calibration set, secret"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+g7250-layout = { path = "../layout" }

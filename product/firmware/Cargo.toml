@@ -3,7 +3,7 @@
 # The board crates (target thumbv7em-none-eabihf) are a separate workspace in board/.
 [workspace]
 resolver = "3"
-members = ["crates/layout", "crates/safety", "crates/proto", "crates/ch394", "tools/imgtool"]
+members = ["crates/layout", "crates/safety", "crates/proto", "crates/ch394", "crates/store", "tools/imgtool"]
 exclude = ["board"]
 
 [workspace.package]
