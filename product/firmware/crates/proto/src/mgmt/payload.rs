@@ -679,3 +679,31 @@ mod tests {
         assert_eq!(parse_set_calibration(&req[..req.len() - 1]), Err(Bad));
     }
 }
+
+/// The parameter ids of Annex P (Table P-1): a calibration entry with any other id is not
+/// allowed (A1.12: status 48).
+pub const PARAMETER_IDS: [&str; 37] = [
+    "P-RF-1", "P-RF-2", "P-RF-3", "P-RF-4", "P-RF-5", "P-ANT-1", "P-ATU-1", "P-PWR-1", "P-PWR-2", "P-PWR-3", "P-PWR-4", "P-PWR-5",
+    "P-SEN-1", "P-SEN-2", "P-SEN-3", "P-SEN-4", "P-SEN-5", "P-TIM-1", "P-TIM-2", "P-NET-1", "P-NET-2", "P-NET-3", "P-SYS-1",
+    "P-SYS-2", "P-SYS-3", "P-SYS-4", "P-SYS-5", "P-SYS-6", "P-SYS-7", "P-SYS-8", "P-SYS-9", "P-RX-1", "P-RX-2", "P-TX-1",
+    "P-L2-1", "P-L2-2", "P-L2-3",
+];
+
+/// Whether a request payload has the size and structure Annex M gives for its command (A1.4
+/// "Malformed payload", 0056): if not, the request cannot be read and gets 17 in the framing
+/// group, before authentication and every state check. Whether its values are allowed is the
+/// command's own check, after the state checks (48, 49, 51-56, 59-63).
+pub fn well_formed(cmd: super::Command, p: &[u8]) -> bool {
+    use super::Command as C;
+    match cmd {
+        C::SetFirstSecret | C::ChangeSecret => p.len() == 32,
+        C::SetConfig => Config::decode(p).is_ok(),
+        C::SwitchLevel | C::UpdateActivate => p.len() == 1,
+        C::ReadLog => p.len() >= 4,
+        C::UpdateBegin => parse_update_begin(p).is_ok(),
+        C::UpdateBlock => Block::decode(p).is_ok(),
+        C::UpdateVerify | C::UpdateAbort | C::Rollback => p.is_empty(),
+        C::SetCalibration => p.len() <= 1024 && parse_set_calibration(p).is_ok(),
+        _ => true,
+    }
+}

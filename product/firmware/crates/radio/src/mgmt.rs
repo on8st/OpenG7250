@@ -301,7 +301,9 @@ impl Server {
         if !self.rate_ok(src, identify, ctx) {
             return None;
         }
-        let (status, n) = self.execute(src, cmd, &req, ctx, out);
+        // A payload without its command's size or structure: 17 in the framing group, before
+        // authentication and every state check (A1.4 "Malformed payload"; 0056).
+        let (status, n) = if mgmt::payload::well_formed(cmd, req.payload) { self.execute(src, cmd, &req, ctx, out) } else { (Status::Malformed, 0) };
         let id = req.header.request_id;
         // Build the reply in place: the payload was written at out[HEADER_LEN..].
         let mut tmp = [0u8; mgmt::MAX_REPLY - mgmt::HEADER_LEN];

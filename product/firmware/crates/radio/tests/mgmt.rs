@@ -509,3 +509,45 @@ fn t_b5_21_status_50_takes_its_place_in_the_a1_3_order() {
     assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::SetCalibration, &[], 300).0, Status::Malformed);
     assert!(s.take_effects().iter().all(|e| !matches!(e, g7250_radio::mgmt::Effect::SetSecret(_) | g7250_radio::mgmt::Effect::SetCalibration(_))));
 }
+
+/// A SET_CALIBRATION payload: date, empty source, one entry (id, value of `vlen` declared, `v`).
+fn cal(id: &[u8], vlen: u16, v: &[u8]) -> Vec<u8> {
+    let mut p = vec![0, 0, 0, 1, 0, id.len() as u8];
+    p.extend_from_slice(id);
+    p.extend_from_slice(&vlen.to_be_bytes());
+    p.extend_from_slice(v);
+    p
+}
+
+#[test]
+fn t_a1_75_malformed_payload_is_17_before_every_state_check_values_after() {
+    // A1.4 "Malformed payload" (0056): no size or structure gives 17 in the framing group, before
+    // authentication and every state check; a value not allowed is command-specific, after them.
+    let mut s = Server::new();
+    let mut w = World::new();
+    s.network_up(0);
+    w.armed = true;
+    w.p2 = true;
+    // SET_FIRST_SECRET of 31 bytes: 17, armed and in a session, window open or closed.
+    assert_eq!(w.call(&mut s, HOST, &req(1, Command::SetFirstSecret, &[7; 31]), 10).unwrap().1, Status::Malformed);
+    w.secret = Some([7; 32]);
+    assert_eq!(w.call(&mut s, HOST, &req(2, Command::SetFirstSecret, &[7; 31]), 20).unwrap().1, Status::Malformed);
+    // SET_CALIBRATION with a TLV past the end: 17, also before authentication (no HMAC: 17, not 32).
+    let past = cal(b"P-RF-2", 10, &[1]);
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::SetCalibration, &past, 100).0, Status::Malformed);
+    assert_eq!(w.call(&mut s, HOST, &req(3, Command::SetCalibration, &past), 150).unwrap().1, Status::Malformed);
+    // Well formed, unknown parameter id: 57 in a session, 50 armed outside one, 48 otherwise.
+    let unknown = cal(b"P-XX-9", 1, &[1]);
+    assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::SetCalibration, &unknown, 200).0, Status::P2SessionRuns);
+    w.p2 = false;
+    assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::SetCalibration, &unknown, 300).0, Status::Armed);
+    w.armed = false;
+    assert_eq!(authed(&mut w, &mut s, HOST, 40, Command::SetCalibration, &unknown, 400).0, Status::InvalidConfig);
+    // A known id is accepted (its value encoding is not fixed yet, Table P-1).
+    assert_eq!(authed(&mut w, &mut s, HOST, 50, Command::SetCalibration, &cal(b"P-RF-2", 1, &[1]), 500).0, Status::Ok);
+    // Values that decode but are not allowed: SWITCH_LEVEL 3 is 48, UPDATE_ACTIVATE with the
+    // foreign flag 56; a wrong size of either is 17.
+    assert_eq!(authed(&mut w, &mut s, HOST, 60, Command::SwitchLevel, &[3], 600).0, Status::InvalidConfig);
+    assert_eq!(authed(&mut w, &mut s, HOST, 70, Command::SwitchLevel, &[1, 1], 700).0, Status::Malformed);
+    assert_eq!(authed(&mut w, &mut s, HOST, 80, Command::UpdateActivate, &[], 800).0, Status::Malformed);
+}

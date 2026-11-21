@@ -192,15 +192,17 @@ impl Server {
                 (Status::Ok, 0)
             }
             Command::SwitchLevel if ctx.update.in_progress() => (Status::UpdateInProgress, 0), // T-A1-31
+            // One byte (checked as structure, 0056); its value: 1, 2 (only after G6, 0011), else 48.
             Command::SwitchLevel => match payload::parse_switch_level(req.payload) {
                 Ok(1) => (Status::Ok, 0),
-                Ok(_) => (Status::NotSupported, 0), // level 2 only after G6 (0011)
-                Err(_) => (Status::Malformed, 0),
+                Ok(_) => (Status::NotSupported, 0),
+                Err(_) => (Status::InvalidConfig, 0),
             },
             Command::SetCalibration | Command::ClearCalibration => {
-                // Table A1-3 order: 17, then 57, then 50.
-                if cmd == Command::SetCalibration && (payload::parse_set_calibration(req.payload).is_err() || req.payload.len() > 1024) {
-                    return (Status::Malformed, 0);
+                // Structure (17) is checked before authentication (0056). Then, in the Table
+                // A1-3 order, 58, 57, 50, and the values (48: an id outside Annex P, A1.12).
+                if ctx.update.in_progress() {
+                    return (Status::UpdateInProgress, 0);
                 }
                 if ctx.p2_session {
                     return (Status::P2SessionRuns, 0);
@@ -212,6 +214,12 @@ impl Server {
                     let _ = self.effects.push(Effect::ClearCalibration);
                     self.log.push(now, format_args!("calibration cleared by {a}.{b}.{c}.{d}:{}", src.1));
                     return (Status::Ok, 0);
+                }
+                let known = payload::parse_set_calibration(req.payload)
+                    .map(|h| payload::calibration_entries(h.entries).all(|e| e.is_ok_and(|(id, _)| payload::PARAMETER_IDS.iter().any(|k| k.as_bytes() == id))))
+                    .unwrap_or(false);
+                if !known {
+                    return (Status::InvalidConfig, 0);
                 }
                 let mut v = heapless::Vec::new();
                 let _ = v.extend_from_slice(req.payload);
@@ -300,9 +308,10 @@ impl Server {
                 }
             }
             Command::UpdateActivate => {
-                // Flags: bit 0 foreign image; a normal image has none (A1.8a item 3).
+                // Flags (one byte, checked as structure, 0056): bit 0 foreign image, not supported in
+                // this firmware (A1.8a item 3): 56.
                 if payload != [0] {
-                    return (Status::Malformed, 0);
+                    return (Status::NotSupported, 0);
                 }
                 match ctx.update.activate(now) {
                     Ok(()) => {
