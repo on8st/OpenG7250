@@ -36,7 +36,7 @@ pub const FW_BETA: bool = true;
 /// Leaves interrupts masked (PRIMASK set); the caller unmasks when it is ready.
 pub fn early_init() {
     cortex_m::interrupt::disable();
-    safe::apply();
+    safe::apply_except_tx_path(); // the TX path pins: set at reset only (A3.6b; 0066 addendum)
     // SAFETY: we own the core at this point; nothing else runs.
     unsafe {
         let p = cortex_m::Peripherals::steal();

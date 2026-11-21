@@ -110,6 +110,58 @@ pub fn apply() {
     }
 }
 
+/// The safe state without the TX path check's pins (Table A3-6): what the start-up paths after
+/// the boot stage's reset-time set-up (0045) apply. Between that set-up and the first TX path
+/// check no code writes those pins or their configuration (A3.6b; 0066 addendum), so that a pin
+/// found wrong is seen by the check, not quietly put back.
+pub fn apply_except_tx_path() {
+    enable_gpio_clocks();
+    for r in SAFE_STATE.iter().filter(|r| !is_tx_path(r.port, r.pin)) {
+        match r.action {
+            Action::DriveHigh => drive(r.port, r.pin, true),
+            Action::DriveLow => drive(r.port, r.pin, false),
+            Action::InputPullUp => input_pull_up(r.port, r.pin),
+            Action::LeaveUntouched => {}
+        }
+    }
+}
+
+/// As [`reassert`], without the TX path check's pins (start-up, see [`apply_except_tx_path`]).
+pub fn reassert_except_tx_path() {
+    for r in SAFE_STATE.iter().filter(|r| r.is_safety() && !is_tx_path(r.port, r.pin)) {
+        match r.action {
+            Action::DriveHigh => drive(r.port, r.pin, true),
+            Action::DriveLow => drive(r.port, r.pin, false),
+            Action::InputPullUp => input_pull_up(r.port, r.pin),
+            Action::LeaveUntouched => {}
+        }
+    }
+}
+
+fn is_tx_path(port: Port, pin: u8) -> bool {
+    g7250_safety::txpath::PINS.iter().any(|p| p.0 == port && p.1 == pin)
+}
+
+/// Start the DWT cycle counter at 0: the boot stage's first step, so that the application can
+/// measure the time from the boot stage's start to its first TX path check (A3.6b: at most
+/// 100 ms; 0066 addendum). SYSCLK is HSI 64 MHz in both stages.
+pub fn start_cycle_count() {
+    use core::ptr::{read_volatile as rd, write_volatile as wr};
+    // SAFETY: core debug registers (ARMv7-M DEMCR, DWT), always present on the Cortex-M7.
+    unsafe {
+        wr(0xE000_EDFC as *mut u32, rd(0xE000_EDFC as *const u32) | (1 << 24));
+        wr(0xE000_1FB0 as *mut u32, 0xC5AC_CE55);
+        wr(0xE000_1004 as *mut u32, 0);
+        wr(0xE000_1000 as *mut u32, rd(0xE000_1000 as *const u32) | 1);
+    }
+}
+
+/// Microseconds since [`start_cycle_count`] (wraps after 67 s).
+pub fn us_since_boot_stage() -> u32 {
+    // SAFETY: a read of DWT CYCCNT.
+    unsafe { core::ptr::read_volatile(0xE000_1004 as *const u32) / (crate::console::HSI_HZ / 1_000_000) }
+}
+
 /// Re-apply the safe state proper (RF and power pins) without touching the parts that drivers
 /// have taken out of reset (CH394, codec). Used whenever not transmitting.
 pub fn reassert() {

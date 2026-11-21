@@ -45,6 +45,9 @@ pub unsafe extern "C" fn __pre_init() {
 
 #[entry]
 fn main() -> ! {
+    // The time base for the first TX path check (A3.6b: within 100 ms of the boot stage's start;
+    // __pre_init's safe-state set-up, some us, comes before it).
+    safe::start_cycle_count();
     // What the vendor bootloader left, before anything is changed ([HIS] HIS 90, F1-Q3/F1-Q4).
     let start = g7250_board::start_state::capture();
     early_init();

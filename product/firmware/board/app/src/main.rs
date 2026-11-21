@@ -17,6 +17,7 @@ mod update;
 
 use embassy_executor::Spawner;
 use embassy_stm32::wdg::IndependentWatchdog;
+use embassy_stm32::interrupt;
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use g7250_board::{FW_BETA, FW_BUILD, FW_MAJOR, FW_MINOR, FW_VERSION, console, early_init, println, reset, safe, wdg};
 use g7250_layout::header::{self, Header, Kind};
@@ -142,11 +143,17 @@ async fn main(spawner: Spawner) {
         hold_without_hal(o);
     }
     let p = embassy_stm32::init(clock_config());
-    // The HAL init does not touch GPIO levels (feature gpio-init-analog is off); re-assert anyway.
-    safe::reassert();
+    // The HAL init does not touch GPIO levels (feature gpio-init-analog is off); re-assert anyway,
+    // all but the TX path pins (A3.6b: not written before the first check).
+    safe::reassert_except_tx_path();
     console::init();
     // SAFETY: early_init cleared every enable and pending bit left by the previous stage.
     unsafe { cortex_m::interrupt::enable() };
+    // The TX path check (A3.6b) on its own interrupt executor, above the thread-mode tasks: its
+    // 5 ms period holds while main still blocks (store scan, init) and while a task runs long.
+    embassy_stm32::interrupt::InterruptExt::set_priority(embassy_stm32::interrupt::CEC, embassy_stm32::interrupt::Priority::P6);
+    let safety = SAFETY_EXECUTOR.start(embassy_stm32::interrupt::CEC);
+    safety.spawn(tx_path().unwrap());
 
     let mut wd = IndependentWatchdog::new(p.IWDG1, wdg::TIMEOUT_MS * 1000);
     wd.unleash();
@@ -285,6 +292,20 @@ pub fn safe_reset(mgmt: &mut mgmt_init::MgmtInit, factory: bool) -> ! {
 /// Moves buffered console output into the USART FIFO when the net loop does not (idle times).
 static CONSOLE_OUT: embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, ()> = embassy_sync::signal::Signal::new();
 
+/// The executor of the TX path check: interrupt CEC (no CEC in this product), priority 6.
+static SAFETY_EXECUTOR: embassy_executor::InterruptExecutor = embassy_executor::InterruptExecutor::new();
+
+#[interrupt]
+#[allow(non_snake_case)]
+unsafe fn CEC() {
+    // SAFETY: the interrupt of SAFETY_EXECUTOR only.
+    unsafe { SAFETY_EXECUTOR.on_interrupt() }
+}
+
+/// Microseconds from the boot stage's start to the first TX path check (GET_STATS
+/// `tx_check_first_us`; 0066 addendum).
+pub static TX_CHECK_FIRST_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 /// The TX path check (A3.6b; 0066): every 5 ms while not armed and not keyed, the TX-side pins'
 /// configuration and input registers against the safe state; a mismatch over every check for
 /// 10 ms raises TX_PATH_NOT_BLOCKED (class 2), sets the safe state again, and stays in the fault.
@@ -293,6 +314,8 @@ async fn tx_path() {
     use g7250_safety::txpath::{Check, PERIOD_MS};
     let mut c = Check::new();
     let mut t = Ticker::every(Duration::from_millis(PERIOD_MS));
+    // When the first check runs, from the boot stage's start (0066 addendum: at most 100 ms).
+    TX_CHECK_FIRST_US.store(safe::us_since_boot_stage(), core::sync::atomic::Ordering::Relaxed);
     loop {
         let open = fault::TX_OPEN.load(core::sync::atomic::Ordering::Relaxed);
         let seen = if open { None } else { safe::tx_path_mismatch() };

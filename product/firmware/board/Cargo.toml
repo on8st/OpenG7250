@@ -29,7 +29,7 @@ stm32-metapac = { version = "21.0.0", features = ["stm32h725ig"] }
 # Do NOT enable the embassy-stm32 feature "gpio-init-analog": it would reset every pin to analog
 # at init and undo the safe state (power hold PH9 included).
 embassy-stm32 = { version = "0.6.0", features = ["stm32h725ig", "time-driver-any", "unstable-pac", "exti"] }
-embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread", "executor-interrupt"] }
 embassy-time = { version = "0.5.1", features = ["tick-hz-1_000_000"] }
 embassy-sync = "0.8.0"
 embassy-futures = "0.1.2"
