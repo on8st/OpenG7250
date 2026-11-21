@@ -14,7 +14,8 @@
 //! big-endian 24-bit, one strobe per byte, six per sample; DRDY most likely rising; f_clk
 //! 122.88 MHz as the word scale (all MEDIUM). Still not known: set-up, strobe width and turnaround
 //! times, I/Q order, which tuning word is DDC0, and the meaning and safe values of 0x01 byte 0 and
-//! bytes 9-18. The spec names the frame P-RX-2 (0042). So the parameter set stays incomplete and
+//! bytes 9-18. The spec names the frame P-RX-2 (0042); 0060 takes its values from the unit's
+//! calibration set (rx_frame.rs), so the gate holds only the bus timing. So the parameter set stays incomplete and
 //! the gate stays closed. Safety rule of HIS 80: any 0x01 write while byte 0 is not understood
 //! only with the RF section in the HIS 85 safe state (byte 0 may hold a TX enable).
 //!
@@ -39,13 +40,10 @@ pub struct BusParams {
     pub turnaround_ns: u32,
     /// The DRDY (PE10) edge that marks new samples: rising (HIS 80) if true.
     pub drdy_rising: bool,
-    /// 0x01 config frame: the safe value of byte 0 (status flags).
-    pub frame_byte0: u8,
-    /// 0x01 config frame: safe values of bytes 9-18 for each rate index 0-3 (384, 192, 96, 48).
-    pub frame_bytes_9_18: [[u8; 10]; 4],
-    /// Spectral-inversion flag: byte and bit in the frame (HIS 80 "Open").
-    pub inversion_flag: (u8, u8),
 }
+// The 0x01 frame values (byte 0, bytes 9-18, the DDC0 tuning word, the I/Q order and the
+// spectral inversion) are per unit: they are P-RX-2 in the unit's calibration set, not in this
+// image (0060; rx_frame.rs).
 
 /// Parameters for the radio, from a cleared HIS. Set only by a commit that cites the HIS.
 pub const CLEARED: Option<BusParams> = None;
@@ -59,6 +57,14 @@ pub const EMULATOR: Option<BusParams> = None;
 pub struct BusPermit {
     pub params: BusParams,
     _sealed: (),
+}
+
+impl BusPermit {
+    /// A permit for host tests of code that needs one (the frame layout); never in a build.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> BusPermit {
+        BusPermit { params: BusParams { strobe_active_high: true, cmd_active_high: true, setup_ns: 0, strobe_ns: 0, turnaround_ns: 0, drdy_rising: true }, _sealed: () }
+    }
 }
 
 /// The bus permit of this build, if any.

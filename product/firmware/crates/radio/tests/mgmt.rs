@@ -373,6 +373,30 @@ fn calibration_refused_during_a_p2_session() {
     assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::ReturnToStock, &[], 20).0, Status::NotSupported);
 }
 
+#[test]
+fn p_rx_2_that_does_not_decode_gets_48() {
+    // A1.12 item 1: a value that does not decode gets 48 and changes nothing; P-RX-2 per Table
+    // P-1 (0060).
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let entry = |v: &[u8]| {
+        let mut e = vec![0, 0, 0, 1, 0, 6];
+        e.extend_from_slice(b"P-RX-2");
+        e.extend_from_slice(&(v.len() as u16).to_be_bytes());
+        e.extend_from_slice(v);
+        e
+    };
+    let bad = entry(&[0, 3]); // offset 3, no rate
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::SetCalibration, &bad, 0).0, Status::InvalidConfig);
+    assert!(s.take_effects().is_empty(), "nothing stored");
+    let mut good = vec![0x01, 1, 3, 0x40];
+    good.extend_from_slice(&[0; 10]);
+    let (st, _) = authed(&mut w, &mut s, HOST, 20, Command::SetCalibration, &entry(&good), 10);
+    assert_eq!(st, Status::Ok);
+    assert!(matches!(s.take_effects()[0], Effect::SetCalibration(_)));
+}
+
 fn package(len: u32, slot: u8) -> Vec<u8> {
     let pkg = Package {
         header_version: 1,

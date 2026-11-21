@@ -32,8 +32,21 @@ pub struct Params {
     pub tx_calibrated: bool,
     /// 384 ksps offered (only once the SPI link to the CH394 is shown fast enough, P-NET-1).
     pub rate_384: bool,
-    /// DDC0 offered: the FPGA receive parameters are set (P-RX-2; B6.1; 0042).
-    pub rx_offered: bool,
+    /// DDC0 offered: the FPGA bus gate is open and the calibration set holds P-RX-2 (B6.1;
+    /// 0042; 0060): the `ddc_rates` bits of the rates P-RX-2 has a frame for; `None` if not.
+    pub rx_rates: Option<u8>,
+}
+
+/// `streams` bit 0 and `ddc_rates` for the DDC0 state (B4.8; 0042; 0060 point 2.4): while
+/// DDC0 is not offered `ddc_rates` keeps the rates of this firmware; once it is, only those
+/// P-RX-2 has a frame for.
+pub fn apply_rx(r: &mut [u32; LEN], rate_384: bool, rx_rates: Option<u8>) {
+    let fw: u32 = if rate_384 { 0x0F } else { 0x07 };
+    r[0x0C] = (r[0x0C] & !1) | rx_rates.is_some() as u32;
+    r[0x10] = match rx_rates {
+        Some(m) => fw & m as u32,
+        None => fw,
+    };
 }
 
 const fn ascii4(s: &[u8; 4]) -> u32 {
@@ -53,11 +66,11 @@ pub fn build(p: &Params) -> [u32; LEN] {
     r[0x0A] = 0; // hw_revision: not identified (HIS-18)
     r[0x0B] = 0x01 | (1 << 4); // level 1 present; active level 1
     // RX IQ only once P-RX-2 is set (0042); TX IQ per tx bit 1; no audio, mic, wideband.
-    r[0x0C] = (p.rx_offered as u32) | ((p.tx_implemented as u32) << 1);
+    r[0x0C] = (p.tx_implemented as u32) << 1;
     r[0x0D] = 1; // num_adc
     r[0x0E] = 1; // num_ddc (0004)
     r[0x0F] = 1; // num_duc
-    r[0x10] = if p.rate_384 { 0x0F } else { 0x07 }; // ddc_rates
+    apply_rx(&mut r, p.rate_384, p.rx_rates); // streams bit 0, ddc_rates
     r[0x11] = 0x00C0_0018; // duc_format: 192 ksps, 24 bits
     r[0x12] = 122_880_000; // dsp_clock_hz (B3.8)
     r[0x13] = 2; // rx_range_count
@@ -103,7 +116,7 @@ mod tests {
     }
 
     fn rec() -> [u32; LEN] {
-        build(&Params { fw_version: 0x0001_0007, tx_implemented: false, tx_calibrated: false, rate_384: false, rx_offered: false })
+        build(&Params { fw_version: 0x0001_0007, tx_implemented: false, tx_calibrated: false, rate_384: false, rx_rates: None })
     }
 
     #[test]
@@ -120,8 +133,15 @@ mod tests {
         assert_eq!(r[0x54], 100);
         // DDC0 not offered before P-RX-2 (T-B6-27).
         assert_eq!(r[0x0C] & 1, 0);
-        let r = build(&Params { fw_version: 0, tx_implemented: false, tx_calibrated: false, rate_384: false, rx_offered: true });
+        assert_eq!(r[0x10], 0x07);
+        let mut r = build(&Params { fw_version: 0, tx_implemented: false, tx_calibrated: false, rate_384: false, rx_rates: Some(0b1001) });
         assert_eq!(r[0x0C] & 1, 1);
+        // Only the rates with a P-RX-2 frame, and 384 only with P-NET-1 (0060 point 2.4).
+        assert_eq!(r[0x10], 0b0001);
+        apply_rx(&mut r, true, Some(0b1001));
+        assert_eq!(r[0x10], 0b1001);
+        apply_rx(&mut r, false, None);
+        assert_eq!((r[0x0C] & 1, r[0x10]), (0, 0x07));
     }
 
     #[test]
@@ -129,10 +149,10 @@ mod tests {
         let r = rec();
         assert_eq!(r[0x20], 0b0_1101); // present, arm required, mode class required; not implemented, not calibrated
         assert_eq!(r[0x0C] & 2, 0);
-        let r = build(&Params { fw_version: 0, tx_implemented: true, tx_calibrated: false, rate_384: false, rx_offered: false });
+        let r = build(&Params { fw_version: 0, tx_implemented: true, tx_calibrated: false, rate_384: false, rx_rates: None });
         assert_eq!(r[0x20], 0b0_1111);
         // Bit 4 is never set while bit 1 is 0 (0039).
-        let r = build(&Params { fw_version: 0, tx_implemented: false, tx_calibrated: true, rate_384: false, rx_offered: false });
+        let r = build(&Params { fw_version: 0, tx_implemented: false, tx_calibrated: true, rate_384: false, rx_rates: None });
         assert_eq!(r[0x20] & 0x10, 0);
     }
 

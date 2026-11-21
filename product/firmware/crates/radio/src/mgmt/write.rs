@@ -221,6 +221,11 @@ impl Server {
                 if !known {
                     return (Status::InvalidConfig, 0);
                 }
+                // A value that does not decode: 48 (A1.12 item 1). P-RX-2 has its encoding in
+                // Table P-1 (0060).
+                if payload::parse_set_calibration(req.payload).is_ok_and(|h| crate::calset::rx_cal(h.entries).is_err()) {
+                    return (Status::InvalidConfig, 0);
+                }
                 let mut v = heapless::Vec::new();
                 let _ = v.extend_from_slice(req.payload);
                 let _ = self.effects.push(Effect::SetCalibration(v));

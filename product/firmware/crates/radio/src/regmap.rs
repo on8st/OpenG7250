@@ -420,7 +420,7 @@ mod tests {
     }
 
     fn map() -> RegMap {
-        RegMap::new(record::build(&record::Params { fw_version: 0x0001_0001, tx_implemented: false, tx_calibrated: false, rate_384: false, rx_offered: false }))
+        RegMap::new(record::build(&record::Params { fw_version: 0x0001_0001, tx_implemented: false, tx_calibrated: false, rate_384: false, rx_rates: None }))
     }
 
     fn packet(pairs: &[Pair]) -> std::vec::Vec<u8> {

@@ -51,6 +51,9 @@ const STATUS_MS: u64 = 50;
 pub struct P2 {
     pub session: Session,
     pub regs: RegMap,
+    /// P-RX-2 from the calibration set (0060), if it holds a valid one. DDC0 is offered only
+    /// with it and the FPGA bus permit.
+    pub rx_cal: Option<g7250_safety::rx_frame::RxCal>,
     pub tx: TxCore,
     /// The network key path (B10.1, B10.5, B10.10; behind the calibration gate).
     pub key: KeyPath,
@@ -164,6 +167,7 @@ impl P2 {
         P2 {
             session: Session::new(),
             regs,
+            rx_cal: None,
             tx,
             key: KeyPath::new(),
             seq_status: 0,
@@ -204,6 +208,20 @@ impl P2 {
 
     /// `LINK_STATUS` (Table B8-2): [15:0] speed, bit 16 full duplex, bit 17 kept (latched until
     /// the next session), [31:24] refusal reason.
+    /// DDC0 is offered: the FPGA bus permit exists and the calibration set holds P-RX-2.
+    pub fn ddc0_offered(&self) -> bool {
+        g7250_safety::fpga_gate::permit().is_some() && self.rx_cal.is_some()
+    }
+
+    /// P-RX-2 of a new calibration set (or none). Calibration writes are refused while a
+    /// session runs (A1.12 item 1), so the record changes only between sessions: `streams`
+    /// bit 0 and `ddc_rates` (0060 point 2.4).
+    pub fn set_rx_cal(&mut self, cal: Option<g7250_safety::rx_frame::RxCal>) {
+        self.rx_cal = cal;
+        let rates = self.ddc0_offered().then(|| cal.map_or(0, |c| c.rate_mask()));
+        g7250_radio::record::apply_rx(&mut self.regs.record, false, rates);
+    }
+
     pub fn set_link(&mut self, l: g7250_ch394::Link) {
         self.link_ok = l.up && l.mbit_100;
         let refusal = if l.up && !l.mbit_100 { 1u32 } else { 0 };
@@ -513,10 +531,10 @@ impl P2 {
             running: self.session.running(),
             general: self.session.general,
             ddc: self.session.ddc,
-            offered_384: false,
-            // DDC0 needs the FPGA bus, closed until its parameters are cleared (fpga_gate;
-            // P-RX-2, 0042): reason 2 until then.
-            ddc0_built: g7250_safety::fpga_gate::permit().is_some(),
+            rates: self.regs.record[0x10] as u8,
+            // DDC0 needs the FPGA bus, closed until its timing is cleared (fpga_gate), and
+            // P-RX-2 in the calibration set (0042; 0060): reason 2 until then.
+            ddc0_built: self.ddc0_offered(),
             update: self.update_in_progress,
         };
         let duc = stream::duc0(self.update_in_progress, self.session.running(), self.link_ok, self.tx.calibrated());

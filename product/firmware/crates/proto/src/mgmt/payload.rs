@@ -555,6 +555,11 @@ pub fn parse_set_calibration(p: &[u8]) -> Result<CalibrationHead<'_>, Bad> {
     Ok(CalibrationHead { date, source, entries })
 }
 
+/// The value of parameter `id` in a calibration set's entries, if the set holds it.
+pub fn calibration_value<'a>(entries: &'a [u8], id: &str) -> Option<&'a [u8]> {
+    calibration_entries(entries).filter_map(Result::ok).find(|(k, _)| *k == id.as_bytes()).map(|(_, v)| v)
+}
+
 /// Iterate the entries of Table M-5: (parameter id, value).
 pub fn calibration_entries(mut p: &[u8]) -> impl Iterator<Item = Result<(&[u8], &[u8]), Bad>> {
     core::iter::from_fn(move || {

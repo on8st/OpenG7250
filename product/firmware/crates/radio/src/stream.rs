@@ -17,8 +17,9 @@ pub struct DdcInputs {
     pub running: bool,
     pub general: Option<General>,
     pub ddc: Option<Ddc>,
-    /// 384 ksps offered (P-NET-1; B6.7).
-    pub offered_384: bool,
+    /// The offered rates, as record `ddc_rates` (B4.8: bit 0 48, bit 1 96, bit 2 192, bit 3
+    /// 384): 384 only with P-NET-1, and only the rates P-RX-2 has a frame for (0060 point 2.4).
+    pub rates: u8,
     /// DDC0 I&Q is built in this firmware (step 4). Until then a valid set-up reports reason 2.
     pub ddc0_built: bool,
     /// A firmware update is in progress (reason 10, A1.8).
@@ -31,8 +32,15 @@ pub fn format_offered(b39: u8) -> bool {
     b39 & !0b101 == 0
 }
 
-pub fn rate_offered(ksps: u16, offered_384: bool) -> bool {
-    matches!(ksps, 48 | 96 | 192) || (ksps == 384 && offered_384)
+pub fn rate_offered(ksps: u16, rates: u8) -> bool {
+    let bit = match ksps {
+        48 => 0,
+        96 => 1,
+        192 => 2,
+        384 => 3,
+        _ => return false,
+    };
+    rates & (1 << bit) != 0
 }
 
 /// The radio-wide reasons, first in the order of Table B8-3 (0042 addendum): 10 update in
@@ -78,7 +86,7 @@ pub fn ddc0(i: &DdcInputs) -> u8 {
     if !i.ddc0_built {
         return 2;
     }
-    if !rate_offered(d.rate_ksps, i.offered_384) {
+    if !rate_offered(d.rate_ksps, i.rates) {
         return 3;
     }
     if !(d.size == 24 || d.size == 0) {
@@ -112,7 +120,7 @@ mod tests {
             running: true,
             general: Some(General { phase_word: true, ..Default::default() }),
             ddc: Some(Ddc { enable: true, rate_ksps: 192, size: 24 }),
-            offered_384: false,
+            rates: 0x07,
             ddc0_built: true,
             update: false,
         }
@@ -126,6 +134,13 @@ mod tests {
         assert_eq!(ddc0(&i), 3); // 384 not offered until P-NET-1
         i.ddc = Some(Ddc { enable: true, rate_ksps: 768, size: 24 });
         assert_eq!(ddc0(&i), 3);
+        // A rate P-RX-2 has no frame for is not offered (0060 point 2.4): 96 missing.
+        i.rates = 0b101;
+        i.ddc = Some(Ddc { enable: true, rate_ksps: 96, size: 24 });
+        assert_eq!(ddc0(&i), 3);
+        i.ddc = Some(Ddc { enable: true, rate_ksps: 48, size: 24 });
+        assert_eq!(ddc0(&i), RUNNING);
+        i.rates = 0x07;
         i.ddc = Some(Ddc { enable: true, rate_ksps: 192, size: 16 });
         assert_eq!(ddc0(&i), 4);
         i.ddc = Some(Ddc { enable: true, rate_ksps: 192, size: 0 });

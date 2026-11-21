@@ -40,7 +40,7 @@ undriven and DDC0 reports reason 2.
 | Id | Answer | Firmware |
 |---|---|---|
 | F4-Q1 | STB, CMD active-high pulses (MEDIUM); MCU drives D0–D7 for commands and writes, inputs for reads, FPGA drives while STB is high, MCU drives again only after STB is low. Set-up, strobe width, turnaround: not known (radio). | Matches `fpga.rs` (release before a read, drive again only after STB low). Times still missing: gate closed. |
-| F4-Q2 | Byte 0 and bytes 9–18: not known; DDC0 cannot run until understood; any 0x01 write only with the RF section in the HIS 85 safe state. Spec: P-RX-2 (0042). | Gate closed; record `streams` bit 0 = 0; DDC0 reason 2. |
+| F4-Q2 | Byte 0 and bytes 9–18: not known; DDC0 cannot run until understood; any 0x01 write only with the RF section in the HIS 85 safe state. Spec: P-RX-2 (0042); 0060: the values come from the unit's factory calibration, in its calibration set (Table P-1 encoding), confirmed by T-B6-28. | P-RX-2 decoded and checked at SET_CALIBRATION (48), loaded from the stored set; the 0x01 frame is built from it only with a bus permit (rx_frame.rs). Gate still closed: record `streams` bit 0 = 0; DDC0 reason 2. |
 | F4-Q3 | Which word (offset 1 or 5) is DDC0: not known; f_clk 122.88 MHz as the scale (MEDIUM). | Waits for the capture (HIS 90). |
 | F4-Q4 | Big-endian 24-bit, one strobe per byte, six per sample (MEDIUM); I/Q order not known. | Waits. |
 | F4-Q5 | DRDY most likely rising (MEDIUM); late-read behaviour not known. | Waits. |

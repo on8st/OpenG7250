@@ -627,10 +627,11 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         tx_implemented: g7250_safety::tx::TX_IMPLEMENTED,
         tx_calibrated: tx.calibrated(),
         rate_384: false, // P-NET-1: offered only once >= 50 MHz SPI is shown
-        // DDC0 offered only with the FPGA receive parameters (P-RX-2, through the bus gate).
-        rx_offered: g7250_safety::fpga_gate::permit().is_some(),
+        // DDC0: set by set_rx_cal below (the bus gate and P-RX-2 of the calibration set).
+        rx_rates: None,
     });
     let mut p2 = crate::p2::P2::new(tx, g7250_radio::regmap::RegMap::new(rec));
+    p2.set_rx_cal(g7250_radio::calset::rx_cal_of_set(mgmt.calibration.get(32..).unwrap_or(&[])));
     p2.set_link(link);
     // TRIP_COUNT kept over a reset without power loss (A3.5; persist.rs).
     p2.key.trips = g7250_board::persist::trip_count();
@@ -934,7 +935,13 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         ) {
                             p2.disarm_for_maintenance(&mut chip, Instant::now().as_millis());
                         }
-                        match crate::mgmt_init::apply_stored(&mut mgmt, e) {
+                        let cal_write = matches!(e, g7250_radio::mgmt::Effect::SetCalibration(_) | g7250_radio::mgmt::Effect::ClearCalibration);
+                        let r = crate::mgmt_init::apply_stored(&mut mgmt, e);
+                        if cal_write {
+                            // From the next session on (A1.12 item 3): P-RX-2 of the stored set.
+                            p2.set_rx_cal(g7250_radio::calset::rx_cal_of_set(mgmt.calibration.get(32..).unwrap_or(&[])));
+                        }
+                        match r {
                             Ok(None) => {}
                             Ok(Some(later)) => {
                                 let _ = after.push(later);
