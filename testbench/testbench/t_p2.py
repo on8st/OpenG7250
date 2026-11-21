@@ -11,7 +11,7 @@ from .p2 import *  # noqa: F401,F403
 
 
 def host(ctx: Ctx) -> Host:
-    return Host(ctx.radio_ip, ctx.host_ip)
+    return Host(ctx.net)
 
 
 def idle(h: Host):
@@ -169,7 +169,7 @@ def t_b3_31(ctx):
 @test("T-B3-33")
 def t_b3_33(ctx):
     try:
-        h = Host(ctx.radio_ip, ctx.host_ip, 1024)
+        h = Host(ctx.net, port=1024)
     except OSError as e:
         raise Skip(f"cannot bind source port 1024 here: {e}")
     with h:
@@ -262,7 +262,7 @@ def t_b4_17(ctx):
     with host(ctx) as h:
         ctx.check("first answered", h.cap_request() is not None)
         time.sleep(0.2)
-        ctx.check("repeat after 200 ms dropped", h.cap_request(0.3) is None)
+        ctx.check("repeat after 200 ms dropped", h.cap_request(0.3, retry=False) is None)
         time.sleep(0.6)
         ctx.check("repeat after 1 s answered", h.cap_request() is not None)
 
@@ -397,7 +397,11 @@ def t_b6_10(ctx):
     with host(ctx) as h:
         h.start(192)
         h.recv(0.1)
-        for rate in (768, 1536, 100):
+        rec = record_of((h.cap_request() or [None])[1:])
+        mask = rec.get(0x10, 0)
+        bits = {48: 0, 96: 1, 192: 2, 384: 3}
+        rates = [r for r, b in bits.items() if not mask >> b & 1] + [768, 1536, 100]
+        for rate in rates:
             h.send(PORT_DDC, ddc_specific(rate))
             ss = _stream_status(h)
             h.drain(0.05)
@@ -544,7 +548,7 @@ def t_b8_08(ctx):
 @test("T-B8-19")
 def t_b8_19(ctx):
     try:
-        h7 = Host(ctx.radio_ip, ctx.host_ip, 7250)
+        h7 = Host(ctx.net, port=7250)
     except OSError as e:
         raise Skip(f"cannot bind source port 7250 here: {e}")
     with h7:

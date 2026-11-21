@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "4551925",
-  "sha256_of_inputs": "43a17f6fdd1f49d5f0127631bfcb99eaa15af725ccc1fb5d04d359f1dc8e5db4"
+  "commit": "0e075f2",
+  "sha256_of_inputs": "13715a03b2808b51f751e74da32c01d44514a9e21a0c7c25b1c5c02951945ffd"
  },
  "his": {
   "commit": "9d10e72"
@@ -29,7 +29,7 @@
    "needs": [
     "net.broadcast"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -50,7 +50,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -66,8 +66,8 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [
-    "HIS-15"
+   "pending": [
+    "P-NET-2"
    ],
    "tx_part": false,
    "notes": []
@@ -84,7 +84,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -102,7 +102,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -118,7 +118,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -134,7 +134,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -155,7 +155,7 @@
    "needs": [
     "power.cycle"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -173,7 +173,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -189,7 +189,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -205,7 +205,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -223,7 +223,7 @@
    "needs": [
     "net.outside"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -239,7 +239,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -256,7 +256,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -276,8 +276,8 @@
     "time.scale",
     "net.hosts"
    ],
-   "tbd": [
-    "HIS-15"
+   "pending": [
+    "P-NET-2"
    ],
    "tx_part": false,
    "notes": []
@@ -296,7 +296,7 @@
    "needs": [
     "time.scale"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -304,15 +304,18 @@
    "id": "T-A1-17",
    "origin": "spec",
    "part": "A-B",
-   "title": "A region change (C-6) is refused with status 57 while a P2 session runs; the factory default allows TX only in the intersection of all regions.",
+   "title": "A region change (C-6) is refused with status 57 while a P2 session runs; the factory default is region 0, the ranges of Table A3-0 (0039).",
    "reqs": [
-    "A1"
+    "A1",
+    "A3",
+    "Table A3-0",
+    "0039"
    ],
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -328,7 +331,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -344,7 +347,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -362,7 +365,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -378,7 +381,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -394,7 +397,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -410,7 +413,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -429,7 +432,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "the RX and MAINTENANCE parts run on the emulator once trial boot is observable; 'accepted after confirmation' needs TX unlocked"
@@ -450,7 +453,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "status 57 part runs on the emulator; status 50 part needs an arm"
@@ -468,7 +471,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -486,7 +489,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -502,7 +505,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -524,9 +527,8 @@
     "sensor.set",
     "hw.observe"
    ],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3"
    ],
    "tx_part": true,
    "notes": [
@@ -550,7 +552,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -566,7 +568,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -582,7 +584,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -600,7 +602,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -620,7 +622,7 @@
    "needs": [
     "time.scale"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -644,9 +646,8 @@
     "sensor.set",
     "dhcp.server"
    ],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3"
    ],
    "tx_part": true,
    "notes": [
@@ -670,9 +671,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3"
    ],
    "tx_part": true,
    "notes": [
@@ -698,9 +698,8 @@
     "time.scale",
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3"
    ],
    "tx_part": false,
    "notes": [
@@ -723,7 +722,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -741,7 +740,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -762,7 +761,7 @@
    "needs": [
     "time.scale"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -786,9 +785,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3"
    ],
    "tx_part": true,
    "notes": [
@@ -811,7 +809,7 @@
     "net.hosts",
     "net.outside"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -828,7 +826,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -845,7 +843,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -862,7 +860,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -883,7 +881,7 @@
    "needs": [
     "time.scale"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -902,7 +900,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -921,8 +919,8 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [
-    "HIS-15"
+   "pending": [
+    "P-NET-2"
    ],
    "tx_part": false,
    "notes": []
@@ -946,7 +944,7 @@
     "net.hosts",
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -969,7 +967,7 @@
     "time.scale",
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -993,9 +991,8 @@
     "net.hosts",
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3"
    ],
    "tx_part": true,
    "notes": [
@@ -1017,7 +1014,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1036,7 +1033,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1044,7 +1041,7 @@
    "id": "T-A1-54",
    "origin": "spec",
    "part": "A-B",
-   "title": "An accepted foreign `UPDATE_BEGIN` ends the P2 session, stops the streams, logs the hand-over with source and target, replies after RF is gone with the one-way warning, and only then erases the secret from storage and hands over to the installer; with forward power held above `P_rf_off` it gets status 59 and nothing changes (reference model; A1.8a items 3, 6–8).",
+   "title": "With the F1 gate passed (reference model), an accepted foreign `UPDATE_BEGIN` ends the P2 session, stops the streams, logs the hand-over with source and target, replies after RF is gone with the one-way warning and hands over to the installer; the secret is still in storage until the first sector erase and is erased with it; with forward power held above `P_rf_off` it gets status 59 and nothing changes (reference model; A1.8a items 3, 6–8).",
    "reqs": [
     "A1",
     "A1.8a"
@@ -1057,9 +1054,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3"
    ],
    "tx_part": false,
    "notes": [
@@ -1070,7 +1066,7 @@
    "id": "T-A1-55",
    "origin": "spec",
    "part": "A-B",
-   "title": "A synthetic opaque image sent with the \"foreign image\" flag is accepted only if the hardware id matches (else 51) and it fits sectors 1–7 (else 19); a block with a bad CRC gets 53 and is not written; `UPDATE_VERIFY` with a hash that differs from the owner-supplied SHA-256 gets 55; `UPDATE_ACTIVATE` without the flag, or before a good verify, gets 55; with both, the activation is permanent, with no trial boot and no rollback (reference model; A1.8a items 3, 5).",
+   "title": "A synthetic opaque image sent with the \"foreign image\" flag is accepted only if the hardware id matches (else 51) and it fits sectors 1–7 (else 61); a block with a bad CRC gets 53 and is not written; `UPDATE_VERIFY` with a hash that differs from the owner-supplied SHA-256 gets 55; `UPDATE_ACTIVATE` without the flag gets 17, before a good verify 55; with both, the activation is permanent, with no trial boot and no rollback (reference model; A1.8a items 3, 5).",
    "reqs": [
     "A1",
     "A1.8a"
@@ -1081,7 +1077,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -1091,7 +1087,7 @@
    "id": "T-A1-56",
    "origin": "spec",
    "part": "A-B",
-   "title": "No update, foreign image included, writes the boot loader, the vendor update or recovery region or a retained stock image (reference model; A1.8a item 1).",
+   "title": "No update writes the vendor bootloader region or the option bytes; an update to an image of this firmware writes neither the boot stage nor the running slot; only the streaming installation writes sector 1 (reference model; A1.8a item 1).",
    "reqs": [
     "A1",
     "A1.8a"
@@ -1102,7 +1098,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -1127,7 +1123,7 @@
    "needs": [
     "ctrl.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -1152,7 +1148,7 @@
    "needs": [
     "ctrl.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -1175,7 +1171,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -1185,7 +1181,33 @@
    "id": "T-A1-60",
    "origin": "spec",
    "part": "A-B",
-   "title": "During a streaming installation (A1.8a item 3): `UPDATE_STATUS` reports the sectors written; `UPDATE_ABORT` after the first erase gets status 60; a transfer that stops for more than 10 min does not restart the main unit and resumes when blocks arrive again; sector 0 and the option bytes are never written, and no sector is written before all its blocks arrived with a good CRC (reference model; 0028).",
+   "title": "During a streaming installation (A1.8a item 3): `UPDATE_STATUS` reports the sectors written; `IDENTIFY` reports the installer state; any other management command than those listed gets 58, and discovery, P2 and TCI get no answer; the TX-side state of A3.6 is unchanged and toggling the local PTT and KEY inputs keys nothing; `UPDATE_ABORT` before the first erase restarts into this firmware with its secret and configuration unchanged, after it gets status 60; a transfer that stops for more than 10 min does not restart the main unit and resumes when blocks arrive again; sector 0 and the option bytes are never written, and no sector is written before all its blocks arrived with a good CRC (reference model; 0028).",
+   "reqs": [
+    "A1",
+    "A1.8a",
+    "A3.6",
+    "0028"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [
+    "time.scale",
+    "hw.observe"
+   ],
+   "pending": [],
+   "tx_part": true,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-61",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Before the F1 gate (P-SYS-5) is set, a foreign `UPDATE_BEGIN` that passes every other check gets status 56 and changes nothing (also an oversized one: 56 precedes 61); after it is set (reference model) the same request is accepted (A1.8a item 3, \"Gate\"; 0028).",
    "reqs": [
     "A1",
     "A1.8a",
@@ -1196,10 +1218,105 @@
    "also": [
     "emulator"
    ],
+   "needs": [],
+   "pending": [
+    "P-SYS-5"
+   ],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-62",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "During a streaming installation, before the first sector erase, 10 min without an update command other than `UPDATE_STATUS` restart the main unit into this firmware with secret and configuration unchanged; a repeat of the accepted `UPDATE_BEGIN` is answered from the stored reply; `IDENTIFY` reports update state \"installer\" with the sectors written (reference model; A1.4, A1.5 I-3, A1.8a item 3).",
+   "reqs": [
+    "A1",
+    "A1.4",
+    "A1.5",
+    "A1.8a"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
    "needs": [
     "time.scale"
    ],
-   "tbd": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-63",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "`SET_CALIBRATION` while a P2 session runs gets 57, while armed 50, during an update 58; with an unknown parameter id 48 and nothing changes; a complete set sets record `tx` bit 4 from the next session on and `IDENTIFY` tags 20 and 21 report it; `FACTORY_RESET` keeps the set; `CLEAR_CALIBRATION` clears bit 4 from the next session on (reference model; A1.12; 0039).",
+   "reqs": [
+    "A1",
+    "A1.12",
+    "0039"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": true,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-64",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "A `SET_CONFIG` with the SWR limit (tag 9) or the PA temperature limit (tag 10) before the calibration set holds P-PWR-2 gets status 62; a P2 write of `LIMIT_SWR` or `LIMIT_PA_TEMP` gets write reject reason `NOT_CALIBRATED` (A1.12 item 4; 0039).",
+   "reqs": [
+    "A1",
+    "A1.12",
+    "0039"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "sensor.set"
+   ],
+   "pending": [
+    "P-PWR-2"
+   ],
+   "tx_part": false,
+   "notes": []
+  },
+  {
+   "id": "T-A1-65",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "A region other than 0 in `SET_CONFIG` (tag 6) gets status 48; with region 0 a DUC0 frequency at each edge of every range of Table A3-0 is inside, 1 Hz outside each edge is outside (reference model with a complete calibration set; A1.6 C-6; Table A3-0; 0039).",
+   "reqs": [
+    "A1",
+    "A3",
+    "A1.6",
+    "Table A3-0",
+    "0039"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -1217,7 +1334,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1233,7 +1350,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1249,7 +1366,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1266,7 +1383,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1282,7 +1399,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1298,7 +1415,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1316,7 +1433,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1332,7 +1449,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1350,7 +1467,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "'neither can stay armed' needs TX unlocked: host only"
@@ -1370,7 +1487,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1386,7 +1503,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1402,7 +1519,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1421,7 +1538,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1442,7 +1559,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "KEY part not in v1.0 (0030)"
@@ -1463,7 +1580,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1481,7 +1598,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1501,7 +1618,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1520,7 +1637,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1542,7 +1659,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -1562,7 +1679,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "LIMIT_* writes need register group 2 only, no arm"
@@ -1582,7 +1699,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1600,7 +1717,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1623,7 +1740,7 @@
     "hw.observe",
     "power.cycle"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "HIS 85 safe state via hw.observe"
@@ -1642,7 +1759,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "0030: local PTT and KEY not used in v1.0"
@@ -1662,7 +1779,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1682,7 +1799,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1703,7 +1820,7 @@
     "ctrl.set",
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1724,9 +1841,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-12",
-    "HIS-11"
+   "pending": [
+    "P-PWR-2"
    ],
    "tx_part": true,
    "notes": [
@@ -1749,9 +1865,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-12",
-    "HIS-11"
+   "pending": [
+    "P-PWR-2"
    ],
    "tx_part": true,
    "notes": [
@@ -1772,7 +1887,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1790,7 +1905,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1810,7 +1925,7 @@
    "needs": [
     "reset.wdt"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1829,7 +1944,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1848,7 +1963,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1868,9 +1983,8 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [
-    "HIS-08",
-    "HIS-12"
+   "pending": [
+    "P-ATU-1"
    ],
    "tx_part": true,
    "notes": [
@@ -1895,9 +2009,9 @@
     "sensor.set",
     "hw.observe"
    ],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3",
+    "P-RF-2"
    ],
    "tx_part": true,
    "notes": [
@@ -1920,8 +2034,8 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [
-    "HIS-07"
+   "pending": [
+    "P-RF-2"
    ],
    "tx_part": true,
    "notes": []
@@ -1943,7 +2057,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -1961,9 +2075,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-11",
-    "HIS-12"
+   "pending": [
+    "P-SEN-3"
    ],
    "tx_part": true,
    "notes": [
@@ -1984,7 +2097,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2005,7 +2118,7 @@
     "power.cycle",
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2023,7 +2136,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -2046,7 +2159,7 @@
    "needs": [
     "time.scale"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2065,8 +2178,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-07"
+   "pending": [
+    "P-RF-2"
    ],
    "tx_part": true,
    "notes": [
@@ -2090,7 +2203,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2111,7 +2224,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2130,9 +2243,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3"
    ],
    "tx_part": true,
    "notes": []
@@ -2154,9 +2266,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-11",
-    "HIS-12"
+   "pending": [
+    "P-PWR-2"
    ],
    "tx_part": true,
    "notes": []
@@ -2176,8 +2287,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-12"
+   "pending": [
+    "P-PWR-3"
    ],
    "tx_part": true,
    "notes": [
@@ -2201,9 +2312,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-11",
-    "HIS-12"
+   "pending": [
+    "P-PWR-2"
    ],
    "tx_part": true,
    "notes": [
@@ -2227,7 +2337,7 @@
    "needs": [
     "time.scale"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2249,7 +2359,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2270,9 +2380,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-11",
-    "HIS-12"
+   "pending": [
+    "P-PWR-2"
    ],
    "tx_part": true,
    "notes": [
@@ -2297,9 +2406,8 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [
-    "HIS-08",
-    "HIS-12"
+   "pending": [
+    "P-ATU-1"
    ],
    "tx_part": true,
    "notes": [
@@ -2325,7 +2433,7 @@
     "power.cycle",
     "reset.wdt"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "'RESTART while armed' part needs TX unlocked: host"
@@ -2348,7 +2456,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -2371,7 +2479,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -2395,7 +2503,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -2418,7 +2526,7 @@
    "needs": [
     "ctrl.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "0030: local PTT and KEY not used in v1.0"
@@ -2439,8 +2547,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-07"
+   "pending": [
+    "P-RF-2"
    ],
    "tx_part": true,
    "notes": [
@@ -2465,9 +2573,8 @@
     "sensor.set",
     "hw.observe"
    ],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3"
    ],
    "tx_part": true,
    "notes": [
@@ -2489,7 +2596,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2510,7 +2617,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2530,7 +2637,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "unarmed drop events: runs while TX is locked"
@@ -2553,7 +2660,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2575,7 +2682,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -2596,7 +2703,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2618,7 +2725,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2637,9 +2744,9 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-07",
-    "HIS-12"
+   "pending": [
+    "P-RF-3",
+    "P-RF-2"
    ],
    "tx_part": true,
    "notes": [
@@ -2664,9 +2771,8 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [
-    "HIS-11",
-    "HIS-12"
+   "pending": [
+    "P-SEN-3"
    ],
    "tx_part": true,
    "notes": [
@@ -2690,7 +2796,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -2711,7 +2817,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -2731,8 +2837,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-07"
+   "pending": [
+    "P-RF-2"
    ],
    "tx_part": true,
    "notes": [
@@ -2756,14 +2862,37 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-11",
-    "HIS-12",
-    "HIS-18"
+   "pending": [
+    "P-SEN-3",
+    "P-TIM-2"
    ],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A3-58",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "v1.0 (0030): with level 1 active, armed and unarmed, with and without hardware CW selected, toggling the local PTT input (PH6) and the KEY contacts (PH3, PH4) keys nothing, and High Priority status byte 4 bits [0]–[2] stay 0 (reference model with simulated inputs; [HIS] HIS 85).",
+   "reqs": [
+    "A3",
+    "0030"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "hw.input"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "needs the local inputs PH6, PH3, PH4 driven: fixture hw.input"
    ]
   },
   {
@@ -2780,7 +2909,7 @@
    "needs": [
     "net.broadcast"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2796,7 +2925,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2814,7 +2943,7 @@
    "needs": [
     "net.broadcast"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2830,7 +2959,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2846,7 +2975,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2862,7 +2991,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2880,7 +3009,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2896,7 +3025,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2916,8 +3045,8 @@
    "needs": [
     "power.cycle"
    ],
-   "tbd": [
-    "HIS-15"
+   "pending": [
+    "P-NET-2"
    ],
    "tx_part": false,
    "notes": []
@@ -2934,7 +3063,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2950,7 +3079,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2966,7 +3095,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2982,7 +3111,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -2998,7 +3127,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3017,7 +3146,7 @@
     "needs-radio"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "tuning check on the emulator through the FPGA frame (HIS 80)"
@@ -3035,7 +3164,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3051,7 +3180,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3067,7 +3196,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3085,7 +3214,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3101,7 +3230,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3119,7 +3248,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3135,7 +3264,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3151,7 +3280,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3167,7 +3296,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3185,8 +3314,8 @@
    "needs": [
     "dhcp.server"
    ],
-   "tbd": [
-    "HIS-15"
+   "pending": [
+    "P-NET-2"
    ],
    "tx_part": true,
    "notes": [
@@ -3205,8 +3334,8 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [
-    "HIS-15"
+   "pending": [
+    "P-NET-2"
    ],
    "tx_part": false,
    "notes": []
@@ -3225,7 +3354,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3243,7 +3372,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3261,8 +3390,8 @@
    "needs": [
     "net.broadcast"
    ],
-   "tbd": [
-    "HIS-15"
+   "pending": [
+    "P-NET-2"
    ],
    "tx_part": false,
    "notes": []
@@ -3279,7 +3408,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3295,7 +3424,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3316,8 +3445,8 @@
     "net.outside",
     "net.broadcast"
    ],
-   "tbd": [
-    "HIS-15"
+   "pending": [
+    "P-NET-2"
    ],
    "tx_part": false,
    "notes": []
@@ -3335,7 +3464,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3351,7 +3480,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3367,7 +3496,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3383,7 +3512,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3399,7 +3528,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3417,7 +3546,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3433,7 +3562,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3450,7 +3579,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3466,7 +3595,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3485,7 +3614,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3501,7 +3630,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3517,7 +3646,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3534,7 +3663,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3550,7 +3679,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3568,7 +3697,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3586,7 +3715,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3605,7 +3734,7 @@
    "needs": [
     "link.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3624,7 +3753,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3640,7 +3769,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3656,7 +3785,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3674,7 +3803,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3694,7 +3823,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3710,7 +3839,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3726,7 +3855,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3742,7 +3871,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3758,7 +3887,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3776,7 +3905,7 @@
    "needs": [
     "link.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3792,7 +3921,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3808,7 +3937,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3826,7 +3955,7 @@
    "needs": [
     "link.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3848,7 +3977,7 @@
    "needs": [
     "link.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3865,7 +3994,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3884,7 +4013,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3903,7 +4032,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3926,7 +4055,7 @@
    "needs": [
     "link.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -3946,7 +4075,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3964,7 +4093,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3980,7 +4109,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -3996,7 +4125,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4012,7 +4141,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4028,7 +4157,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4044,7 +4173,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4060,7 +4189,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4078,7 +4207,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -4098,7 +4227,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4116,7 +4245,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4132,7 +4261,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4150,7 +4279,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "emulator only if it can inject an ADC test tone"
@@ -4170,7 +4299,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4186,7 +4315,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4202,7 +4331,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4218,7 +4347,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4235,7 +4364,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4254,7 +4383,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4270,7 +4399,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4286,7 +4415,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4302,7 +4431,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4318,7 +4447,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "before-M2 part in v1.0; the M2 part when M2 is in scope"
@@ -4336,7 +4465,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4352,7 +4481,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4368,7 +4497,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4385,7 +4514,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4402,7 +4531,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4419,7 +4548,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4435,7 +4564,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4451,7 +4580,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4467,7 +4596,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4485,7 +4614,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -4502,7 +4631,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -4519,7 +4648,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4537,7 +4666,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -4553,7 +4682,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4569,7 +4698,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4586,7 +4715,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4604,7 +4733,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4620,7 +4749,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4636,7 +4765,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4654,7 +4783,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -4672,7 +4801,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4688,7 +4817,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4706,7 +4835,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -4726,9 +4855,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-11",
-    "HIS-12"
+   "pending": [
+    "P-PWR-2"
    ],
    "tx_part": false,
    "notes": []
@@ -4749,7 +4877,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -4770,7 +4898,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -4788,7 +4916,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -4810,7 +4938,7 @@
     "power.cycle",
     "reset.wdt"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -4832,9 +4960,8 @@
     "net.hosts",
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-11",
-    "HIS-12"
+   "pending": [
+    "P-PWR-2"
    ],
    "tx_part": true,
    "notes": []
@@ -4854,7 +4981,7 @@
    "needs": [
     "net.hosts"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4873,7 +5000,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4889,7 +5016,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "1 ms while transmitting: radio"
@@ -4908,7 +5035,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4926,8 +5053,8 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [
-    "HIS-11"
+   "pending": [
+    "P-SEN-1"
    ],
    "tx_part": false,
    "notes": []
@@ -4944,7 +5071,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -4962,8 +5089,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-11"
+   "pending": [
+    "P-SEN-1"
    ],
    "tx_part": false,
    "notes": []
@@ -4982,7 +5109,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -5000,10 +5127,10 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
-    "the locked state; see also T-B10-L01..L12"
+    "record tx bit 1 = 1 in r1.0 (0036): this test applies to a build without TX only; the r1.0 frozen state is T-B10-41, T-B10-42"
    ]
   },
   {
@@ -5020,7 +5147,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5034,14 +5161,16 @@
     "B10.2"
    ],
    "scope": "v1.0",
-   "target": "needs-radio",
+   "target": "emulator",
    "also": [
     "host"
    ],
    "needs": [],
-   "tbd": [],
-   "tx_part": true,
-   "notes": []
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "frozen TX reaches BAD_TOKEN, WATCHDOG_DISABLED, PTT_ACTIVE, NO_MODE_CLASS, NOT_CALIBRATED and their order; the other reasons need faults, inhibits, level 2 or an update: host"
+   ]
   },
   {
    "id": "T-B10-04",
@@ -5057,7 +5186,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5075,7 +5204,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5094,8 +5223,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-12"
+   "pending": [
+    "P-PWR-3"
    ],
    "tx_part": true,
    "notes": []
@@ -5114,7 +5243,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5132,7 +5261,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5152,7 +5281,7 @@
    "needs": [
     "time.scale"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5170,7 +5299,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5188,8 +5317,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-18"
+   "pending": [
+    "P-TIM-2"
    ],
    "tx_part": true,
    "notes": []
@@ -5208,7 +5337,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5228,7 +5357,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5246,7 +5375,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5263,7 +5392,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "0030: local PTT and KEY not used in v1.0"
@@ -5283,7 +5412,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "write range and session-end reset run locked; the unkey timing part needs TX unlocked"
@@ -5303,7 +5432,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5321,7 +5450,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "read back via STREAM_STATUS"
@@ -5341,7 +5470,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5359,7 +5488,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5377,7 +5506,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5395,7 +5524,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5413,7 +5542,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5431,8 +5560,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-18"
+   "pending": [
+    "P-TIM-2"
    ],
    "tx_part": true,
    "notes": []
@@ -5451,7 +5580,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5469,7 +5598,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5487,7 +5616,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5505,7 +5634,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5523,7 +5652,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5542,7 +5671,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -5562,7 +5691,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5581,10 +5710,10 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-07",
-    "HIS-12",
-    "HIS-18"
+   "pending": [
+    "P-RF-3",
+    "P-RF-2",
+    "P-TIM-2"
    ],
    "tx_part": true,
    "notes": [
@@ -5606,7 +5735,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5628,7 +5757,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5647,7 +5776,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5666,7 +5795,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5687,7 +5816,7 @@
    "needs": [
     "hw.observe"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "0030: local PTT and KEY not used in v1.0"
@@ -5709,7 +5838,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5729,8 +5858,8 @@
     "host"
    ],
    "needs": [],
-   "tbd": [
-    "HIS-07"
+   "pending": [
+    "P-RF-2"
    ],
    "tx_part": true,
    "notes": [
@@ -5755,8 +5884,54 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
+   "notes": []
+  },
+  {
+   "id": "T-B10-41",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "With record `tx` bit 1 = 1 and bit 4 = 0 (transmit parameters of Annex P not set), an arm that meets every other condition of B10.2 item 3 is rejected with `NOT_CALIBRATED`, and `ATU_TUNE` = 1 with write reject reason `NOT_CALIBRATED`; with bit 4 = 1 (reference model, simulated values) the arm is accepted (Annex P; 0035, 0036).",
+   "reqs": [
+    "B10",
+    "B10.2",
+    "0035",
+    "0036"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "'with bit 4 = 1 the arm is accepted' part: reference model with a calibration set (host)"
+   ]
+  },
+  {
+   "id": "T-B10-42",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "With record `tx` bit 4 = 0, DUC I&Q from the owner is discarded and counted, `STREAM_STATUS` DUC0 reads not running with reason 14, and PTT and CWX key nothing and are not latched (B10, B10.7; 0039).",
+   "reqs": [
+    "B10",
+    "B10.7",
+    "0039"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "hw.observe"
+   ],
+   "pending": [],
+   "tx_part": false,
    "notes": []
   },
   {
@@ -5772,7 +5947,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -5790,7 +5965,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -5806,7 +5981,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -5822,7 +5997,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -5841,7 +6016,7 @@
     "needs-radio"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "needs a forced overrun"
@@ -5861,7 +6036,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5877,7 +6052,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -5895,7 +6070,7 @@
     "emulator"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "records the CH394Q's ICMP behaviour; firmware silence also on the emulator"
@@ -5915,7 +6090,7 @@
     "needs-radio"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -5934,7 +6109,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -5953,7 +6128,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -5972,7 +6147,7 @@
    "needs": [
     "net.outside"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -5991,7 +6166,7 @@
     "needs-radio"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
@@ -6012,7 +6187,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -6031,7 +6206,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -6050,7 +6225,7 @@
     "host"
    ],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": true,
    "notes": []
   },
@@ -6066,7 +6241,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6084,7 +6259,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6102,7 +6277,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6121,7 +6296,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6139,7 +6314,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6157,7 +6332,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6175,7 +6350,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6193,7 +6368,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6211,7 +6386,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6231,7 +6406,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6250,7 +6425,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6271,7 +6446,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6294,7 +6469,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6315,7 +6490,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6335,7 +6510,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6354,7 +6529,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6373,7 +6548,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6392,7 +6567,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6411,7 +6586,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6430,7 +6605,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6451,7 +6626,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6469,7 +6644,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6488,7 +6663,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6506,7 +6681,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6524,7 +6699,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6542,7 +6717,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6560,7 +6735,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6578,7 +6753,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6597,7 +6772,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6615,7 +6790,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6633,7 +6808,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6651,7 +6826,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6669,7 +6844,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6687,7 +6862,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6705,7 +6880,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6723,7 +6898,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6741,7 +6916,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6759,7 +6934,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6778,7 +6953,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6796,7 +6971,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6815,7 +6990,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6833,7 +7008,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6852,7 +7027,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -6870,7 +7045,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6889,7 +7064,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6908,7 +7083,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6930,7 +7105,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6949,7 +7124,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6972,7 +7147,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -6990,7 +7165,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7011,7 +7186,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7031,7 +7206,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7050,7 +7225,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7071,7 +7246,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7089,7 +7264,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7107,7 +7282,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7125,7 +7300,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7144,7 +7319,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7162,7 +7337,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7180,7 +7355,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7198,7 +7373,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7216,7 +7391,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7234,7 +7409,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7252,7 +7427,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7270,7 +7445,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7288,7 +7463,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7306,7 +7481,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7324,7 +7499,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7344,7 +7519,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7362,7 +7537,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7380,7 +7555,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7398,7 +7573,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7416,7 +7591,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7434,7 +7609,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7452,7 +7627,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7472,7 +7647,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7490,7 +7665,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7508,7 +7683,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7526,7 +7701,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7544,7 +7719,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7565,7 +7740,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7585,7 +7760,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7605,7 +7780,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -7624,7 +7799,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7643,7 +7818,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7662,7 +7837,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7681,7 +7856,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7701,7 +7876,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7720,7 +7895,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7739,7 +7914,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7759,7 +7934,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7778,7 +7953,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7797,7 +7972,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7819,7 +7994,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7841,7 +8016,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7860,7 +8035,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7879,7 +8054,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7899,7 +8074,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7909,16 +8084,17 @@
    "id": "T-C5-54",
    "origin": "spec",
    "part": "C",
-   "title": "With token `atu` and without `atu_select`, `G7250_ATU` reports `bypass` for `ATU_STATE` 0, `inline` for 1, 2 and 3, and after a failed cycle (4) the value reported before the cycle (C5.7).",
+   "title": "With token `atu` and without `atu_select`, `G7250_ATU` reports `bypass` for `ATU_STATE` 0, `inline` for 1, 2 and 3, after a failed cycle (4) the value reported before the cycle, and `unknown` for 5; a set while the state is unknown gets `NOT_CALIBRATED`, before `READ_ONLY` (C5.7; 0032).",
    "reqs": [
     "C5",
-    "C5.7"
+    "C5.7",
+    "0032"
    ],
    "scope": "v1.0",
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7937,7 +8113,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7958,7 +8134,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7979,7 +8155,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -7999,7 +8175,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8019,7 +8195,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8039,7 +8215,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8064,7 +8240,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8086,7 +8262,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8107,7 +8283,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8129,7 +8305,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8147,7 +8323,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8165,7 +8341,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8183,7 +8359,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8201,7 +8377,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8219,7 +8395,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -8237,7 +8413,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -8255,7 +8431,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8275,7 +8451,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8294,7 +8470,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8315,7 +8491,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8333,7 +8509,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8351,7 +8527,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8369,7 +8545,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8387,7 +8563,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8406,7 +8582,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8425,7 +8601,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8443,7 +8619,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8462,7 +8638,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8483,7 +8659,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8502,7 +8678,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8520,7 +8696,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8540,7 +8716,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8561,7 +8737,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8580,7 +8756,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8600,7 +8776,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8623,7 +8799,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8645,7 +8821,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8667,7 +8843,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8686,7 +8862,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8705,7 +8881,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8724,7 +8900,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8746,7 +8922,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8766,7 +8942,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8790,7 +8966,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8808,7 +8984,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8826,7 +9002,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8846,7 +9022,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8864,7 +9040,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8882,7 +9058,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8900,7 +9076,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8919,7 +9095,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8929,18 +9105,20 @@
    "id": "T-C8-08",
    "origin": "spec",
    "part": "C",
-   "title": "(L2) A controller PTT input (if HIS-17 gives a path) is reported by `TX_FOOTSWITCH` and never keys, armed or not.",
+   "title": "Not in v1.0 (0030). (L2) A controller PTT input (if HIS-17 gives a path) is reported by `TX_FOOTSWITCH` and never keys, armed or not.",
    "reqs": [
-    "C8"
+    "C8",
+    "0030"
    ],
-   "scope": "after-G6",
+   "scope": "not-v1.0",
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
-    "level 2 (firmware TCI server), after G6; refmodel level 2 first"
+    "0030: local PTT and KEY not used in v1.0",
+    "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
    ]
   },
   {
@@ -8955,7 +9133,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8973,7 +9151,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -8991,7 +9169,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9009,7 +9187,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9027,7 +9205,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9048,7 +9226,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9068,7 +9246,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9086,7 +9264,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9107,7 +9285,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9126,7 +9304,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9145,7 +9323,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9165,7 +9343,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9185,7 +9363,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9205,7 +9383,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9224,7 +9402,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9248,7 +9426,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 2 (firmware TCI server), after G6; refmodel level 2 first"
@@ -9267,7 +9445,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9288,7 +9466,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9310,7 +9488,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9333,7 +9511,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9354,7 +9532,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9374,7 +9552,7 @@
    "target": "host",
    "also": [],
    "needs": [],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9398,7 +9576,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9423,7 +9601,7 @@
    "needs": [
     "sensor.set"
    ],
-   "tbd": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "level 1: AetherSDR's TCI server vs a TCI test client (0013, 0014); the firmware part is level 2, after G6"
@@ -9433,15 +9611,18 @@
    "id": "T-B10-L01",
    "origin": "testbench",
    "part": "A-B",
-   "title": "Locked: record `tx` reads bit 0 = 1, bit 1 = 0, bits 2 and 3 = 1; `regmap_groups` bit 2 is set (group 2 present in r1.0).",
+   "title": "TX frozen: record `tx` reads bit 0 = 1, bit 1 = 1 (0036), bits 2 and 3 = 1, bit 4 = 0 until the calibration set is complete; `streams` bit 1 = 1; `regmap_groups` bits 0-5 set, 6-7 clear (B4.8; 0035).",
    "reqs": [
     "B4.8",
     "B8.3",
-    "B10"
+    "B10",
+    "Annex P",
+    "0035",
+    "0036"
    ],
    "needs": [],
    "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
+    "TX frozen until the calibration set is complete (Annex P; 0035, 0036)"
    ],
    "scope": "v1.0",
    "target": "emulator",
@@ -9449,138 +9630,21 @@
     "host"
    ],
    "tx_part": false,
-   "tbd": []
-  },
-  {
-   "id": "T-B10-L02",
-   "origin": "testbench",
-   "part": "A-B",
-   "title": "Locked: a correct arm write (`token XOR ARM_MAGIC`) with every other B10.2 item 3 precondition met is rejected: `TX_ARM_STATE` stays state 0, generation unchanged, reject reason = the locked reason (spec: 11 `TX_NOT_IMPLEMENTED`; SF-01).",
-   "reqs": [
-    "B10.2",
-    "Table B8-3",
-    "SF-01"
-   ],
-   "needs": [],
-   "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
-   ],
-   "scope": "v1.0",
-   "target": "emulator",
-   "also": [
-    "host"
-   ],
-   "tx_part": false,
-   "tbd": []
-  },
-  {
-   "id": "T-B10-L03",
-   "origin": "testbench",
-   "part": "A-B",
-   "title": "Locked: with other preconditions also failing (no mode class, watchdog bit clear, run clear) the arm reject reason is the one of the agreed precedence (SF-02).",
-   "reqs": [
-    "B10.2",
-    "SF-02"
-   ],
-   "needs": [],
-   "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
-   ],
-   "scope": "v1.0",
-   "target": "emulator",
-   "also": [
-    "host"
-   ],
-   "tx_part": false,
-   "tbd": []
-  },
-  {
-   "id": "T-B10-L04",
-   "origin": "testbench",
-   "part": "A-B",
-   "title": "Locked: PTT 0→1 (High Priority byte 4 bit [1]) with PA enable set, DUC0 inside a transmit range and drive 255 does not key: `TX_STATE` bit 0 stays 0, no `TX_STATE` push shows a key, and the HIS 85 safe state holds throughout (T/R lines at RX levels, chain A bit 7 clear in every frame, bias channels 2, 7, 8 at 0).",
-   "reqs": [
-    "A3.1a",
-    "B10.1",
-    "A3.6",
-    "HIS 85"
-   ],
-   "needs": [
-    "hw.observe"
-   ],
-   "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
-   ],
-   "scope": "v1.0",
-   "target": "emulator",
-   "also": [
-    "host"
-   ],
-   "tx_part": false,
-   "tbd": []
-  },
-  {
-   "id": "T-B10-L05",
-   "origin": "testbench",
-   "part": "A-B",
-   "title": "Locked: CWX (byte 5 bit [0]) with dot and dash bits, break-in set, keyer speed 20, does not key; the safe state holds.",
-   "reqs": [
-    "B10.5a",
-    "A3.1a",
-    "HIS 85"
-   ],
-   "needs": [
-    "hw.observe"
-   ],
-   "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
-   ],
-   "scope": "v1.0",
-   "target": "emulator",
-   "also": [
-    "host"
-   ],
-   "tx_part": false,
-   "tbd": []
-  },
-  {
-   "id": "T-B10-L06",
-   "origin": "testbench",
-   "part": "A-B",
-   "title": "Locked: `ATU_TUNE` = 1 from the owner, armed or not, gets `WRITE_STATUS` reason 11 `NOT_CALIBRATED`, `ATU_STATE` 0, no tune starts, and the ATU latches PD13, PG2, PG5 are never written (0032; precedence SF-03).",
-   "reqs": [
-    "A3.9b",
-    "B8.4",
-    "Table B8-3",
-    "0032",
-    "HIS 85"
-   ],
-   "needs": [
-    "hw.observe"
-   ],
-   "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
-   ],
-   "scope": "v1.0",
-   "target": "emulator",
-   "also": [
-    "host"
-   ],
-   "tx_part": false,
-   "tbd": []
+   "pending": []
   },
   {
    "id": "T-B10-L07",
    "origin": "testbench",
    "part": "A-B",
-   "title": "Locked: `ATU_TUNE` = 0 from the owner is accepted as a no-op; from a non-owner `NOT_OWNER`; during an update `BUSY` (A3.9b item 1).",
+   "title": "TX frozen: `ATU_TUNE` = 0 from the owner is accepted as a no-op with `ATU_STATE` 5 (unknown); from a non-owner `NOT_OWNER` (A3.9b item 1; Annex P).",
    "reqs": [
     "A3.9b",
-    "B8.4"
+    "B8.4",
+    "Annex P"
    ],
    "needs": [],
    "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
+    "TX frozen until the calibration set is complete (Annex P; 0035, 0036)"
    ],
    "scope": "v1.0",
    "target": "emulator",
@@ -9588,47 +9652,24 @@
     "host"
    ],
    "tx_part": false,
-   "tbd": []
-  },
-  {
-   "id": "T-B10-L08",
-   "origin": "testbench",
-   "part": "A-B",
-   "title": "Locked: DUC I&Q from the owner at 192 ksps is discarded or held without effect; `STREAM_STATUS` DUC0 reads not running with the agreed reason (SF-04); no RF path change.",
-   "reqs": [
-    "B10.7",
-    "B8",
-    "SF-04"
-   ],
-   "needs": [
-    "hw.observe"
-   ],
-   "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
-   ],
-   "scope": "v1.0",
-   "target": "emulator",
-   "also": [
-    "host"
-   ],
-   "tx_part": false,
-   "tbd": []
+   "pending": []
   },
   {
    "id": "T-B10-L09",
    "origin": "testbench",
    "part": "A-B",
-   "title": "Locked: `TX_MODE_CLASS`, `KEYED_TIMEOUT` and the `LIMIT_<name>` writes are answered as in Table B8-2 (accepted values, `BAD_VALUE`, `LOOSER_LIMIT`); none moves a pin of the RF section.",
+   "title": "TX frozen: `TX_MODE_CLASS`, `KEYED_TIMEOUT`, `LIMIT_TX_TIME` and `LIMIT_FWD_POWER` writes are answered as in Table B8-2 (accepted values, `BAD_VALUE`, `LOOSER_LIMIT`, 0 = back to the persistent value) and are reset at the session end; none moves a pin of the RF section.",
    "reqs": [
     "B8.4",
     "Table B8-2",
+    "A3.6",
     "HIS 85"
    ],
    "needs": [
     "hw.observe"
    ],
    "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
+    "TX frozen until the calibration set is complete (Annex P; 0035, 0036)"
    ],
    "scope": "v1.0",
    "target": "emulator",
@@ -9636,38 +9677,17 @@
     "host"
    ],
    "tx_part": false,
-   "tbd": []
-  },
-  {
-   "id": "T-B10-L10",
-   "origin": "testbench",
-   "part": "A-B",
-   "title": "Locked: no management request unlocks TX or changes record `tx` bit 1 within a session (A1.9, B4.7); the unlock path is SF-05.",
-   "reqs": [
-    "A1.9",
-    "B4.7",
-    "SF-05"
-   ],
-   "needs": [],
-   "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
-   ],
-   "scope": "v1.0",
-   "target": "emulator",
-   "also": [
-    "host"
-   ],
-   "tx_part": false,
-   "tbd": []
+   "pending": []
   },
   {
    "id": "T-B10-L11",
    "origin": "testbench",
    "part": "A-B",
-   "title": "Locked: the HIS 85 safe state is held, traced from power-on, through idle, a session with PTT held 10 s, a takeover, a watchdog standby, `RESTART` and an update begin/abort: no T/R line leaves its RX level, chain A bit 7 is never set, bias channels 2, 7, 8 are never non-zero, PB14 is low until the first DAC write, the ATU latches and the codec are untouched.",
+   "title": "TX frozen: the HIS 85 safe state is held, traced from power-on, through idle, a session with PTT held, a takeover, a watchdog standby and a power cycle: no T/R line leaves its RX level, chain A bit 7 is never set, bias channels 2, 7, 8 are never non-zero, the ATU latches and the codec are untouched.",
    "reqs": [
     "A3.6",
     "A3.6a",
+    "B10",
     "0029",
     "0031",
     "0032",
@@ -9679,7 +9699,7 @@
     "net.hosts"
    ],
    "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
+    "TX frozen until the calibration set is complete (Annex P; 0035, 0036)"
    ],
    "scope": "v1.0",
    "target": "emulator",
@@ -9687,28 +9707,7 @@
     "host"
    ],
    "tx_part": false,
-   "tbd": []
-  },
-  {
-   "id": "T-B10-L12",
-   "origin": "testbench",
-   "part": "A-B",
-   "title": "Locked: High Priority status byte 4 bits [0]–[2] are 0 and status bytes 14–15, 22–23 carry no RF (0030; B9.2).",
-   "reqs": [
-    "B9.2",
-    "0030"
-   ],
-   "needs": [],
-   "notes": [
-    "TX locked until calibrated (ON8ST, 2026-11-20)"
-   ],
-   "scope": "v1.0",
-   "target": "emulator",
-   "also": [
-    "host"
-   ],
-   "tx_part": false,
-   "tbd": []
+   "pending": []
   }
  ]
 }

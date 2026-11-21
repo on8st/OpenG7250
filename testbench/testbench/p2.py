@@ -98,12 +98,18 @@ def parse_regs(data: bytes) -> list[tuple[int, int]]:
 class Host:
     """One P2 host: one UDP socket (one source port) for everything of its session."""
 
-    def __init__(self, radio_ip: str, bind_ip: str = "0.0.0.0", port: int = 0):
-        self.radio = radio_ip
+    def __init__(self, net, idx: int = 0, port: int = 0):
+        """`net`: a testbench.net.Net; `idx`: the endpoint host entry; `port`: a fixed source
+        port (0 = any)."""
+        self.net = net
+        self.radio = net.radio_ip
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        self.s.bind((bind_ip, port))
-        self.port = self.s.getsockname()[1]
+        try:
+            self.port = net.bind(self.s, idx, port)
+        except BaseException:
+            self.s.close()
+            raise
 
     def close(self):
         self.s.close()
@@ -114,8 +120,9 @@ class Host:
     def __exit__(self, *a):
         self.close()
 
-    def send(self, port: int, data: bytes, ip: str | None = None):
-        self.s.sendto(data, (ip or self.radio, port))
+    def send(self, port: int, data: bytes, kind: str = "unicast"):
+        """Send to a radio port; kind "limited" or "directed" for a broadcast."""
+        self.s.sendto(data, self.net.dest(port, kind))
 
     def recv(self, timeout: float = 0.5, from_port: int | None = None, until=None):
         """Datagrams (src_port, data, t) until timeout; filtered by sender port if given.
@@ -129,7 +136,8 @@ class Host:
             r, _, _ = select.select([self.s], [], [], left)
             if not r:
                 break
-            data, (ip, p) = self.s.recvfrom(4096)
+            data, src = self.s.recvfrom(4096)
+            p = self.net.radio_port(src)
             if from_port is None or p == from_port:
                 got.append((p, data, time.monotonic()))
                 if until and until(got):
@@ -140,8 +148,8 @@ class Host:
         self.recv(t)
 
     # --- conveniences ---
-    def discover(self, timeout: float = 0.5, ip: str | None = None):
-        self.send(PORT_DISC, discovery(), ip)
+    def discover(self, timeout: float = 0.5, kind: str = "unicast"):
+        self.send(PORT_DISC, discovery(), kind)
         return [d for p, d, _ in self.recv(timeout, PORT_DISC)]
 
     running = False
@@ -188,12 +196,17 @@ class Host:
             out += parse_regs(d)
         return out
 
-    def cap_request(self, timeout: float = 0.5):
-        self.send(PORT_REG, regs([(CAP_REQUEST, 1)]))
-        for p, d, _ in self.recv(timeout, PORT_REG):
-            pr = parse_regs(d)
-            if pr and pr[0] == (CAP_REQUEST, 1):
-                return pr
+    def cap_request(self, timeout: float = 0.5, retry: bool = True):
+        """CAP_REQUEST; without an answer, one retry after 1 s (B4.4 item 4: a non-owner is
+        answered at most once per second)."""
+        for attempt in range(2 if retry else 1):
+            if attempt:
+                time.sleep(1.05 - timeout if timeout < 1.05 else 0)
+            self.send(PORT_REG, regs([(CAP_REQUEST, 1)]))
+            for p, d, _ in self.recv(timeout, PORT_REG):
+                pr = parse_regs(d)
+                if pr and pr[0] == (CAP_REQUEST, 1):
+                    return pr
         return None
 
 

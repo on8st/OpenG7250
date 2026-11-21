@@ -1,6 +1,7 @@
-"""TX-locked state (r1.0 until calibrated; ON8ST 2026-11-20): every TX request is refused and
-the HIS 85 safe state holds. Test ids T-B10-Lnn are added by the bench (catalogue), plus the
-spec tests that run while locked. GPL-3.0-or-later, (c) 2026 ON8ST."""
+"""TX frozen until the calibration set is complete (r1.0; Annex P freeze rule, A1.12, B10
+intro; decisions 0035, 0036, 0039): every arm is rejected with NOT_CALIBRATED, no TX request
+keys, the HIS 85 safe state holds. Spec tests T-B10-03, T-B10-41, T-B10-42 and the bench tests
+T-B10-L01, L07, L09, L11. GPL-3.0-or-later, (c) 2026 ON8ST."""
 from __future__ import annotations
 
 import time
@@ -8,20 +9,18 @@ import time
 from .core import Ctx, test
 from .p2 import *  # noqa: F401,F403
 
-# Expected locked arm reject reason: the spec as written (B10.2 item 3) unless the run passes
-# params {"lock_reason": n} (finding SF-01 proposes a NOT_CALIBRATED arm reason).
-SPEC_LOCK_REASON = 11  # TX_NOT_IMPLEMENTED
+NOT_CALIBRATED_ARM = 12  # Table B8-3 arm reject reason
+STREAM_TX_NOT_CALIBRATED = 14  # Table B8-3 stream reason
 
 
 def host(ctx):
-    return Host(ctx.radio_ip, ctx.host_ip)
+    return Host(ctx.net)
 
 
-def session(h: Host, pa=True):
-    h.start(pa=pa)
+def session(h: Host, pa=True, wd=True):
+    h.start(pa=pa, wd=wd)
     got = h.recv(0.3, PORT_REG)
-    pairs = sum((parse_regs(d) for _, d, _ in got), [])
-    return pairs
+    return sum((parse_regs(d) for _, d, _ in got), [])
 
 
 def token_of(h: Host, pairs):
@@ -29,6 +28,18 @@ def token_of(h: Host, pairs):
     if t is None:
         t = value(h.write([(TX_ARM_TOKEN, 0)]), TX_ARM_TOKEN)
     return t
+
+
+def current_token(h: Host):
+    return value(h.write([(TX_ARM_TOKEN, 0)]), TX_ARM_TOKEN)
+
+
+def arm_reason(st):
+    return None if st is None else ARM_REJECT.get((st >> 8) & 0xFF, (st >> 8) & 0xFF)
+
+
+def has_obs(ctx):
+    return "hw.observe" in ctx.endpoint.get("fixtures", [])
 
 
 def safe(ctx: Ctx, label: str):
@@ -39,55 +50,105 @@ def safe(ctx: Ctx, label: str):
     a = o["spi1_a"]
     ctx.check(f"{label}: chain A bit 7 clear", not a.get("bit7_ever", False) and
               (a.get("last_frame") is None or a["last_frame"] & 0x80 == 0), str(a))
-    ctx.check(f"{label}: PA bias never non-zero", not o["pa_dac"].get("bias_nonzero_ever", False))
+    dac = o["pa_dac"]
+    ch = dac.get("ch")
+    bias_ok = not dac.get("bias_nonzero_ever", False) and (ch is None or all(ch[i] in (None, 0) for i in (1, 6, 7)))
+    ctx.check(f"{label}: PA bias channels 2, 7, 8 at 0 or never written", bias_ok, str(dac))
     ctx.check(f"{label}: ATU latches never written (0032)", all(v == 0 for v in o["atu_latch_writes"].values()))
 
 
-def lock_reason(ctx):
-    return ctx.params.get("lock_reason", SPEC_LOCK_REASON)
+def record(h: Host) -> dict:
+    return record_of((h.cap_request() or [None])[1:])
 
 
-@test("T-B10-L01", "T-B10-01")
+@test("T-B10-L01")
 def t_l01(ctx):
     with host(ctx) as h:
-        rec = record_of(h.cap_request()[1:])
+        rec = record(h)
         tx = rec[0x20]
         ctx.eq("tx bit 0 TX hardware present", tx & 1, 1)
-        ctx.eq("tx bit 1 TX implemented = 0 while locked", (tx >> 1) & 1, 0)
+        ctx.eq("tx bit 1 TX implemented (0036)", (tx >> 1) & 1, 1)
         ctx.eq("tx bits 2, 3 (arm and mode class required)", (tx >> 2) & 3, 3)
-        ctx.eq("regmap_groups bit 2 (TX group present)", (rec[0x53] >> 2) & 1, 1)
-        ctx.eq("streams bit 1 (TX IQ) follows tx bit 1", (rec[0x0C] >> 1) & 1, 0)
+        ctx.eq("tx bit 4 = 0 until calibrated (Annex P)", (tx >> 4) & 1, 0)
+        ctx.eq("streams bit 1 (TX IQ) follows tx bit 1", (rec[0x0C] >> 1) & 1, 1)
+        ctx.eq("regmap_groups bits 0-5 set, 6-7 clear (0035)", rec[0x53] & 0xFF, 0x3F)
+        ctx.eq("cal_info bits 0-4 = 0 until calibrated (0039)", rec[0x57] & 0x1F, 0)
 
 
-@test("T-B10-L02")
-def t_l02(ctx):
+@test("T-B10-03")
+def t_b10_03(ctx):
+    """The reasons reachable with TX frozen, and their order (B10.2 item 3)."""
     with host(ctx) as h:
+        rec = record(h)
+        if (rec.get(0x20, 0) >> 4) & 1:
+            ctx.notes.append("TX calibrated here: NOT_CALIBRATED rows not checked")
+        # 1. watchdog bit clear, no mode class, PTT clear: WATCHDOG_DISABLED before NO_MODE_CLASS
+        pairs = session(h, wd=False)
+        tok = token_of(h, pairs)
+        st = value(h.write([(TX_ARM, tok ^ 0x1234)]), TX_ARM_STATE)
+        ctx.eq("wrong value: BAD_TOKEN first", arm_reason(st), "BAD_TOKEN")
+        st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
+        ctx.eq("watchdog bit clear: WATCHDOG_DISABLED before PTT, mode class, calibration", arm_reason(st), "WATCHDOG_DISABLED")
+        h.stop()
+    with host(ctx) as h:
+        pairs = session(h)
+        tok = token_of(h, pairs)
+        h.keepalive(ptt=True)
+        st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
+        ctx.eq("PTT at 1: PTT_ACTIVE before NO_MODE_CLASS", arm_reason(st), "PTT_ACTIVE")
+        h.keepalive(ptt=False)
+        st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
+        ctx.eq("no mode class: NO_MODE_CLASS before NOT_CALIBRATED", arm_reason(st), "NO_MODE_CLASS")
+        h.write([(TX_MODE_CLASS, 1)])
+        st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
+        if not (rec.get(0x20, 0) >> 4) & 1:
+            ctx.eq("only the calibration missing: NOT_CALIBRATED", (st >> 8) & 0xFF if st is not None else None, NOT_CALIBRATED_ARM)
+        h.stop()
+    ctx.notes.append("NOT_RUNNING (not set over P2), IN_FAULT, INHIBITED, LEVEL_NOT_ACTIVE, "
+                     "MAINTENANCE: not reachable with TX frozen; host tests")
+
+
+@test("T-B10-41")
+def t_b10_41(ctx):
+    with host(ctx) as h:
+        rec = record(h)
+        if not ctx.eq("record tx bit 1 = 1, bit 4 = 0", rec.get(0x20, 0) & 0b1_0010, 0b10):
+            return
         pairs = session(h)
         tok = token_of(h, pairs)
         h.write([(TX_MODE_CLASS, 1)])
         before = value(h.write([(TX_ARM_STATE, 0)]), TX_ARM_STATE)
-        ans = h.write([(TX_ARM, tok ^ ARM_MAGIC)])
-        st = value(ans, TX_ARM_STATE)
+        st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
         if ctx.check("TX_ARM answered with TX_ARM_STATE", st is not None):
             ctx.eq("state stays 0", st & 0xF, 0)
             ctx.eq("generation unchanged", st >> 24, (before or 0) >> 24)
-            ctx.eq("reject reason", ARM_REJECT.get((st >> 8) & 0xFF, (st >> 8) & 0xFF),
-                   ARM_REJECT.get(lock_reason(ctx), lock_reason(ctx)))
+            ctx.eq("reject reason NOT_CALIBRATED (12)", (st >> 8) & 0xFF, NOT_CALIBRATED_ARM)
+        for label in ("unarmed", "after the refused arm"):
+            ws = write_status(h.write([(ATU_TUNE, 1)]))
+            ctx.check(f"ATU_TUNE = 1 {label}: NOT_CALIBRATED", any(a == ATU_TUNE and r == "NOT_CALIBRATED" for a, _, r in ws), str(ws))
+        ctx.eq("ATU_STATE 5 (unknown, Annex P)", value(h.write([(ATU_STATE, 0)]), ATU_STATE), 5)
+        if has_obs(ctx):
+            safe(ctx, "after the arm and ATU_TUNE")
         h.stop()
+    ctx.notes.append("'with bit 4 = 1 the arm is accepted': T-A1-63 (calibration set, host)")
 
 
-@test("T-B10-L04", "T-B10-L12")
-def t_l04(ctx):
+@test("T-B10-42")
+def t_b10_42(ctx):
     with host(ctx) as h:
         pairs = session(h)
         tok = token_of(h, pairs)
         h.write([(TX_MODE_CLASS, 1)])
         h.write([(TX_ARM, tok ^ ARM_MAGIC)])
-        keyed = False
-        t_end = time.monotonic() + 1.0
+        for _ in range(20):
+            h.send(PORT_DUCIQ, bytes(1444))
+        ss = value(h.write([(STREAM_STATUS, 0)]), STREAM_STATUS)
+        ctx.check("STREAM_STATUS DUC0 not running", ss is not None and not (ss >> 8) & 0x80, hex(ss or 0))
+        ctx.eq("DUC0 reason 14 (TX not calibrated)", None if ss is None else (ss >> 8) & 0x7F, STREAM_TX_NOT_CALIBRATED)
+        # PTT toggled with every other key condition met; then CWX with break-in
+        keyed, status = False, []
         ptt = False
-        status = []
-        while time.monotonic() < t_end:
+        for _ in range(16):
             ptt = not ptt
             h.keepalive(ptt=ptt, duc0_hz=14.2e6, drive=255)
             for p, d, _ in h.recv(0.05):
@@ -96,48 +157,20 @@ def t_l04(ctx):
                     keyed |= v is not None and bool(v & 1)
                 elif p == PORT_DDC:
                     status.append(d)
-        ctx.check("no TX_STATE push shows a key", not keyed)
-        ts = value(h.write([(TX_STATE, 0)]), TX_STATE)
-        ctx.eq("TX_STATE bit 0", None if ts is None else ts & 1, 0)
-        ctx.check("status byte 4 bits 0-2 are 0 (0030)", status and all(d[4] & 0b111 == 0 for d in status))
-        if "hw.observe" in ctx.endpoint.get("fixtures", []):
-            safe(ctx, "after PTT toggling")
-        h.stop()
-
-
-@test("T-B10-L05")
-def t_l05(ctx):
-    with host(ctx) as h:
-        session(h)
         h.send(PORT_DUC, bytes(5) + bytes([0x80]) + bytes(3) + bytes([20]) + bytes(50))
-        keyed = False
-        for i in range(20):
+        for i in range(12):
             h.keepalive(cwx=0b011 if i % 2 else 0b101)
             for p, d, _ in h.recv(0.03, PORT_REG):
                 v = value(parse_regs(d), TX_STATE)
                 keyed |= v is not None and bool(v & 1)
-        ctx.check("CWX keys nothing", not keyed)
-        if "hw.observe" in ctx.endpoint.get("fixtures", []):
-            safe(ctx, "after CWX")
+        ctx.check("PTT and CWX key nothing (no TX_STATE push with bit 0)", not keyed)
+        ts = value(h.write([(TX_STATE, 0)]), TX_STATE)
+        ctx.eq("TX_STATE bit 0 after the requests (not latched)", None if ts is None else ts & 1, 0)
+        ctx.check("status byte 4 bits 0-2 are 0 (0030)", status and all(d[4] & 0b111 == 0 for d in status))
+        if has_obs(ctx):
+            safe(ctx, "after DUC I&Q, PTT and CWX")
         h.stop()
-
-
-@test("T-B10-L06")
-def t_l06(ctx):
-    with host(ctx) as h:
-        pairs = session(h)
-        for label in ("unarmed", "after an arm attempt"):
-            ans = h.write([(ATU_TUNE, 1)])
-            ws = write_status(ans)
-            ctx.check(f"{label}: NOT_CALIBRATED", any(a == ATU_TUNE and r == "NOT_CALIBRATED" for a, _, r in ws), str(ws))
-            st = value(h.write([(ATU_STATE, 0)]), ATU_STATE)
-            ctx.eq(f"{label}: ATU_STATE 0", st, 0)
-            tok = token_of(h, pairs)
-            h.write([(TX_MODE_CLASS, 1)])
-            h.write([(TX_ARM, tok ^ ARM_MAGIC)])
-        if "hw.observe" in ctx.endpoint.get("fixtures", []):
-            safe(ctx, "after ATU_TUNE")
-        h.stop()
+    ctx.notes.append("'discarded and counted': the GET_STATS counter name is not fixed by the spec")
 
 
 @test("T-B10-L07")
@@ -146,22 +179,9 @@ def t_l07(ctx):
         session(h)
         ans = h.write([(ATU_TUNE, 0)])
         ctx.eq("ATU_TUNE = 0 accepted (no rejection)", write_status(ans), [])
+        ctx.eq("answered with ATU_STATE 5", value(ans, ATU_STATE), 5)
         ans = other.write([(ATU_TUNE, 0)])
         ctx.check("from a non-owner NOT_OWNER", any(r == "NOT_OWNER" for _, _, r in write_status(ans)))
-        h.stop()
-
-
-@test("T-B10-L08")
-def t_l08(ctx):
-    with host(ctx) as h:
-        session(h)
-        for _ in range(20):
-            h.send(PORT_DUCIQ, bytes(1444))
-        ss = value(h.write([(STREAM_STATUS, 0)]), STREAM_STATUS)
-        ctx.check("STREAM_STATUS DUC0 not running", ss is not None and not (ss >> 8) & 0x80, hex(ss or 0))
-        ctx.eq("DUC0 reason (proposal SF-04: 2 not offered)", None if ss is None else (ss >> 8) & 0x7F, 2)
-        if "hw.observe" in ctx.endpoint.get("fixtures", []):
-            safe(ctx, "after DUC I&Q")
         h.stop()
 
 
@@ -171,24 +191,21 @@ def t_l09(ctx):
         session(h)
         rej = lambda ans: [r for _, _, r in write_status(ans)]
         for v, ok in ((0, False), (1, True), (4, True), (5, False)):
-            ans = h.write([(TX_MODE_CLASS, v)])
-            ctx.eq(f"TX_MODE_CLASS {v}", rej(ans), [] if ok else ["BAD_VALUE"])
+            ctx.eq(f"TX_MODE_CLASS {v}", rej(h.write([(TX_MODE_CLASS, v)])), [] if ok else ["BAD_VALUE"])
         for v, ok in ((99, False), (100, True), (500, True), (501, False)):
-            ans = h.write([(KEYED_TIMEOUT, v)])
-            ctx.eq(f"KEYED_TIMEOUT {v}", rej(ans), [] if ok else ["BAD_VALUE"])
+            ctx.eq(f"KEYED_TIMEOUT {v}", rej(h.write([(KEYED_TIMEOUT, v)])), [] if ok else ["BAD_VALUE"])
         ans = h.write([(LIMIT_FWD_POWER, 10_000)])
         ctx.eq("LIMIT_FWD_POWER 10 W accepted, in force", value(ans, LIMIT_FWD_POWER), 10_000)
         ans = h.write([(LIMIT_FWD_POWER, 0)])
         ctx.eq("writing 0 returns the persistent value (100 W)", value(ans, LIMIT_FWD_POWER), 100_000)
-        ans = h.write([(LIMIT_FWD_POWER, 200_000)])
-        ctx.eq("looser than persistent", rej(ans), ["LOOSER_LIMIT"])
-        if "hw.observe" in ctx.endpoint.get("fixtures", []):
+        ctx.eq("looser than persistent", rej(h.write([(LIMIT_FWD_POWER, 200_000)])), ["LOOSER_LIMIT"])
+        ctx.eq("LIMIT_TX_TIME looser than 300 000 ms", rej(h.write([(LIMIT_TX_TIME, 300_001)])), ["LOOSER_LIMIT"])
+        if has_obs(ctx):
             safe(ctx, "after TX register writes")
         h.stop()
-        time.sleep(0.05)
         h.start()
         h.drain(0.1)
-        ctx.eq("TX_MODE_CLASS back to 0 at session end", value(h.write([(TX_STATE, 0), (TX_MODE_CLASS, 9)]), TX_MODE_CLASS), 0)
+        ctx.eq("TX_MODE_CLASS back to 0 at session end", value(h.write([(TX_MODE_CLASS, 9)]), TX_MODE_CLASS), 0)
         ctx.eq("KEYED_TIMEOUT back to 500", value(h.write([(KEYED_TIMEOUT, 1)]), KEYED_TIMEOUT), 500)
         h.stop()
 

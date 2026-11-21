@@ -35,6 +35,14 @@ class Ctx:
     endpoint: dict
     params: dict = field(default_factory=dict)
     checks: list = field(default_factory=list)
+    notes: list = field(default_factory=list)
+
+    @property
+    def net(self):
+        from .net import Net
+        if "_net" not in self.__dict__:
+            self.__dict__["_net"] = Net(self.endpoint)
+        return self.__dict__["_net"]
 
     @property
     def radio_ip(self) -> str:
@@ -82,6 +90,11 @@ def fmt(v):
 def run_one(tid: str, ctx: Ctx) -> dict:
     fn = REGISTRY.get(tid)
     t0 = time.monotonic()
+    if fn is not None and "hw.trace" in ctx.endpoint.get("fixtures", []):
+        try:  # safe-state checks count from the start of each test (format v1.1 section 4)
+            ctx.fixture("hw.trace", action="start")
+        except Skip:
+            pass
     res: dict = {"id": tid}
     if fn is None:
         res.update(status="skip", reason="not implemented in the test bench yet")
@@ -98,6 +111,9 @@ def run_one(tid: str, ctx: Ctx) -> dict:
         res.update(status="blocked", reason=str(e))
     except Exception as e:  # noqa: BLE001 - a broken test is an error result
         res.update(status="error", reason=f"{type(e).__name__}: {e}")
+    if ctx.notes:
+        res["reason"] = "; ".join(filter(None, [res.get("reason", ""), *ctx.notes]))
     res["duration_s"] = round(time.monotonic() - t0, 3)
+    res["wall_s"] = res["duration_s"]  # the bench measures wall time; a runner may replace duration_s
     res["checks"] = ctx.checks
     return res

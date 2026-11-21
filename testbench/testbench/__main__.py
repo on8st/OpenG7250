@@ -50,13 +50,13 @@ def cmd_list(a) -> int:
         e["title"] = t["title"]
         if t.get("needs"):
             e["needs"] = t["needs"]
-        if t.get("tbd"):
-            e["params"] = {"tbd": t["tbd"]}
+        if t.get("pending"):
+            e["params"] = {"pending": t["pending"]}
         tests.append(e)
-    doc = {"format": "g7250-testlist", "version": 1, "spec": cat["spec"], "his": cat["his"],
+    doc = {"format": "g7250-testlist", "version": 1, "minor": 1, "spec": cat["spec"], "his": cat["his"],
            "catalogue": {"commit": git_commit(),
                          "sha256": hashlib.sha256(CATALOGUE.read_bytes()).hexdigest()},
-           "defaults": {"timeout_s": 30}, "tests": tests}
+           "defaults": {"timeout_s": 30}, "boot": a.boot, "tests": tests}
     text = json.dumps(doc, indent=1, ensure_ascii=False) + "\n"
     if a.o:
         Path(a.o).write_text(text, encoding="utf-8")
@@ -105,7 +105,7 @@ def cmd_run(a) -> int:
     if a.o:
         summary = {s: sum(1 for r in results if r["status"] == s)
                    for s in ("pass", "fail", "skip", "blocked", "error", "not_run")}
-        doc = {"format": "g7250-testresult", "version": 1, "testlist": {"sha256": tl_hash},
+        doc = {"format": "g7250-testresult", "version": 1, "minor": 1, "testlist": {"sha256": tl_hash},
                "subject": {"kind": endpoint.get("kind"), "model": endpoint.get("model")},
                "runner": {"name": "testbench", "version": 1}, "testbench": {"commit": git_commit()},
                "started": started,
@@ -124,6 +124,8 @@ def main() -> int:
     l.add_argument("--include-also", action="store_true", help="also tests whose `also` names the target")
     l.add_argument("--scope", default="v1.0")
     l.add_argument("--implemented", action="store_true", help="only tests the bench implements")
+    l.add_argument("--boot", choices=["per-test", "per-list"], default="per-test",
+                   help="per-list only for lists whose tests restore what they change")
     l.add_argument("-o")
     r = sub.add_parser("run")
     r.add_argument("--endpoint", required=True)

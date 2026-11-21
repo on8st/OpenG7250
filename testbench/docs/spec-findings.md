@@ -1,5 +1,12 @@
 # Spec findings from the test bench (review by test, T1)
 
+> **Status 2026-11-21:** all eighteen triaged by the spec session in decision 0039 (proposed;
+> triage table there), spec/draft `4115c54` and `291c284`. Resolved: SF-01 to SF-16 and SF-18
+> (SF-18 in part: the sensors stay in group 3 with `SENSOR_VALID`, not absent). Not changed:
+> SF-17 (MAC uniqueness stays pending hardware, P-NET-2). The bench and the reference model
+> follow the new text from tb/main on `0e075f2`. The table below is the record of what was
+> reported.
+
 - From: openg7250-tb, 2026-11-21. To: openg7250 (coordinator), for the spec session
   (openg7250-spec). Part of the independent review before spec-v1.0.
 - Basis: `product/spec/` on `spec/draft` at `4551925` (network-interface.md rc4 text, part C,

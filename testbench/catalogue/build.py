@@ -49,14 +49,15 @@ def reqs_of(tid: str, desc: str) -> list[str]:
 
 
 # --- classification rules ---------------------------------------------------------------
-TBD_SYMBOLS = {
-    "P_rf_off": ["HIS-07", "HIS-12"], "t_rf_off": ["HIS-07", "HIS-12"],
-    "t_settle": ["HIS-07"], "t_blank": ["HIS-11", "HIS-12"], "P_swr": ["HIS-12"],
-    "P_temp": ["HIS-12"], "T2": ["HIS-11", "HIS-12"], "T3": ["HIS-11", "HIS-12"],
-    "T4": ["HIS-11", "HIS-12"], "S1": ["HIS-11", "HIS-12"], "S2": ["HIS-11", "HIS-12"],
-    "underrun time": ["HIS-18"], "P_ssb_mean": ["HIS-11", "HIS-12"], "margin": ["HIS-12"],
-    "tune power": ["HIS-08", "HIS-12"], "MAC": ["HIS-15"],
+# Annex P parameters a test needs measured (0035: the spec names them, "TBD" is gone). A test
+# that needs one gives "blocked" on the radio until the calibration set holds it.
+PENDING_SYMBOLS = {
+    "P_rf_off": "P-RF-3", "t_rf_off": "P-RF-3", "t_settle": "P-RF-2", "t_blank": "P-SEN-3",
+    "P_swr": "P-PWR-2", "P_temp": "P-PWR-2", "T2": "P-PWR-2", "T3": "P-PWR-2", "T4": "P-PWR-2",
+    "S1": "P-PWR-2", "S2": "P-PWR-2", "P_ssb_mean": "P-PWR-2", "underrun time": "P-TIM-2",
+    "margin": "P-PWR-3", "tune power": "P-ATU-1", "MAC": "P-NET-2",
 }
+PID = re.compile(r"\bP-[A-Z0-9]+-\d\b")
 NEEDS_RULES = [
     (r"10 Mbit|100 to 10|link loss|link renegotiat|100 Mbit", "link.set"),
     (r"power cycle|power loss|power-on|power on\b", "power.cycle"),
@@ -83,7 +84,7 @@ TX_ANY = re.compile(r"\barm|\bkey|PTT|CWX|TX|transmit|ATU|DUC", re.I)
 
 def classify(tid: str, desc: str) -> dict:
     group = tid.split("-")[1]
-    c: dict = {"scope": "v1.0", "target": "emulator", "also": [], "needs": [], "tbd": [],
+    c: dict = {"scope": "v1.0", "target": "emulator", "also": [], "needs": [], "pending": [],
                "tx_part": False, "notes": []}
     # scope
     if desc.startswith("Not in v1.0"):
@@ -114,11 +115,12 @@ def classify(tid: str, desc: str) -> dict:
     for pat, need in NEEDS_RULES:
         if re.search(pat, desc) and need not in c["needs"]:
             c["needs"].append(need)
-    for sym, his in TBD_SYMBOLS.items():
-        if sym in desc:
-            for h in his:
-                if h not in c["tbd"]:
-                    c["tbd"].append(h)
+    for sym, pid in PENDING_SYMBOLS.items():
+        if sym in desc and pid not in c["pending"]:
+            c["pending"].append(pid)
+    for pid in PID.findall(desc):
+        if pid not in c["pending"]:
+            c["pending"].append(pid)
     return c
 
 
@@ -161,7 +163,7 @@ OVERRIDES: dict[str, dict] = {
                 "notes": ["unarmed drop events: runs while TX is locked"]},
     # B3
     "T-B3-09": {"target": "needs-radio", "also": ["emulator"], "needs": ["power.cycle"],
-                "tbd": ["HIS-15"]},
+                "pending": ["P-NET-2"]},
     "T-B3-15": {"target": "emulator", "also": ["needs-radio"],
                 "notes": ["tuning check on the emulator through the FPGA frame (HIS 80)"]},
     "T-B3-25": {"tx_part": True, "notes": ["'works while armed' part needs TX unlocked"]},
@@ -188,12 +190,25 @@ OVERRIDES: dict[str, dict] = {
     "T-B8-20": TXR,
     # B9
     "T-B9-01": {"tx_part": True, "notes": ["1 ms while transmitting: radio"]},
-    "T-B9-03": {"target": "needs-radio", "also": [], "tbd": ["HIS-11"]},
-    "T-B9-05": {"target": "needs-radio", "also": ["host"], "tbd": ["HIS-11"]},
+    "T-B9-03": {"target": "needs-radio", "also": [], "pending": ["P-SEN-1"]},
+    "T-B9-05": {"target": "needs-radio", "also": ["host"], "pending": ["P-SEN-1"]},
     # B10: whole group needs a transmission, except these
     **{t: TXR for t in [f"T-B10-{n:02d}" for n in range(1, 41)]},
     "T-B10-01": {"target": "emulator", "also": ["host"], "tx_part": False,
-                 "notes": ["the locked state; see also T-B10-L01..L12"]},
+                 "notes": ["record tx bit 1 = 1 in r1.0 (0036): this test applies to a build "
+                           "without TX only; the r1.0 frozen state is T-B10-41, T-B10-42"]},
+    "T-B10-03": {"target": "emulator", "also": ["host"], "tx_part": False,
+                 "notes": ["frozen TX reaches BAD_TOKEN, WATCHDOG_DISABLED, PTT_ACTIVE, "
+                           "NO_MODE_CLASS, NOT_CALIBRATED and their order; the other reasons "
+                           "need faults, inhibits, level 2 or an update: host"]},
+    "T-B10-41": {"target": "emulator", "also": ["host"], "tx_part": False,
+                 "notes": ["'with bit 4 = 1 the arm is accepted' part: reference model with a "
+                           "calibration set (host)"]},
+    "T-B10-42": {"target": "emulator", "also": ["host"], "tx_part": False, "needs": ["hw.observe"]},
+    "T-A3-58": {"target": "emulator", "also": ["host"], "tx_part": False, "needs": ["hw.input"],
+                "notes": ["needs the local inputs PH6, PH3, PH4 driven: fixture hw.input"]},
+    "T-A1-63": {"target": "host", "also": ["emulator"]},
+    "T-A1-64": {"target": "emulator", "also": ["host"]},
     "T-B10-08": {"target": "emulator", "also": ["host"]},
     "T-B10-16": {"target": "emulator", "also": ["host"],
                  "notes": ["write range and session-end reset run locked; the unkey timing "
@@ -217,47 +232,25 @@ OVERRIDES: dict[str, dict] = {
 # "locked" = TX not yet calibrated (r1.0 until the measured values of HIS-11/HIS-12 are set).
 # The expected reject reason for an arm is the spec as written (TX_NOT_IMPLEMENTED, B10.2 item
 # 3) until finding SF-01 is decided; the test takes it as a parameter.
-LOCK = {"scope": "v1.0", "target": "emulator", "also": ["host"], "tx_part": False, "tbd": []}
+LOCK = {"scope": "v1.0", "target": "emulator", "also": ["host"], "tx_part": False, "pending": []}
 BENCH_TESTS = [
-    ("T-B10-L01", "Locked: record `tx` reads bit 0 = 1, bit 1 = 0, bits 2 and 3 = 1; "
-     "`regmap_groups` bit 2 is set (group 2 present in r1.0).", ["B4.8", "B8.3", "B10"], []),
-    ("T-B10-L02", "Locked: a correct arm write (`token XOR ARM_MAGIC`) with every other B10.2 "
-     "item 3 precondition met is rejected: `TX_ARM_STATE` stays state 0, generation unchanged, "
-     "reject reason = the locked reason (spec: 11 `TX_NOT_IMPLEMENTED`; SF-01).",
-     ["B10.2", "Table B8-3", "SF-01"], []),
-    ("T-B10-L03", "Locked: with other preconditions also failing (no mode class, watchdog bit "
-     "clear, run clear) the arm reject reason is the one of the agreed precedence (SF-02).",
-     ["B10.2", "SF-02"], []),
-    ("T-B10-L04", "Locked: PTT 0→1 (High Priority byte 4 bit [1]) with PA enable set, DUC0 "
-     "inside a transmit range and drive 255 does not key: `TX_STATE` bit 0 stays 0, no "
-     "`TX_STATE` push shows a key, and the HIS 85 safe state holds throughout (T/R lines at RX "
-     "levels, chain A bit 7 clear in every frame, bias channels 2, 7, 8 at 0).",
-     ["A3.1a", "B10.1", "A3.6", "HIS 85"], ["hw.observe"]),
-    ("T-B10-L05", "Locked: CWX (byte 5 bit [0]) with dot and dash bits, break-in set, keyer "
-     "speed 20, does not key; the safe state holds.", ["B10.5a", "A3.1a", "HIS 85"],
-     ["hw.observe"]),
-    ("T-B10-L06", "Locked: `ATU_TUNE` = 1 from the owner, armed or not, gets `WRITE_STATUS` "
-     "reason 11 `NOT_CALIBRATED`, `ATU_STATE` 0, no tune starts, and the ATU latches PD13, "
-     "PG2, PG5 are never written (0032; precedence SF-03).",
-     ["A3.9b", "B8.4", "Table B8-3", "0032", "HIS 85"], ["hw.observe"]),
-    ("T-B10-L07", "Locked: `ATU_TUNE` = 0 from the owner is accepted as a no-op; from a "
-     "non-owner `NOT_OWNER`; during an update `BUSY` (A3.9b item 1).", ["A3.9b", "B8.4"], []),
-    ("T-B10-L08", "Locked: DUC I&Q from the owner at 192 ksps is discarded or held without "
-     "effect; `STREAM_STATUS` DUC0 reads not running with the agreed reason (SF-04); no RF "
-     "path change.", ["B10.7", "B8", "SF-04"], ["hw.observe"]),
-    ("T-B10-L09", "Locked: `TX_MODE_CLASS`, `KEYED_TIMEOUT` and the `LIMIT_<name>` writes are "
-     "answered as in Table B8-2 (accepted values, `BAD_VALUE`, `LOOSER_LIMIT`); none moves a "
-     "pin of the RF section.", ["B8.4", "Table B8-2", "HIS 85"], ["hw.observe"]),
-    ("T-B10-L10", "Locked: no management request unlocks TX or changes record `tx` bit 1 within "
-     "a session (A1.9, B4.7); the unlock path is SF-05.", ["A1.9", "B4.7", "SF-05"], []),
-    ("T-B10-L11", "Locked: the HIS 85 safe state is held, traced from power-on, through idle, "
-     "a session with PTT held 10 s, a takeover, a watchdog standby, `RESTART` and an update "
-     "begin/abort: no T/R line leaves its RX level, chain A bit 7 is never set, bias channels "
-     "2, 7, 8 are never non-zero, PB14 is low until the first DAC write, the ATU latches and the "
-     "codec are untouched.", ["A3.6", "A3.6a", "0029", "0031", "0032", "HIS 85"],
-     ["hw.observe", "power.cycle", "net.hosts"]),
-    ("T-B10-L12", "Locked: High Priority status byte 4 bits [0]–[2] are 0 and status bytes "
-     "14–15, 22–23 carry no RF (0030; B9.2).", ["B9.2", "0030"], []),
+    # Kept where the spec has no test of its own; the other T1 locked tests are now spec tests:
+    # L02, L06 -> T-B10-41; L03 -> T-B10-03; L04, L05, L08, L12 -> T-B10-42; L10 -> T-A1-63.
+    ("T-B10-L01", "TX frozen: record `tx` reads bit 0 = 1, bit 1 = 1 (0036), bits 2 and 3 = 1, "
+     "bit 4 = 0 until the calibration set is complete; `streams` bit 1 = 1; `regmap_groups` "
+     "bits 0-5 set, 6-7 clear (B4.8; 0035).", ["B4.8", "B8.3", "B10", "Annex P", "0035", "0036"], []),
+    ("T-B10-L07", "TX frozen: `ATU_TUNE` = 0 from the owner is accepted as a no-op with "
+     "`ATU_STATE` 5 (unknown); from a non-owner `NOT_OWNER` (A3.9b item 1; Annex P).",
+     ["A3.9b", "B8.4", "Annex P"], []),
+    ("T-B10-L09", "TX frozen: `TX_MODE_CLASS`, `KEYED_TIMEOUT`, `LIMIT_TX_TIME` and "
+     "`LIMIT_FWD_POWER` writes are answered as in Table B8-2 (accepted values, `BAD_VALUE`, "
+     "`LOOSER_LIMIT`, 0 = back to the persistent value) and are reset at the session end; none "
+     "moves a pin of the RF section.", ["B8.4", "Table B8-2", "A3.6", "HIS 85"], ["hw.observe"]),
+    ("T-B10-L11", "TX frozen: the HIS 85 safe state is held, traced from power-on, through idle, "
+     "a session with PTT held, a takeover, a watchdog standby and a power cycle: no T/R line "
+     "leaves its RX level, chain A bit 7 is never set, bias channels 2, 7, 8 are never non-zero, "
+     "the ATU latches and the codec are untouched.", ["A3.6", "A3.6a", "B10", "0029", "0031",
+     "0032", "HIS 85"], ["hw.observe", "power.cycle", "net.hosts"]),
 ]
 
 
@@ -302,8 +295,8 @@ def main() -> int:
                       "title": t["desc"], "reqs": reqs_of(t["id"], t["desc"]), **c})
     for tid, desc, reqs, needs in BENCH_TESTS:
         tests.append({"id": tid, "origin": "testbench", "part": "A-B", "title": desc,
-                      "reqs": reqs, "needs": needs, "notes": ["TX locked until calibrated "
-                      "(ON8ST, 2026-11-20)"], **LOCK})
+                      "reqs": reqs, "needs": needs, "notes": ["TX frozen until the "
+                      "calibration set is complete (Annex P; 0035, 0036)"], **LOCK})
     src_hash = hashlib.sha256(ni.read_bytes() + pc.read_bytes()).hexdigest()
     doc = {"format": "g7250-catalogue", "version": 1,
            "spec": {"branch": "spec/draft", "commit": git("log", "-1", "--format=%h", "--",
@@ -331,7 +324,7 @@ def write_md(doc: dict) -> None:
              "`emulator` = firmware in the emulator, also the reference model; `needs-radio`). "
              "`also`: other environments where the test, or a part of it, runs. `tx`: the test "
              "has a part that needs TX unlocked (host refmodel, radio after calibration). "
-             "`tbd`: HIS ids of values the test needs that are still TBD (result `blocked`).", ""]
+             "`pending`: Annex P parameters the test needs measured (result `blocked` until set).", ""]
     summary: dict = {}
     for t in doc["tests"]:
         s = summary.setdefault(t["scope"], {})
@@ -339,12 +332,12 @@ def write_md(doc: dict) -> None:
     lines += ["| Scope | host | emulator | needs-radio |", "|---|---|---|---|"]
     for sc, d in summary.items():
         lines.append(f"| {sc} | {d.get('host', 0)} | {d.get('emulator', 0)} | {d.get('needs-radio', 0)} |")
-    lines += ["", "| Id | Scope | Target | Also | tx | Needs | TBD | Requirements | Test |",
+    lines += ["", "| Id | Scope | Target | Also | tx | Needs | Pending | Requirements | Test |",
               "|---|---|---|---|---|---|---|---|---|"]
     for t in doc["tests"]:
         lines.append("| {id} | {scope} | {target} | {also} | {tx} | {needs} | {tbd} | {reqs} | {title} |".format(
             id=t["id"], scope=t["scope"], target=t["target"], also=", ".join(t["also"]),
-            tx="x" if t["tx_part"] else "", needs=", ".join(t["needs"]), tbd=", ".join(t["tbd"]),
+            tx="x" if t["tx_part"] else "", needs=", ".join(t["needs"]), tbd=", ".join(t["pending"]),
             reqs=", ".join(t["reqs"]), title=t["title"].replace("|", "\\|")))
     (OUT / "catalogue.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
