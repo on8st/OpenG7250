@@ -46,5 +46,13 @@ pid=$!
 trap 'kill $pid 2>/dev/null || true' EXIT INT TERM
 sleep 1
 cd "$here"
+if [ -n "${G7250_TESTS:-}" ]; then
+    # only these tests (comma-separated ids), e.g. the keyer tests against --cal full
+    sel=""
+    for t in $(echo "$G7250_TESTS" | tr ',' ' '); do sel="$sel --test $t"; done
+    # shellcheck disable=SC2086
+    python3 -m testbench run --endpoint "$out/ep.json" $sel -o "$out/result.json" "$@"
+    exit $?
+fi
 python3 -m testbench list --implemented --scope v1.0 -o "$out/tests.json"
 python3 -m testbench run --endpoint "$out/ep.json" --tests "$out/tests.json" -o "$out/result.json" "$@"

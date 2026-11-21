@@ -170,3 +170,46 @@ class SavedCalibration:
         if not r or r.get("status") != 0:
             self.ctx.notes.append(f"calibration set not restored: {None if not r else r.get('status')}")
         self.c.authed("END_WRITE_SESSION", secret)
+
+
+def parse_stats(payload: bytes) -> dict[str, int]:
+    """GET_STATS reply (Table M-1): repeated name length (u8), name (ASCII), value (u64)."""
+    out, i = {}, 0
+    while i < len(payload):
+        n = payload[i]
+        name = payload[i + 1:i + 1 + n].decode("ascii", "replace")
+        out[name] = int.from_bytes(payload[i + 1 + n:i + 9 + n], "big")
+        i += 9 + n
+    return out
+
+
+def parse_log(payload: bytes) -> list[tuple[int, int, str]]:
+    """READ_LOG reply (Table M-1): repeated sequence (u32), uptime ms (u32), text length (u8),
+    text (ASCII)."""
+    out, i = [], 0
+    while i + 9 <= len(payload):
+        seq = int.from_bytes(payload[i:i + 4], "big")
+        up = int.from_bytes(payload[i + 4:i + 8], "big")
+        n = payload[i + 8]
+        out.append((seq, up, payload[i + 9:i + 9 + n].decode("ascii", "replace")))
+        i += 9 + n
+    return out
+
+
+def stats(c: "Mgmt") -> dict[str, int] | None:
+    r = c.req("GET_STATS")
+    return parse_stats(r["payload"]) if r and r.get("status") == 0 else None
+
+
+def read_log(c: "Mgmt", first: int = 0) -> list[tuple[int, int, str]]:
+    """Every log entry from sequence `first` on, page by page (L-3)."""
+    out: list = []
+    while True:
+        r = c.req("READ_LOG", first.to_bytes(4, "big"))
+        if not r or r.get("status") != 0:
+            return out
+        page = parse_log(r["payload"])
+        if not page:
+            return out
+        out += page
+        first = page[-1][0] + 1

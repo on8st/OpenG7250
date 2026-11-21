@@ -107,6 +107,7 @@ pub mod unkey {
     pub const KEYED_TIMEOUT: u8 = 2;
     pub const ARM_DROPPED: u8 = 5;
     pub const PA_DISABLED: u8 = 7;
+    pub const CW_CAP: u8 = 9;
     pub const MODE_CLASS: u8 = 10;
 }
 

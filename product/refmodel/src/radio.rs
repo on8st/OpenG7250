@@ -5,9 +5,11 @@
 //! Modelled in T1: B2 ports, B3 discovery and Set IP, B4 record, B5 session / takeover /
 //! watchdog / set-up phase / restart, B6 DDC0 stream and refusals, B7 field handling, B8 register
 //! map with every write rejection, B9 status packet, B10 arm handshake (locked and unlocked) with
-//! a minimal keying model (PTT edge, keyed timeout, PA enable, TX ranges, mode class), B11
-//! minimum lengths, A1 management channel (mgmt.rs). Not modelled: relays and settle times,
-//! sensors and limit actions, faults, CW keyer, ATU tune cycle (always NOT_CALIBRATED), DUC
+//! a minimal keying model (PTT edge, keyed timeout, PA enable, TX ranges, mode class), the CWX
+//! keyer of B10.5a with its timing (keyer.rs; 0046) and the key.log fixture, B11 minimum
+//! lengths, A1 management channel (mgmt.rs). Not modelled: relays and settle times, sensors and
+//! limit actions, faults, the hang delay, the hardware keyer from KEY, ATU tune cycle (always
+//! NOT_CALIBRATED), DUC
 //! FIFO, wideband, level 2, firmware update transfer.
 
 use std::collections::HashMap;
@@ -15,10 +17,13 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use crate::cap;
 use crate::codes::*;
+use crate::keyer::{self, Keyer};
 use crate::mgmt::Mgmt;
 use crate::util::*;
 
 pub const MS: u64 = 1_000;
+/// TX_STATE [11:8] source CWX (Table B8-2)
+pub const SRC_CWX: u8 = 2;
 pub const S: u64 = 1_000_000;
 
 #[derive(Debug, Clone)]
@@ -107,6 +112,12 @@ pub struct HpState {
     pub duc0_phase: u32,
     pub drive: u8,
     pub last_ptt1_at: Option<u64>,
+    /// the CWX request (byte 5 bit [0] and a paddle bit) in the last packet
+    pub cwx_req: bool,
+    pub last_cwx1_at: Option<u64>,
+    /// a 0->1 CWX edge failed the 10 ms test (B11.6a): the paddles count as released until
+    /// the request is 0 again
+    pub cwx_ignored: bool,
 }
 
 /// RX-side and TX-side settings of a session (B5.1a, A3.6a).
@@ -203,6 +214,17 @@ pub struct Radio {
     pub resets: u64,
     /// The stored calibration set (A1.12); kept by FACTORY_RESET, lost only with the model.
     pub cal: Option<Calibration>,
+    /// The CWX keyer of B10.5a (0046).
+    pub keyer: Keyer,
+    /// The key.log fixture (format v1.5): key changes and High Priority arrivals since start.
+    pub keylog: Option<KeyLog>,
+}
+
+/// key.log (format v1.5): changes of the keyed state and High Priority packets as received.
+#[derive(Debug, Clone, Default)]
+pub struct KeyLog {
+    pub key: Vec<(u64, bool)>,
+    pub hp: Vec<(u64, u32, u8, u8)>,
 }
 
 /// Calibration set (A1.12, Annex M Table M-5).
@@ -305,6 +327,8 @@ impl Radio {
             mgmt: Mgmt::new(now),
             resets: 0,
             cal,
+            keyer: Keyer::new(keyer::Settings { iambic: false, mode_b: false, strict: false, speed: 0, weight: 50 }),
+            keylog: None,
         };
         r.new_token();
         r.logf("power-on reset");
@@ -489,6 +513,13 @@ impl Radio {
 
     // ---------- arm / unkey / session end ----------
     fn unkey(&mut self, reason: u8, out: &mut Vec<Tx>) {
+        if self.tx.keyed && self.tx.source == SRC_CWX {
+            let now = self.now;
+            self.log_key(now, false);
+            if reason != unkey::CW_CAP {
+                self.keyer.stop(now, &mut Vec::new());
+            }
+        }
         if self.tx.keyed {
             self.tx.keyed = false;
             self.tx.source = 0;
@@ -550,6 +581,7 @@ impl Radio {
         self.mode_class = 0;
         self.keyed_timeout_ms = 500;
         self.session_limits = [0; 4];
+        self.keyer.reset();
         self.counters_continue = keep_counters;
         if !keep_counters {
             self.seq.clear();
@@ -561,6 +593,7 @@ impl Radio {
     pub fn on_datagram(&mut self, now: u64, rx: &Rx) -> Vec<Tx> {
         self.now = now;
         let mut out = Vec::new();
+        self.run_keyer(now, &mut out);
         let ip = *rx.src.ip();
         match rx.local_port {
             port::MGMT => {
@@ -768,6 +801,7 @@ impl Radio {
         self.logf(&format!("takeover {old} -> {newhost}"));
         // TX settings back (A3.6a); RX settings kept (A2.4 step 4)
         self.reset_tx_settings();
+        self.keyer.reset();
         let s = self.session.as_mut().unwrap();
         s.owner = newhost;
         s.last_cc = self.now;
@@ -776,6 +810,9 @@ impl Radio {
         s.keyed_at = None;
         s.s.hp.ptt = false;
         s.s.hp.last_ptt1_at = None;
+        s.s.hp.cwx_req = false;
+        s.s.hp.last_cwx1_at = None;
+        s.s.hp.cwx_ignored = false;
         if let Some(g) = s.s.general.as_mut() {
             g.raw[31] = 0;
             g.raw[32] = 0;
@@ -859,7 +896,16 @@ impl Radio {
                 self.push(&[(reg::WATCHDOG_STATE, w)], out);
             }
             CcKind::Ddc => self.session.as_mut().unwrap().s.ddc = Some(d.to_vec()),
-            CcKind::Duc => self.session.as_mut().unwrap().s.duc = Some(d.to_vec()),
+            CcKind::Duc => {
+                self.session.as_mut().unwrap().s.duc = Some(d.to_vec());
+                // B10.5a item 1 (0046): once per DUC-specific packet that carries S > 60
+                if d.len() > 9 && d[9] > 60 {
+                    self.count("cw_speed_clamped");
+                    self.logf(&format!("CW speed {} used as 60", d[9]));
+                }
+                let (set, _) = self.keyer_settings();
+                self.keyer.set = set;
+            }
             CcKind::Hp => self.apply_hp(d, out),
         }
         if self.ddc0_reason() != before_ddc {
@@ -876,6 +922,9 @@ impl Radio {
         }
         let ptt = d[4] & 0b10 != 0;
         let now = self.now;
+        if let Some(l) = self.keylog.as_mut() {
+            l.hp.push((now, be32(d, 0), d[4], d[5]));
+        }
         let s = self.session.as_mut().unwrap();
         s.last_hp = now;
         let was = s.s.hp.ptt;
@@ -893,8 +942,132 @@ impl Radio {
             if ok_10ms {
                 self.try_key(out);
             }
-        } else if !ptt && was && self.tx.keyed {
+        } else if !ptt && was && self.tx.keyed && self.tx.source != SRC_CWX {
             self.unkey(unkey::RELEASED, out);
+        }
+        self.cwx_input(d[5], out);
+    }
+
+    // ---------- CWX keyer (B10.5a; 0046) ----------
+    fn log_key(&mut self, t: u64, on: bool) {
+        if let Some(l) = self.keylog.as_mut() {
+            l.key.push((t, on));
+        }
+    }
+
+    /// Keyer settings from the owner's DUC-specific packet (byte 5 bits [3], [5], [6]; bytes
+    /// 9, 10). Break-in is byte 5 bit [7].
+    fn keyer_settings(&self) -> (keyer::Settings, bool) {
+        let d = self.session.as_ref().and_then(|s| s.s.duc.as_ref());
+        let b = |i: usize| d.map_or(0, |d| d.get(i).copied().unwrap_or(0));
+        let b5 = b(5);
+        (keyer::Settings { iambic: b5 & 0x08 != 0, mode_b: b5 & 0x20 != 0, strict: b5 & 0x40 != 0,
+                           speed: b(9), weight: b(10) }, b5 & 0x80 != 0)
+    }
+
+    fn cwx_input(&mut self, b5: u8, out: &mut Vec<Tx>) {
+        let (set, _) = self.keyer_settings();
+        self.keyer.set = set;
+        let cwx = b5 & 1 != 0;
+        // bit [0] clear: bits [1], [2] ignored; speed 0: CWX keys nothing (Table B10-1)
+        let on = cwx && set.speed != 0;
+        let (mut dot, mut dash) = (on && b5 & 2 != 0, on && b5 & 4 != 0);
+        let now = self.now;
+        // B11.6a unnumbered rule for the CWX request: a 0->1 edge counts only if t_edge - t_ref
+        // >= 10 ms (t_ref: the latest earlier packet with the request at 1, else the arm
+        // confirmation); a failed edge is ignored, the request counts as 1 for the next edge
+        let req = b5 & 1 != 0 && b5 & 6 != 0;
+        if let Some(s) = self.session.as_mut() {
+            let hp = &mut s.s.hp;
+            let t_ref = hp.last_cwx1_at.or(s.arm_confirmed_at);
+            if req && !hp.cwx_req {
+                hp.cwx_ignored = !t_ref.map_or(true, |t| now.saturating_sub(t) >= 10 * MS);
+            }
+            if !req {
+                hp.cwx_ignored = false;
+            }
+            if req {
+                hp.last_cwx1_at = Some(now);
+            }
+            hp.cwx_req = req;
+            if hp.cwx_ignored {
+                dot = false;
+                dash = false;
+            }
+        }
+        let mut ko = Vec::new();
+        self.keyer.input(now, dot, dash, &mut ko);
+        self.apply_keyer(ko, out);
+    }
+
+    fn run_keyer(&mut self, now: u64, out: &mut Vec<Tx>) {
+        if self.keyer.next_due().map_or(true, |t| t > now) {
+            return;
+        }
+        let mut ko = Vec::new();
+        self.keyer.advance(now, &mut ko);
+        self.apply_keyer(ko, out);
+    }
+
+    /// The conditions of A3.1a for a keyer element, as far as modelled (as try_key, with
+    /// break-in set: CWX keys by itself, B10.5b).
+    fn cwx_may_key(&self) -> bool {
+        let Some(s) = self.session.as_ref() else { return false };
+        let freq = phase_to_hz(s.s.hp.duc0_phase).round() as u32;
+        let inside = cap::TX_BANDS.iter().any(|(lo, hi)| freq >= *lo && freq <= *hi);
+        let pa = s.s.general.as_ref().map_or(false, |g| g.pa_enable());
+        let enc_ok = s.s.general.as_ref().map_or(true, |g| g.b(37) & 0b1000 != 0);
+        let eer = s.s.duc.as_ref().map_or(false, |d| d[5] & 1 != 0);
+        let (_, break_in) = self.keyer_settings();
+        self.tx_calibrated() && self.arm.state == 1 && s.arm_confirmed_at.is_some() && inside && pa
+            && enc_ok && !eer && self.mode_class != 0 && !self.update_in_progress && break_in
+            && !(self.tx.keyed && self.tx.source != SRC_CWX)
+    }
+
+    fn apply_keyer(&mut self, ko: Vec<keyer::Out>, out: &mut Vec<Tx>) {
+        for o in ko {
+            match o {
+                keyer::Out::On(t) => {
+                    if !self.cwx_may_key() {
+                        self.keyer.stop(t, &mut Vec::new());
+                        continue;
+                    }
+                    self.now = self.now.max(t);
+                    self.tx.keyed = true;
+                    self.tx.source = SRC_CWX;
+                    self.hw.tx_levels = true;
+                    self.hw.chain_a_bit7_ever = true;
+                    self.hw.bias_nonzero_ever = true;
+                    self.log_key(t, true);
+                    let w = self.tx_state_word();
+                    self.push(&[(reg::TX_STATE, w)], out);
+                }
+                keyer::Out::Off(t, why) => {
+                    if !(self.tx.keyed && self.tx.source == SRC_CWX) {
+                        continue;
+                    }
+                    if why == keyer::Off::Cap {
+                        self.logf("CWX paddle bit held over 1 s: unkey (B10.5a)");
+                        let saved = self.now;
+                        self.now = t;
+                        self.unkey(unkey::CW_CAP, out);
+                        self.now = saved.max(t);
+                        continue;
+                    }
+                    // the end of a mark: PA off, the keyer between elements (A3.4d)
+                    self.tx.keyed = false;
+                    self.hw.tx_levels = false;
+                    self.log_key(t, false);
+                    let w = self.tx_state_word();
+                    self.push(&[(reg::TX_STATE, w)], out);
+                }
+                keyer::Out::Released(_) => {
+                    if self.tx.source == SRC_CWX && !self.tx.keyed {
+                        self.tx.source = 0;
+                        self.tx.unkey = unkey::RELEASED;
+                    }
+                }
+            }
         }
     }
 
@@ -1191,6 +1364,7 @@ impl Radio {
     pub fn tick(&mut self, now: u64) -> Vec<Tx> {
         self.now = now;
         let mut out = Vec::new();
+        self.run_keyer(now, &mut out);
         let mut due: Vec<Tx> = Vec::new();
         self.scheduled.retain(|(t, p)| {
             if *t <= now {
@@ -1251,6 +1425,7 @@ impl Radio {
     pub fn reset(&mut self, cause: &str) {
         let mut out = Vec::new();
         self.drop_arm(drop::MAINTENANCE, &mut out);
+        self.keyer.reset();
         self.session = None;
         self.carried = None;
         self.last_owner = None;

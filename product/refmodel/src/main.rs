@@ -110,7 +110,7 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump"];
+    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log"];
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -267,6 +267,35 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
             let sp = args.get("speed").and_then(|v| v.as_f64()).unwrap_or(100.0) as u16;
             r.link_mbit = sp;
             ok(J::Null)
+        }
+        "key.log" => {
+            // format v1.5: key changes and High Priority arrivals, paged, capped
+            const CAP: usize = 100_000;
+            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("read");
+            if action == "start" {
+                r.keylog = Some(Default::default());
+                return ok(J::obj(vec![("t_us", J::Num(now as f64))]));
+            }
+            let Some(l) = r.keylog.as_ref() else { return err("key.log not started") };
+            let from_k = args.get("from_key").and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
+            let from_h = args.get("from_hp").and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
+            const PAGE: usize = 2000;
+            let key: Vec<J> = l.key.iter().skip(from_k).take(PAGE)
+                .map(|(t, on)| J::obj(vec![("t_us", J::Num(*t as f64)), ("on", J::Num(*on as u8 as f64))])).collect();
+            let hp: Vec<J> = l.hp.iter().skip(from_h).take(PAGE)
+                .map(|(t, seq, b4, b5)| J::obj(vec![("t_us", J::Num(*t as f64)), ("seq", J::Num(*seq as f64)),
+                                                    ("b4", J::Num(*b4 as f64)), ("b5", J::Num(*b5 as f64))])).collect();
+            let dropped = l.key.len().saturating_sub(CAP) + l.hp.len().saturating_sub(CAP);
+            let v = J::obj(vec![
+                ("t_us", J::Num(now as f64)),
+                ("key", J::Arr(key)), ("hp", J::Arr(hp)),
+                ("count_key", J::Num(l.key.len().min(CAP) as f64)), ("count_hp", J::Num(l.hp.len().min(CAP) as f64)),
+                ("dropped", J::Num(dropped as f64)),
+            ]);
+            if action == "stop" {
+                r.keylog = None;
+            }
+            ok(v)
         }
         "state.dump" => ok(J::obj(vec![
             ("session_owner", r.session.as_ref().map_or(J::Null, |s| J::Str(s.owner.to_string()))),

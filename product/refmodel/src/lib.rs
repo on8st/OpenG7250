@@ -5,6 +5,7 @@ pub mod cap;
 pub mod codes;
 pub mod crypto;
 pub mod json;
+pub mod keyer;
 pub mod mgmt;
 pub mod radio;
 pub mod util;

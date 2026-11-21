@@ -1,6 +1,6 @@
-# Test list and result format (v1.4)
+# Test list and result format (v1.5)
 
-- Status: **v1.4**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
+- Status: **v1.5**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
   the first answers of the emulator side (openg7250-emu, relayed by openg7250): the address
   mapping of section 3, the fixture plan of section 4, and its four proposals (emulated-time
   timeouts, boot per test, artifacts, "not modelled" errors), all accepted. v1.2 folded in its
@@ -10,7 +10,9 @@
   `null`, so that "not driven" is no longer reported as "low", with the bench's rule per pin
   for them; `hosts[i].fixed_ports`; the DHCP fixtures and `net.endpoint`; the `boot` trace event
   and the replay at a trace start, with the point from which pins are judged (A3.6, 0045); the
-  port rule for a shared machine. Changes are marked **(v1.1)** to **(v1.4)**. Each version only adds fields, apart
+  port rule for a shared machine. v1.5 adds the `key.log` fixture for the CW keyer timing of
+  B10.5a (0046), in the shape the emulator side answered (paging, a cap, exact write times of
+  the keying pins). Changes are marked **(v1.1)** to **(v1.5)**. Each version only adds fields, apart
   from that one rename of a count nobody reads. A v1.3 reader keeps working if it treats an
   unknown level as "not driven".
 - Purpose: the file that `product_run.py <elf> <tests> -o <result>` reads (`<tests>`), and the file
@@ -52,7 +54,7 @@ hand-written subset.
 ```json
 {
   "format": "g7250-testlist",
-  "version": 1, "minor": 4,
+  "version": 1, "minor": 5,
   "spec":  { "branch": "spec/draft", "commit": "0e075f2" },
   "his":   { "commit": "d07627e" },
   "catalogue": { "commit": "<tb/main commit>", "sha256": "<of catalogue.json>" },
@@ -96,7 +98,7 @@ hand-written subset.
 
 ```json
 {
-  "format": "g7250-endpoint", "version": 1, "minor": 4,
+  "format": "g7250-endpoint", "version": 1, "minor": 5,
   "kind": "emulator",
   "radio": { "ip": "192.168.73.10", "netmask": "255.255.255.0", "mac": "02:00:00:00:72:50",
              "connect": { "1024": "127.0.0.1:41024", "1025": "127.0.0.1:41025",
@@ -192,6 +194,7 @@ delivery is given in the last column; the reference model offers the ones marked
 | `dhcp.server` | **(v1.4)** the server is off at power-on. `dhcp.start {server?, address?, netmask?, router?, lease_s?}` starts answering (defaults 192.168.73.1, .10, 255.255.255.0, .1, 3600 s); `dhcp.stop {}` stops; `dhcp.offer {address?, lease_s?, …}` sets what is offered and acknowledged next and starts (a later renewal is acknowledged with the new address); `dhcp.nak {count?}` NAKs the next `count` REQUESTs (default 1); `dhcp.expire {}` forgets the binding (the next renewal is NAKed); `dhcp.log {}` → every DHCP message both ways: `type`, `src`, `dst`, `ciaddr`, options 50 and 54, broadcast flag, `yiaddr`, `lease`, `t_us` (emulated), `t_wall` | A1.11, A1.11a, T-A1-66 (and T-A1-35 once TX can be armed) | emulator now |
 | `net.endpoint` | **(v1.4)** `net.endpoint {}` → the endpoint as it is now. When the image moves to a new subnet (DHCP, Set IP, link-local), `hosts[]` follow it; the bench re-reads the endpoint after an address change | T-A1-66 | emulator now |
 | `sensor.set` | `sensor.set {name, value}`; names `supply_mv`, `current_ma`, `pa_temp_mc`, `fwd_power_mw`, `rev_power_mw` | Table A3-2 rows, RF-gone waits, A3.4c | after the emulator's analog models; **(v1.1)** only in the units and scales the HIS gives, else `ok: false`, `"not in HIS: <name>"` |
+| `key.log` | **(v1.5)** `key.log {action: "start"\|"read"\|"stop", from_key?, from_hp?}`; below | B10.5a keyer timing (0046): T-B10-33, T-B10-43 to T-B10-46 | emulator after its CH394 socket log and DHCP checks; model |
 | `hw.input` | **(v1.2)** `hw.input {pin: "PH6"\|"PH3"\|"PH4", level: 0\|1}`; any other pin `ok: false`, `"pin not offered: <pin>"` | T-A3-58: local PTT and KEY inputs key nothing (0030; [HIS] HIS 85) | emulator step 3; model |
 
 A fixture that answers `ok: false` with `"not in HIS: <name>"` makes the test `skip` with that
@@ -314,6 +317,37 @@ HIS). A frame with bit 7 set does not free PA10. The bias check uses the snapsho
 zero counts and no file. Its snapshot carries `pins` and two summary flags,
 `spi1_a.bit7_ever` and `pa_dac.bias_nonzero_ever`, latched since the trace start.
 
+`key.log` **(v1.5)**. The keyer of B10.5a is judged on mark and space lengths of ±1 ms and on
+a 5 ms latency from a paddle edge, which the network cannot show: a `TX_STATE` push carries the
+host's jitter, and emulated time can differ from wall time. `key.log` gives both sides of the
+measurement on the radio's own clock.
+
+- `start` → `{"t_us"}`: empties the log and records from now on. A `start` while running
+  restarts (empties) it.
+- `read {from_key?: n, from_hp?: m}` → `{"t_us", "key": [...], "hp": [...], "count_key",
+  "count_hp", "dropped"}`: the entries from index `n` and `m` on (a page; the runner chooses
+  its size), the totals so far and the entries lost to the cap. The bench reads page by page
+  until it has `count_key` and `count_hp` entries.
+- `stop {from_key?, from_hp?}` → the same as `read`, then stops.
+- `key`: every change of the keyed state (`TX_STATE` bit 0, PA actually keyed) as `{"t_us",
+  "on": 0|1}`. On the emulator, from the write times of the keying pin(s), which the emulator
+  side names from the gate-cleared HIS 85 wording only; where the HIS does not single out one
+  keying signal it says so instead of choosing a pin. On the reference model, its own keyed
+  state.
+- `hp`: every High Priority packet received on radio port 1027 as `{"t_us", "seq", "b4",
+  "b5"}`: bytes 0–3 (the sequence number), byte 4 and byte 5 (CWX and the paddle bits). On the
+  emulator `t_us` is the time the datagram enters the CH394 socket receive buffer (first
+  visible to the image).
+- Every `t_us` is on the clock of the trace and `boot` events (section 4, `hw.trace`).
+- A cap (about 100 000 entries each) with `"dropped": n`. Dropped entries fail the test, as
+  for `hw.trace`.
+
+The bench measures marks and spaces between `key` events and latencies from the `hp` arrival
+of the packet with the edge, so its own pacing does not enter the verdict. It plans each paddle
+edge at least 0.2 T from the keyer's decision points and checks afterwards that it arrived
+there; if one did not, the test is an `error` with reason `pacing: …`, not a verdict. Until the
+image keys (record `tx` bit 4 = 1), these tests are `blocked` on the calibration set.
+
 `hw.input` **(v1.2)**. The level is electrical (0 or 1). The bench drives both levels on every
 pin, because the HIS doesn't give the active level. Edges reach the interrupt controller as from
 a real input.
@@ -322,7 +356,7 @@ a real input.
 
 ```json
 {
-  "format": "g7250-testresult", "version": 1, "minor": 4,
+  "format": "g7250-testresult", "version": 1, "minor": 5,
   "testlist": { "sha256": "…" },
   "subject":  { "kind": "emulator", "elf_sha256": "…", "fw_version": "0.1.0+12" },
   "runner":   { "name": "product_run.py", "version": "…", "emulator_commit": "…" },
@@ -364,12 +398,13 @@ Runner exit code: 0 if there is no `fail` and no `error`, 1 if there is a `fail`
 A test with target `emulator` is also run against the reference model. A test with target
 `host` is not sent to `product_run.py`.
 
-## 7. Open points for the emulator side (v1.4)
+## 7. Open points for the emulator side (v1.5)
 
 1. Settled: the address mapping (section 3, v1.2), the `hw.trace` schema and `hw.input`
    (section 4, v1.2), the live trace file (v1.3), pin modes with `"z"` and `null`,
    `fixed_ports`, the DHCP fixtures, `net.endpoint`, the `boot` event and the replay, the
-   `t_us` of `hw.trace start`, and `"emulator not ready"` during a power cycle (v1.4).
+   `t_us` of `hw.trace start`, and `"emulator not ready"` during a power cycle (v1.4); the
+   shape of `key.log` (v1.5).
 2. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
    runs, the 0x04 reads are six strobes per sample; such a trace is meant for a short test
    only, and the runner may drop events (which fails the test) if it cannot keep up.

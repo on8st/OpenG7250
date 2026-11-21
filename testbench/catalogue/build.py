@@ -130,6 +130,10 @@ def classify(tid: str, desc: str) -> dict:
 # state runs on the reference model with TX unlocked (host) and on the radio with measured
 # values (needs-radio). The emulator runs the T-*-Lnn locked-state tests instead.
 TXR = {"target": "needs-radio", "also": ["host"]}
+# The freeze rule of Annex P: TX unlocks (record tx bit 4) when every one of these is set.
+CAL_SET = ([f"P-RF-{i}" for i in range(1, 6)] + [f"P-PWR-{i}" for i in range(1, 6)]
+           + [f"P-SEN-{i}" for i in range(1, 6)] + ["P-TIM-1", "P-TIM-2", "P-RX-2", "P-TX-1",
+                                                    "P-ATU-1", "P-ANT-1"])
 OVERRIDES: dict[str, dict] = {
     # A1: update and reset tests whose subject is the armed / keyed case
     **{t: TXR for t in ["T-A1-02", "T-A1-05", "T-A1-27", "T-A1-29", "T-A1-30", "T-A1-33",
@@ -223,6 +227,12 @@ OVERRIDES: dict[str, dict] = {
     **{t: {"target": "needs-radio", "also": ["emulator"], "pending": ["P-RX-2"]}
        for t in ["T-B6-08", "T-B6-09", "T-B6-11", "T-B6-12", "T-B6-17"]},
     "T-A1-64": {"target": "emulator", "also": ["host"]},
+    # CWX keyer (B10.5a, 0046): judged on the key.log fixture (format v1.5), on the reference
+    # model with a calibration set and on the emulator once the image keys; blocked on the
+    # calibration set of the freeze rule until then (Annex P)
+    **{t: {"target": "emulator", "also": ["host"], "needs": ["key.log"], "pending": CAL_SET,
+           "notes": ["needs TX unlocked: blocked until the calibration set is complete (tx bit 4)"]}
+       for t in ["T-B10-33", "T-B10-43", "T-B10-44", "T-B10-45", "T-B10-46"]},
     "T-B10-08": {"target": "emulator", "also": ["host"]},
     "T-B10-16": {"target": "emulator", "also": ["host"],
                  "notes": ["write range and session-end reset run locked; the unkey timing "

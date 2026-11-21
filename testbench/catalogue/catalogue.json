@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "a118943",
-  "sha256_of_inputs": "66d8c22c7ffd46db0129da8e1d15803facc9e42300ad050825da615256008699"
+  "commit": "7da25a9",
+  "sha256_of_inputs": "442f7143de58de2b492eef98ad12142671751835859a8d14b10b5b237cb4d69e"
  },
  "his": {
   "commit": "d07627e"
@@ -5983,14 +5983,40 @@
     "B10.5a"
    ],
    "scope": "v1.0",
-   "target": "needs-radio",
+   "target": "emulator",
    "also": [
     "host"
    ],
-   "needs": [],
-   "pending": [],
+   "needs": [
+    "key.log"
+   ],
+   "pending": [
+    "P-RF-1",
+    "P-RF-2",
+    "P-RF-3",
+    "P-RF-4",
+    "P-RF-5",
+    "P-PWR-1",
+    "P-PWR-2",
+    "P-PWR-3",
+    "P-PWR-4",
+    "P-PWR-5",
+    "P-SEN-1",
+    "P-SEN-2",
+    "P-SEN-3",
+    "P-SEN-4",
+    "P-SEN-5",
+    "P-TIM-1",
+    "P-TIM-2",
+    "P-RX-2",
+    "P-TX-1",
+    "P-ATU-1",
+    "P-ANT-1"
+   ],
    "tx_part": true,
-   "notes": []
+   "notes": [
+    "needs TX unlocked: blocked until the calibration set is complete (tx bit 4)"
+   ]
   },
   {
    "id": "T-B10-34",
@@ -6186,6 +6212,187 @@
    "pending": [],
    "tx_part": false,
    "notes": []
+  },
+  {
+   "id": "T-B10-43",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "With CWX, iambic set, *S* = 20 wpm and *W* = 50: a held dot paddle gives marks of 60 ms and spaces of 60 ms, a held dash paddle marks of 180 ms and spaces of 60 ms, within the tolerance of B10.5a item 6; with *S* = 60 the unit is 20 ms; *S* = 70 is used as 60, the log has `CW speed 70 used as 60` and `GET_STATS` `cw_speed_clamped` rises by one per packet; a dot paddle edge while idle keys within 5 ms of the packet's arrival (reference model with a complete calibration set, or emulator; B10.5a items 1, 4; 0046).",
+   "reqs": [
+    "B10",
+    "B10.5a"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "key.log"
+   ],
+   "pending": [
+    "P-RF-1",
+    "P-RF-2",
+    "P-RF-3",
+    "P-RF-4",
+    "P-RF-5",
+    "P-PWR-1",
+    "P-PWR-2",
+    "P-PWR-3",
+    "P-PWR-4",
+    "P-PWR-5",
+    "P-SEN-1",
+    "P-SEN-2",
+    "P-SEN-3",
+    "P-SEN-4",
+    "P-SEN-5",
+    "P-TIM-1",
+    "P-TIM-2",
+    "P-RX-2",
+    "P-TX-1",
+    "P-ATU-1",
+    "P-ANT-1"
+   ],
+   "tx_part": true,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "needs TX unlocked: blocked until the calibration set is complete (tx bit 4)"
+   ]
+  },
+  {
+   "id": "T-B10-44",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Weight: at *S* = 20 wpm, *W* = 66 gives dot marks of 79.2 ms with spaces of 40.8 ms and *W* = 33 dot marks of 39.6 ms with spaces of 80.4 ms, a dot plus space staying 120 ms; *W* = 80 is used as 66, *W* = 0 as 50 (B10.5a item 3; 0046).",
+   "reqs": [
+    "B10",
+    "B10.5a"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "key.log"
+   ],
+   "pending": [
+    "P-RF-1",
+    "P-RF-2",
+    "P-RF-3",
+    "P-RF-4",
+    "P-RF-5",
+    "P-PWR-1",
+    "P-PWR-2",
+    "P-PWR-3",
+    "P-PWR-4",
+    "P-PWR-5",
+    "P-SEN-1",
+    "P-SEN-2",
+    "P-SEN-3",
+    "P-SEN-4",
+    "P-SEN-5",
+    "P-TIM-1",
+    "P-TIM-2",
+    "P-RX-2",
+    "P-TX-1",
+    "P-ATU-1",
+    "P-ANT-1"
+   ],
+   "tx_part": true,
+   "notes": [
+    "needs TX unlocked: blocked until the calibration set is complete (tx bit 4)"
+   ]
+  },
+  {
+   "id": "T-B10-45",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Strict character spacing: with bit [6] set, a paddle pressed 1.5 *T* after the end of a mark and held starts its element 3 *T* after that end; one pressed at 1.5 *T* and released at 2.5 *T* starts nothing; with bit [6] clear a paddle pressed at 1.5 *T* starts its element at once, within 5 ms (B10.5a items 4, 5; 0046).",
+   "reqs": [
+    "B10",
+    "B10.5a"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "key.log"
+   ],
+   "pending": [
+    "P-RF-1",
+    "P-RF-2",
+    "P-RF-3",
+    "P-RF-4",
+    "P-RF-5",
+    "P-PWR-1",
+    "P-PWR-2",
+    "P-PWR-3",
+    "P-PWR-4",
+    "P-PWR-5",
+    "P-SEN-1",
+    "P-SEN-2",
+    "P-SEN-3",
+    "P-SEN-4",
+    "P-SEN-5",
+    "P-TIM-1",
+    "P-TIM-2",
+    "P-RX-2",
+    "P-TX-1",
+    "P-ATU-1",
+    "P-ANT-1"
+   ],
+   "tx_part": true,
+   "notes": [
+    "needs TX unlocked: blocked until the calibration set is complete (tx bit 4)"
+   ]
+  },
+  {
+   "id": "T-B10-46",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Iambic, dash paddle held: (a) dot paddle also pressed during the dash mark and both released before its end: mode A ends after the dash, mode B sends one dot after it and stops; (b) dot paddle pressed and released during the dash mark while the dash paddle stays held: mode A sends another dash, mode B a dot and then dashes; (c) dot paddle pressed only during the space after the dash: no dot from memory in either mode, the decision point sees what is held (B10.5a item 4; 0046).",
+   "reqs": [
+    "B10",
+    "B10.5a"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "key.log"
+   ],
+   "pending": [
+    "P-RF-1",
+    "P-RF-2",
+    "P-RF-3",
+    "P-RF-4",
+    "P-RF-5",
+    "P-PWR-1",
+    "P-PWR-2",
+    "P-PWR-3",
+    "P-PWR-4",
+    "P-PWR-5",
+    "P-SEN-1",
+    "P-SEN-2",
+    "P-SEN-3",
+    "P-SEN-4",
+    "P-SEN-5",
+    "P-TIM-1",
+    "P-TIM-2",
+    "P-RX-2",
+    "P-TX-1",
+    "P-ATU-1",
+    "P-ANT-1"
+   ],
+   "tx_part": true,
+   "notes": [
+    "needs TX unlocked: blocked until the calibration set is complete (tx bit 4)"
+   ]
   },
   {
    "id": "T-B11-01",
