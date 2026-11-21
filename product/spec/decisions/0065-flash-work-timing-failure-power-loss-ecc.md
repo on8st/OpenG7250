@@ -40,8 +40,12 @@ states what is required, so that the tests can check it.
    - the generation never goes back.
    Test T-A1-86 (flash.log).
 4. **FPGA bus during flash work** (gap 8). Yes, a spec test covers it. No bus cycle is open
-   across an erase or a program: STB and CMD are low, and the firmware ends any cycle first.
-   This is part of T-B5-22. The testbench's own T-B6-L01 stays as it is.
+   across an erase or a program. While the bus gate is closed ([HIS] HIS 80; 0042) that means
+   no MCU drive on PE0–PE10 at all: no strobe, no command, the levels left to the board. Once
+   the gate is open, STB and CMD are driven low, and the firmware ends any cycle first
+   (clarified on a firmware question, 2026-11-21). This is part of T-B5-22: on the emulator, with
+   the gate closed, the FPGA bus model shows "idle" (no MCU drive) for the whole run. The
+   testbench's own T-B6-L01 stays as it is.
 5. **ECC read errors** (gap 9). A double ECC error in a store word is treated as a torn
    record:
    - the store uses the older record, or the previous generation if the newest commit word is
