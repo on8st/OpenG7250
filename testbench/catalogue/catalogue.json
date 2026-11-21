@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "6308396",
-  "sha256_of_inputs": "d1c3bb063c6e57c1314c02d25359a87ca0cbbb344c660cd4780440d8e89567cf"
+  "commit": "1d401fa",
+  "sha256_of_inputs": "e26ba452be5518faf724e88423cb6ba24d262b485699f4ca5d8721820abd28f5"
  },
  "his": {
   "commit": "72591aa"
@@ -4118,6 +4118,23 @@
    "notes": []
   },
   {
+   "id": "T-B4-19",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "The unasked record at a session start arrives in one to three packets to the owner's register destination, in ascending address order, with increasing port 7250 sequence numbers (gaps only where other register pushes were sent in between, which the test sees as packets with those numbers), within 50 ms, together holding every record register once with the values of a `CAP_REQUEST` answer in the same session; the `CAP_REQUEST` answer is one packet (B4.4 items 1, 2; 0059).",
+   "reqs": [
+    "B4",
+    "B4.4"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
    "id": "T-B5-01",
    "origin": "spec",
    "part": "A-B",
@@ -4465,7 +4482,7 @@
    "id": "T-B5-20",
    "origin": "spec",
    "part": "A-B",
-   "title": "On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 \"High Priority bursts\", Table B2-2; 0053, 0054).",
+   "title": "On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost; in each case `GET_STATS` `hp_rx` rises by exactly the number of packets sent (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 \"High Priority bursts\", Table B2-2; 0053, 0054, 0058).",
    "reqs": [
     "B5",
     "B2.3",

@@ -237,6 +237,7 @@ def t_b4_07(ctx):
     with host(ctx) as h:
         h.start()
         got = h.recv(0.5, PORT_REG)
+        # by register: the record may come in parts (0059), only the first holds register 0
         recs = [d for _, d, _ in got if any(a == 0 and v == 0x47373235 for a, v in parse_regs(d))]
         ctx.eq("unasked record once at session start", len(recs), 1)
         h.send(PORT_DISC, general())
@@ -813,3 +814,50 @@ def t_b5_20(ctx):
     # the firmware's step_*_us pass timers included), name=value sorted by name
     ctx.check("information (not judged): GET_STATS after the last burst, all counters", True,
               ", ".join(f"{k}={st[k]}" for k in sorted(st)) if st else "no GET_STATS answer")
+
+
+@test("T-B4-19")
+def t_b4_19(ctx):
+    """B4.4 items 1, 2 (0059): the unasked record in one to three parts, collected by register
+    address; the CAP_REQUEST answer in one packet."""
+    win = 0.05 / time_scale(ctx)
+    with host(ctx) as h:
+        h.start()
+        got = h.recv(0.4, PORT_REG)
+        parts = []  # (t, seq, pairs) of the packets that carry record registers
+        for _, d, t in got:
+            pairs = parse_regs(d)
+            rec_pairs = [(a, v) for a, v in pairs if a < 0x0100]
+            if rec_pairs:
+                parts.append((t, struct.unpack_from(">I", d, 0)[0], rec_pairs, len(rec_pairs) == len(pairs)))
+        if not ctx.check("the unasked record arrives at the session start", bool(parts), f"{len(got)} register packets"):
+            return
+        ctx.check("in one to three packets (B4.4 item 2)", 1 <= len(parts) <= 3, f"{len(parts)} parts")
+        ctx.check("each part holds record registers only", all(p[3] for p in parts), str([len(p[2]) for p in parts]))
+        addrs = [a for p in parts for a, _ in p[2]]
+        ctx.check("ascending register address order, within and across the parts", addrs == sorted(addrs) and len(set(addrs)) == len(addrs),
+                  f"{len(addrs)} registers, first {addrs[:3]}, last {addrs[-3:]}")
+        # increasing numbers of the session counter; a gap only where the bench saw another
+        # register push to this destination take the number in between (0059 as clarified)
+        seqs = [p[1] for p in parts]
+        others = {struct.unpack_from(">I", d, 0)[0] for _, d, _ in got} - set(seqs)
+        gaps_ok = all(seqs[i + 1] > seqs[i] and all(n in others for n in range(seqs[i] + 1, seqs[i + 1]))
+                      for i in range(len(seqs) - 1))
+        ctx.check("increasing port 7250 sequence numbers, gaps only for other pushes seen in between (B2.7, 0051, 0059)",
+                  gaps_ok, f"parts {seqs}, other register packets {sorted(others)[:8]}")
+        span = parts[-1][0] - parts[0][0]
+        ctx.check(f"all parts within 50 ms of the first ({win * 1000:.0f} ms on the host clock)", span <= win, f"{span * 1000:.1f} ms")
+        unasked = dict(p for part in parts for p in part[2])
+        n = unasked.get(2)
+        ctx.check("together every record register exactly once (cap_length registers, 0 to cap_length - 1)",
+                  n is not None and sorted(unasked) == list(range(n)), f"cap_length {n}, {len(unasked)} registers")
+        # the CAP_REQUEST answer in the same session: one packet, the same values
+        h.send(PORT_REG, regs([(CAP_REQUEST, 1)]))
+        ans = [d for _, d, _ in h.recv(0.3, PORT_REG) if any(a == 0 for a, _ in parse_regs(d))]
+        ctx.eq("the CAP_REQUEST answer is one packet (B4.4 item 1)", len(ans), 1)
+        if ans:
+            answer = {a: v for a, v in parse_regs(ans[0]) if a < 0x0100}
+            diff = [a for a in set(answer) | set(unasked) if answer.get(a) != unasked.get(a)]
+            ctx.check("the unasked record has the values of the CAP_REQUEST answer", not diff,
+                      f"differ at {sorted(diff)[:5]}" if diff else f"{len(answer)} registers equal")
+        idle(h)
