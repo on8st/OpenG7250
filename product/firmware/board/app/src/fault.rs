@@ -15,6 +15,24 @@ pub static WAKE: embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw:
 /// Codes raised and not yet logged (bit per code), for the net loop's event log.
 static UNLOGGED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
+/// TX is armed or keyed (set by P2 every pass): the TX path check is not made (A3.6b).
+pub static TX_OPEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// The mismatch that raised TX_PATH_NOT_BLOCKED, for the log (A3.6b: the pin and the comparison).
+static DETAIL: Mutex<RefCell<Option<g7250_safety::txpath::Mismatch>>> = Mutex::new(RefCell::new(None));
+
+pub fn set_detail(m: g7250_safety::txpath::Mismatch) {
+    cortex_m::interrupt::free(|cs| {
+        let mut d = DETAIL.borrow(cs).borrow_mut();
+        if d.is_none() {
+            *d = Some(m);
+        }
+    });
+}
+
+pub fn detail() -> Option<g7250_safety::txpath::Mismatch> {
+    cortex_m::interrupt::free(|cs| *DETAIL.borrow(cs).borrow())
+}
+
 /// Raise `code`. Returns true for a new entry.
 pub fn raise(code: u8) -> bool {
     let new = cortex_m::interrupt::free(|cs| LATCH.borrow(cs).borrow_mut().raise(code));

@@ -130,6 +130,11 @@ pub const SAFE_STATE: &[PinRule] = &[
     r(E, 10, LeaveUntouched, "FPGA bus DRDY (input): untouched (HIS 80)"),
 ];
 
+/// The TX-side outputs of A3.6 for the TX path check (A3.6b; txpath.rs), as (port, pin, safe
+/// level): chain A output enable (TX path disable), the T/R lines, and the PA DAC RESET (the bias
+/// channels) ([HIS] HIS 85). HIS 85 names no SEND or TUNER trigger pin.
+pub const TX_PATH_PINS: [(Port, u8, bool); 6] = [(A, 10, true), (F, 4, true), (F, 6, false), (C, 7, false), (H, 11, false), (B, 14, false)];
+
 /// The rule for a pin, if the safe state lists it.
 pub fn rule(port: Port, pin: u8) -> Option<&'static PinRule> {
     SAFE_STATE.iter().find(|r| r.port == port && r.pin == pin)

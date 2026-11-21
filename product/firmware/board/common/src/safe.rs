@@ -123,10 +123,55 @@ pub fn reassert() {
     }
 }
 
+/// The TX path check's reading (A3.6b; g7250_safety::txpath): the first TX-side pin whose MCU
+/// configuration (push-pull output, output register at the safe level) or input register (the
+/// level at the pin) differs from the safe state.
+pub fn tx_path_mismatch() -> Option<g7250_safety::txpath::Mismatch> {
+    use g7250_safety::txpath::{Comparison, Mismatch, PINS, bias_mismatch};
+    // PA bias channels 2, 7, 8: the value last written (no read-back; Table A3-6).
+    let last = [0, 1, 2].map(|i| DAC_BIAS_LAST[i].load(core::sync::atomic::Ordering::Relaxed));
+    if let Some(ch) = bias_mismatch(last) {
+        let (port, pin, _) = PINS[5]; // the DAC's RESET pin, PB14
+        return Some(Mismatch { port, pin, what: Comparison::DacValue(ch) });
+    }
+    for (port, pin, high) in PINS {
+        let g = gpio(port);
+        let n = pin as usize;
+        let config = g.moder().read().moder(n) == Moder::OUTPUT
+            && g.otyper().read().ot(n) == Ot::PUSH_PULL
+            && (g.odr().read().odr(n) == pac::gpio::vals::Odr::HIGH) == high;
+        if !config {
+            return Some(Mismatch { port, pin, what: Comparison::Configuration });
+        }
+        if (g.idr().read().idr(n) == pac::gpio::vals::Idr::HIGH) != high {
+            return Some(Mismatch { port, pin, what: Comparison::PinLevel });
+        }
+    }
+    None
+}
+
+/// The values last written to PA DAC channels 2, 7, 8 (g7250_safety::txpath::BIAS_CHANNELS).
+/// This firmware has no DAC driver and never writes the DAC (RESET held, all outputs at VrefL),
+/// so they stay 0; a DAC driver stores every value it writes here.
+pub static DAC_BIAS_LAST: [core::sync::atomic::AtomicU16; 3] = [const { core::sync::atomic::AtomicU16::new(0) }; 3];
+
+/// The safety pins other than the TX-side ones of the TX path check (A3.6b has its own time
+/// filter for those): output at the safe level, or input with pull-up.
+pub fn holds_except_tx_path() -> bool {
+    SAFE_STATE
+        .iter()
+        .filter(|r| r.is_safety() && !g7250_safety::txpath::PINS.iter().any(|p| p.0 == r.port && p.1 == r.pin))
+        .all(rule_holds)
+}
+
 /// Self-check: every driven RF and power pin of the table is an output at its safe level. Used
 /// at start-up and periodically; a failure is a class 2 fault (0007 sub-decision 5).
 pub fn holds() -> bool {
-    SAFE_STATE.iter().filter(|r| r.is_safety()).all(|r| {
+    SAFE_STATE.iter().filter(|r| r.is_safety()).all(rule_holds)
+}
+
+fn rule_holds(r: &g7250_safety::safe_state::PinRule) -> bool {
+    {
         let g = gpio(r.port);
         let n = r.pin as usize;
         let out = g.moder().read().moder(n) == Moder::OUTPUT;
@@ -137,5 +182,5 @@ pub fn holds() -> bool {
             Action::InputPullUp => g.moder().read().moder(n) == Moder::INPUT && g.pupdr().read().pupdr(n) == Pupdr::PULL_UP,
             Action::LeaveUntouched => true,
         }
-    })
+    }
 }

@@ -771,6 +771,7 @@ impl P2 {
     /// (`FAULT`), and `SAFETY_STATE`, `FAULT_CODE`, `FAULT_FLAGS` and `FAULT_CLASS` are pushed to
     /// the owner (B8; on change). Called every pass.
     pub fn sync_faults(&mut self, chip: &mut Chip, now: u64) {
+        crate::fault::TX_OPEN.store(self.tx.state() != g7250_safety::tx::ArmState::Disarmed, core::sync::atomic::Ordering::Relaxed);
         let f = crate::fault::now();
         if f == self.regs.faults {
             return;

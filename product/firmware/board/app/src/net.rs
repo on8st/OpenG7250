@@ -47,6 +47,16 @@ fn flash_failures(server: &mut Server) {
     for c in 1..32u8 {
         if codes & (1 << c) != 0 {
             server.log.push(now, format_args!("fault {} entered (class {}): TX locked until reset, RX goes on", c, g7250_safety::fault::class_of(c)));
+            if c == g7250_safety::fault::code::TX_PATH_NOT_BLOCKED {
+                match crate::fault::detail() {
+                    Some(m) => match m.what {
+                        g7250_safety::txpath::Comparison::Configuration => server.log.push(now, format_args!("TX path not blocked: P{:?}{} configuration (mode or output register) not the safe state", m.port, m.pin)),
+                        g7250_safety::txpath::Comparison::PinLevel => server.log.push(now, format_args!("TX path not blocked: P{:?}{} pin level (input register) not the safe level", m.port, m.pin)),
+                        g7250_safety::txpath::Comparison::DacValue(ch) => server.log.push(now, format_args!("TX path not blocked: PA DAC channel {ch} value last written not 0")),
+                    },
+                    None => server.log.push(now, format_args!("safe state found not held (a non-TX-side safety pin); re-applied")),
+                }
+            }
         }
     }
 }

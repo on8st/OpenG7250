@@ -73,7 +73,9 @@ async fn watchdog(mut wd: IndependentWatchdog<'static, embassy_stm32::peripheral
     loop {
         // Not transmitting (TX is never armed in this build): the safe state must hold. If it
         // does not, put it back; the fault path comes with the safety core (F3).
-        if !safe::holds() {
+        // The TX-side pins are the TX path check's (tx_path task, A3.6b); the other safety pins
+        // here.
+        if !safe::holds_except_tx_path() {
             // A3.5: a TX path not blocked (drop event 13), class 2, latched until a reset; the
             // safe state is put back at once (HIS 85).
             safe::reassert();
@@ -228,6 +230,7 @@ async fn main(spawner: Spawner) {
     // task pump into the USART FIFO (0054: a blocking line costs about 5 ms).
     console::set_buffered(true);
     spawner.spawn(console_pump().unwrap());
+    spawner.spawn(tx_path().unwrap());
 
     let mut n: u64 = 0;
     loop {
@@ -281,6 +284,28 @@ pub fn safe_reset(mgmt: &mut mgmt_init::MgmtInit, factory: bool) -> ! {
 
 /// Moves buffered console output into the USART FIFO when the net loop does not (idle times).
 static CONSOLE_OUT: embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, ()> = embassy_sync::signal::Signal::new();
+
+/// The TX path check (A3.6b; 0066): every 5 ms while not armed and not keyed, the TX-side pins'
+/// configuration and input registers against the safe state; a mismatch over every check for
+/// 10 ms raises TX_PATH_NOT_BLOCKED (class 2), sets the safe state again, and stays in the fault.
+#[embassy_executor::task]
+async fn tx_path() {
+    use g7250_safety::txpath::{Check, PERIOD_MS};
+    let mut c = Check::new();
+    let mut t = Ticker::every(Duration::from_millis(PERIOD_MS));
+    loop {
+        let open = fault::TX_OPEN.load(core::sync::atomic::Ordering::Relaxed);
+        let seen = if open { None } else { safe::tx_path_mismatch() };
+        if let Some(m) = c.observe(Instant::now().as_millis(), open, seen) {
+            safe::reassert();
+            fault::set_detail(m);
+            if fault::raise(g7250_safety::fault::code::TX_PATH_NOT_BLOCKED) {
+                println!("app: FAULT TX path not blocked: P{:?}{} {:?}", m.port, m.pin, m.what);
+            }
+        }
+        t.next().await;
+    }
+}
 
 /// Waits for buffered output (the console's hook), then moves it into the USART FIFO; a timer
 /// only while bytes wait for FIFO room (16 bytes at 115 200 Bd take about 1.4 ms). No periodic

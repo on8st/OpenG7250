@@ -13,3 +13,4 @@ pub mod keypath;
 pub mod safe_state;
 pub mod supply;
 pub mod tx;
+pub mod txpath;
