@@ -63,10 +63,13 @@ PLL, VTOR, PRIMASK, caches, peripherals or interrupts left on, whether the IWDG
 already runs) is **not known**. New firmware must not assume reset values; the
 facts can only come from the radio (`90-needs-hardware.md`).
 
-- **AXI SRAM over a reset without power loss:** whether the content of AXI SRAM
-  at 0x2401FFE0–0x2401FFFF survives a reset without power loss (software reset,
-  watchdog reset), i.e. through the stage that runs before 0x08020000, is
-  **UNKNOWN**. Measurement in `90-needs-hardware.md`.
+- **AXI SRAM over a reset without power loss:** a system reset (software reset,
+  watchdog reset) does not clear SRAM: the hardware keeps AXI SRAM content
+  through it (ST RM0468, embedded SRAM). AXI SRAM has a 64-bit ECC word (ST
+  AN5342), so data kept over a reset must be written as whole, aligned 64-bit
+  words; a partial word can be lost. Whether the stage that runs before
+  0x08020000 writes AXI SRAM at 0x2401FFE0–0x2401FFFF is **not known**.
+  Measurement in `90-needs-hardware.md`.
 
 ## Image placement (platform constraint)
 - The bootloader occupies 0x08000000–0x0801FFFF and is not part of the

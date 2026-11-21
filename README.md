@@ -13,7 +13,7 @@ any part of this project.
 |---|---|---|---|---|
 | [`re/analysis/`](re/analysis/) | RE | — | Own RE work: decryption and Ghidra tooling, findings, memory map, protocol coverage | Present |
 | `re/emu/` | RE | `g7250-emu` | Emulator running the stock Main and Control firmware | Present; merged from `g7250-emu` (tag `emu-v1`) with history; adapted to the umbrella, data pin on `re/analysis`, A–E acceptance passes |
-| `his/` | Gate | `g7250-his` | Hardware-interface spec: hardware facts only | Cleared at `5292ba8` by gate review 8 ([re/analysis/docs/his-gate-review-8.md](re/analysis/docs/his-gate-review-8.md); earlier reviews 1–7 in the same folder); product side may read. Merged from `g7250-his` (tag `his-draft0`) with history |
+| `his/` | Gate | `g7250-his` | Hardware-interface spec: hardware facts only | Cleared at `0677c2d` by gate review 9 ([re/analysis/docs/his-gate-review-9.md](re/analysis/docs/his-gate-review-9.md); earlier reviews 1–8 in the same folder); product side may read. Merged from `g7250-his` (tag `his-draft0`) with history |
 | `product/spec/` | Product | `g7250-spec` | Network interface spec based on the public OpenHPSDR protocols; details in `product/spec/` | Present (skeleton); content follows in a separate PR |
 | `product/firmware/` | Product | `g7250-firmware` | New firmware, starting with a headless Main for AetherSDR | Later; never checked out in an RE work tree |
 | `testbench/` | Shared | — | Automated test framework and design of the HIL test bench | Planned in the tree; written from `product/spec/` and `his/` only |
