@@ -1847,9 +1847,11 @@ holds may be lost, and a P2 session may end by its watchdog (B5.6) and be restar
   ended, and from the update state (`UPDATE_STATUS`, `IDENTIFY`);
 - **during flash work** (0065), up to `t_erase_max`, the maximum 128 KiB sector erase time of
   the datasheet of the MCU fitted ([STM32H72x]; [HIS] HIS 10): the processor watchdog MUST NOT
-  expire, the RF control pins MUST hold their A3.6 levels, no FPGA bus cycle may be open (STB
-  PE9 and CMD PE8 low, [HIS] HIS 80; the firmware ends any cycle before it starts an erase or a
-  program), and after it the radio goes on as before. A3.10 has nothing to cover then, because
+  expire, the RF control pins MUST hold their A3.6 levels, no FPGA bus cycle may be open: while
+  the bus gate is closed ([HIS] HIS 80; 0042) the MCU drives none of PE0–PE10, which is the
+  required state (no strobe, no command; the levels are then the board's); once it is open,
+  STB (PE9) and CMD (PE8) are driven low, the firmware ending any cycle before it starts an
+  erase or a program, and after it the radio goes on as before. A3.10 has nothing to cover then, because
   flash work never overlaps an arm;
 - **flash work that fails** (0065): an erase or program that ends with an error flag, or does
   not end within 2 × `t_erase_max`, has failed. The operation is abandoned: a firmware update
@@ -3994,7 +3996,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
 | T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost; in each case `GET_STATS` `hp_rx` rises by exactly the number of packets sent (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 "High Priority bursts", Table B2-2; 0053, 0054, 0058). |
 | T-B5-21 | While armed: `SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET` (as a commanded reset, A1.9) and `SET_CALIBRATION` get status 50 or first unkey and disarm as their rules say, and no flash work starts while TX is armed or keyed; unarmed, a `SET_CONFIG` is answered only after its flash write has ended (emulator; B2.3 "Flash work"; 0055). |
-| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, STB and CMD stay low with no bus cycle open across an erase, and after it RX, discovery and the management channel go on (B2.3 "Flash work"; 0065). |
+| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run ("idle"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on (B2.3 "Flash work"; 0065). |
 
 ### Streams (B6)
 
