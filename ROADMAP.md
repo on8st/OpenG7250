@@ -12,7 +12,7 @@
 
 ## Open integration steps
 
-- Gate review of `his/` done: cleared at `d07627e` by gate review 7
+- Gate review of `his/` done: cleared at `5292ba8` by gate review 8
   (`re/analysis/docs/his-gate-review-5.md`; reviews 1–4 in the same
   folder). The product side may read `his/`. From now on every change to `his/`
   goes through the gate before the product side reads it.
