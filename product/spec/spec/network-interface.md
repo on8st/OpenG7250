@@ -1423,7 +1423,12 @@ A3.6b **TX path check** (0066). While TX is not armed and not keyed, the TX path
 blocked as A3.6 sets it, and the firmware MUST check that it is, at least every 5 ms. **Start** (0066 addendum): the
 first check MUST run no later than 100 ms after the boot stage's first instruction; between the
 safe-state set-up of the boot stage (0045) and the first check, no code writes the pins of
-Table A3-6b or their configuration. The check covers the TX-side outputs of
+Table A3-6b or their configuration. **During flash work** (B2.3; 0066 addendum) the 5 ms period
+does not apply, because a sector erase or program cannot be split: the firmware SHOULD sample the
+pins in the loop that waits for the operation (where it services the watchdog), and MUST run a
+check at once when the operation ends. A mismatch present at the end counts from the start of
+flash work or from its first sample in the loop, so it gives the fault no later than 20 ms
+after the operation ends. Flash work never overlaps an arm (0055). The check covers the TX-side outputs of
 A3.6 that [HIS] HIS 85 names with a known safe level (Table A3-6b) and compares two things with
 the safe state:
 
@@ -4037,7 +4042,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
 | T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost; in each case `GET_STATS` `hp_rx` rises by exactly the number of packets sent (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 "High Priority bursts", Table B2-2; 0053, 0054, 0058). |
 | T-B5-21 | While armed: `SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET` (as a commanded reset, A1.9) and `SET_CALIBRATION` get status 50 or first unkey and disarm as their rules say, and no flash work starts while TX is armed or keyed; unarmed, a `SET_CONFIG` is answered only after its flash write has ended (emulator; B2.3 "Flash work"; 0055). |
-| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run ("idle"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on (B2.3 "Flash work"; 0065). |
+| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run ("idle"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on; a pin of Table A3-6b forced to the other level during a stretched erase gives `TX_PATH_NOT_BLOCKED` no later than 20 ms after the erase ends, and one forced and released within the erase gives no fault unless the firmware's samples in its wait loop saw it for 10 ms (B2.3 "Flash work"; A3.6b; 0065, 0066). |
 
 ### Streams (B6)
 
