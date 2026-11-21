@@ -463,7 +463,15 @@ namespace Antmicro.Renode.Peripherals.SPI
                 // keep the order of arrival
                 if(pending.Count > 0) target = Math.Max(target, LastTarget());
                 if(target <= now && pending.Count == 0) { }
-                else { pending.Enqueue(Tuple.Create(target, p, shift, wall)); ArmPace(); return; }
+                else
+                {
+                    pending.Enqueue(Tuple.Create(target, p, shift, wall));
+                    // the timer only from the emulation thread (this is the bridge's thread;
+                    // arming it here while the emulation's pace callback waits for paceSync
+                    // deadlocks)
+                    machine.LocalTimeSource.ExecuteInNearestSyncedState(ts => { lock(paceSync) ArmPace(); });
+                    return;
+                }
             }
             Deliver(p, shift, wall);
         }
