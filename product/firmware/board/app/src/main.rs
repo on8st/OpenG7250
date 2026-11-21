@@ -15,7 +15,18 @@ use embassy_time::{Duration, Instant, Ticker, Timer};
 use g7250_board::{FW_BETA, FW_BUILD, FW_MAJOR, FW_MINOR, FW_VERSION, console, early_init, println, reset, safe, wdg};
 use g7250_layout::header::{self, Header, Kind};
 use g7250_layout::{Range, Slot};
+use g7250_safety::tx::{MEASURED, RfActuator, TxCore};
 
+/// The radio side of an unkey: back to the safe state ([HIS] HIS 85). This build has no key
+/// path at all (no `KeyPermit` can exist, `g7250_safety::tx`), so unkey is only ever the safe
+/// state again.
+pub struct BoardRf;
+
+impl RfActuator for BoardRf {
+    fn unkey(&mut self) {
+        safe::reassert();
+    }
+}
 
 #[cfg(not(feature = "slot-b"))]
 const SLOT: Slot = Slot::A;
@@ -105,11 +116,21 @@ async fn main(spawner: Spawner) {
         // 0007 sub-decision 5 "Entry": a watchdog reset seen at start-up is a fault.
         println!("app: FAULT watchdog reset seen at start-up");
     }
+    // Transmit gate (F3). The boot counter of B10.2 item 5 needs the configuration store, which
+    // does not exist yet; with no calibration the core can never arm, so 0 is safe here.
+    let tx = TxCore::new(0, &MEASURED);
     println!(
-        "app: safe state {}; TX disabled; ATU bypass; watchdog {} ms",
+        "app: safe state {}; TX {} (record tx bit 1 = {}, bit 4 = {}); ATU bypass; watchdog {} ms",
         if safe::holds() { "held" } else { "NOT HELD" },
+        if tx.calibrated() { "calibrated" } else { "NOT_CALIBRATED: every TX request is rejected" },
+        tx.record_tx_bit1() as u8,
+        tx.record_tx_bit4() as u8,
         wdg::TIMEOUT_MS
     );
+    if tx.calibrated() {
+        // Unreachable in this build; a calibrated build must not start without a review.
+        panic!("calibrated build without a reviewed key path");
+    }
 
     spawner.spawn(watchdog(wd).unwrap());
 
