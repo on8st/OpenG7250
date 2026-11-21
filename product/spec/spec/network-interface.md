@@ -660,6 +660,24 @@ change under A1.11a (0035).
   power-on, then the RFC 3927 probe and announce on the link-local address ([RFC3927] section
   9: about 7 s at most), then the sockets. The time from power-on to link up (boot and
   auto-negotiation) is not part of this bound.
+- **Link-local address** (0049). The G7250 chooses, probes and announces its link-local
+  address as [RFC3927] section 2. Only socket 0 can work in MACRAW ([CH394]), and no socket is
+  free (0008, 0017), so:
+  - the probe and announce run on socket 0 in MACRAW, at start-up before the P2 and
+    management sockets open, and again whenever a link-local address is chosen while running
+    (after the end of a lease, a DHCPNAK or a conflict, each an address change of A1.11a that
+    ends the session). During such a probe, at most 10 s, discovery (port 1024, socket 0) and
+    the other sockets are closed;
+  - the DHCP attempts and the probe run one after the other, as the start-up bound assumes;
+  - defence is [RFC3927] section 2.5 option (a): on a conflict ([CH394] GINT IP_CONFLI) the
+    G7250 gives the address up at once, without a defending ARP, chooses a new one and probes
+    it; after 10 conflicts it waits 60 s before the next probe ([RFC3927] section 9,
+    MAX_CONFLICTS, RATE_LIMIT_INTERVAL). Every conflict is logged.
+- **Conflict on a DHCP or static address** (0049). A conflict on a leased address: the G7250
+  sends DHCPDECLINE ([RFC2131] section 3.1 item 5), uses a link-local address and starts DHCP
+  again. A conflict on a static address: fall back to the previous configuration and log it
+  (A1.6 C-4); if there is none, or it conflicts too, use a link-local address. Each is an
+  address change of A1.11a.
 - **Bound on a borrow** (0041). One borrow MUST last at most 2 s, so that a host's
   retransmission of A1.4 (every 500 ms, up to 5 times) still reaches the management channel
   after it; an exchange not finished in 2 s is abandoned and retried at the next interval, so
@@ -3590,6 +3608,10 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
 | T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
 | T-A1-69 | From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 15 s, from the link-local address (reference model or emulator; A1.11 "Bound on start-up"; 0048). |
+| T-A1-70 | At start-up with no DHCP server: the radio sends the RFC 3927 probes for its chosen link-local address with the section 9 timing before it answers discovery; an ARP reply claiming that address during the probe makes it choose another and probe again (reference model or emulator; A1.11; 0049). |
+| T-A1-71 | After a successful probe the radio sends the RFC 3927 announcements, and only then answers discovery and `IDENTIFY` on the link-local address, within the start-up bound (A1.11; 0048, 0049). |
+| T-A1-72 | While running on a link-local address, a conflict (IP_CONFLI) makes the radio give the address up at once without a defending ARP, end the session as an address change (A1.11a), probe a new address with discovery and management closed for at most 10 s, and log the conflict; after 10 conflicts it waits 60 s before the next probe (A1.11; 0049). |
+| T-A1-73 | A conflict on a DHCP-leased address sends DHCPDECLINE, moves to link-local and restarts DHCP; a conflict on a static address falls back to the previous configuration (C-4), or to link-local if there is none; each is logged (A1.6 C-4, A1.11; 0049). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |

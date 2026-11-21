@@ -78,8 +78,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0046 | CW keyer timing: unit 1200/S ms, weight as mark/space shift, Curtis iambic A/B, strict spacing, tolerance | proposed |
 | 0047 | Unkey reason 11 when an ATU tune cycle ends by itself; abort gives 1 | proposed |
 | 0048 | Sockets open within 5 s (DHCP) or 15 s (no DHCP) of link up | proposed |
+| 0049 | Link-local probe on socket 0 (MACRAW), defence by giving the address up; conflicts on DHCP/static addresses | proposed |
 
-All numbers 0001–0048 are now in use.
+All numbers 0001–0049 are now in use.
 
 ## Open questions for ON8ST
 
