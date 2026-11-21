@@ -3,8 +3,11 @@
 //! Application of the G7250 main firmware, started by the boot stage from slot A or B.
 //!
 //! Milestone F1: safe state first, clocks on HSI, console banner, watchdog.
+//! Milestone F2: CH394 on SPI6, IP configuration, discovery (`net`).
 #![no_std]
 #![no_main]
+
+mod net;
 
 use embassy_executor::Spawner;
 use embassy_stm32::wdg::IndependentWatchdog;
@@ -109,6 +112,10 @@ async fn main(spawner: Spawner) {
     );
 
     spawner.spawn(watchdog(wd).unwrap());
+
+    let id = g7250_proto::discovery::Identity { mac: [0; 6], fw_major: FW_MAJOR, fw_minor: FW_MINOR, beta: FW_BETA, num_ddc: 1 };
+    let pins = net::NetPins { spi: p.SPI6, sck: p.PG13, mosi: p.PG14, miso: p.PG12, cs: p.PG15, rst: p.PB5 };
+    spawner.spawn(net::run(pins, id).unwrap());
 
     loop {
         Timer::after_secs(10).await;

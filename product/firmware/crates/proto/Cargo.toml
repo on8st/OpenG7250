@@ -1,0 +1,10 @@
+[package]
+name = "g7250-proto"
+description = "Protocol code of the G7250 main firmware: G7250-P2 discovery, network configuration, DHCP, rate limits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]

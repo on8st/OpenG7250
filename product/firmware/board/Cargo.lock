@@ -543,8 +543,11 @@ dependencies = [
  "embassy-stm32",
  "embassy-sync",
  "embassy-time",
+ "embedded-hal 1.0.0",
  "g7250-board",
+ "g7250-ch394",
  "g7250-layout",
+ "g7250-proto",
  "g7250-safety",
  "heapless",
 ]
@@ -570,11 +573,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "g7250-ch394"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+]
+
+[[package]]
 name = "g7250-layout"
 version = "0.1.0"
 dependencies = [
  "embedded-hal 1.0.0",
 ]
+
+[[package]]
+name = "g7250-proto"
+version = "0.1.0"
 
 [[package]]
 name = "g7250-safety"

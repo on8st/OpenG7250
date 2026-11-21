@@ -1,0 +1,11 @@
+[package]
+name = "g7250-ch394"
+description = "WCH CH394 (W5500-compatible) Ethernet controller driver, UDP mode, for the G7250 main firmware"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+embedded-hal = { workspace = true }

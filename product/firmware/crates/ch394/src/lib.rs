@@ -1,0 +1,324 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 ON8ST
+//! Driver for the WCH CH394 Ethernet controller of the G7250 Main, in UDP mode.
+//!
+//! Sources: [HIS] HIS 40 (`9d10e72`): CH394 on SPI6, mode 0, 8-bit, MSB first, CS# PG15, RST#
+//! PB5, INT# PC13; "W5500-register-compatible, per its datasheet"; the CH394 holds the MAC
+//! address in its own register set. Register addresses, frame format and socket commands: the
+//! public WIZnet W5500 datasheet (V1.0.x, sections 2.2 "SPI frame", 3 "Register and memory
+//! organization", 4 "Register descriptions"), which the CH394 datasheet declares compatible.
+//! Points where the CH394 may differ are marked `CH394?` and listed in the HIS questions.
+//!
+//! Generic over a blocking `embedded_hal::spi::SpiDevice` (the device owns CS#), so the protocol
+//! is tested on the host against a register model (`tests/model.rs`).
+#![cfg_attr(not(test), no_std)]
+
+use embedded_hal::spi::{Operation, SpiDevice};
+
+/// Block select bits of the control byte (W5500 section 2.2.2).
+pub mod bsb {
+    pub const COMMON: u8 = 0b00000;
+    pub const fn sock_reg(n: u8) -> u8 {
+        n * 4 + 1
+    }
+    pub const fn sock_tx(n: u8) -> u8 {
+        n * 4 + 2
+    }
+    pub const fn sock_rx(n: u8) -> u8 {
+        n * 4 + 3
+    }
+}
+
+/// Common registers (W5500 section 4.1).
+pub mod common {
+    pub const MR: u16 = 0x0000;
+    pub const GAR: u16 = 0x0001;
+    pub const SUBR: u16 = 0x0005;
+    pub const SHAR: u16 = 0x0009;
+    pub const SIPR: u16 = 0x000F;
+    pub const IR: u16 = 0x0015;
+    pub const RTR: u16 = 0x0019;
+    pub const RCR: u16 = 0x001B;
+    pub const PHYCFGR: u16 = 0x002E;
+    pub const VERSIONR: u16 = 0x0039;
+    /// IR bit 7: IP conflict (spec A1.6 C-4, A1.11a: "GINT IP_CONFLI").
+    pub const IR_CONFLICT: u8 = 0x80;
+}
+
+/// Socket registers (W5500 section 4.2).
+pub mod sock {
+    pub const MR: u16 = 0x0000;
+    pub const CR: u16 = 0x0001;
+    pub const IR: u16 = 0x0002;
+    pub const SR: u16 = 0x0003;
+    pub const PORT: u16 = 0x0004;
+    pub const DIPR: u16 = 0x000C;
+    pub const DPORT: u16 = 0x0010;
+    pub const RXBUF_SIZE: u16 = 0x001E;
+    pub const TXBUF_SIZE: u16 = 0x001F;
+    pub const TX_FSR: u16 = 0x0020;
+    pub const TX_WR: u16 = 0x0024;
+    pub const RX_RSR: u16 = 0x0026;
+    pub const RX_RD: u16 = 0x0028;
+
+    pub const MR_UDP: u8 = 0x02;
+    pub const CR_OPEN: u8 = 0x01;
+    pub const CR_CLOSE: u8 = 0x10;
+    pub const CR_SEND: u8 = 0x20;
+    pub const CR_RECV: u8 = 0x40;
+    pub const SR_CLOSED: u8 = 0x00;
+    pub const SR_UDP: u8 = 0x22;
+    pub const IR_SENDOK: u8 = 0x10;
+    pub const IR_TIMEOUT: u8 = 0x08;
+}
+
+/// Number of hardware sockets (spec B2.3: "all 8 CH394Q sockets").
+pub const SOCKETS: u8 = 8;
+/// UDP receive header in the socket RX buffer: source IP (4), source port (2), length (2).
+pub const UDP_HDR: usize = 8;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error<E> {
+    Spi(E),
+    /// The chip did not answer as expected (version register, or a socket did not open).
+    NoChip(u8),
+    SocketState(u8),
+    /// The datagram does not fit into the free TX buffer, or is larger than a TX buffer.
+    TooLarge,
+    /// SEND ended with a timeout (ARP for the destination failed).
+    SendTimeout,
+    /// Polling a command or flag gave up.
+    Stuck,
+}
+
+/// Link state from PHYCFGR (W5500 section 4.1: bit 0 LNK, bit 1 SPD 100, bit 2 DPX full).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Link {
+    pub up: bool,
+    pub mbit_100: bool,
+    pub full_duplex: bool,
+}
+
+impl Link {
+    pub fn from_phycfgr(v: u8) -> Self {
+        Self { up: v & 1 != 0, mbit_100: v & 2 != 0, full_duplex: v & 4 != 0 }
+    }
+    /// Speed in Mbit/s for `LINK_STATUS` [15:0] (B8, Table B8-2); 0 = link down.
+    pub fn speed(&self) -> u16 {
+        match (self.up, self.mbit_100) {
+            (false, _) => 0,
+            (true, true) => 100,
+            (true, false) => 10,
+        }
+    }
+}
+
+/// A received datagram's header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Datagram {
+    pub src_ip: [u8; 4],
+    pub src_port: u16,
+    /// Bytes copied into the caller's buffer.
+    pub len: usize,
+    /// Bytes of the datagram that did not fit and were dropped.
+    pub truncated: usize,
+}
+
+/// The value the version register holds on a W5500 (W5500 section 4.1, VERSIONR = 0x04).
+/// CH394? The CH394's value is not in the HIS; the driver accepts any value except the ones an
+/// absent or held-in-reset chip reads (0x00, 0xFF).
+pub const W5500_VERSION: u8 = 0x04;
+
+pub struct Ch394<S> {
+    spi: S,
+    /// Socket buffer size in KiB per socket, RX and TX (default 2 KiB each, W5500 section 4.2).
+    buf_kib: [u8; SOCKETS as usize],
+    /// Bound on polling loops (each iteration one SPI transaction).
+    pub poll_limit: u32,
+}
+
+impl<S: SpiDevice> Ch394<S> {
+    pub fn new(spi: S) -> Self {
+        Self { spi, buf_kib: [2; SOCKETS as usize], poll_limit: 100_000 }
+    }
+
+    pub fn release(self) -> S {
+        self.spi
+    }
+
+    fn ctrl(block: u8, write: bool) -> u8 {
+        (block << 3) | ((write as u8) << 2) // OM = 00, variable data length mode
+    }
+
+    pub fn read(&mut self, block: u8, addr: u16, buf: &mut [u8]) -> Result<(), Error<S::Error>> {
+        let h = [(addr >> 8) as u8, addr as u8, Self::ctrl(block, false)];
+        self.spi.transaction(&mut [Operation::Write(&h), Operation::Read(buf)]).map_err(Error::Spi)
+    }
+
+    pub fn write(&mut self, block: u8, addr: u16, data: &[u8]) -> Result<(), Error<S::Error>> {
+        let h = [(addr >> 8) as u8, addr as u8, Self::ctrl(block, true)];
+        self.spi.transaction(&mut [Operation::Write(&h), Operation::Write(data)]).map_err(Error::Spi)
+    }
+
+    pub fn read_u8(&mut self, block: u8, addr: u16) -> Result<u8, Error<S::Error>> {
+        let mut b = [0u8; 1];
+        self.read(block, addr, &mut b)?;
+        Ok(b[0])
+    }
+
+    /// 16-bit counters change while being read; read until two reads agree (W5500 section 4.2,
+    /// Sn_TX_FSR and Sn_RX_RSR notes).
+    pub fn read_u16_stable(&mut self, block: u8, addr: u16) -> Result<u16, Error<S::Error>> {
+        let mut prev = self.read_u16(block, addr)?;
+        for _ in 0..self.poll_limit {
+            let v = self.read_u16(block, addr)?;
+            if v == prev {
+                return Ok(v);
+            }
+            prev = v;
+        }
+        Err(Error::Stuck)
+    }
+
+    pub fn read_u16(&mut self, block: u8, addr: u16) -> Result<u16, Error<S::Error>> {
+        let mut b = [0u8; 2];
+        self.read(block, addr, &mut b)?;
+        Ok(u16::from_be_bytes(b))
+    }
+
+    /// Check that a chip answers; returns the version register.
+    pub fn probe(&mut self) -> Result<u8, Error<S::Error>> {
+        let v = self.read_u8(bsb::COMMON, common::VERSIONR)?;
+        if v == 0x00 || v == 0xFF { Err(Error::NoChip(v)) } else { Ok(v) }
+    }
+
+    /// The MAC address the chip holds (HIS 40: provided by the CH394 in its own register set;
+    /// the firmware does not write it).
+    pub fn mac(&mut self) -> Result<[u8; 6], Error<S::Error>> {
+        let mut m = [0u8; 6];
+        self.read(bsb::COMMON, common::SHAR, &mut m)?;
+        Ok(m)
+    }
+
+    pub fn link(&mut self) -> Result<Link, Error<S::Error>> {
+        Ok(Link::from_phycfgr(self.read_u8(bsb::COMMON, common::PHYCFGR)?))
+    }
+
+    /// Set the address, netmask and gateway (C-1, A1.6).
+    pub fn set_ip(&mut self, ip: [u8; 4], mask: [u8; 4], gw: [u8; 4]) -> Result<(), Error<S::Error>> {
+        self.write(bsb::COMMON, common::GAR, &gw)?;
+        self.write(bsb::COMMON, common::SUBR, &mask)?;
+        self.write(bsb::COMMON, common::SIPR, &ip)
+    }
+
+    /// Read and clear the common interrupt flags; returns them.
+    pub fn take_irq(&mut self) -> Result<u8, Error<S::Error>> {
+        let v = self.read_u8(bsb::COMMON, common::IR)?;
+        if v != 0 {
+            self.write(bsb::COMMON, common::IR, &[v])?;
+        }
+        Ok(v)
+    }
+
+    /// Set the RX and TX buffer size of every socket, in KiB (powers of two; total 16 per
+    /// direction, W5500 section 4.2). The split is TBD in the spec (B2.3, HIS-14).
+    pub fn set_buffers(&mut self, kib: [u8; SOCKETS as usize]) -> Result<(), Error<S::Error>> {
+        let total: u32 = kib.iter().map(|&k| k as u32).sum();
+        if total > 16 || kib.iter().any(|&k| !matches!(k, 0 | 1 | 2 | 4 | 8 | 16)) {
+            return Err(Error::TooLarge);
+        }
+        for n in 0..SOCKETS {
+            self.write(bsb::sock_reg(n), sock::RXBUF_SIZE, &[kib[n as usize]])?;
+            self.write(bsb::sock_reg(n), sock::TXBUF_SIZE, &[kib[n as usize]])?;
+        }
+        self.buf_kib = kib;
+        Ok(())
+    }
+
+    fn command(&mut self, n: u8, cmd: u8) -> Result<(), Error<S::Error>> {
+        self.write(bsb::sock_reg(n), sock::CR, &[cmd])?;
+        // The command register reads 0 when the command has been taken (W5500 section 4.2).
+        for _ in 0..self.poll_limit {
+            if self.read_u8(bsb::sock_reg(n), sock::CR)? == 0 {
+                return Ok(());
+            }
+        }
+        Err(Error::Stuck)
+    }
+
+    /// Open socket `n` as UDP on local `port`. Broadcast reception stays enabled (needed for
+    /// discovery to 255.255.255.255 and to the directed broadcast, B3.2).
+    pub fn udp_open(&mut self, n: u8, port: u16) -> Result<(), Error<S::Error>> {
+        self.udp_close(n)?;
+        self.write(bsb::sock_reg(n), sock::MR, &[sock::MR_UDP])?;
+        self.write(bsb::sock_reg(n), sock::PORT, &port.to_be_bytes())?;
+        self.command(n, sock::CR_OPEN)?;
+        let sr = self.read_u8(bsb::sock_reg(n), sock::SR)?;
+        if sr != sock::SR_UDP {
+            return Err(Error::SocketState(sr));
+        }
+        Ok(())
+    }
+
+    pub fn udp_close(&mut self, n: u8) -> Result<(), Error<S::Error>> {
+        self.command(n, sock::CR_CLOSE)?;
+        self.write(bsb::sock_reg(n), sock::IR, &[0xFF])
+    }
+
+    /// Receive one datagram from socket `n` into `buf`, if one is waiting.
+    pub fn udp_recv(&mut self, n: u8, buf: &mut [u8]) -> Result<Option<Datagram>, Error<S::Error>> {
+        let avail = self.read_u16_stable(bsb::sock_reg(n), sock::RX_RSR)? as usize;
+        if avail < UDP_HDR {
+            return Ok(None);
+        }
+        let rd = self.read_u16(bsb::sock_reg(n), sock::RX_RD)?;
+        let mut h = [0u8; UDP_HDR];
+        self.read(bsb::sock_rx(n), rd, &mut h)?;
+        let len = u16::from_be_bytes([h[6], h[7]]) as usize;
+        let take = len.min(buf.len());
+        // The RX buffer address wraps at 16 bits; the chip maps it onto the socket buffer.
+        let data_at = rd.wrapping_add(UDP_HDR as u16);
+        if take > 0 {
+            self.read(bsb::sock_rx(n), data_at, &mut buf[..take])?;
+        }
+        let new_rd = data_at.wrapping_add(len as u16);
+        self.write(bsb::sock_reg(n), sock::RX_RD, &new_rd.to_be_bytes())?;
+        self.command(n, sock::CR_RECV)?;
+        Ok(Some(Datagram {
+            src_ip: [h[0], h[1], h[2], h[3]],
+            src_port: u16::from_be_bytes([h[4], h[5]]),
+            len: take,
+            truncated: len - take,
+        }))
+    }
+
+    /// Send one datagram from socket `n`. Waits for SEND_OK or TIMEOUT.
+    pub fn udp_send(&mut self, n: u8, ip: [u8; 4], port: u16, data: &[u8]) -> Result<(), Error<S::Error>> {
+        let cap = self.buf_kib[n as usize] as usize * 1024;
+        if data.len() > cap {
+            return Err(Error::TooLarge);
+        }
+        let free = self.read_u16_stable(bsb::sock_reg(n), sock::TX_FSR)? as usize;
+        if data.len() > free {
+            return Err(Error::TooLarge);
+        }
+        self.write(bsb::sock_reg(n), sock::DIPR, &ip)?;
+        self.write(bsb::sock_reg(n), sock::DPORT, &port.to_be_bytes())?;
+        let wr = self.read_u16(bsb::sock_reg(n), sock::TX_WR)?;
+        self.write(bsb::sock_tx(n), wr, data)?;
+        self.write(bsb::sock_reg(n), sock::TX_WR, &wr.wrapping_add(data.len() as u16).to_be_bytes())?;
+        self.command(n, sock::CR_SEND)?;
+        for _ in 0..self.poll_limit {
+            let ir = self.read_u8(bsb::sock_reg(n), sock::IR)?;
+            if ir & sock::IR_SENDOK != 0 {
+                self.write(bsb::sock_reg(n), sock::IR, &[sock::IR_SENDOK])?;
+                return Ok(());
+            }
+            if ir & sock::IR_TIMEOUT != 0 {
+                self.write(bsb::sock_reg(n), sock::IR, &[sock::IR_TIMEOUT])?;
+                return Err(Error::SendTimeout);
+            }
+        }
+        Err(Error::Stuck)
+    }
+}
