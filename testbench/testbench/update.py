@@ -65,6 +65,9 @@ class Updater:
 
     def __init__(self, c: Mgmt, secret: bytes):
         self.c, self.s = c, secret
+        # a host keeps under the reply cap of A1.10 S4 (20 per second per source); every
+        # authenticated command is two datagrams (GET_CHALLENGE and the request)
+        c.pace = 18
 
     def req(self, cmd: str, payload: bytes = b""):
         return self.c.authed(cmd, self.s, payload)

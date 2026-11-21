@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "90097d9",
-  "sha256_of_inputs": "6e6344f11a101be96f6a65a7ac995017e05ac0c2e82a5ac6b03854423e279680"
+  "commit": "319089f",
+  "sha256_of_inputs": "3f1b4e8dde9041ee9ef875ef06e77cb23667b2429be78c2b4a0001c30812c7d9"
  },
  "his": {
   "commit": "72591aa"
@@ -159,6 +159,11 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ],
+   "covers": [
+    "UP-06",
+    "UP-07 (in part: 'each step of an update')",
+    "ST-06b (in part: the other slot after a power cut)"
    ]
   },
   {
@@ -175,7 +180,10 @@
    "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "covers": [
+    "UP-05a (a trial without confirmation rolls back and logs it)"
+   ]
   },
   {
    "id": "T-A1-10",
@@ -415,7 +423,10 @@
    "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "covers": [
+    "UP-03 (run request: reason 10; register write: BUSY)"
+   ]
   },
   {
    "id": "T-A1-24",
@@ -436,6 +447,9 @@
    "tx_part": true,
    "notes": [
     "the RX and MAINTENANCE parts run on the emulator once trial boot is observable; 'accepted after confirmation' needs TX unlocked"
+   ],
+   "covers": [
+    "UP-04"
    ]
   },
   {
@@ -491,7 +505,10 @@
    "needs": [],
    "pending": [],
    "tx_part": true,
-   "notes": []
+   "notes": [],
+   "covers": [
+    "UP-10 (in part: refused armed, accepted unarmed)"
+   ]
   },
   {
    "id": "T-A1-28",
@@ -626,6 +643,9 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ],
+   "covers": [
+    "UP-09"
    ]
   },
   {
@@ -765,6 +785,9 @@
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ],
+   "covers": [
+    "UP-03 (an arm and UPDATE_BEGIN serialise)"
    ]
   },
   {
@@ -885,6 +908,9 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ],
+   "covers": [
+    "UP-09 (after UPDATE_ABORT and after VERIFY without ACTIVATE)"
    ]
   },
   {
@@ -1152,6 +1178,9 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ],
+   "covers": [
+    "UP-02 (the own-image install through the management commands)"
    ]
   },
   {
@@ -1175,6 +1204,9 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ],
+   "covers": [
+    "ST-06b (in part: a block or image that does not verify gets 53 or 55)"
    ]
   },
   {
@@ -1366,6 +1398,11 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ],
+   "covers": [
+    "UP-01 (63 for the running slot)",
+    "UP-02 (the full update and the trial)",
+    "UP-08 (write failure, status 55)"
    ]
   },
   {
@@ -1390,6 +1427,10 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ],
+   "covers": [
+    "UP-05 (network down: rollback after 60 s)",
+    "UP-05a (reset before confirming)"
    ]
   },
   {
@@ -1587,6 +1628,9 @@
    "tx_part": false,
    "notes": [
     "needs the update client (Table M-4 package) in the bench and the slot layout; flash.log v1.8"
+   ],
+   "covers": [
+    "UP-02 (flash.log: sectors 6 and 7 only as store writes)"
    ]
   },
   {
@@ -1609,6 +1653,9 @@
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
     "needs the update client (Table M-4 package) in the bench and the slot size of the firmware layout"
+   ],
+   "covers": [
+    "UP-01 (63 whatever the length)"
    ]
   },
   {
@@ -1627,6 +1674,51 @@
    "pending": [],
    "tx_part": false,
    "notes": []
+  },
+  {
+   "id": "T-A1-80",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "With no transfer in progress (after a restart, after `UPDATE_ABORT`, and after an activation): `UPDATE_BLOCK` gets 54, also with a bad CRC; `UPDATE_VERIFY` and `UPDATE_ACTIVATE` get 55; nothing is written and `UPDATE_STATUS` stays idle; with a malformed payload the reply is 17 (reference model or emulator; A1.8 \"No transfer in progress\"; 0063).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ],
+   "covers": [
+    "UP-02 (no transfer after an activation)"
+   ]
+  },
+  {
+   "id": "T-A1-81",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "`UPDATE_BEGIN` with a wrong magic, or with header version 2, gets 17 and nothing changes; with a readable header and component 2 it gets 56; with component 2 and the wrong hardware id, 51 (order 51, 56, 63, 61, 52) (reference model or emulator; A1.8 \"Unreadable or unsupported header\"; 0063).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
   },
   {
    "id": "T-A2-01",
@@ -5443,7 +5535,10 @@
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "covers": [
+    "UP-03 (a non-owner's register write: BUSY)"
+   ]
   },
   {
    "id": "T-B8-11",

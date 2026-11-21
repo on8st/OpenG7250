@@ -83,7 +83,16 @@ class Mgmt:
     def __exit__(self, *a):
         self.close()
 
+    pace = 0  # requests per second at most from this socket (0 = unpaced; A1.10 S4 caps at 20)
+
     def raw(self, data: bytes, timeout: float = 0.5, kind: str = "unicast") -> list[dict]:
+        if self.pace:
+            sent = self.__dict__.setdefault("_sent", [])
+            now = time.monotonic()
+            sent[:] = [t for t in sent if now - t < 1.0]
+            if len(sent) >= self.pace:
+                time.sleep(max(0.0, 1.0 - (now - sent[0])) + 0.005)
+            sent.append(time.monotonic())
         self.s.sendto(data, self.net.dest(7251, kind))
         got, end = [], time.monotonic() + timeout
         while (left := end - time.monotonic()) > 0:

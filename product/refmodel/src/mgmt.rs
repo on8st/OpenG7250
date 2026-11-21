@@ -624,11 +624,11 @@ impl Mgmt {
     fn update_begin(&mut self, r: &mut Radio, p: &[u8], out: &mut Vec<Tx>) -> (u16, Vec<u8>, Option<&'static str>) {
         let flags = p[0];
         let h = &p[1..];
-        if be32(h, 0) != PK_MAGIC || h[4] != 1 || h[5] != 1 {
-            return (st::MALFORMED, vec![], None);
-        }
         if be16(h, 6) != HW_ID {
             return (st::WRONG_HARDWARE, vec![], None);
+        }
+        if h[5] != 1 {
+            return (st::NOT_SUPPORTED, vec![], None); // a component this version does not know (0063)
         }
         if flags & 1 != 0 {
             return (st::NOT_SUPPORTED, vec![], None); // F1 gate closed (P-SYS-5), A1.8a "Gate"
@@ -853,7 +853,8 @@ fn payload_malformed(cmd: u16, p: &[u8]) -> bool {
     match cmd {
         SET_FIRST_SECRET | CHANGE_SECRET => p.len() != 32,
         SWITCH_LEVEL => p.len() != 1,
-        UPDATE_BEGIN => p.len() != 1 + 53,
+        // 0063: a header that cannot be read (wrong magic, header version not 1) is 17 as well
+        UPDATE_BEGIN => p.len() != 1 + 53 || be32(p, 1) != PK_MAGIC || p[5] != 1,
         UPDATE_BLOCK => p.len() < 8 || p.len() > 8 + BLOCK,
         UPDATE_ACTIVATE => p.len() != 1,
         SET_CALIBRATION => !cal_structure_ok(p),

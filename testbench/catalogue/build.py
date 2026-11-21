@@ -332,6 +332,52 @@ def git(*args: str) -> str:
         return "unknown"
 
 
+# The firmware's emulator run sheet (Store ST-, Update UP-), as relayed by openg7250 with the
+# stimulus only (the bench does not read product/firmware/): which spec tests judge the same
+# situation. "covers" on a test lists the run-sheet ids it judges; UNCOVERED lists those no spec
+# test covers, with the clause that should, for the spec session.
+COVERS: dict[str, list[str]] = {
+    "T-A1-67": ["UP-01 (63 for the running slot)", "UP-02 (the full update and the trial)", "UP-08 (write failure, status 55)"],
+    "T-A1-78": ["UP-01 (63 whatever the length)"],
+    "T-A1-58": ["UP-02 (the own-image install through the management commands)"],
+    "T-A1-77": ["UP-02 (flash.log: sectors 6 and 7 only as store writes)"],
+    "T-A1-80": ["UP-02 (no transfer after an activation)"],
+    "T-A1-23": ["UP-03 (run request: reason 10; register write: BUSY)"],
+    "T-B8-10": ["UP-03 (a non-owner's register write: BUSY)"],
+    "T-A1-40": ["UP-03 (an arm and UPDATE_BEGIN serialise)"],
+    "T-A1-24": ["UP-04"],
+    "T-A1-68": ["UP-05 (network down: rollback after 60 s)", "UP-05a (reset before confirming)"],
+    "T-A1-09": ["UP-05a (a trial without confirmation rolls back and logs it)"],
+    "T-A1-08": ["UP-06", "UP-07 (in part: 'each step of an update')", "ST-06b (in part: the other slot after a power cut)"],
+    "T-A1-34": ["UP-09"],
+    "T-A1-46": ["UP-09 (after UPDATE_ABORT and after VERIFY without ACTIVATE)"],
+    "T-A1-27": ["UP-10 (in part: refused armed, accepted unarmed)"],
+    "T-A1-59": ["ST-06b (in part: a block or image that does not verify gets 53 or 55)"],
+}
+UNCOVERED = [
+    ("UP-03", "CAP_REQUEST still answered during an update, and an arm after UPDATE_BEGIN rejected with MAINTENANCE: "
+              "A1.8 first item (0022 §10) says both; no test asserts them (T-A1-23 could)"),
+    ("UP-05", "the trial with a class 2 fault: A1.8 self-confirmation (0044) needs 'no class 2 fault'; T-A1-68 covers "
+              "the network-down case only"),
+    ("UP-07", "a power cut during the boot stage's trial-attempt write or the self-confirmation write: A1.8 U-5, U-6 "
+              "and 0044; T-A1-08 says 'each step of an update' without naming these two writes"),
+    ("UP-10", "what ROLLBACK does: A1.8 and Table M-1 give only its status rules and an empty reply; which image it "
+              "starts, its precondition (a good other slot), the log and the reset are not specified"),
+    ("ST-01", "a sector erase at the datasheet maximum: B2.3 'Flash work' (0055) and A3.10 (safety timing under load) "
+              "allow the stall but no test checks that the processor watchdog and the safety timing hold through it"),
+    ("ST-02", "an erase that never ends (beyond 10 s): none; the spec says nothing on a flash operation that does not "
+              "finish"),
+    ("ST-03", "a power cut during the erase of the other store sector: A1.6 (stored with a version and a check value, "
+              "survives a restart) and 0061 (sectors used in turn, a compaction never erases the only copy); no test"),
+    ("ST-04", "a power cut after each flash word of a store write (copy, commit): A1.6 and 0061 as ST-03; no test"),
+    ("ST-05", "the bus during a long erase: if the FPGA bus of HIS 80, the bench test T-B6-L01 judges it (no spec "
+              "test); if the safe-state pins, the run-wide hw.trace rules (A3.6) judge them in every test"),
+    ("ST-06a", "a double ECC error in the live store sector (a record header or payload): A1.6 check value; none on "
+               "an ECC read error"),
+    ("ST-06c", "a double ECC error in the newest commit word: A1.6 and 0061; none"),
+]
+
+
 def main() -> int:
     ni = SPEC / "network-interface.md"
     pc = SPEC / "part-c-tci-profile.md"
@@ -351,6 +397,8 @@ def main() -> int:
                 c["notes"] = c["notes"] + v
             else:
                 c[k] = v
+        if t["id"] in COVERS:
+            c["covers"] = COVERS[t["id"]]
         tests.append({"id": t["id"], "origin": "spec", "part": t["part"],
                       "title": t["desc"], "reqs": reqs_of(t["id"], t["desc"]), **c})
     for tid, desc, reqs, needs in BENCH_TESTS:
@@ -399,6 +447,19 @@ def write_md(doc: dict) -> None:
             id=t["id"], scope=t["scope"], target=t["target"], also=", ".join(t["also"]),
             tx="x" if t["tx_part"] else "", needs=", ".join(t["needs"]), tbd=", ".join(t["pending"]),
             reqs=", ".join(t["reqs"]), title=t["title"].replace("|", "\\|")))
+    lines += ["", "## Firmware run sheet (ST-, UP-) and the spec tests", "",
+              "From the stimulus of each run-sheet check as relayed by openg7250 (the bench does not read "
+              "product/firmware/). A run-sheet check is judged by the spec tests that cover it.", "",
+              "| Run-sheet id | Covered by |", "|---|---|"]
+    by: dict[str, list[str]] = {}
+    for t in doc["tests"]:
+        for cv in t.get("covers", []):
+            by.setdefault(cv.split(" ")[0], []).append(f"{t['id']} {cv[len(cv.split(' ')[0]):].strip()}".strip())
+    for rid in sorted(by, key=lambda x: (x[:2], x)):
+        lines.append(f"| {rid} | {'; '.join(by[rid])} |")
+    lines += ["", "Not covered by any spec test (for the spec session):", "", "| Run-sheet id | Clause that should cover it |", "|---|---|"]
+    for rid, why in UNCOVERED:
+        lines.append(f"| {rid} | {why} |")
     (OUT / "catalogue.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

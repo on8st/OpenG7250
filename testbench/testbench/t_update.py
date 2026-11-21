@@ -47,6 +47,8 @@ def updating(ctx, s: bytes, restart_at_end: bool = True):
         finally:
             if restart_at_end:
                 restart(ctx, u)
+            else:
+                u.req("END_WRITE_SESSION")  # leave the write session free for the next test
 
 
 def facts(ctx, u: Updater):
@@ -287,3 +289,74 @@ def t_a1_05(ctx: Ctx):
         ctx.eq("and the arm is unchanged", None if st is None else st & 0xF, 1)
         h.stop()
     ctx.notes.append("keyed part not run: needs a key-down (TX tests)")
+
+
+def no_transfer_checks(ctx, u: Updater, when: str):
+    img = image(600, seed=80)
+    from .update import block_payload
+    r = u.req("UPDATE_BLOCK", block_payload(0, img[:512]))
+    ctx.eq(f"{when}: UPDATE_BLOCK gets 54", r["status"] if r else None, 54)
+    r = u.req("UPDATE_BLOCK", block_payload(0, img[:512], crc=0x12345678))
+    ctx.eq(f"{when}: UPDATE_BLOCK with a bad CRC also 54", r["status"] if r else None, 54)
+    r = u.req("UPDATE_VERIFY")
+    ctx.eq(f"{when}: UPDATE_VERIFY gets 55", r["status"] if r else None, 55)
+    r = u.req("UPDATE_ACTIVATE", b"\x00")
+    ctx.eq(f"{when}: UPDATE_ACTIVATE gets 55", r["status"] if r else None, 55)
+    r = u.req("UPDATE_BLOCK", b"\x00\x00")
+    ctx.eq(f"{when}: a malformed UPDATE_BLOCK payload gets 17", r["status"] if r else None, 17)
+    st = u.status()
+    ctx.eq(f"{when}: nothing written, UPDATE_STATUS idle", (st or {}).get("state"), 0)
+
+
+@test("T-A1-80")
+def t_a1_80(ctx: Ctx):
+    """A1.8 "No transfer in progress" (0063): after a restart, after UPDATE_ABORT and after an
+    activation."""
+    s = secret(ctx)
+    with updating(ctx, s) as u:
+        no_transfer_checks(ctx, u, "after a restart")
+        run, other, ver, lay = facts(ctx, u)
+        img = image(SMALL, seed=81)
+        r = u.begin(pkg(img, newer(ver), other))
+        if ctx.eq("UPDATE_BEGIN accepted", r["status"] if r else None, 0):
+            u.req("UPDATE_ABORT")
+            no_transfer_checks(ctx, u, "after UPDATE_ABORT")
+    activated = []
+    with updating(ctx, s, restart_at_end=False) as u:
+        run, other, ver, lay = facts(ctx, u)
+        img = image(SMALL, seed=82)
+        st, step = u.full(img, pkg(img, newer(ver), other))
+        if ctx.eq("a complete transfer for the activation part", (st, step), (0, "verified")):
+            r = u.req("UPDATE_ACTIVATE", b"\x00")
+            if r and r["status"] == 0:
+                activated.append(1)
+    if not activated:
+        with updating(ctx, s):
+            return
+    time.sleep(0.3)
+    wait_reachable(ctx, "UPDATE_ACTIVATE")
+    with updating(ctx, s, restart_at_end=False) as u:
+        no_transfer_checks(ctx, u, "after an activation")
+        deadline = time.monotonic() + 20  # let the trial confirm itself, not left half-way
+        while time.monotonic() < deadline and u.identify().get(10) == b"\x01":
+            time.sleep(0.5)
+
+
+@test("T-A1-81")
+def t_a1_81(ctx: Ctx):
+    """A1.8 "Unreadable or unsupported header" (0063)."""
+    s = secret(ctx)
+    with updating(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        img = image(SMALL, seed=83)
+        sha = hashlib.sha256(img).digest()
+        r = u.begin(header(len(img), sha, version=newer(ver), slot=other, magic=0x12345678))
+        ctx.eq("wrong magic: 17", r["status"] if r else None, 17)
+        r = u.begin(header(len(img), sha, version=newer(ver), slot=other, hver=2))
+        ctx.eq("header version 2: 17", r["status"] if r else None, 17)
+        ctx.eq("and nothing changes: UPDATE_STATUS idle", (u.status() or {}).get("state"), 0)
+        r = u.begin(header(len(img), sha, version=newer(ver), slot=other, component=2))
+        ctx.eq("readable header, component 2: 56", r["status"] if r else None, 56)
+        r = u.begin(header(len(img), sha, version=newer(ver), slot=other, component=2, hw=HW_ID + 1))
+        ctx.eq("component 2 and the wrong hardware id: 51 (51 comes before 56)", r["status"] if r else None, 51)
+        ctx.eq("nothing changed: UPDATE_STATUS idle", (u.status() or {}).get("state"), 0)
