@@ -55,6 +55,8 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
 - 0061: the store is in flash sectors 6 and 7 (A1.8 "Store location", A1.12, P-SYS-5).
 - 0061 addendum (SF-26): an image of this firmware too large for its slot gets 61; updates
   touch sectors 6 and 7 only as store writes; T-A1-77, T-A1-78.
+- 0062 (proposed, SF-27): `IDENTIFY` tag 25 reports the flash layout; T-A1-77, T-A1-78 use
+  it; T-A1-79.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 
