@@ -56,6 +56,11 @@ pub struct P2 {
     pub key: KeyPath,
     seq_status: u32,
     seq_regs: u32,
+    /// Port 7250 packets to a host that is not the owner (NOT_OWNER and CAP_REQUEST answers,
+    /// the refused-session and update answers): a counter of their own, never reset by a
+    /// session event, so that the owner's register stream has no gaps from them. Interim
+    /// reading of B2.7 (bench T-A2-11; proposal (b) to the spec session), pending its ruling.
+    seq_other: u32,
     /// Last unasked record per destination (B4.4 item 2: at most once per 1 s).
     last_unasked: Option<(Addr, u64)>,
     /// The unasked record of this session has gone out (B4.4 item 2: once per session).
@@ -145,6 +150,7 @@ impl P2 {
             key: KeyPath::new(),
             seq_status: 0,
             seq_regs: 0,
+            seq_other: 0,
             last_unasked: None,
             unasked_sent: false,
             record_last: [None; 8],
@@ -217,10 +223,19 @@ impl P2 {
     }
 
     fn send_regs(&mut self, chip: &mut Chip, to: Addr, pairs: &[Pair]) {
+        Self::send_counted(chip, &mut self.seq_regs, to, pairs);
+    }
+
+    /// Register packets to a host that is not the owner, on their own counter (`seq_other`).
+    fn send_regs_other(&mut self, chip: &mut Chip, to: Addr, pairs: &[Pair]) {
+        Self::send_counted(chip, &mut self.seq_other, to, pairs);
+    }
+
+    fn send_counted(chip: &mut Chip, seq: &mut u32, to: Addr, pairs: &[Pair]) {
         let mut out = [0u8; regmap::MAX_LEN];
         for chunk in pairs.chunks(regmap::MAX_PAIRS) {
-            let n = regmap::encode(self.seq_regs, chunk, &mut out);
-            self.seq_regs = self.seq_regs.wrapping_add(1);
+            let n = regmap::encode(*seq, chunk, &mut out);
+            *seq = seq.wrapping_add(1);
             let _ = chip.udp_send(S7250, to.0, to.1, &out[..n]);
         }
     }
@@ -395,7 +410,7 @@ impl P2 {
                 Event::Refused { from } => {
                     if self.refused_limit.allow(from.0, from.1, now) {
                         let p = [(regmap::addr::LINK_STATUS, self.regs.link_status), (regmap::addr::STREAM_STATUS, 0x08)];
-                        self.send_regs(chip, from, &p);
+                        self.send_regs_other(chip, from, &p);
                     }
                 }
             }
@@ -499,7 +514,7 @@ impl P2 {
             if kind == CnC::HighPriority && p.len() > 4 && p[4] & 0x01 != 0 && self.last_update_answer.is_none_or(|t| now.saturating_sub(t) >= 100) {
                 self.last_update_answer = Some(now);
                 let pairs = [(regmap::addr::STREAM_STATUS, self.stream_status())];
-                self.send_regs(chip, from, &pairs);
+                self.send_regs_other(chip, from, &pairs);
             }
             return;
         }
@@ -594,7 +609,11 @@ impl P2 {
                 self.not_owner_last[slot] = Some((from, now));
             }
         }
-        self.send_regs(chip, dest, &ans.pairs);
+        if owner {
+            self.send_regs(chip, dest, &ans.pairs);
+        } else {
+            self.send_regs_other(chip, dest, &ans.pairs);
+        }
     }
 
     /// Call every few ms: watchdog and link (B5.6, B5.8), High Priority status (B9.2).
