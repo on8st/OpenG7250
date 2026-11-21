@@ -543,7 +543,12 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let mut dropped_1024: u32 = 0;
     let mut answered: u32 = 0;
     let mut last_link = link;
+    // The longest pass that handled a P2 packet, µs (GET_STATS `net_busy_pass_max_us`): the
+    // margin of 0054 (High Priority packets 1 ms apart, two held by the CH394) needs every busy
+    // pass well under 2 ms.
+    let mut busy_pass_max_us: u64 = 0;
     loop {
+        let pass_start = Instant::now();
         // Session watchdog and status first, on every pass, so that no branch below can delay
         // the standby beyond B5.6's 1100 ms (T-B5-10).
         p2.tick(&mut chip, Instant::now().as_millis());
@@ -652,12 +657,20 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 // only two packets each (Table B2-2; 0053): they are emptied (up to the most that
                 // fits) on every pass, so a burst is read within the time two packets take to
                 // arrive (T-B5-20); the others take one per pass.
+                // The High Priority socket is checked again after each other socket, so that at
+                // most one other datagram (up to 1444 bytes, about 0.75 ms over SPI) is read
+                // between two High Priority reads (0054: packets 1 ms apart without loss).
+                const HP: (u8, Option<g7250_radio::session::CnC>, usize) = (crate::p2::S1027, Some(g7250_radio::session::CnC::HighPriority), HP_DUC_PER_PASS);
                 for (sock, kind, per_pass) in [
+                    HP,
                     (crate::p2::S1025, Some(g7250_radio::session::CnC::DdcSpecific), 1),
+                    HP,
                     (crate::p2::S1026, Some(g7250_radio::session::CnC::DucSpecific), 1),
-                    (crate::p2::S1027, Some(g7250_radio::session::CnC::HighPriority), HP_DUC_PER_PASS),
+                    HP,
                     (crate::p2::S1029, None, HP_DUC_PER_PASS),
+                    HP,
                     (crate::p2::S7250, None, 1),
+                    HP,
                 ] {
                     for _ in 0..per_pass {
                         let Ok(Some(d)) = chip.udp_recv(sock, &mut rx) else { break };
@@ -675,9 +688,11 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 }
                 p2.tick(&mut chip, Instant::now().as_millis());
                 if handled {
+                    busy_pass_max_us = busy_pass_max_us.max(pass_start.elapsed().as_micros());
                     continue;
                 }
                 // Counters of the key path for GET_STATS (Table B10-1, B10.5a item 1).
+                server.stats.net_busy_pass_max_us = busy_pass_max_us;
                 server.stats.cw_hang_clamped = p2.key.cw_hang_clamped;
                 server.stats.cw_speed_clamped = p2.key.cw_speed_clamped;
                 server.stats.takeovers = p2.takeovers;

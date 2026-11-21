@@ -53,11 +53,13 @@ pub struct Stats {
     pub cw_speed_clamped: u64,
     /// Level-1 takeovers since start (A2.4).
     pub takeovers: u64,
+    /// The longest net-loop pass that handled a P2 packet since start, µs (0054 margin).
+    pub net_busy_pass_max_us: u64,
 }
 
 impl Stats {
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 14] = [
+        let items: [(&[u8], u64); 15] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
             (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
@@ -72,6 +74,7 @@ impl Stats {
             (b"cw_hang_clamped", self.cw_hang_clamped),
             (b"cw_speed_clamped", self.cw_speed_clamped),
             (b"takeovers", self.takeovers),
+            (b"net_busy_pass_max_us", self.net_busy_pass_max_us),
         ];
         let mut at = 0;
         for (n, v) in items {
@@ -189,6 +192,7 @@ impl Server {
                 cw_hang_clamped: 0,
                 cw_speed_clamped: 0,
                 takeovers: 0,
+                net_busy_pass_max_us: 0,
             },
             writer: None,
             reset_pending: false,
