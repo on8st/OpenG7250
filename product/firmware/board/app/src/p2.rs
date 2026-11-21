@@ -668,6 +668,22 @@ impl P2 {
         }
     }
 
+    /// Unkey and drop the arm with `MAINTENANCE` (Table A3-1 event 11) before flash work or a
+    /// commanded reset (A1.6, A1.9; B2.3 "Flash work", 0055); the new arm state and token are
+    /// pushed to the owner. Nothing changes while not armed (A3.2).
+    pub fn disarm_for_maintenance(&mut self, chip: &mut Chip, now: u64) {
+        let mut rf = crate::BoardRf;
+        if self.tx.drop(DropReason::Maintenance, &mut rf) {
+            self.key.arm_dropped();
+            self.regs.armed = false;
+            if let Some(dest) = self.session.register_destination() {
+                let p = [(regmap::addr::TX_ARM_STATE, self.tx.arm_state_reg()), (regmap::addr::TX_ARM_TOKEN, self.tx.token())];
+                self.send_regs(chip, dest, &p);
+            }
+            self.sync_tx_state(chip, now);
+        }
+    }
+
     /// A DUC I&Q packet on port 1029 (B10.7). It enters the FIFO only from the owner during its
     /// session, with record `tx` bits 1 and 4 set and no DUC-specific refusal standing; anything
     /// else is discarded whole and counted, with no other effect.

@@ -24,6 +24,9 @@ const TX_BANDS: usize = 10;
 /// What the board must do after a request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
+    /// Unkey and drop the arm (`MAINTENANCE`, Table A3-1 event 11) before any flash work of this
+    /// request: a `SET_CONFIG` while armed (A1.6; B2.3 "Flash work", 0055). First in the list.
+    DisarmForMaintenance,
     /// Store the secret (before the reply).
     SetSecret([u8; 32]),
     /// Store the configuration, the full Table M-3 TLV list (before the reply).
@@ -119,6 +122,10 @@ impl Server {
         if !open {
             return (Status::FirstSecretClosed, 0);
         }
+        // No flash work while TX is armed or keyed (B2.3 "Flash work"; 0055; Table A1-2).
+        if ctx.armed {
+            return (Status::Armed, 0);
+        }
         let Ok(secret) = <[u8; 32]>::try_from(payload) else { return (Status::Malformed, 0) };
         self.window_used = true;
         let _ = self.effects.push(Effect::SetSecret(secret));
@@ -153,6 +160,8 @@ impl Server {
                 self.writer = None;
                 (Status::Ok, 0)
             }
+            // No flash work while TX is armed or keyed (B2.3 "Flash work"; 0055; Table A1-2).
+            Command::ChangeSecret if ctx.armed => (Status::Armed, 0),
             Command::ChangeSecret => {
                 let (Some(old), Ok(v)) = (ctx.secret, <[u8; 32]>::try_from(req.payload)) else { return (Status::Malformed, 0) };
                 let new = auth::change_secret_mask(old, &self.used_challenge, &v);
@@ -410,6 +419,10 @@ impl Server {
         let net_changed = (m.address_mode, m.address, m.netmask, m.gateway) != (cur.address_mode, cur.address, cur.netmask, cur.gateway);
         let mut v = heapless::Vec::new();
         let _ = v.extend_from_slice(&b[..n]);
+        // While armed: unkey and disarm first, then write (A1.6; 0055).
+        if ctx.armed {
+            let _ = self.effects.push(Effect::DisarmForMaintenance);
+        }
         let _ = self.effects.push(Effect::SetConfig(v));
         if net_changed {
             let _ = self.effects.push(Effect::ApplyNetwork);

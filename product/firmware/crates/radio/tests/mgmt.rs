@@ -454,3 +454,37 @@ fn update_write_failure_is_55_and_logged_and_begin_in_trial_is_58() {
     let (st, p) = authed(&mut w, &mut s, HOST, 140, Command::UpdateAbort, &[], 14000);
     assert_eq!((st, p), (Status::Ok, vec![1]));
 }
+
+#[test]
+fn t_b5_21_no_flash_work_while_armed() {
+    use g7250_radio::mgmt::Effect;
+    // B2.3 "Flash work" (0055): while armed or keyed, SET_FIRST_SECRET, CHANGE_SECRET and
+    // SET_CALIBRATION get status 50 and write nothing; SET_CONFIG disarms first, then writes.
+    let mut s = Server::new();
+    let mut w = World::new();
+    s.network_up(0);
+    s.take_effects();
+    w.armed = true;
+    assert_eq!(w.call(&mut s, HOST, &req(1, Command::SetFirstSecret, &[7; 32]), 10).unwrap().1, Status::Armed);
+    assert!(s.take_effects().is_empty());
+    w.armed = false;
+    assert_eq!(w.call(&mut s, HOST, &req(2, Command::SetFirstSecret, &[7; 32]), 20).unwrap().1, Status::Ok);
+    w.secret = Some([7; 32]);
+    s.take_effects();
+    w.armed = true;
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::ChangeSecret, &[9; 32], 100).0, Status::Armed);
+    assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::SetCalibration, &[0, 0, 0, 1, 0], 200).0, Status::Armed);
+    assert!(s.take_effects().is_empty(), "no flash work while armed");
+    // SET_CONFIG while armed: the disarm comes before the store write.
+    use g7250_proto::mgmt::payload::Config;
+    let mut b = [0u8; 256];
+    let n = Config { max_tx_time_ms: Some(60_000), ..Default::default() }.encode(&mut b).unwrap();
+    assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::SetConfig, &b[..n], 300).0, Status::Ok);
+    let e = s.take_effects();
+    assert_eq!(e[0], Effect::DisarmForMaintenance);
+    assert!(matches!(e[1], Effect::SetConfig(_)));
+    // Unarmed: no disarm.
+    w.armed = false;
+    assert_eq!(authed(&mut w, &mut s, HOST, 40, Command::SetConfig, &b[..n], 400).0, Status::Ok);
+    assert!(matches!(s.take_effects().as_slice(), [Effect::SetConfig(_)]));
+}

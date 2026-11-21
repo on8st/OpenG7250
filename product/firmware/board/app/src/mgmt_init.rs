@@ -175,6 +175,8 @@ pub fn apply_stored(m: &mut MgmtInit, e: g7250_radio::mgmt::Effect) -> Result<Op
             Ok(None)
         }
         later @ (Effect::ApplyNetwork | Effect::Restart | Effect::FactoryReset | Effect::UpdateStarted) => Ok(Some(later)),
+        // Applied by the net loop before any store write (0055).
+        Effect::DisarmForMaintenance => Ok(None),
     }
 }
 

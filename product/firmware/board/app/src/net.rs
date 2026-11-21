@@ -730,6 +730,15 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                     // counts); network changes and resets after it (A1.6, A1.9).
                     let mut after: heapless::Vec<g7250_radio::mgmt::Effect, 4> = heapless::Vec::new();
                     for e in effects {
+                        // No flash work while TX is armed or keyed (B2.3 "Flash work"; 0055): a
+                        // SET_CONFIG while armed, and a commanded reset (A1.9), unkey and drop the
+                        // arm (MAINTENANCE) first, before any store write and before the reply.
+                        if matches!(
+                            e,
+                            g7250_radio::mgmt::Effect::DisarmForMaintenance | g7250_radio::mgmt::Effect::Restart | g7250_radio::mgmt::Effect::FactoryReset
+                        ) {
+                            p2.disarm_for_maintenance(&mut chip, Instant::now().as_millis());
+                        }
                         match crate::mgmt_init::apply_stored(&mut mgmt, e) {
                             Ok(None) => {}
                             Ok(Some(later)) => {
@@ -762,9 +771,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                                 }
                             }
                             g7250_radio::mgmt::Effect::Restart | g7250_radio::mgmt::Effect::FactoryReset => {
-                                // Commanded reset (A1.9): unkey and disarm (never armed in this
-                                // build), RF gone (never keyed), reply sent (above), relays to the
-                                // A3.6 state, then the reset. A factory reset writes the items of
+                                // Commanded reset (A1.9): unkeyed and disarmed (above, before the
+                                // reply), RF gone (never keyed in this build), reply sent, relays to
+                                // the A3.6 state, then the reset. A factory reset writes the items of
                                 // Table A1-4 only now, between steps 4 and 5 (A1.6a).
                                 let factory = e == g7250_radio::mgmt::Effect::FactoryReset;
                                 Timer::after_millis(20).await; // let the reply leave the CH394
