@@ -1758,7 +1758,11 @@ G7250 MUST process without loss:
 2. a sequence of any length in which the packets arrive at least 1 ms apart.
 
 These figures hold at the SPI clock known to work and do not depend on P-NET-1; a faster clock
-(up to 62 MHz, [CH394]) only adds margin.
+(up to 62 MHz, [CH394]) only adds margin. `GET_STATS` MUST count every High Priority packet read
+from port 1027, from any source and before the owner check, under the name `hp_rx` (0058), so
+that a lost packet shows even when it repeats the state in force. The [CH394] datasheet gives no
+per-socket receive-overflow count for UDP sockets, so none is defined; a drop shows as a
+shortfall in `hp_rx`.
 
 **Flash work** (0055). Writing or erasing the MCU's flash can stall the processor for up to a
 few seconds (a sector erase). While a management write that writes flash (`SET_CONFIG`,
@@ -3876,7 +3880,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-17 | Host A streams DDC0 at 192 ksps on 7.1 MHz with PA enable and CW select set; its C&C is cut for 1.5 s (watchdog standby), after which it continues its High Priority keepalive with run = 1 unchanged: the first packet restarts the session without a run 0→1 edge, DDC0 resumes at 192 ksps on 7.1 MHz with sequence numbers continuing from before the standby, PA enable and CW select read cleared (Table A3-4), and an arm is rejected with `WATCHDOG_DISABLED` until A sends a General packet with byte 38 bit [0] set, then accepted (A2.3, B5.4, B2.7). The same after a link loss and return to 100 Mbit/s; after a stop and run the counters start at 0. |
 | T-B5-18 | After host A's session ends by a watchdog standby, a run bit alone from host B gives DDC0 `STREAM_STATUS` reason 1 and counters starting at 0; A's RX settings are not used for B (B5.4 item 3, B2.7). |
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
-| T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 "High Priority bursts", Table B2-2; 0053, 0054). |
+| T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost; in each case `GET_STATS` `hp_rx` rises by exactly the number of packets sent (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 "High Priority bursts", Table B2-2; 0053, 0054, 0058). |
 | T-B5-21 | While armed: `SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET` (as a commanded reset, A1.9) and `SET_CALIBRATION` get status 50 or first unkey and disarm as their rules say, and no flash work starts while TX is armed or keyed; unarmed, a `SET_CONFIG` is answered only after its flash write has ended (emulator; B2.3 "Flash work"; 0055). |
 
 ### Streams (B6)
