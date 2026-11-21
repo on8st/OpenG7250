@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ON8ST
-//! Values kept over a reset without power loss: `TRIP_COUNT` (Table B8-2: "survives `RESTART`
-//! and resets without power loss", A3.5).
+//! Values kept over a reset without power loss (A3.5 "Counters"): `TRIP_COUNT`, the fault entry
+//! counter per class 1 code and the reset counter per reset cause (g7250_safety::counters).
 //!
-//! Where: the top 32 bytes of the AXI SRAM that every option setting has (0x2401FFE0, section
+//! Where: the top 128 bytes of the AXI SRAM that every option setting has (0x2401FF80, section
 //! `.persist`, NOLOAD), outside the RAM of both the boot stage and the application (their
-//! `memory.x` end 32 bytes lower), so neither image's data, bss or stack ever reaches it. Never
+//! `memory.x` end 128 bytes lower), so neither image's data, bss or stack ever reaches it. Never
 //! the Backup SRAM or the backup domain ([HIS] HIS 15 rule 4; the vendored HAL keeps them off).
 //! A previous stage that writes there (the vendor bootloader, HIS 10) is caught by the checks
-//! below and only costs the count.
+//! and only costs the counts (P-SYS-9).
 //!
 //! When: the block is read only when the reset flags show no power-on or brown-out reset since
 //! the application last cleared them (the boot stage does not clear them, `reset::read`). After a
@@ -16,83 +16,87 @@
 //! ECC, and a read of such a word is a bus error (RM0468, RAMECC). So every read is of a block
 //! this application wrote since power-up.
 //!
-//! How: two slots, each two 64-bit words `[magic, sequence | value, check]`; a write goes to the
-//! slot that is not the newest valid one, so a reset in the middle of a write leaves the other
-//! slot whole.
+//! How: two slots of [`SLOT_WORDS`] 64-bit words (counters.rs encoding: header, values, check);
+//! a write goes to the slot that is not the newest valid one, header last, so a reset in the
+//! middle of a write leaves the other slot whole.
 
 use core::ptr::{addr_of_mut, read_volatile, write_volatile};
+use g7250_safety::counters::{Counters, SLOT_WORDS};
 
-const MAGIC: u32 = 0x4737_5043; // "G7PC"
-
-/// Two slots of two 64-bit words: `[magic | sequence << 32, value | check << 32]`. The AXI SRAM
-/// has a 64-bit ECC word: it is written in whole, aligned 64-bit words only ([HIS] HIS 10,
-/// MEDIUM), never in halves, so no write merges into a word whose ECC was never set.
+/// Two slots. The AXI SRAM has a 64-bit ECC word: it is written in whole, aligned 64-bit words
+/// only ([HIS] HIS 10, MEDIUM), never in halves.
 #[unsafe(link_section = ".persist")]
-static mut BLOCK: core::mem::MaybeUninit<[[u64; 2]; 2]> = core::mem::MaybeUninit::uninit();
-
-fn check(seq: u32, v: u32) -> u32 {
-    !(v ^ seq.rotate_left(16)) ^ MAGIC
-}
+static mut BLOCK: core::mem::MaybeUninit<[[u64; SLOT_WORDS]; 2]> = core::mem::MaybeUninit::uninit();
+const _: () = assert!(core::mem::size_of::<[[u64; SLOT_WORDS]; 2]>() <= 128);
 
 fn slot(i: usize) -> *mut u64 {
     // SAFETY: a static of this module; only raw pointers, read and written volatile.
-    unsafe { (addr_of_mut!(BLOCK) as *mut [u64; 2]).add(i) as *mut u64 }
+    unsafe { (addr_of_mut!(BLOCK) as *mut [u64; SLOT_WORDS]).add(i) as *mut u64 }
 }
 
-fn read(i: usize) -> Option<(u32, u32)> {
-    // SAFETY: `slot` points into the `.persist` block (8-aligned); volatile, as it outlives the
-    // program.
-    let (w0, w1) = unsafe { (read_volatile(slot(i)), read_volatile(slot(i).add(1))) };
-    let (magic, seq) = (w0 as u32, (w0 >> 32) as u32);
-    let (v, c) = (w1 as u32, (w1 >> 32) as u32);
-    (magic == MAGIC && c == check(seq, v)).then_some((seq, v))
+fn read(i: usize) -> [u64; SLOT_WORDS] {
+    let mut w = [0u64; SLOT_WORDS];
+    for (k, x) in w.iter_mut().enumerate() {
+        // SAFETY: `slot` points into the `.persist` block (8-aligned); volatile, as it outlives
+        // the program.
+        *x = unsafe { read_volatile(slot(i).add(k)) };
+    }
+    w
 }
 
-fn write(i: usize, seq: u32, v: u32) {
-    // SAFETY: as `read`. Value and check first, magic and sequence last: a reset between the
-    // two leaves a check that does not match the sequence, so this slot is invalid and the other
-    // one is used.
+fn write(i: usize, w: &[u64; SLOT_WORDS]) {
+    // SAFETY: as `read`. Values and check first, the header (magic, sequence) last: a reset in
+    // between leaves this slot invalid and the other one is used.
     unsafe {
-        write_volatile(slot(i).add(1), v as u64 | (check(seq, v) as u64) << 32);
-        write_volatile(slot(i), MAGIC as u64 | (seq as u64) << 32);
+        for k in (1..SLOT_WORDS).rev() {
+            write_volatile(slot(i).add(k), w[k]);
+        }
+        write_volatile(slot(i), w[0]);
     }
 }
 
-/// The newest valid slot: index, sequence, value.
-fn newest() -> Option<(usize, u32, u32)> {
-    match (read(0), read(1)) {
-        (Some((a, va)), Some((b, vb))) => Some(if b.wrapping_sub(a) as i32 > 0 { (1, b, vb) } else { (0, a, va) }),
-        (Some((a, va)), None) => Some((0, a, va)),
-        (None, Some((b, vb))) => Some((1, b, vb)),
-        (None, None) => None,
-    }
+fn newest() -> Option<(usize, u32, Counters)> {
+    Counters::newest(&read(0), &read(1))
 }
 
 /// At start, before any other use: `power_lost` from the reset flags (power-on or brown-out).
-/// Returns the trip count kept over the reset, and whether it was found (false after a power
-/// loss, or when a previous stage overwrote the block: then the count starts again at 0).
-pub fn start(power_lost: bool) -> (u32, bool) {
+/// Returns the counters kept over the reset, and whether they were found (false after a power
+/// loss, or when a previous stage overwrote the block: then they start again at 0).
+pub fn start(power_lost: bool) -> (Counters, bool) {
     if !power_lost {
-        if let Some((_, _, v)) = newest() {
-            return (v, true);
+        if let Some((_, _, c)) = newest() {
+            return (c, true);
         }
     }
-    write(0, 0, 0);
-    write(1, 0, 0);
-    (0, false)
+    let z = Counters::default();
+    write(0, &z.encode(0));
+    write(1, &z.encode(0));
+    (z, false)
 }
 
-/// The trip count kept (0 if none; after [`start`] there always is one).
+/// The counters kept (zero if none; after [`start`] there always are some).
+pub fn get() -> Counters {
+    newest().map_or(Counters::default(), |n| n.2)
+}
+
+/// Keep new counters (call on every change).
+pub fn set(c: &Counters) {
+    let (i, seq) = match newest() {
+        Some((_, _, old)) if old == *c => return,
+        Some((i, s, _)) => (1 - i, s.wrapping_add(1)),
+        None => (0, 1),
+    };
+    write(i, &c.encode(seq));
+}
+
+/// The trip count kept.
 pub fn trip_count() -> u32 {
-    newest().map_or(0, |n| n.2)
+    get().trip_count
 }
 
 /// Keep a new trip count (call on every change).
 pub fn set_trip_count(v: u32) {
-    let (i, seq) = match newest() {
-        Some((_, _, old)) if old == v => return,
-        Some((i, s, _)) => (1 - i, s.wrapping_add(1)),
-        None => (0, 1),
-    };
-    write(i, seq, v);
+    let mut c = get();
+    c.trip_count = v;
+    set(&c);
 }

@@ -4,11 +4,10 @@
 //! `FAULT_FLAGS` (bit *c* for every code since the last clear), `FAULT_CLASS` (the highest class
 //! among them), and the `FAULT_CLEAR` rules (B8.4; Table B8-3 "Fault code").
 //!
-//! This step holds the class 2 codes this firmware raises: `TX_PATH_NOT_BLOCKED` (the safe state
-//! found not held) and `INTERNAL_ERROR` (a failed flash operation, B2.3 "flash work that fails";
-//! 0065 point 2). Class 2 is latched until a reset and never cleared by `FAULT_CLEAR`. The class 1
-//! rules (condition gone, 10 s hold-off, escalation, counters kept over a reset) come with
-//! `WDT_RESET_AT_START`, the next step; until then a clear of a class 1 code is refused too.
+//! Class 2 is latched until a reset and never cleared by `FAULT_CLEAR`. Class 1 is cleared by the
+//! owner writing the current `FAULT_CODE` once every flagged code is class 1 and not escalated,
+//! its condition is gone and [`HOLD_OFF_MS`] have passed since the latest entry. The third entry
+//! of the same class 1 code since power-on is escalated: class 2 (counters.rs counts them).
 
 /// Fault codes (Table B8-3).
 pub mod code {
@@ -39,21 +38,33 @@ pub enum ClearReject {
     BadValue,
 }
 
+/// A clear needs this long since the latest fault entry (A3.5 "Clearing"; 0022 §27).
+pub const HOLD_OFF_MS: u64 = 10_000;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Faults {
     first: u8,
     flags: u32,
-    escalated: bool,
+    /// Class 1 codes escalated to class 2 (bit per code).
+    escalated: u32,
+    /// Time of the latest entry, ms.
+    last_entry_ms: u64,
 }
 
 impl Faults {
     pub const fn new() -> Self {
-        Faults { first: 0, flags: 0, escalated: false }
+        Faults { first: 0, flags: 0, escalated: 0, last_entry_ms: 0 }
     }
 
-    /// Enter the fault state with `c` (A3.5 "Entry"). Returns true if `c` was not set yet (a new
-    /// entry: log it and push the registers).
+    /// Enter the fault state with `c` at `now_ms` (A3.5 "Entry"). Returns true if `c` was not set
+    /// yet (a new entry: log it and push the registers). For a class 1 code, use
+    /// [`Self::raise_counted`].
     pub fn raise(&mut self, c: u8) -> bool {
+        self.raise_at(c, self.last_entry_ms)
+    }
+
+    /// As [`Self::raise`], with the entry time.
+    pub fn raise_at(&mut self, c: u8, now_ms: u64) -> bool {
         if class_of(c) == 0 {
             return false;
         }
@@ -63,7 +74,22 @@ impl Faults {
             self.first = c;
         }
         self.flags |= bit;
+        self.last_entry_ms = self.last_entry_ms.max(now_ms);
         new
+    }
+
+    /// A class 1 code's entry, `count` being its entry count since power-on after this one
+    /// (counters.rs): from the third it is escalated, class 2 (A3.5 "Escalation").
+    pub fn raise_counted(&mut self, c: u8, now_ms: u64, count: u32) -> bool {
+        if count >= crate::counters::ESCALATE_AT {
+            self.escalated |= 1 << c;
+        }
+        self.raise_at(c, now_ms)
+    }
+
+    /// Whether a code is set and escalated.
+    pub fn is_escalated(&self, c: u8) -> bool {
+        self.escalated & self.flags & (1 << c) != 0
     }
 
     /// In the fault state: unkey, no arm (A3.5 "Effect").
@@ -84,30 +110,32 @@ impl Faults {
         let mut c = 0;
         for i in 1..32u8 {
             if self.flags & (1 << i) != 0 {
-                c = c.max(class_of(i));
+                c = c.max(if self.escalated & (1 << i) != 0 { 2 } else { class_of(i) });
             }
-        }
-        if self.escalated && c == 1 {
-            c = 2;
         }
         c as u32
     }
 
-    /// `FAULT_CLEAR` with value `v` (A3.5 "Clearing"; B8.4): without a fault, 0 is
-    /// `NOT_CLEARABLE` and any other value `BAD_VALUE` (0039); with a class 2 code set,
-    /// `NOT_CLEARABLE`; a value other than the current fault code, `BAD_VALUE`. Class 1 clears
-    /// come with their conditions in the next step: refused (`NOT_CLEARABLE`) until then.
-    pub fn clear(&mut self, v: u32) -> Result<(), ClearReject> {
+    /// `FAULT_CLEAR` with value `v` at `now_ms` (A3.5 "Clearing"; B8.4; Table B8-2 0x0215):
+    /// - no fault: 0 is `NOT_CLEARABLE`, any other value `BAD_VALUE` (0039);
+    /// - a value other than the current `FAULT_CODE`: `BAD_VALUE`;
+    /// - the current code: all flags cleared if every flagged code is class 1 and not escalated,
+    ///   its condition is gone (`gone`), and [`HOLD_OFF_MS`] have passed since the latest entry;
+    ///   else `NOT_CLEARABLE` and nothing changes. A clear never re-arms (the caller only clears).
+    pub fn clear(&mut self, v: u32, now_ms: u64, gone: impl Fn(u8) -> bool) -> Result<(), ClearReject> {
         if self.flags == 0 {
             return Err(if v == 0 { ClearReject::NotClearable } else { ClearReject::BadValue });
-        }
-        if self.class() == 2 {
-            return Err(ClearReject::NotClearable);
         }
         if v != self.first as u32 {
             return Err(ClearReject::BadValue);
         }
-        Err(ClearReject::NotClearable)
+        let all_ok = (1..32u8).filter(|&i| self.flags & (1 << i) != 0).all(|i| class_of(i) == 1 && self.escalated & (1 << i) == 0 && gone(i));
+        if !all_ok || now_ms.saturating_sub(self.last_entry_ms) < HOLD_OFF_MS {
+            return Err(ClearReject::NotClearable);
+        }
+        // The escalation stays with the entry counters (power-on only); the flags go.
+        *self = Faults { last_entry_ms: self.last_entry_ms, ..Faults::new() };
+        Ok(())
     }
 }
 
@@ -146,11 +174,49 @@ mod tests {
     #[test]
     fn class_2_is_latched_until_reset() {
         let mut f = Faults::new();
-        assert_eq!(f.clear(0), Err(ClearReject::NotClearable));
-        assert_eq!(f.clear(7), Err(ClearReject::BadValue));
-        f.raise(code::INTERNAL_ERROR);
-        assert_eq!(f.clear(19), Err(ClearReject::NotClearable));
-        assert_eq!(f.clear(0), Err(ClearReject::NotClearable));
+        let gone = |_| true;
+        assert_eq!(f.clear(0, 0, gone), Err(ClearReject::NotClearable));
+        assert_eq!(f.clear(7, 0, gone), Err(ClearReject::BadValue));
+        f.raise_at(code::INTERNAL_ERROR, 0);
+        assert_eq!(f.clear(19, 60_000, gone), Err(ClearReject::NotClearable));
+        assert_eq!(f.clear(0, 60_000, gone), Err(ClearReject::BadValue), "not the current code");
         assert_eq!((f.flags(), f.class()), (1 << 19, 2), "nothing cleared");
+    }
+
+    #[test]
+    fn class_1_clear_after_the_hold_off_with_the_condition_gone() {
+        // T-A3-23: under 10 s after the latest entry NOT_CLEARABLE even with the condition gone;
+        // after 10 s it clears; the current code only; condition not gone NOT_CLEARABLE.
+        let mut f = Faults::new();
+        f.raise_counted(code::WDT_RESET_AT_START, 1_000, 1);
+        assert_eq!(f.class(), 1);
+        assert_eq!(f.clear(17, 10_999, |_| true), Err(ClearReject::NotClearable));
+        assert_eq!(f.clear(2, 11_000, |_| true), Err(ClearReject::BadValue));
+        assert_eq!(f.clear(17, 11_000, |_| false), Err(ClearReject::NotClearable));
+        assert_eq!(f.clear(17, 11_000, |_| true), Ok(()));
+        assert_eq!((f.safety_state(), f.first_code(), f.flags(), f.class()), (0, 0, 0, 0));
+        // A newer entry restarts the hold-off for all.
+        let mut f = Faults::new();
+        f.raise_counted(code::WDT_RESET_AT_START, 0, 1);
+        f.raise_counted(code::SWR_REPEATED, 8_000, 1);
+        assert_eq!(f.clear(17, 12_000, |_| true), Err(ClearReject::NotClearable));
+        assert_eq!(f.clear(17, 18_000, |_| true), Ok(()));
+        // A class 2 code with a class 1 one: not clearable.
+        let mut f = Faults::new();
+        f.raise_counted(code::WDT_RESET_AT_START, 0, 1);
+        f.raise_at(code::INTERNAL_ERROR, 0);
+        assert_eq!(f.clear(17, 60_000, |_| true), Err(ClearReject::NotClearable));
+    }
+
+    #[test]
+    fn the_third_entry_of_a_class_1_code_is_class_2() {
+        let mut f = Faults::new();
+        f.raise_counted(code::SWR_REPEATED, 0, 2);
+        assert_eq!(f.class(), 1);
+        assert_eq!(f.clear(2, 20_000, |_| true), Ok(()));
+        f.raise_counted(code::SWR_REPEATED, 30_000, 3);
+        assert!(f.is_escalated(code::SWR_REPEATED));
+        assert_eq!(f.class(), 2, "escalated: latched until reset");
+        assert_eq!(f.clear(2, 90_000, |_| true), Err(ClearReject::NotClearable));
     }
 }

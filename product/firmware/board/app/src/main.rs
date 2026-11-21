@@ -127,9 +127,32 @@ async fn main(spawner: Spawner) {
     // SAFETY: the core peripherals are taken once, at the start, for this only.
     unsafe { cortex_m::Peripherals::steal() }.SCB.enable_icache();
     let cause = reset::read(true);
-    // TRIP_COUNT over resets without power loss (A3.5; Table B8-2): before anything else reads
-    // or writes the persist block.
-    let (trips, kept) = g7250_board::persist::start(cause.power_on || cause.brown_out);
+    // The counters of A3.5 over resets without power loss (TRIP_COUNT, fault entries, resets):
+    // before anything else reads or writes the persist block. Then this reset is counted under
+    // its cause (one cause: the watchdogs first; the pin flag is set with every reset).
+    let (counters, kept) = g7250_board::persist::start(cause.power_on || cause.brown_out);
+    let trips = counters.trip_count;
+    if !(cause.power_on || cause.brown_out) {
+        use g7250_safety::counters::ResetCause as R;
+        let rc = if cause.independent_watchdog {
+            Some(R::IndependentWatchdog)
+        } else if cause.window_watchdog {
+            Some(R::WindowWatchdog)
+        } else if cause.software {
+            Some(R::Software)
+        } else if cause.low_power {
+            Some(R::LowPower)
+        } else if cause.pin {
+            Some(R::Pin)
+        } else {
+            None
+        };
+        if let Some(rc) = rc {
+            let mut c = counters;
+            c.count_reset(rc);
+            g7250_board::persist::set(&c);
+        }
+    }
 
     // The boot stage set the core supply once; the HAL init must not write it (vendored patch
     // "supply-once") and runs only if it holds the board's configuration and is ready.
@@ -154,6 +177,11 @@ async fn main(spawner: Spawner) {
     embassy_stm32::interrupt::InterruptExt::set_priority(embassy_stm32::interrupt::CEC, embassy_stm32::interrupt::Priority::P6);
     let safety = SAFETY_EXECUTOR.start(embassy_stm32::interrupt::CEC);
     safety.spawn(tx_path().unwrap());
+    // A processor watchdog reset seen at start-up: WDT_RESET_AT_START, class 1 (A3.5 "Entry";
+    // HIS-13); its third since power-on is escalated (counted over resets in persist.rs).
+    if cause.independent_watchdog || cause.window_watchdog {
+        fault::raise(g7250_safety::fault::code::WDT_RESET_AT_START);
+    }
 
     let mut wd = IndependentWatchdog::new(p.IWDG1, wdg::TIMEOUT_MS * 1000);
     wd.unleash();

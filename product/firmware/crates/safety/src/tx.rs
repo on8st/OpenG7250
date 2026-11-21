@@ -108,7 +108,7 @@ pub struct Measured {
     /// The TX IQ underrun time, ms (B10.5; P-TIM-2, HIS-18): at least the key latency plus one
     /// DUC packet period, at most 500 ms; the check uses the lower of it and `KEYED_TIMEOUT`.
     pub underrun_ms: Option<u32>,
-    /// P-SYS-9 (0050): the AXI SRAM range of the persist block (0x2401FFE0) is shown to survive a
+    /// P-SYS-9 (0050): the AXI SRAM range of the persist block (0x2401FF80-0x2401FFFF) is shown to survive a
     /// reset without power loss on the radio (RD-01, T-A3-60). Part of the freeze rule.
     pub reset_ram_kept: Option<()>,
     /// ATU latch meanings, safe values, tune power and timing (0032 item 2; HIS-08).

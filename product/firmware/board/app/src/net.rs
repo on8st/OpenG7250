@@ -43,6 +43,9 @@ fn flash_failures(server: &mut Server) {
         server.log.push(now, format_args!("flash operation failed: {how} (FLASH_SR1 {sr:#010x})"));
         crate::fault::raise(g7250_safety::fault::code::INTERNAL_ERROR);
     }
+    if let Some(c) = crate::fault::take_cleared() {
+        server.log.push(now, format_args!("fault {c} cleared by the owner (FAULT_CLEAR)"));
+    }
     let codes = crate::fault::take_unlogged();
     for c in 1..32u8 {
         if codes & (1 << c) != 0 {
@@ -926,6 +929,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 server.stats.ll_unprobed = unprobed as u64;
                 server.stats.console_dropped = g7250_board::console::DROPPED.load(core::sync::atomic::Ordering::Relaxed) as u64;
                 server.stats.hp_rx = hp_rx;
+                let k = g7250_board::persist::get();
+                server.stats.fault_entries = k.entries.map(|v| v as u64);
+                server.stats.resets = k.resets.map(|v| v as u64);
                 steps[9] = p2.max_events_us;
                 steps[10] = p2.max_send_us;
                 server.stats.steps = steps;

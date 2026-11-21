@@ -653,6 +653,19 @@ impl P2 {
         let kctx = self.key_ctx(&[]);
         let mut c = WriteCtx { from_owner: owner, busy: self.update_in_progress, tx: &mut self.tx, rf: &mut rf, arm, key: kctx, path: &mut self.key, now };
         let ans = self.regs.handle(p, &mut c);
+        // An accepted FAULT_CLEAR (A3.5 "Clearing"): the board's latch clears with the same rule;
+        // the registers then follow it (sync_faults pushes the change).
+        if let Some((v, t, unkeyed)) = self.regs.fault_cleared.take() {
+            let gone = |code: u8| match code {
+                g7250_safety::fault::code::WDT_RESET_AT_START => true,
+                g7250_safety::fault::code::SWR_REPEATED => unkeyed,
+                _ => false,
+            };
+            if crate::fault::clear(v, t, gone) {
+                crate::fault::note_cleared(v);
+            }
+            self.sync_faults(chip, now);
+        }
         // A mode class change while keyed unkeys first (A3.9c); a disarm under a key is reason 5.
         if self.regs.tx_mode_class != class {
             self.key.mode_class_changed(&mut self.tx, &mut rf);

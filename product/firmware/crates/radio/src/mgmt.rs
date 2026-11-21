@@ -63,6 +63,11 @@ pub struct Stats {
     /// Microseconds from the boot stage's start to the first TX path check (A3.6b; 0066
     /// addendum: at most 100 ms).
     pub tx_check_first_us: u64,
+    /// A3.5 "Counters" since power-on, over resets: entries of SWR_REPEATED, PA_OVERTEMP,
+    /// WDT_RESET_AT_START; resets by cause (pin, software, independent watchdog, window watchdog,
+    /// low-power).
+    pub fault_entries: [u64; 3],
+    pub resets: [u64; 5],
     /// Console bytes dropped because the console's ring was full (the console never blocks).
     pub console_dropped: u64,
     /// High Priority packets read from port 1027, from any source, before the owner check
@@ -92,7 +97,7 @@ pub const STEP_NAMES: [&[u8]; STEPS] = [
 
 impl Stats {
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 20] = [
+        let items: [(&[u8], u64); 28] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
             (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
@@ -111,6 +116,14 @@ impl Stats {
             (b"net_send_dropped", self.net_send_dropped),
             (b"ll_unprobed", self.ll_unprobed),
             (b"tx_check_first_us", self.tx_check_first_us),
+            (b"entries_swr_repeated", self.fault_entries[0]),
+            (b"entries_pa_overtemp", self.fault_entries[1]),
+            (b"entries_wdt_reset_at_start", self.fault_entries[2]),
+            (b"resets_pin", self.resets[0]),
+            (b"resets_software", self.resets[1]),
+            (b"resets_independent_watchdog", self.resets[2]),
+            (b"resets_window_watchdog", self.resets[3]),
+            (b"resets_low_power", self.resets[4]),
             (b"console_dropped", self.console_dropped),
             (b"hp_rx", self.hp_rx),
         ];
@@ -237,6 +250,8 @@ impl Server {
                 net_send_dropped: 0,
                 ll_unprobed: 0,
                 tx_check_first_us: 0,
+                fault_entries: [0; 3],
+                resets: [0; 5],
                 console_dropped: 0,
                 hp_rx: 0,
                 steps: [0; STEPS],

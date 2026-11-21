@@ -33,9 +33,24 @@ pub fn detail() -> Option<g7250_safety::txpath::Mismatch> {
     cortex_m::interrupt::free(|cs| *DETAIL.borrow(cs).borrow())
 }
 
-/// Raise `code`. Returns true for a new entry.
+/// Raise `code`. Returns true for a new entry. A class 1 code's new entry is counted in the
+/// persist block (A3.5 "Counters": since power-on, over resets); its third is escalated.
 pub fn raise(code: u8) -> bool {
-    let new = cortex_m::interrupt::free(|cs| LATCH.borrow(cs).borrow_mut().raise(code));
+    let now = embassy_time::Instant::now().as_millis();
+    let new = cortex_m::interrupt::free(|cs| {
+        let mut l = LATCH.borrow(cs).borrow_mut();
+        if l.flags() & (1 << code) != 0 {
+            return false;
+        }
+        if class_of(code) == 1 {
+            let mut c = g7250_board::persist::get();
+            let n = c.count_entry(code).unwrap_or(1);
+            g7250_board::persist::set(&c);
+            l.raise_counted(code, now, n)
+        } else {
+            l.raise_at(code, now)
+        }
+    });
     if class_of(code) == 2 {
         crate::update::set_class2_fault();
     }
@@ -45,6 +60,27 @@ pub fn raise(code: u8) -> bool {
         g7250_board::println!("app: FAULT code {} (class {}) entered", code, class_of(code));
     }
     new
+}
+
+/// `FAULT_CLEAR` accepted by the register map (A3.5 "Clearing"): the latch takes the same rule
+/// again (the same value and time) and clears. A clear never re-arms.
+pub fn clear(v: u32, now_ms: u64, gone: impl Fn(u8) -> bool) -> bool {
+    cortex_m::interrupt::free(|cs| LATCH.borrow(cs).borrow_mut().clear(v, now_ms, gone).is_ok())
+}
+
+static CLEARED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// A clear of `code` happened, for the log.
+pub fn note_cleared(code: u32) {
+    CLEARED.store(code | 0x100, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// The code cleared since the last call, if any.
+pub fn take_cleared() -> Option<u32> {
+    match CLEARED.swap(0, core::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        v => Some(v & 0xFF),
+    }
 }
 
 /// The latch now.

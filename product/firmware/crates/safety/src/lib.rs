@@ -8,6 +8,7 @@
 pub mod fault;
 pub mod fpga_gate;
 pub mod rx_frame;
+pub mod counters;
 pub mod cw;
 pub mod keypath;
 pub mod safe_state;

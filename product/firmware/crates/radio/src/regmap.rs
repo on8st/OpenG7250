@@ -151,6 +151,8 @@ pub struct RegMap {
     pub armed: bool,
     /// The fault state (A3.5): a copy of the radio's latch, set by the board each pass.
     pub faults: g7250_safety::fault::Faults,
+    /// A `FAULT_CLEAR` accepted (value, time, unkeyed), for the board to clear its latch.
+    pub fault_cleared: Option<(u32, u64, bool)>,
     pub trip_count: u32,
     /// `LIMIT_STATUS`, from the key path.
     pub limit_status: u32,
@@ -176,6 +178,7 @@ impl RegMap {
             watchdog_written: None,
             armed: false,
             faults: g7250_safety::fault::Faults::new(),
+            fault_cleared: None,
             trip_count: 0,
             limit_status: 0,
             limit_tx_time: 0,
@@ -343,10 +346,23 @@ impl RegMap {
                 Err(e) => Some(e),
             },
             FAULT_CLEAR => {
-                // A3.5 "Clearing" (B8.4; 0039): the latch's rules. Only class 2 codes can be set
-                // in this build, so every clear is refused; nothing is cleared.
-                match self.faults.clone().clear(v) {
-                    Ok(()) => None,
+                // A3.5 "Clearing" (B8.4; 0039; Table B8-2 0x0215): the latch's rules. The
+                // condition of each class 1 code: WDT_RESET_AT_START always gone (the clear
+                // acknowledges a past event); SWR_REPEATED gone when unkeyed; PA_OVERTEMP not
+                // known gone (P-PWR-2 pending). The board then clears its own latch.
+                let keyed = c.tx.keyed().is_some();
+                let gone = |code: u8| match code {
+                    g7250_safety::fault::code::WDT_RESET_AT_START => true,
+                    g7250_safety::fault::code::SWR_REPEATED => !keyed,
+                    _ => false,
+                };
+                let mut f = self.faults;
+                match f.clear(v, c.now, gone) {
+                    Ok(()) => {
+                        self.faults = f;
+                        self.fault_cleared = Some((v, c.now, !keyed));
+                        None
+                    }
                     Err(g7250_safety::fault::ClearReject::NotClearable) => Some(WriteReject::NotClearable),
                     Err(g7250_safety::fault::ClearReject::BadValue) => Some(WriteReject::BadValue),
                 }
@@ -437,10 +453,34 @@ mod tests {
     }
 
     fn run(m: &mut RegMap, tx: &mut TxCore, owner: bool, p: &[Pair]) -> Answer {
+        run_at(m, tx, owner, p, 0)
+    }
+
+    fn run_at(m: &mut RegMap, tx: &mut TxCore, owner: bool, p: &[Pair], now: u64) -> Answer {
         let mut rf = Rf;
         let mut path = KeyPath::new();
-        let mut c = WriteCtx { from_owner: owner, busy: false, tx, rf: &mut rf, arm: ArmContext { run: true, level1_active: true, ..Default::default() }, key: KeyContext::default(), path: &mut path, now: 0 };
+        let mut c = WriteCtx { from_owner: owner, busy: false, tx, rf: &mut rf, arm: ArmContext { run: true, level1_active: true, ..Default::default() }, key: KeyContext::default(), path: &mut path, now };
         m.handle(&packet(p), &mut c)
+    }
+
+    #[test]
+    fn fault_clear_of_a_class_1_code_after_10_s_t_a3_23() {
+        use g7250_safety::fault::code::WDT_RESET_AT_START;
+        let mut m = map();
+        let mut tx = TxCore::new(1, &MEASURED);
+        m.faults.raise_counted(WDT_RESET_AT_START, 1_000, 1);
+        assert_eq!((m.read(FAULT_CODE, &tx), m.read(FAULT_CLASS, &tx)), (Some(17), Some(1)));
+        // Under 10 s after the entry: NOT_CLEARABLE, nothing cleared, nothing for the board.
+        let a = run_at(&mut m, &mut tx, true, &[(FAULT_CLEAR, 17)], 10_999);
+        assert_eq!(a.pairs[1].1 & 0xFF, WriteReject::NotClearable as u32);
+        assert_eq!((m.read(FAULT_FLAGS, &tx), m.fault_cleared), (Some(1 << 17), None));
+        // Another value: BAD_VALUE.
+        let a = run_at(&mut m, &mut tx, true, &[(FAULT_CLEAR, 2)], 20_000);
+        assert_eq!(a.pairs[1].1 & 0xFF, WriteReject::BadValue as u32);
+        // After 10 s: cleared, and the board is told.
+        let _ = run_at(&mut m, &mut tx, true, &[(FAULT_CLEAR, 17)], 11_000);
+        assert_eq!((m.read(SAFETY_STATE, &tx), m.read(FAULT_FLAGS, &tx)), (Some(0), Some(0)));
+        assert_eq!(m.fault_cleared, Some((17, 11_000, true)));
     }
 
     #[test]
