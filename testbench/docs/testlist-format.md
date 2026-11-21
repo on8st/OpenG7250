@@ -8,7 +8,9 @@
   `hw.input`. v1.3 took over the emulator's live trace file and its field names (`count`, not
   `events`). v1.4 takes over the emulator's proposal of pin modes and the levels `"z"` and
   `null`, so that "not driven" is no longer reported as "low", with the bench's rule per pin
-  for them. Changes are marked **(v1.1)** to **(v1.4)**. Each version only adds fields, apart
+  for them; `hosts[i].fixed_ports`; the DHCP fixtures and `net.endpoint`; the `boot` trace event
+  and the replay at a trace start, with the point from which pins are judged (A3.6, 0045); the
+  port rule for a shared machine. Changes are marked **(v1.1)** to **(v1.4)**. Each version only adds fields, apart
   from that one rename of a count nobody reads. A v1.3 reader keeps working if it treats an
   unknown level as "not driven".
 - Purpose: the file that `product_run.py <elf> <tests> -o <result>` reads (`<tests>`), and the file
@@ -102,7 +104,8 @@ hand-written subset.
                           "1029": "127.0.0.1:41029", "1035": "127.0.0.1:41035",
                           "7250": "127.0.0.1:47250", "7251": "127.0.0.1:47251" } },
   "hosts": [
-    { "ip": "192.168.73.20", "in_subnet": true,  "bind": "127.0.0.1", "ports": [52000, 52099] },
+    { "ip": "192.168.73.20", "in_subnet": true,  "bind": "127.0.0.1", "ports": [52000, 52099],
+      "fixed_ports": [1024, 7250] },
     { "ip": "192.168.73.21", "in_subnet": true,  "bind": "127.0.0.1", "ports": [52100, 52199] },
     { "ip": "10.99.0.20",    "in_subnet": false, "bind": "127.0.0.1", "ports": [52200, 52299] }
   ],
@@ -121,6 +124,10 @@ the test host cannot bind those addresses without root. So:
 - `radio.connect` (optional): for each radio port, the local address the bench sends to. A
   datagram the bench receives from that address is read as coming from that radio port (sender
   port demultiplexing, B2.4a). Without `connect` the bench sends to `radio.ip` on the spec ports.
+- **(v1.4)** `hosts[i].fixed_ports` (optional), for example `[1024, 7250]`: ports the bench
+  binds only when a test asks for that exact port (T-B3-33 source port 1024, T-B8-19 source port
+  7250). An ordinary socket never takes one, also when it lies inside `ports`. A test that needs
+  a fixed port not listed here skips with the reason.
 - `hosts[i].bind` and `hosts[i].ports` [lo, hi] (optional): the local address and the port
   range the bench binds for host *i*. **(v1.2, confirmed by the emulator side)** Each local
   port *p* in [lo, hi] maps 1:1: the radio sees the source `hosts[i].ip`:*p*. A reply to
@@ -182,7 +189,8 @@ delivery is given in the last column; the reference model offers the ones marked
 | `net.hosts` | none (flag: `hosts` has ≥ 2 in-subnet entries and 1 outside) | takeover, A1.10 S4, B11.15 | emulator second (network bridge); model (ports on one address) |
 | `link.set` | `link.set {speed: 0\|10\|100}` | B5.8, B5.9, B5.13 (0 = link down) | emulator later; model |
 | `power.cut` | `power.cut {at_us: t}` | A1.8 U-5, T-A1-08 | emulator later |
-| `dhcp.server` | `dhcp.offer {…}`, `dhcp.nak {}`, `dhcp.expire {}` | A1.11a, T-A1-35 | emulator later |
+| `dhcp.server` | **(v1.4)** the server is off at power-on. `dhcp.start {server?, address?, netmask?, router?, lease_s?}` starts answering (defaults 192.168.73.1, .10, 255.255.255.0, .1, 3600 s); `dhcp.stop {}` stops; `dhcp.offer {address?, lease_s?, …}` sets what is offered and acknowledged next and starts (a later renewal is acknowledged with the new address); `dhcp.nak {count?}` NAKs the next `count` REQUESTs (default 1); `dhcp.expire {}` forgets the binding (the next renewal is NAKed); `dhcp.log {}` → every DHCP message both ways: `type`, `src`, `dst`, `ciaddr`, options 50 and 54, broadcast flag, `yiaddr`, `lease`, `t_us` (emulated), `t_wall` | A1.11, A1.11a, T-A1-66 (and T-A1-35 once TX can be armed) | emulator now |
+| `net.endpoint` | **(v1.4)** `net.endpoint {}` → the endpoint as it is now. When the image moves to a new subnet (DHCP, Set IP, link-local), `hosts[]` follow it; the bench re-reads the endpoint after an address change | T-A1-66 | emulator now |
 | `sensor.set` | `sensor.set {name, value}`; names `supply_mv`, `current_ma`, `pa_temp_mc`, `fwd_power_mw`, `rev_power_mw` | Table A3-2 rows, RF-gone waits, A3.4c | after the emulator's analog models; **(v1.1)** only in the units and scales the HIS gives, else `ok: false`, `"not in HIS: <name>"` |
 | `hw.input` | **(v1.2)** `hw.input {pin: "PH6"\|"PH3"\|"PH4", level: 0\|1}`; any other pin `ok: false`, `"pin not offered: <pin>"` | T-A3-58: local PTT and KEY inputs key nothing (0030; [HIS] HIS 85) | emulator step 3; model |
 
@@ -239,6 +247,18 @@ A change of mode alone is also an event.
 - `kind` `spi`: one transfer between chip-select edges on `SPI1` or `SPI2`; `cs` is the
   chip-select pin or `null`; `data` is the bytes as hex.
 - `kind` `reset`: `cause` `power`, `wdt` or `software`.
+- **(v1.4)** `kind` `boot`: `{"seq": n, "t_us": T, "kind": "boot", "at": "0x08020000", "pc":
+  "0x0802xxxx"}`. The core executes its first instruction after a reset (power-on,
+  `power.cycle`, `power.cut`, `reset.wdt`, software reset); `at` is the vector-table address it
+  booted from (0x08020000, the boot stage), `pc` the reset handler address from that table, and
+  `t_us` the emulated time of that first instruction. A reset during a trace gives a `boot`
+  event right after the `reset` event.
+- **(v1.4)** Replay at `start`: a trace first replays the last `boot` event and the boot-phase
+  `gpio` events (their `t_us` before the start time, all within 10 ms of the boot), then the
+  current state of every watched pin, then live events. The latch and strobe pins PA11, PH12,
+  PD13, PG2, PG5 are in that current state and in `hw.observe` `pins`. **Proposal:** `start`
+  also returns `"t_us"`, the emulated start time, so that the bench knows exactly where the
+  replay ends; without it the bench takes the boot + 10 ms.
 - A reader MUST ignore an unknown `kind`.
 - Pins: the HIS 85 safe-state items, plus any pin named in `start {pins: [...]}`.
 - **(v1.3)** `start` returns `{"file": "<path>"}`; `stop` returns `{"count": n, "dropped": n,
@@ -250,8 +270,21 @@ The bench starts a trace at the beginning of every test, keeps the `file` from `
 each safe-state checkpoint of the test reads that file. At the end of the test it calls `stop`;
 `dropped` > 0 makes the test `fail`, because its trace checks are then incomplete.
 
-**Rules per pin (v1.4).** The bench (`testbench/testbench/trace.py`) checks every event since
-the trace start, the start snapshot included, and the snapshot's `pins`. What each pin must do
+**From when (v1.4; spec A3.6, decision 0045).** The RF control pins of HIS 85 must be at their
+safe-state levels no later than 20 µs after the boot stage's first instruction. Before that the
+hardware and the vendor bootloader set them, outside the spec, and nothing there fails a test.
+A test is judged in one of two ways:
+- `since: boot` (T-A3-06, T-B10-L11): from every `boot` event's `t_us` + 20 µs on. At that
+  moment each pin must already be at its level, then it must stay there. The replayed boot-phase
+  events after that moment count.
+- `since: start` (every other test): from the trace start's current-state snapshot on, so a
+  boot-phase event is not judged once per test. A `boot` during the test is judged from its
+  `t_us` + 20 µs.
+A `hw.observe` snapshot taken before boot + 20 µs is not judged; the bench polls until it is
+later.
+
+**Rules per pin (v1.4).** The bench (`testbench/testbench/trace.py`) checks every event from
+that point on, and the snapshot's `pins`. What each pin must do
 follows the wording of the HIS for that pin. A pin the HIS wants **held** at a level fails on
 any other state, `"z"` (not held) and `null` (unknown) included. A pin the HIS only forbids a
 level for fails only on that level.
@@ -326,6 +359,10 @@ A test with target `emulator` is also run against the reference model. A test wi
 
 ## 7. Open points for the emulator side (v1.4)
 
-None. Settled: the address mapping (section 3, v1.2), the `hw.trace` schema and `hw.input`
-(section 4, v1.2), the live trace file with `count`, `dropped` and `file` (section 4, v1.3),
-and pin modes with the levels `"z"` and `null` (section 4, v1.4).
+1. Settled: the address mapping (section 3, v1.2), the `hw.trace` schema and `hw.input`
+   (section 4, v1.2), the live trace file (v1.3), pin modes with `"z"` and `null`,
+   `fixed_ports`, the DHCP fixtures, `net.endpoint`, the `boot` event and the replay (v1.4).
+2. Proposed: `hw.trace start` returns `"t_us"`, the emulated start time (section 4).
+3. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
+   runs, the 0x04 reads are six strobes per sample; such a trace is meant for a short test
+   only, and the runner may drop events (which fails the test) if it cannot keep up.

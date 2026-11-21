@@ -35,7 +35,8 @@ pub fn regmap_groups(_cfg: &Config) -> u32 {
 }
 
 /// `calibrated`: the stored calibration set is complete for the freeze rule (`tx` bit 4).
-pub fn build(cfg: &Config, calibrated: bool) -> Vec<u32> {
+/// `rx_offered`: the set holds P-RX-2, so DDC0 is offered (`streams` bit 0; B6.1, 0042).
+pub fn build(cfg: &Config, calibrated: bool, rx_offered: bool) -> Vec<u32> {
     let mut r = vec![0u32; LEN];
     r[0x00] = 0x4737_3235; // "G725"
     r[0x01] = 0x0001_0001;
@@ -48,7 +49,8 @@ pub fn build(cfg: &Config, calibrated: bool) -> Vec<u32> {
     r[0x09] = P2_VERSION as u32;
     r[0x0A] = 0; // hw_revision: not identified (HIS-18)
     r[0x0B] = 0x1 | (1 << 4); // level 1 present, active level 1
-    r[0x0C] = 0x1 | 0x2; // RX IQ; TX IQ per tx bit 1 (= 1 in r1.0, 0036); no mic (0031)
+    // bit 0 RX IQ once P-RX-2 is set (0042); bit 1 TX IQ per tx bit 1 (= 1 in r1.0, 0036)
+    r[0x0C] = (rx_offered as u32) | 0x2;
     r[0x0D] = 1; // num_adc (HIS-01, assumed)
     r[0x0E] = 1; // num_ddc, 0004
     r[0x0F] = 1; // num_duc

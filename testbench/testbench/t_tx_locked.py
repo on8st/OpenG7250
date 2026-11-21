@@ -48,10 +48,20 @@ def has_obs(ctx):
 
 
 def safe(ctx: Ctx, label: str):
-    """Check the HIS 85 safe-state items through hw.observe."""
+    """Check the HIS 85 safe-state items through hw.observe (and the trace, where the runner
+    gives a trace file). Pin levels count from 20 us after the boot stage's first instruction
+    (A3.6; 0045): a snapshot taken before that point is not judged."""
+    from .trace import check_pins, check_safe, last_boot_t_us, load, BOOT_MARGIN_US
+    events = load(ctx.trace_file) if ctx.trace_file else None
+    boot_t = last_boot_t_us(events) if events else None
     o = ctx.fixture("hw.observe")
-    if "pins" in o:  # v1.4: mode, pull and level ("z", null) per watched pin
-        from .trace import check_pins
+    deadline = time.monotonic() + 2.0
+    while boot_t is not None and o.get("t_us", 0) < boot_t + BOOT_MARGIN_US and time.monotonic() < deadline:
+        time.sleep(0.05)
+        o = ctx.fixture("hw.observe")
+    if boot_t is not None and o.get("t_us", 0) < boot_t + BOOT_MARGIN_US:
+        ctx.notes.append(f"{label}: snapshot at t_us {o.get('t_us')} is before boot + 20 us, not judged")
+    elif "pins" in o:  # v1.4: mode, pull and level ("z", null) per watched pin
         for name, ok, detail in check_pins(o["pins"]):
             ctx.check(f"{label}: {name}", ok, detail)
     else:
@@ -71,9 +81,9 @@ def safe(ctx: Ctx, label: str):
         # this checkpoint, all events since the test start. Without a file (the reference
         # model) the snapshot checks above are all there is.
         if ctx.trace_file:
-            from .trace import check_safe, load
-            for name, ok, detail in check_safe(load(ctx.trace_file)):
-                ctx.check(f"{label} (trace): {name}", ok, detail)
+            events = load(ctx.trace_file)  # again: the events up to this checkpoint
+            for name, ok, detail in check_safe(events, since=ctx.trace_since, start_t_us=ctx.trace_start_t_us):
+                ctx.check(f"{label} (trace since {ctx.trace_since}): {name}", ok, detail)
 
 
 def record(ctx, h: Host) -> dict:
@@ -230,7 +240,7 @@ def t_l09(ctx):
         h.stop()
 
 
-@test("T-B10-L11")
+@test("T-B10-L11", trace_since="boot")
 def t_l11(ctx):
     ctx.need("hw.observe")
     with host(ctx) as a, host(ctx) as b:
@@ -252,6 +262,63 @@ def t_l11(ctx):
         if "power.cycle" in ctx.endpoint.get("fixtures", []):
             ctx.fixture("power.cycle")
             safe(ctx, "power-on")
+
+
+@test("T-A3-06", trace_since="boot")
+def t_a3_06(ctx):
+    """After power-on (from 20 us after the boot stage's first instruction, 0045) and after every
+    session end (stop, watchdog standby, takeover) the state of A3.6 holds: the HIS 85 RF control
+    pins at their safe levels; TX_STATE unkeyed; TX_MODE_CLASS 0 and KEYED_TIMEOUT 500 at the next
+    session (A3.6, A3.6a)."""
+    ctx.need("hw.observe")
+    if "power.cycle" in ctx.endpoint.get("fixtures", []):
+        ctx.fixture("power.cycle")
+        time.sleep(1.0)
+        safe(ctx, "after power-on")
+    else:
+        ctx.notes.append("power-on part not run: fixture power.cycle not offered")
+    with host(ctx) as a, host(ctx) as b:
+        for end in ("stop", "watchdog standby", "takeover"):
+            session(a)
+            a.write([(TX_MODE_CLASS, 2), (KEYED_TIMEOUT, 200)])
+            if end == "stop":
+                a.stop()
+            elif end == "watchdog standby":
+                time.sleep(1.3)
+            else:
+                b.keepalive()
+                time.sleep(0.05)
+            safe(ctx, f"after {end}")
+            owner = b if end == "takeover" else a
+            owner.start()
+            owner.drain(0.1)
+            ctx.eq(f"after {end}: TX_MODE_CLASS back to 0", value(owner.write([(TX_MODE_CLASS, 9)]), TX_MODE_CLASS), 0)
+            ctx.eq(f"after {end}: KEYED_TIMEOUT back to 500", value(owner.write([(KEYED_TIMEOUT, 1)]), KEYED_TIMEOUT), 500)
+            ts = value(owner.write([(TX_STATE, 0)]), TX_STATE)
+            ctx.eq(f"after {end}: TX_STATE unkeyed", None if ts is None else ts & 1, 0)
+            owner.stop()
+
+
+@test("T-B6-L01", trace_pins=["PE%d" % i for i in range(11)])
+def t_b6_l01(ctx):
+    """[HIS] HIS 80 on the FPGA bus during a session: no command 0x05, 0x06, 0x09 or 0x0A; a 0x01
+    frame only with the RF section in the safe state (B6.1; 0042); D0-D7 back to outputs only
+    after STB is low. Needs the hw.trace file with PE0-PE10 (emulator)."""
+    from .trace import check_fpga, load
+    if not ctx.trace_file:
+        from .core import Skip
+        raise Skip("needs an hw.trace file with PE0-PE10 (emulator)")
+    with host(ctx) as h:
+        h.start(192)
+        h.recv_alive(1.0)
+        h.keepalive(ddc0_hz=14.2e6)
+        h.recv_alive(0.5)
+        h.stop()
+    events = load(ctx.trace_file)
+    seen = {e.get("pin") for e in events if e.get("kind") == "gpio"}
+    ctx.check("the trace watches the FPGA bus pins", {"PE8", "PE9"} <= seen, f"pins seen: {sorted(p for p in seen if p and p.startswith('PE'))}")
+    for name, ok, detail in check_fpga(events):
+        ctx.check(name, ok, detail)
 
 
 @test("T-A3-58")
@@ -296,3 +363,22 @@ def t_a3_58(ctx):
         h.stop()
         for pin in ("PH6", "PH3", "PH4"):
             ctx.fixture("hw.input", pin=pin, level=0)
+
+
+@test("T-B4-18")
+def t_b4_18(ctx):
+    """r1.0 without a complete calibration set: record tx bits 0-3 = 1, bit 4 = 0; an arm that meets
+    every other condition gets NOT_CALIBRATED (12), not TX_NOT_IMPLEMENTED (11) (B4.8, B10.2; 0036)."""
+    with host(ctx) as h:
+        tx = record(ctx, h)[0x20]
+        ctx.eq("record tx bits 0-3", tx & 0xF, 0xF)
+        if (tx >> 4) & 1:
+            ctx.notes.append("TX calibrated here (tx bit 4 = 1): the arm part needs a radio without a complete set")
+            return
+        ctx.eq("record tx bit 4 (no complete calibration set)", (tx >> 4) & 1, 0)
+        pairs = session(h)
+        tok = token_of(ctx, h, pairs)
+        h.write([(TX_MODE_CLASS, 1)])
+        st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
+        ctx.eq("arm reject reason 12 NOT_CALIBRATED, not 11", None if st is None else (st >> 8) & 0xFF, NOT_CALIBRATED_ARM)
+        h.stop()

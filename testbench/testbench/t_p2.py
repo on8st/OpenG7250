@@ -337,6 +337,7 @@ def t_b5_10(ctx):
 @test("T-B5-11")
 def t_b5_11(ctx):
     with host(ctx) as h:
+        need_ddc0(ctx, h)
         h.send(PORT_DDC, ddc_specific(192))
         h.keepalive()
         got = h.recv(0.3, PORT_DDC0)
@@ -351,14 +352,19 @@ def t_b6_01(ctx):
         h.send(PORT_DISC, general())
         h.send(PORT_DDC, ddc_specific(192))
         ctx.eq("no DDC0 before run (packets in 0.3 s)", len(h.recv(0.3, PORT_DDC0)), 0)
-        h.keepalive()  # liveness: the same set-up with run does stream
-        ctx.at_least("DDC0 after run", len(h.recv(0.3, PORT_DDC0)), what="DDC0 packets in 0.3 s")
+        h.keepalive()  # liveness: the same set-up with run starts the session
+        if ddc0_offered(ctx, h):
+            ctx.at_least("DDC0 after run", len(h.recv(0.3, PORT_DDC0)), what="DDC0 packets in 0.3 s")
+        else:  # before P-RX-2 the session runs without DDC0 (B6.1)
+            ss = _stream_status(h)
+            ctx.eq("after run, before P-RX-2: DDC0 reason 2 (not offered)", None if ss is None else ss & 0x7F, 2)
         idle(h)
 
 
 @test("T-B6-02", "T-B6-03", "T-B6-04", "T-B6-05", "T-B6-25")
 def t_b6_stream(ctx):
     with host(ctx) as h, host(ctx) as disc:
+        need_ddc0(ctx, h)
         disc.discover()
         h.start(192)
         got = h.recv(0.6)
@@ -380,6 +386,7 @@ def t_b6_stream(ctx):
 @test("T-B6-06")
 def t_b6_06(ctx):
     with host(ctx) as h:
+        need_ddc0(ctx, h)
         h.start()
         h.recv(0.2)
         h.stop()
@@ -393,6 +400,7 @@ def t_b6_06(ctx):
 @test("T-B6-08")
 def t_b6_08(ctx):
     with host(ctx) as h:
+        need_ddc0(ctx, h)
         h.start(48)
         h.recv_alive(0.2)
         got = h.recv_alive(1.0, PORT_DDC0)
@@ -413,6 +421,8 @@ def t_b6_10(ctx):
         h.start(192)
         h.recv(0.1)
         rec = need_record(ctx, h)
+        offered = bool(rec[0x0C] & 1)
+        want = 3 if offered else 2  # before P-RX-2 reason 2 comes before 3 (Table B8-3 order; 0042)
         mask = rec.get(0x10, 0)
         bits = {48: 0, 96: 1, 192: 2, 384: 3}
         rates = [r for r, b in bits.items() if not mask >> b & 1] + [768, 1536, 100]
@@ -421,17 +431,21 @@ def t_b6_10(ctx):
             ss = _stream_status(h)
             h.drain(0.05)
             ctx.eq(f"rate {rate}: DDC0 stops (packets in 0.15 s)", len(h.recv(0.15, PORT_DDC0)), 0)
-            ctx.eq(f"rate {rate}: reason 3", None if ss is None else ss & 0x7F, 3)
+            ctx.eq(f"rate {rate}: reason {want}", None if ss is None else ss & 0x7F, want)
             h.keepalive()
-        h.send(PORT_DDC, ddc_specific(96))
-        h.drain(0.05)
-        ctx.at_least("valid rate resumes", len(h.recv(0.2, PORT_DDC0)), what="DDC0 packets in 0.2 s")
+        if offered:
+            h.send(PORT_DDC, ddc_specific(96))
+            h.drain(0.05)
+            ctx.at_least("valid rate resumes", len(h.recv(0.2, PORT_DDC0)), what="DDC0 packets in 0.2 s")
+        else:
+            ctx.notes.append("before P-RX-2: reason 2 checked; the resume part needs P-RX-2")
         idle(h)
 
 
 @test("T-B6-13")
 def t_b6_13(ctx):
     with host(ctx) as h:
+        need_ddc0(ctx, h)
         h.start(192)
         h.recv(0.1)
         h.send(PORT_DDC, ddc_specific(192, enable=False))
@@ -444,7 +458,11 @@ def t_b6_13(ctx):
 
 @test("T-B6-18", "T-B6-19", "T-B6-20", "T-B7-04")
 def t_b6_refusals(ctx):
-    cases = [("sample size 16", lambda h: h.send(PORT_DDC, ddc_specific(192, size=16)), 4),
+    # before P-RX-2 the sample size gives reason 2 (2 before 4), the General-packet refusals keep
+    # their reasons (they come before 2; Table B8-3 order, 0042)
+    with host(ctx) as h0:
+        size_reason = 4 if ddc0_offered(ctx, h0) else 2
+    cases = [("sample size 16", lambda h: h.send(PORT_DDC, ddc_specific(192, size=16)), size_reason),
              ("byte 39 little-endian", lambda h: h.send(PORT_DISC, general(b39=0x02)), 5),
              ("byte 37 time stamp", lambda h: h.send(PORT_DISC, general(b37=0x09)), 6),
              ("byte 37 VNA", lambda h: h.send(PORT_DISC, general(b37=0x0C)), 11)]
@@ -468,8 +486,13 @@ def t_b6_26(ctx):
         got = h.recv(0.3)
         ctx.at_least("status packets run", sum(p == PORT_DDC for p, _, _ in got), what="status packets in 0.3 s")
         ctx.check("no DDC0 without a DDC-specific packet", not any(p == PORT_DDC0 for p, _, _ in got), f"{sum(p == PORT_DDC0 for p, _, _ in got)} DDC0 packets")
+        ss = _stream_status(h)
+        ctx.eq("run without a DDC-specific packet: DDC0 reason 1", None if ss is None else ss & 0x7F, 1)
         h.send(PORT_DDC, ddc_specific(192))
-        ctx.at_least("DDC-specific starts DDC0", len(h.recv(0.2, PORT_DDC0)), what="DDC0 packets in 0.2 s")
+        if ddc0_offered(ctx, h):
+            ctx.at_least("DDC-specific starts DDC0", len(h.recv(0.2, PORT_DDC0)), what="DDC0 packets in 0.2 s")
+        else:
+            ctx.notes.append("before P-RX-2: the start of DDC0 needs P-RX-2 (B6.1)")
         idle(h)
 
 
@@ -480,7 +503,10 @@ def t_b7_03(ctx):
         h.send(PORT_DDC, ddc_specific(192))
         h.keepalive()
         got = h.recv(0.4)
-        ctx.at_least("DDC0 still from 1035", sum(p == PORT_DDC0 for p, _, _ in got), what="DDC0 packets from 1035 in 0.4 s")
+        if ddc0_offered(ctx, h):
+            ctx.at_least("DDC0 still from 1035", sum(p == PORT_DDC0 for p, _, _ in got), what="DDC0 packets from 1035 in 0.4 s")
+        else:
+            ctx.notes.append("before P-RX-2: the DDC0 port part needs P-RX-2 (B6.1)")
         ls = None
         for p, d, _ in got:
             if p == PORT_REG:
@@ -572,3 +598,29 @@ def t_b8_19(ctx):
         h7.send(PORT_REG, regs([(KEYED_TIMEOUT, 200)]))
         h7.send(PORT_REG, regs([(CAP_REQUEST, 1)]))
         ctx.eq("no answer to a non-owner from port 7250", h7.recv(0.3), [])
+
+
+@test("T-B6-27")
+def t_b6_27(ctx):
+    """Before P-RX-2: streams bit 0 = 0, DDC0 enable gets reason 2 and no packets, the rest answers;
+    with P-RX-2 set DDC0 runs (B6.1; 0042)."""
+    with host(ctx) as h:
+        streams = need_record(ctx, h)[0x0C]
+        offered = bool(streams & 1)
+        ctx.notes.append(f"record streams = {streams:#x}")
+        h.start(192)
+        got = h.recv(0.4)
+        ss = _stream_status(h)
+        n = sum(p == PORT_DDC0 for p, _, _ in got)
+        if not offered:
+            ctx.eq("DDC0 enabled: STREAM_STATUS DDC0 reason 2, not running", None if ss is None else ss & 0xFF, 2)
+            ctx.eq("no DDC0 packets", n, 0)
+            ctx.eq("discovery answered", len(h.discover()), 1)
+        else:
+            ctx.notes.append("P-RX-2 set here: checked that DDC0 runs")
+            ctx.at_least("with P-RX-2 set, DDC0 runs", n, what="DDC0 packets in 0.4 s")
+            ctx.check("STREAM_STATUS DDC0 running", ss is not None and ss & 0x80, hex(ss or 0))
+        idle(h)
+    from .mgmt import Mgmt, identify
+    with Mgmt(ctx.net) as c:
+        ctx.eq("management channel answers (IDENTIFY model)", identify(ctx, c).get(1), b"G7250")

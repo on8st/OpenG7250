@@ -13,9 +13,13 @@ from typing import Callable
 REGISTRY: dict[str, Callable] = {}
 
 
-def test(*ids: str):
-    """Register a test function for one or more catalogue ids."""
+def test(*ids: str, trace_pins: list | None = None, trace_since: str = "start"):
+    """Register a test function for one or more catalogue ids. `trace_pins`: extra pins the
+    hw.trace of this test watches; `trace_since`: "start" (judge pins from the trace start
+    snapshot on) or "boot" (from the boot event + 20 us on, A3.6; 0045)."""
     def deco(fn):
+        fn.trace_pins = trace_pins
+        fn.trace_since = trace_since
         for i in ids:
             REGISTRY[i] = fn
         return fn
@@ -30,6 +34,11 @@ class Blocked(Exception):
     pass
 
 
+class RunnerFault(Exception):
+    """The runner or its control socket failed (no answer, broken connection): the result is
+    "error" with the runner named as the cause, not a verdict on the firmware."""
+
+
 class Missing(Exception):
     """An expected reply did not come: the test fails (it is a verdict on the endpoint, not a
     bench error). Raised by Ctx.got() and by the helpers that read replies."""
@@ -42,6 +51,9 @@ class Ctx:
     checks: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     trace_file: str | None = None  # v1.3: the live trace file of this test, from hw.trace start
+    trace_pins: list | None = None  # extra pins a test watches (hw.trace start {pins})
+    trace_since: str = "start"  # from when pin levels are judged: "start" or "boot" (+20 us)
+    trace_start_t_us: int | None = None  # emulated time of the trace start, if the runner gives it
 
     @property
     def net(self):
@@ -98,10 +110,14 @@ class Ctx:
         self.need(op)
         addr = self.endpoint["control"]["address"]
         host, port = addr.rsplit(":", 1)
-        with socket.create_connection((host, int(port)), timeout=5) as s:
-            s.sendall((json.dumps({"op": op, "args": args}) + "\n").encode())
-            line = s.makefile().readline()
-        rep = json.loads(line)
+        # emulated time can run slower than wall time: allow 30 s per fixture call
+        try:
+            with socket.create_connection((host, int(port)), timeout=30) as s:
+                s.sendall((json.dumps({"op": op, "args": args}) + "\n").encode())
+                line = s.makefile().readline()
+            rep = json.loads(line)
+        except (OSError, ValueError) as e:  # socket.timeout is an OSError
+            raise RunnerFault(f"runner: fixture {op}: {type(e).__name__}: {e}") from None
         if not rep.get("ok"):
             raise Skip(rep.get("error", f"fixture:{op}"))
         return rep.get("value")
@@ -116,17 +132,21 @@ def fmt(v):
 def run_one(tid: str, ctx: Ctx) -> dict:
     fn = REGISTRY.get(tid)
     t0 = time.monotonic()
-    if fn is not None and "hw.trace" in ctx.endpoint.get("fixtures", []):
-        try:  # safe-state checks count from the start of each test (format v1.1 section 4)
-            rep = ctx.fixture("hw.trace", action="start")
-            ctx.trace_file = (rep or {}).get("file") if isinstance(rep, dict) else None
-        except Skip:
-            pass
     res: dict = {"id": tid}
     if fn is None:
         res.update(status="skip", reason="not implemented in the test bench yet")
         return res
+    ctx.trace_pins = getattr(fn, "trace_pins", None)
+    ctx.trace_since = getattr(fn, "trace_since", "start")
     try:
+        if "hw.trace" in ctx.endpoint.get("fixtures", []):
+            # safe-state checks count from the start of each test (format v1.1 section 4)
+            try:
+                rep = ctx.fixture("hw.trace", action="start", **({"pins": ctx.trace_pins} if ctx.trace_pins else {}))
+                ctx.trace_file = (rep or {}).get("file") if isinstance(rep, dict) else None
+                ctx.trace_start_t_us = (rep or {}).get("t_us") if isinstance(rep, dict) else None
+            except Skip:
+                pass
         fn(ctx)
         ok = all(c["ok"] for c in ctx.checks) and ctx.checks
         res["status"] = "pass" if ok else "fail"
@@ -136,6 +156,8 @@ def run_one(tid: str, ctx: Ctx) -> dict:
             bad = [c for c in ctx.checks if not c["ok"]]
             if bad:  # the first failed check with what was observed
                 res["reason"] = f"{bad[0]['name']}: {bad[0]['detail']}" + (f" (+{len(bad) - 1} more)" if len(bad) > 1 else "")
+    except RunnerFault as e:
+        res.update(status="error", reason=str(e))
     except Missing as e:
         ctx.checks.append({"name": str(e).split(":")[0], "ok": False, "detail": str(e)})
         res.update(status="fail", reason=str(e))
@@ -154,6 +176,10 @@ def run_one(tid: str, ctx: Ctx) -> dict:
                     res["status"] = "fail"
         except Skip:
             pass
+        except RunnerFault as e:
+            ctx.notes.append(f"{e} (at the end of the test)")
+            if res.get("status") == "pass":
+                res["status"] = "error"
     if ctx.notes:
         res["reason"] = "; ".join(filter(None, [res.get("reason", ""), *ctx.notes]))
     res["duration_s"] = round(time.monotonic() - t0, 3)

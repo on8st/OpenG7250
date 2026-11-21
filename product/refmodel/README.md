@@ -37,6 +37,10 @@ protocol crate, and the firmware never uses this code (0037).
 |---|---|
 | `--tx locked` (default) | r1.0 before calibration: no calibration set, record `tx` bit 1 = 1 and bit 4 = 0, every arm rejected with `NOT_CALIBRATED` (B10.2 item 3, Annex P freeze rule), nothing keys, DUC0 stream reason 14, `ATU_STATE` 5 and `ATU_TUNE` = 1 `NOT_CALIBRATED`, `LIMIT_SWR` and `LIMIT_PA_TEMP` `NOT_CALIBRATED` |
 | `--tx unlocked` | starts with a complete simulated calibration set (Annex P "Tests": simulated values): `tx` bit 4 = 1, arm accepted, a minimal keying model, for host-side tests of TX logic |
+| `--cal none` | no calibration set at all: also DDC0 is not offered (record `streams` bit 0 = 0, stream reason 2; B6.1, 0042), as on a radio before P-RX-2 |
+| `--cal rx` (default with `--tx locked`) | a simulated set that holds only P-RX-2: DDC0 offered, TX frozen |
+| `--cal full` | as `--tx unlocked` |
+| `--port-base N` (default 20000) | spec port p at local port N + p, control at N + 7290; the endpoint file carries `radio.connect` and the bench host ranges at N + 9000 … N + 9199. Refuses any N whose ports touch 1024–7251 or 30000–38299 (the emulator runner's), so the model and the runner never share a port; `0` = the spec ports, only when no emulator run can be going |
 
 A calibration set can also be written and cleared at run time with `SET_CALIBRATION` and
 `CLEAR_CALIBRATION` (A1.12); record `tx` bit 4 follows from the next session on.

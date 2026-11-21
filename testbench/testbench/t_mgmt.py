@@ -97,7 +97,8 @@ def t_a1_secret(ctx):
         r = c.authed("END_WRITE_SESSION", s)
         ctx.eq("valid HMAC: 0", r["status"] if r else None, 0)
         # T-A1-20: challenge per host, used once
-        ch1, ch2 = c.challenge(), c2.challenge()
+        ch1 = ctx.got(c.challenge(), "GET_CHALLENGE (host 1)", "no challenge on port 7251 within 0.5 s")
+        ch2 = ctx.got(c2.challenge(), "GET_CHALLENGE (host 2)", "no challenge on port 7251 within 0.5 s")
         r = c.authed("END_WRITE_SESSION", s, challenge=ch2)
         ctx.eq("other host's challenge: 33", r["status"] if r else None, 33)
         r = c2.authed("END_WRITE_SESSION", s, challenge=ch2)
@@ -107,7 +108,7 @@ def t_a1_secret(ctx):
         # T-A1-22: CHANGE_SECRET masked
         import hashlib, hmac
         new = os.urandom(32)
-        ch = c.challenge()
+        ch = ctx.got(c.challenge(), "GET_CHALLENGE", "no challenge on port 7251 within 0.5 s")
         mask = hmac.new(s, b"G7NS" + ch, hashlib.sha256).digest()
         masked = bytes(a ^ b for a, b in zip(new, mask))
         r = c.authed("CHANGE_SECRET", s, masked, challenge=ch)
@@ -179,7 +180,7 @@ def t_a2_05(ctx):
 
 
 # ---------------- calibration (A1.12, Annex M, Annex P) ----------------
-from .mgmt import FREEZE_SET, calibration_payload, config_tlv  # noqa: E402
+from .mgmt import FREEZE_SET, SavedCalibration, calibration_payload, config_tlv, parse_calibration  # noqa: E402
 from .p2 import (ARM_MAGIC, LIMIT_SWR, LIMIT_PA_TEMP, PORT_REG, TX_ARM, TX_ARM_STATE,  # noqa: E402
                  TX_ARM_TOKEN, TX_MODE_CLASS, TX_STATE, Host, need_record, need_token, parse_regs, value,
                  write_status)
@@ -216,6 +217,17 @@ def arm_once(ctx, h: Host) -> int | None:
 def t_a1_63(ctx):
     s = secret_of(ctx)
     with m(ctx) as c, Host(ctx.net) as h:
+        saved = SavedCalibration(ctx, c)
+        try:
+            s = _t_a1_63(ctx, c, h, s, saved)
+        finally:
+            saved.restore(bytes.fromhex(ctx.endpoint.get("_learned", {}).get("secret", s.hex())))
+    ctx.notes.append("'while armed 50' and 'during an update 58' not reachable here: an arm needs "
+                     "a session (57 comes first, Table A1-3), the update transfer is not modelled")
+
+
+def _t_a1_63(ctx, c, h, s, saved):
+    if True:
         h.start()
         h.drain(0.1)
         r = c.authed("SET_CALIBRATION", s, simulated_set())
@@ -224,7 +236,7 @@ def t_a1_63(ctx):
         r = c.authed("SET_CALIBRATION", s, calibration_payload({"P-XX-9": b"\x01"}))
         ctx.eq("unknown parameter id: 48", r["status"] if r else None, 48)
         g = c.req("GET_CALIBRATION")
-        ctx.eq("nothing stored (set id zeros)", g["payload"][:32] if g else None, bytes(32))
+        ctx.eq("after 48 nothing changed (set id as before)", g["payload"][:32] if g else None, saved.set_id)
         r = c.authed("SET_CALIBRATION", s, simulated_set())
         ctx.eq("complete set: 0", r["status"] if r else None, 0)
         ctx.eq("reply: TX calibrated", r["payload"][32:33] if r else None, b"\x01")
@@ -250,13 +262,17 @@ def t_a1_63(ctx):
         r = c.authed("CLEAR_CALIBRATION", s)
         ctx.eq("CLEAR_CALIBRATION: 0", r["status"] if r else None, 0)
         ctx.eq("tx bit 4 = 0 from the next session", tx_bit4(h), 0)
-        c.authed("END_WRITE_SESSION", s)
-    ctx.notes.append("'while armed 50' and 'during an update 58' not reachable here: an arm needs "
-                     "a session (57 comes first, Table A1-3), the update transfer is not modelled")
+        g = c.req("GET_CALIBRATION")
+        ctx.eq("after CLEAR_CALIBRATION nothing stored (set id zeros)", g["payload"][:32] if g else None, bytes(32))
+    return s
 
 
 @test("T-A1-64")
 def t_a1_64(ctx):
+    with m(ctx) as c:
+        g = ctx.got(c.req("GET_CALIBRATION"), "GET_CALIBRATION", "no reply on port 7251 within 0.5 s")
+        if "P-PWR-2" in parse_calibration(g["payload"])[3]:
+            raise Skip("the calibration set already holds P-PWR-2: the test needs a radio before that")
     with Host(ctx.net) as h:
         h.start()
         h.drain(0.1)
@@ -279,9 +295,18 @@ def t_a1_64(ctx):
 @test("T-A1-65")
 def t_a1_65(ctx):
     s = secret_of(ctx)
+    with m(ctx) as c0:
+        saved = SavedCalibration(ctx, c0)
+        try:
+            _t_a1_65(ctx, s, c0)
+        finally:
+            saved.restore(s)
+
+
+def _t_a1_65(ctx, s, c):
     ranges = [(1.8, 2.0), (3.5, 3.9), (7.0, 7.2), (10.1, 10.15), (14.0, 14.35), (18.068, 18.168),
               (21.0, 21.45), (24.89, 24.99), (28.0, 29.7), (50.0, 54.0)]  # Table A3-0
-    with m(ctx) as c, Host(ctx.net) as h:
+    with Host(ctx.net) as h:
         r = c.authed("SET_CONFIG", s, config_tlv((6, b"\x01")))
         ctx.eq("region 1: 48", r["status"] if r else None, 48)
         r = c.authed("SET_CONFIG", s, config_tlv((6, b"\x00")))
@@ -306,5 +331,79 @@ def t_a1_65(ctx):
                 keyed = ts is not None and ts & 1 == 1
                 ctx.eq(f"{f:.0f} Hz {'inside' if inside else 'outside'}", keyed, inside)
         h.stop()
-        c.authed("CLEAR_CALIBRATION", s)
-        c.authed("END_WRITE_SESSION", s)
+
+
+# ---------------- DHCP (A1.11, A1.11a; 0041) ----------------
+def reread_endpoint(ctx):
+    """net.endpoint: the endpoint as it is now (hosts[] follow the radio to a new subnet)."""
+    ep = ctx.fixture("net.endpoint")
+    learned = ctx.endpoint.get("_learned")
+    ctx.endpoint.clear()
+    ctx.endpoint.update(ep)
+    if learned:
+        ctx.endpoint["_learned"] = learned
+    ctx.__dict__.pop("_net", None)
+
+
+def discovers(log):
+    """t_us of the client's DHCPDISCOVER and DHCPREQUEST messages in a dhcp.log (only a client
+    sends these two types, RFC 2131 Table 2)."""
+    return [m["t_us"] for m in log if str(m.get("type", "")).upper().replace("DHCP", "") in ("DISCOVER", "REQUEST")]
+
+
+@test("T-A1-66")
+def t_a1_66(ctx):
+    """No DHCP server: link-local address [RFC3927], retries from 4 s doubling to at most 64 s,
+    each borrow of the management socket at most 2 s, so that a request repeated every 500 ms
+    around a retry is answered (A1.2, A1.11; 0041)."""
+    ctx.need("dhcp.server")
+    ctx.need("power.cycle")
+    ctx.fixture("dhcp.stop")
+    ctx.fixture("power.cycle")
+    time.sleep(3.0)
+    reread_endpoint(ctx)
+    ip = ctx.endpoint["radio"]["ip"]
+    ctx.check("link-local address while no lease is held (169.254.0.0/16)", ip.startswith("169.254."), ip)
+    with m(ctx) as c:
+        t = identify(ctx, c)
+        ctx.check("management answers on the link-local address", t.get(1) == b"G7250", repr(t.get(1)))
+    # wait for six attempts: 4 + 8 + 16 + 32 + 64 s after the first, about 2 min
+    deadline = time.monotonic() + 200
+    times = []
+    while time.monotonic() < deadline:
+        times = discovers(ctx.fixture("dhcp.log") or [])
+        if len(times) >= 6:
+            break
+        time.sleep(2.0)
+    gaps = [(b - a) / 1e6 for a, b in zip(times, times[1:])]
+    want = [4, 8, 16, 32, 64][:len(gaps)]
+    # RFC 2131 4.1: each delay randomised by -1 to +1 s
+    ctx.check("at least six DHCP attempts within 200 s", len(times) >= 6, f"{len(times)} attempts")
+    ctx.all_of("retry spacing 4 s doubling to 64 s (each +-1 s)", list(zip([round(g, 2) for g in gaps], want)),
+               lambda x: abs(x[0] - x[1]) <= 1.0)
+    if len(times) < 2:
+        return
+    # the borrow: send IDENTIFY every 500 ms from 0.5 s before the next expected retry for 2.5 s
+    nxt = times[-1] / 1e6 + 64.0
+    now_emu = (ctx.fixture("hw.observe") or {}).get("t_us", 0) / 1e6 if "hw.observe" in ctx.endpoint.get("fixtures", []) else None
+    if now_emu is None:
+        ctx.notes.append("borrow part not run: no emulated clock (hw.observe t_us)")
+        return
+    wait = nxt - 0.5 - now_emu
+    if wait > 70:
+        ctx.notes.append(f"borrow part not run: next retry {wait:.0f} s away")
+        return
+    time.sleep(max(0.0, wait))
+    answered = []
+    with m(ctx) as c:
+        rid = c.next_id()
+        for i in range(6):
+            r = c.raw(build(CMD["IDENTIFY"], b"", rid), timeout=0.45)  # one request id: retransmissions
+            answered.append(bool(r))
+            time.sleep(0.05)
+    ctx.check("a request repeated every 500 ms for 2.5 s around a retry is answered", any(answered), str(answered))
+    longest, run = 0, 0
+    for a in answered:
+        run = 0 if a else run + 1
+        longest = max(longest, run)
+    ctx.check("no gap longer than 2 s (4 unanswered tries) during the borrow", longest <= 4, f"longest run unanswered: {longest} x 500 ms")

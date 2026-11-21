@@ -31,6 +31,8 @@ pub struct Config {
     /// Start with a complete simulated calibration set (Annex P, A1.12): record `tx` bit 4 = 1.
     /// The default is the r1.0 state before calibration: `tx` bit 4 = 0, TX frozen (0035, 0036).
     pub calibrated: bool,
+    /// Start with a set that holds P-RX-2 only (DDC0 offered, B6.1), when not `calibrated`.
+    pub rx_params: bool,
     /// Offered DDC0 rates: 48, 96, 192 ksps until P-NET-1 shows 50 MHz SPI (Annex P).
     pub ddc_rates: u32,
     /// Persistent limits (C-3). Built-in values per Table B8-2. SWR S2 and PA T3 are pending
@@ -51,6 +53,7 @@ impl Default for Config {
             fw: (0, 1, 1),
             beta: true,
             calibrated: false,
+            rx_params: true,
             ddc_rates: 0x07,
             builtin_tx_time_ms: 300_000,
             builtin_fwd_power_mw: 100_000,
@@ -218,12 +221,15 @@ pub const FREEZE_SET: [&str; 19] = [
     "P-PWR-5", "P-SEN-1", "P-SEN-2", "P-SEN-3", "P-SEN-4", "P-SEN-5", "P-TIM-1", "P-TIM-2",
     "P-TX-1", "P-ATU-1",
 ];
+/// Annex P freeze rule as amended by 0042: P-RX-2 is part of it too.
+pub const FREEZE_EXTRA: [&str; 2] = ["P-ANT-1", "P-RX-2"];
 /// Every parameter id of Table P-1.
-pub const ALL_PARAMS: [&str; 34] = [
-    "P-RF-1", "P-RF-2", "P-RF-3", "P-RF-4", "P-RF-5", "P-ANT-1", "P-ATU-1", "P-PWR-1", "P-PWR-2",
-    "P-PWR-3", "P-PWR-4", "P-PWR-5", "P-SEN-1", "P-SEN-2", "P-SEN-3", "P-SEN-4", "P-SEN-5",
-    "P-TIM-1", "P-TIM-2", "P-NET-1", "P-NET-2", "P-SYS-1", "P-SYS-2", "P-SYS-3", "P-SYS-4",
-    "P-SYS-5", "P-SYS-6", "P-SYS-7", "P-SYS-8", "P-RX-1", "P-TX-1", "P-L2-1", "P-L2-2", "P-L2-3",
+pub const ALL_PARAMS: [&str; 36] = [
+    "P-RF-1", "P-RF-2", "P-RF-3", "P-RF-4", "P-RF-5", "P-ANT-1", "P-ATU-1", "P-PWR-1",
+    "P-PWR-2", "P-PWR-3", "P-PWR-4", "P-PWR-5", "P-SEN-1", "P-SEN-2", "P-SEN-3", "P-SEN-4",
+    "P-SEN-5", "P-TIM-1", "P-TIM-2", "P-NET-1", "P-NET-2", "P-NET-3", "P-SYS-1", "P-SYS-2",
+    "P-SYS-3", "P-SYS-4", "P-SYS-5", "P-SYS-6", "P-SYS-7", "P-SYS-8", "P-RX-1", "P-RX-2",
+    "P-TX-1", "P-L2-1", "P-L2-2", "P-L2-3",
 ];
 
 impl Calibration {
@@ -232,13 +238,18 @@ impl Calibration {
     }
     /// Complete for the freeze rule (Annex P): every FREEZE_SET parameter and P-ANT-1.
     pub fn complete(&self) -> bool {
-        FREEZE_SET.iter().all(|p| self.has(p)) && self.has("P-ANT-1")
+        FREEZE_SET.iter().all(|p| self.has(p)) && FREEZE_EXTRA.iter().all(|p| self.has(p))
     }
     /// A simulated complete set, for `--tx unlocked` (Annex P "Tests": simulated values).
     pub fn simulated() -> Self {
         let mut entries: Vec<(String, Vec<u8>)> = FREEZE_SET.iter().map(|p| (p.to_string(), vec![1])).collect();
-        entries.push(("P-ANT-1".into(), vec![1]));
+        entries.extend(FREEZE_EXTRA.iter().map(|p| (p.to_string(), vec![1])));
         Calibration { id: [0x5A; 32], date: 0, source: "refmodel simulated".into(), entries }
+    }
+    /// A simulated set that holds only P-RX-2: DDC0 offered, TX still frozen.
+    pub fn simulated_rx() -> Self {
+        Calibration { id: [0x52; 32], date: 0, source: "refmodel simulated (P-RX-2 only)".into(),
+                      entries: vec![("P-RX-2".into(), vec![1])] }
     }
 }
 
@@ -248,8 +259,14 @@ pub fn phase_to_hz(p: u32) -> f64 {
 
 impl Radio {
     pub fn new(cfg: Config, now: u64) -> Self {
-        let cal = if cfg.calibrated { Some(Calibration::simulated()) } else { None };
-        let record = cap::build(&cfg, cal.as_ref().map_or(false, |c| c.complete()));
+        let cal = if cfg.calibrated {
+            Some(Calibration::simulated())
+        } else if cfg.rx_params {
+            Some(Calibration::simulated_rx())
+        } else {
+            None
+        };
+        let record = cap::build(&cfg, cal.as_ref().map_or(false, |c| c.complete()), cal.as_ref().map_or(false, |c| c.has("P-RX-2")));
         let persistent = [cfg.builtin_tx_time_ms, cfg.builtin_fwd_power_mw, cfg.builtin_swr_s2,
                           cfg.builtin_pa_temp_t3_mc];
         let mut r = Radio {
@@ -306,7 +323,7 @@ impl Radio {
     /// Rebuild the record after a calibration change; only while no session runs (A1.12 item 1).
     pub fn rebuild_record(&mut self) {
         let complete = self.cal.as_ref().map_or(false, |c| c.complete());
-        self.record = cap::build(&self.cfg, complete);
+        self.record = cap::build(&self.cfg, complete, self.has_param("P-RX-2"));
     }
     pub fn count(&mut self, what: &str) {
         *self.stats.entry(what.to_string()).or_insert(0) += 1;
@@ -384,7 +401,10 @@ impl Radio {
             0 => 0x80,
             r => r as u32,
         };
-        let duc = if !self.tx_calibrated() { sr::TX_NOT_CALIBRATED as u32 } else { 0 };
+        let duc = match self.duc0_reason() {
+            0 => if self.tx.keyed { 0x80 } else { 0 },
+            r => r as u32,
+        };
         let mic = sr::NOT_OFFERED as u32;
         let wb = sr::NOT_OFFERED as u32;
         ddc | duc << 8 | mic << 16 | wb << 24
@@ -395,39 +415,64 @@ impl Radio {
         self.link_mbit as u32 | 1 << 16 | (p as u32) << 17 | refuse << 24
     }
     /// The reason DDC0 does not run (0 = running), Table B8-3.
+    /// Stream reason order of Table B8-3 (0042): 10, 9, 8 (radio-wide); 1 (not enabled by the
+    /// host); 13, 6, 11, 12, 5 (General-packet refusals); 2, 14 (not offered, not calibrated);
+    /// 3, 4, 7 (stream parameters).
     pub fn ddc0_reason(&self) -> u8 {
-        if self.link_mbit < 100 {
-            return sr::LINK;
-        }
         if self.update_in_progress {
             return sr::UPDATE;
         }
         let Some(s) = self.session.as_ref() else { return sr::RUN_CLEAR };
+        if self.link_mbit < 100 {
+            return sr::LINK;
+        }
+        let enabled = s.s.ddc.as_ref().map_or(false, |d| d[7] & 1 != 0);
+        if !enabled {
+            return sr::NOT_ENABLED;
+        }
         if let Some(g) = &s.s.general {
             let b37 = g.b(37);
+            if b37 & 0b1000 == 0 {
+                return sr::FREQ_ENCODING;
+            }
             if b37 & 0b11 != 0 {
                 return sr::TIMESTAMP;
             }
             if b37 & 0b100 != 0 {
                 return sr::VNA;
             }
-            if b37 & 0b1000 == 0 {
-                return sr::FREQ_ENCODING;
-            }
             if g.b(39) & !0b101 != 0 {
                 return sr::FORMAT;
             }
         }
-        let Some(d) = &s.s.ddc else { return sr::NOT_ENABLED };
-        let rate = be16(d, 18);
-        if !self.rate_offered(rate) {
+        // B6.1 (0042): DDC0 is not offered until the FPGA configuration frame is set (P-RX-2)
+        if !self.has_param("P-RX-2") {
+            return sr::NOT_OFFERED;
+        }
+        let d = s.s.ddc.as_ref().unwrap();
+        if !self.rate_offered(be16(d, 18)) {
             return sr::RATE;
         }
         if !(d[22] == 0 || d[22] == 24) {
             return sr::SIZE;
         }
-        if d[7] & 1 == 0 {
-            return sr::NOT_ENABLED;
+        0
+    }
+
+    /// DUC0 byte of STREAM_STATUS, same order: radio-wide, then EER (12), then 14.
+    pub fn duc0_reason(&self) -> u8 {
+        if self.update_in_progress {
+            return sr::UPDATE;
+        }
+        let Some(s) = self.session.as_ref() else { return sr::RUN_CLEAR };
+        if self.link_mbit < 100 {
+            return sr::LINK;
+        }
+        if s.s.duc.as_ref().map_or(false, |d| d[5] & 1 != 0) {
+            return sr::EER;
+        }
+        if !self.tx_calibrated() {
+            return sr::TX_NOT_CALIBRATED;
         }
         0
     }

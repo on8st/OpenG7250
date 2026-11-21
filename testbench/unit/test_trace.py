@@ -81,3 +81,78 @@ class TraceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from testbench.trace import check_fpga  # noqa: E402
+
+
+def boot(seq, t):
+    return dict(seq=seq, t_us=t, kind="boot", at="0x08020000", pc="0x08020101")
+
+
+def at(seq, t, pin, level, mode="output"):
+    return dict(seq=seq, t_us=t, kind="gpio", pin=pin, level=level, mode=mode)
+
+
+def held_ok(seq0, t):
+    """Every held pin at its safe level at time t."""
+    lv = dict(PF4=1, PF6=0, PC7=0, PH11=0, PA10=1, PH10=1, PD13=1, PG2=1, PG5=1, PD12=0, PB10=0)
+    return [at(seq0 + i, t, p, v) for i, (p, v) in enumerate(lv.items())]
+
+
+class BootWindowTest(unittest.TestCase):
+    def test_z_before_boot_plus_20us_is_outside_the_spec(self):
+        ev = [boot(1, 1000), at(2, 1005, "PF4", "z", "analog")] + held_ok(10, 1015)
+        self.assertEqual([n for n, ok, _ in check_safe(ev, since="boot") if not ok], [])
+
+    def test_wrong_level_at_boot_plus_20us_fails(self):
+        # PF4 still "z" at boot + 20 us: the state at that moment is judged
+        ev = [boot(1, 1000), at(2, 1005, "PF4", "z", "analog")] + [e for e in held_ok(10, 1015) if e["pin"] != "PF4"] \
+            + [at(30, 1100, "PF4", 1)]
+        bad = [n for n, ok, _ in check_safe(ev, since="boot") if not ok]
+        self.assertEqual(len(bad), 1)
+        self.assertTrue(bad[0].startswith("PF4"))
+
+    def test_start_mode_skips_the_replayed_boot_phase(self):
+        # replayed boot phase (within 10 ms) with a bad level, then the start snapshot is right
+        ev = [boot(1, 1000), at(2, 1030, "PD12", 1)] + held_ok(10, 50_000)
+        self.assertEqual([n for n, ok, _ in check_safe(ev, since="start") if not ok], [])
+        self.assertTrue(any(n.startswith("PD12") for n, ok, _ in check_safe(ev, since="boot") if not ok))
+
+    def test_reset_during_the_trace_opens_a_new_window(self):
+        ev = held_ok(1, 50_000) + [dict(seq=20, t_us=60_000, kind="reset", cause="power"), boot(21, 60_010),
+                                   at(22, 60_015, "PG2", "z", "analog")] + held_ok(30, 60_040)
+        self.assertEqual([n for n, ok, _ in check_safe(ev, since="start") if not ok], [])
+
+
+def cmd_byte(seq, byte):
+    """D0-D7 = byte, then CMD and STB up, both down (HIS 80)."""
+    ev = [at(seq + i, seq, f"PE{i}", (byte >> i) & 1) for i in range(8)]
+    return ev + [at(seq + 8, seq, "PE8", 1), at(seq + 9, seq, "PE9", 1), at(seq + 10, seq, "PE9", 0),
+                 at(seq + 11, seq, "PE8", 0)]
+
+
+class FpgaBusTest(unittest.TestCase):
+    def base(self):
+        return [at(1, 1, "PE9", 0), at(2, 1, "PE8", 0)] + held_ok(3, 1)
+
+    def test_clean_bus(self):
+        ev = self.base() + cmd_byte(100, 0x08) + cmd_byte(200, 0x01)
+        self.assertEqual([n for n, ok, _ in check_fpga(ev) if not ok], [])
+
+    def test_forbidden_command(self):
+        bad = [n for n, ok, _ in check_fpga(self.base() + cmd_byte(100, 0x05)) if not ok]
+        self.assertEqual(len(bad), 1)
+        self.assertIn("0x05", bad[0])
+
+    def test_0x01_outside_the_safe_state(self):
+        ev = self.base() + [at(50, 50, "PF6", 1)] + cmd_byte(100, 0x01)
+        bad = [n for n, ok, _ in check_fpga(ev) if not ok]
+        self.assertEqual(len(bad), 1)
+        self.assertIn("0x01", bad[0])
+
+    def test_data_back_to_output_with_stb_high(self):
+        ev = self.base() + [at(50, 50, "PE0", 0, "input"), at(51, 51, "PE9", 1), at(52, 52, "PE0", 0, "output")]
+        bad = [n for n, ok, _ in check_fpga(ev) if not ok]
+        self.assertEqual(len(bad), 1)
+        self.assertIn("D0-D7", bad[0])

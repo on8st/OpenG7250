@@ -240,3 +240,34 @@ fn record_table_a3_0_and_groups() {
     assert_eq!(r.record[0x10], 0x07, "192 ksps maximum until P-NET-1");
     assert_eq!(r.record[0x57] & 0x1F, 0, "cal_info bits 0-4 = 0 uncalibrated");
 }
+
+#[test]
+fn stream_reason_order_0042() {
+    // without P-RX-2: enable -> 2; rate 768 -> 2 (2 before 3); byte 39 little-endian -> 5
+    // (General refusals before 2); no enable -> 1 (before everything but 10, 9, 8)
+    let a = host(50000);
+    let reason = |r: &mut Radio, t: u64| {
+        let out = r.on_datagram(t, &rx(a, port::REGMAP, &regw(&[(reg::STREAM_STATUS, 0)])));
+        find(&out, reg::STREAM_STATUS).unwrap() & 0xFF
+    };
+    let mut r = Radio::new(Config { rx_params: false, ..Config::default() }, 0);
+    session(&mut r, a, 0);
+    assert_eq!(reason(&mut r, MS), sr::NOT_OFFERED as u32);
+    assert_eq!(r.record[0x0C] & 1, 0, "streams bit 0 = 0 before P-RX-2");
+    r.on_datagram(2 * MS, &rx(a, port::DDC_SPECIFIC, &ddc(768)));
+    assert_eq!(reason(&mut r, 3 * MS), sr::NOT_OFFERED as u32);
+    let mut g = general(true, false);
+    g[39] = 0x02;
+    r.on_datagram(4 * MS, &rx(a, port::DISCOVERY, &g));
+    assert_eq!(reason(&mut r, 5 * MS), sr::FORMAT as u32);
+    let mut d = ddc(768);
+    d[7] = 0;
+    r.on_datagram(6 * MS, &rx(a, port::DDC_SPECIFIC, &d));
+    assert_eq!(reason(&mut r, 7 * MS), sr::NOT_ENABLED as u32);
+    // with P-RX-2 (the default model): rate 768 -> 3
+    let mut r = Radio::new(Config::default(), 0);
+    session(&mut r, a, 0);
+    assert_eq!(reason(&mut r, MS), 0x80, "running");
+    r.on_datagram(2 * MS, &rx(a, port::DDC_SPECIFIC, &ddc(768)));
+    assert_eq!(reason(&mut r, 3 * MS), sr::RATE as u32);
+}

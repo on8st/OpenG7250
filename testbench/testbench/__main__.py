@@ -52,6 +52,8 @@ def cmd_list(a) -> int:
             e["needs"] = t["needs"]
         if t.get("pending"):
             e["params"] = {"pending": t["pending"]}
+        if t.get("timeout_s"):
+            e["timeout_s"] = t["timeout_s"]
         tests.append(e)
     doc = {"format": "g7250-testlist", "version": 1, "minor": 4, "spec": cat["spec"], "his": cat["his"],
            "catalogue": {"commit": git_commit(),

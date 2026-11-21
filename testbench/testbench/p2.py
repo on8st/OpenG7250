@@ -234,6 +234,21 @@ def need_discovery(ctx, h: "Host", timeout: float = 0.5) -> bytes:
     return r[0]
 
 
+PENDING_RX = "pending:P-RX-2 (record streams bit 0 = 0: DDC0 not offered until the FPGA frame is set, B6.1; 0042)"
+
+
+def ddc0_offered(ctx, h: "Host") -> bool:
+    """Record `streams` bit 0 (B4.8): DDC0 offered, that is P-RX-2 set (B6.1; 0042)."""
+    return bool(need_record(ctx, h)[0x0C] & 1)
+
+
+def need_ddc0(ctx, h: "Host"):
+    """A test that needs DDC0 to stream cannot be decided before P-RX-2: blocked, not failed."""
+    if not ddc0_offered(ctx, h):
+        from .core import Blocked
+        raise Blocked(PENDING_RX)
+
+
 def need_token(ctx, h: "Host", pairs=None) -> int:
     """TX_ARM_TOKEN from the session-start push, else read by a write (B8.4a)."""
     t = value(pairs or [], TX_ARM_TOKEN)

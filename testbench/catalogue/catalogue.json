@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "0e075f2",
-  "sha256_of_inputs": "13715a03b2808b51f751e74da32c01d44514a9e21a0c7c25b1c5c02951945ffd"
+  "commit": "a118943",
+  "sha256_of_inputs": "66d8c22c7ffd46db0129da8e1d15803facc9e42300ad050825da615256008699"
  },
  "his": {
   "commit": "d07627e"
@@ -1323,6 +1323,76 @@
    ]
   },
   {
+   "id": "T-A1-66",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041).",
+   "reqs": [
+    "A1",
+    "A1.2",
+    "A1.11"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "dhcp.server",
+    "power.cycle"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "DHCP fixtures of the emulator (format v1.4); the reference model has no DHCP"
+   ],
+   "timeout_s": 300
+  },
+  {
+   "id": "T-A1-67",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-68",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [
+    "power.cycle",
+    "time.scale"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
    "id": "T-A2-01",
    "origin": "spec",
    "part": "A-B",
@@ -1725,7 +1795,7 @@
    "id": "T-A3-06",
    "origin": "spec",
    "part": "A-B",
-   "title": "After power-on and after every session end the state of A3.6 holds.",
+   "title": "After power-on and after every session end the state of A3.6 holds. After power-on the check starts 20 µs after the boot stage's first instruction at 0x08020000; from then on every RF control pin of HIS 85 is at its safe-state level and stays there (emulator or reference model; A3.6, \"From when\"; 0045).",
    "reqs": [
     "A3",
     "A3.6"
@@ -1738,12 +1808,14 @@
    ],
    "needs": [
     "hw.observe",
+    "hw.trace",
     "power.cycle"
    ],
    "pending": [],
-   "tx_part": true,
+   "tx_part": false,
    "notes": [
-    "HIS 85 safe state via hw.observe"
+    "spec marks it reference model; emulator only with the fixtures",
+    "HIS 85 safe state via hw.observe and hw.trace, from the boot event + 20 us (0045)"
    ]
   },
   {
@@ -2896,6 +2968,32 @@
    ]
   },
   {
+   "id": "T-A3-59",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040).",
+   "reqs": [
+    "A3",
+    "A3.6",
+    "A3.5a"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "sensor.set",
+    "hw.observe"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "needs the debug console (USART1) of the runner; no fixture for it yet"
+   ]
+  },
+  {
    "id": "T-B3-01",
    "origin": "spec",
    "part": "A-B",
@@ -3432,21 +3530,24 @@
    "id": "T-B3-32",
    "origin": "spec",
    "part": "A-B",
-   "title": "Set IP with the unit's MAC to the unicast or directed broadcast address from a source outside the radio's subnet is ignored and counted; to 255.255.255.255 from the same source it is accepted (B3.9, B11.15).",
+   "title": "Set IP with the unit's MAC to the unicast or directed broadcast address from a source outside the radio's subnet is ignored and counted. To 255.255.255.255 from the same source it is accepted where the controller reports the destination; where it does not (P-NET-3), it is ignored and counted too, except while the radio uses a link-local address, when it is accepted (B3.9, B11.15; 0039).",
    "reqs": [
     "B3",
     "B3.9",
-    "B11.15"
+    "B11.15",
+    "0039"
    ],
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
    "needs": [
     "net.outside",
-    "net.broadcast"
+    "net.broadcast",
+    "ctrl.set"
    ],
    "pending": [
-    "P-NET-2"
+    "P-NET-2",
+    "P-NET-3"
    ],
    "tx_part": false,
    "notes": []
@@ -3464,6 +3565,26 @@
    "target": "emulator",
    "also": [],
    "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
+   "id": "T-B3-34",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "After a Set IP to an address inside the current subnet the netmask is unchanged; to an address outside it the netmask becomes 255.255.255.0 and a gateway outside the new subnet is cleared; 0.0.0.0 starts DHCP (B3.9; 0039).",
+   "reqs": [
+    "B3",
+    "B3.9",
+    "0039"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "dhcp.server"
+   ],
    "pending": [],
    "tx_part": false,
    "notes": []
@@ -3758,6 +3879,29 @@
    "notes": []
   },
   {
+   "id": "T-B4-18",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "An r1.0 firmware reports record `tx` bits 0–3 = 1 and bit 4 = 0 without a complete calibration set; an arm that meets every other condition gets `NOT_CALIBRATED` (12), not `TX_NOT_IMPLEMENTED` (11). A build with bit 1 = 0 reports bit 4 = 0 and rejects the arm with 11, which precedes 12 (B4.8, B10, B10.2 item 3; 0036, 0039).",
+   "reqs": [
+    "B4",
+    "B4.8",
+    "B10",
+    "B10.2",
+    "0036",
+    "0039"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
    "id": "T-B5-01",
    "origin": "spec",
    "part": "A-B",
@@ -3937,9 +4081,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B5-12",
@@ -4125,9 +4273,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-03",
@@ -4141,9 +4293,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-04",
@@ -4157,9 +4313,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-05",
@@ -4173,9 +4333,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-06",
@@ -4189,9 +4353,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-07",
@@ -4227,7 +4395,9 @@
     "emulator"
    ],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
    "notes": []
   },
@@ -4245,7 +4415,9 @@
     "emulator"
    ],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
    "notes": []
   },
@@ -4253,17 +4425,25 @@
    "id": "T-B6-10",
    "origin": "spec",
    "part": "A-B",
-   "title": "A DDC0 rate outside `ddc_rates` (including 768 and 1536) stops DDC0, is not clamped, and is reported in `STREAM_STATUS`; a valid rate resumes it.",
+   "title": "A DDC0 rate outside `ddc_rates` (including 768 and 1536) stops DDC0, is not clamped, and is reported in `STREAM_STATUS`; a valid rate resumes it. With P-RX-2 set (reference model); before it, reason 2 (Table B8-3 order; 0042).",
    "reqs": [
-    "B6"
+    "B6",
+    "B8",
+    "Table B8-3"
    ],
    "scope": "v1.0",
-   "target": "emulator",
-   "also": [],
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
   },
   {
    "id": "T-B6-11",
@@ -4279,11 +4459,11 @@
     "emulator"
    ],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": [
-    "emulator only if it can inject an ADC test tone"
-   ]
+   "notes": []
   },
   {
    "id": "T-B6-12",
@@ -4299,7 +4479,9 @@
     "emulator"
    ],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
    "notes": []
   },
@@ -4315,9 +4497,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-14",
@@ -4331,9 +4517,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-15",
@@ -4347,9 +4537,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-16",
@@ -4364,9 +4558,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-17",
@@ -4380,10 +4578,14 @@
     "0015"
    ],
    "scope": "v1.0",
-   "target": "emulator",
-   "also": [],
+   "target": "needs-radio",
+   "also": [
+    "emulator"
+   ],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
    "notes": []
   },
@@ -4391,31 +4593,43 @@
    "id": "T-B6-18",
    "origin": "spec",
    "part": "A-B",
-   "title": "A sample size other than 0 or 24 stops DDC0 with a reason.",
+   "title": "A sample size other than 0 or 24 stops DDC0 with a reason. With P-RX-2 set (reference model); before it, reason 2 (Table B8-3 order; 0042).",
    "reqs": [
-    "B6"
+    "B6",
+    "B8",
+    "Table B8-3"
    ],
    "scope": "v1.0",
-   "target": "emulator",
-   "also": [],
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
   },
   {
    "id": "T-B6-19",
    "origin": "spec",
    "part": "A-B",
-   "title": "General byte 39 asking for little-endian, float or double stops DDC0 with a reason.",
+   "title": "General byte 39 asking for little-endian, float or double stops DDC0 with a reason. The reason is 5, also before P-RX-2 (Table B8-3 order; 0042).",
    "reqs": [
-    "B6"
+    "B6",
+    "B8",
+    "Table B8-3"
    ],
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
    "notes": []
   },
@@ -4423,15 +4637,19 @@
    "id": "T-B6-20",
    "origin": "spec",
    "part": "A-B",
-   "title": "General byte 37 bit [0] or [1] set stops DDC0 with a reason; time stamp bytes 4–11 are otherwise zero.",
+   "title": "General byte 37 bit [0] or [1] set stops DDC0 with a reason; time stamp bytes 4–11 are otherwise zero. The reason is 6, also before P-RX-2 (Table B8-3 order; 0042).",
    "reqs": [
-    "B6"
+    "B6",
+    "B8",
+    "Table B8-3"
    ],
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
    "notes": []
   },
@@ -4497,9 +4715,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-25",
@@ -4514,9 +4736,13 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"
+   ]
   },
   {
    "id": "T-B6-26",
@@ -4534,6 +4760,29 @@
    "pending": [],
    "tx_part": false,
    "notes": []
+  },
+  {
+   "id": "T-B6-27",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Before P-RX-2 is set: record `streams` bit 0 = 0; a session that enables DDC0 gets `STREAM_STATUS` DDC0 not running with reason 2 and no DDC0 packets; discovery, `CAP_REQUEST` and the management channel answer as usual; with P-RX-2 set (reference model) DDC0 runs (B6.1; 0042).",
+   "reqs": [
+    "B6",
+    "B6.1"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [],
+   "pending": [
+    "P-RX-2"
+   ],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
   },
   {
    "id": "T-B7-01",
@@ -4588,15 +4837,19 @@
    "id": "T-B7-04",
    "origin": "spec",
    "part": "A-B",
-   "title": "General byte 37 bit [2] set stops DDC0 with reason 11.",
+   "title": "General byte 37 bit [2] set stops DDC0 with reason 11. Also before P-RX-2 (Table B8-3 order; 0042).",
    "reqs": [
-    "B7"
+    "B7",
+    "B8",
+    "Table B8-3"
    ],
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [],
+   "pending": [
+    "P-RX-2"
+   ],
    "tx_part": false,
    "notes": []
   },
@@ -9667,6 +9920,30 @@
    ],
    "needs": [
     "hw.observe"
+   ],
+   "notes": [
+    "TX frozen until the calibration set is complete (Annex P; 0035, 0036)"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "tx_part": false,
+   "pending": []
+  },
+  {
+   "id": "T-B6-L01",
+   "origin": "testbench",
+   "part": "A-B",
+   "title": "FPGA bus ([HIS] HIS 80) during a session: no command 0x05, 0x06, 0x09 or 0x0A; a 0x01 frame only with the RF section in the safe state (B6.1; 0042); D0-D7 back to outputs only after STB is low. Needs hw.trace with PE0-PE10.",
+   "reqs": [
+    "B6.1",
+    "0042",
+    "HIS 80"
+   ],
+   "needs": [
+    "hw.trace"
    ],
    "notes": [
     "TX frozen until the calibration set is complete (Annex P; 0035, 0036)"

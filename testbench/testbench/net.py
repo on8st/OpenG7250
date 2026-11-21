@@ -49,8 +49,11 @@ class Net:
         h = self.hosts[idx]
         ip = h.get("bind", h["ip"])
         lo_hi = h.get("ports")
-        if port and lo_hi and not lo_hi[0] <= port <= lo_hi[1]:
-            raise Skip(f"source port {port} is outside hosts[{idx}].ports {lo_hi}: not mapped by the runner")
+        fixed = set(h.get("fixed_ports", []))  # v1.4: bound only when a test asks for the port
+        if port:
+            if (lo_hi or fixed) and port not in fixed and not (lo_hi and lo_hi[0] <= port <= lo_hi[1]):
+                raise Skip(f"source port {port} is not in hosts[{idx}].fixed_ports {sorted(fixed)} "
+                           f"or hosts[{idx}].ports {lo_hi}: not mapped by the runner")
         if port or not lo_hi:
             try:
                 s.bind((ip, port))
@@ -66,6 +69,8 @@ class Net:
         start = _CURSOR.get(idx, 0)
         for k in range(n):
             p = lo + (start + k) % n
+            if p in fixed:  # an ordinary socket never takes a fixed port
+                continue
             try:
                 s.bind((ip, p))
                 _CURSOR[idx] = (start + k + 1) % n

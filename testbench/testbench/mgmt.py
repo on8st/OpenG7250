@@ -20,7 +20,8 @@ CMD = dict(IDENTIFY=0x0001, GET_STATS=0x0002, GET_CHALLENGE=0x0010, SET_FIRST_SE
 # Annex P freeze rule: every parameter of groups P-RF, P-PWR, P-SEN, P-TIM, and P-TX-1, P-ATU-1,
 # P-ANT-1 (Table P-1).
 FREEZE_SET = ([f"P-RF-{i}" for i in range(1, 6)] + [f"P-PWR-{i}" for i in range(1, 6)]
-              + [f"P-SEN-{i}" for i in range(1, 6)] + ["P-TIM-1", "P-TIM-2", "P-TX-1", "P-ATU-1", "P-ANT-1"])
+              + [f"P-SEN-{i}" for i in range(1, 6)] + ["P-TIM-1", "P-TIM-2", "P-RX-2", "P-TX-1", "P-ATU-1",
+                                                         "P-ANT-1"])  # P-RX-2 joined with 0042
 
 
 def calibration_payload(entries: dict[str, bytes], date: int = 0, source: str = "testbench") -> bytes:
@@ -126,3 +127,46 @@ def identify(ctx, c: Mgmt) -> dict[int, bytes]:
         from .core import Missing
         raise Missing(f"IDENTIFY: status {r.get('status')}")
     return tlv(r["payload"])
+
+
+def parse_calibration(payload: bytes):
+    """GET_CALIBRATION reply (Annex M Table M-1, M-5): (set id, date, source, {id: value})."""
+    set_id = payload[:32]
+    date, sl = struct.unpack_from(">IB", payload, 32)
+    source = payload[37:37 + sl].decode("ascii", "replace")
+    i, entries = 37 + sl, {}
+    while i < len(payload):
+        il = payload[i]
+        k = payload[i + 1:i + 1 + il].decode("ascii", "replace")
+        vl = struct.unpack_from(">H", payload, i + 1 + il)[0]
+        entries[k] = payload[i + 3 + il:i + 3 + il + vl]
+        i += 3 + il + vl
+    return set_id, date, source, entries
+
+
+class SavedCalibration:
+    """Save the radio's calibration set at the start of a test and put it back at the end, so a
+    test that writes or clears it leaves the radio as it found it (with the secret in force then)."""
+
+    def __init__(self, ctx, c: Mgmt):
+        self.ctx, self.c = ctx, c
+        g = ctx.got(c.req("GET_CALIBRATION"), "GET_CALIBRATION", "no reply on port 7251 within 0.5 s")
+        self.set_id, self.date, self.source, self.entries = parse_calibration(g["payload"])
+
+    @property
+    def empty(self) -> bool:
+        return self.set_id == bytes(32)
+
+    def restore(self, secret: bytes):
+        import time
+        for _ in range(4):  # 57 while the test's P2 session still runs: it ends by its watchdog in 1 s
+            if self.empty:
+                r = self.c.authed("CLEAR_CALIBRATION", secret)
+            else:
+                r = self.c.authed("SET_CALIBRATION", secret, calibration_payload(self.entries, self.date, self.source))
+            if not r or r.get("status") != 57:
+                break
+            time.sleep(0.6)
+        if not r or r.get("status") != 0:
+            self.ctx.notes.append(f"calibration set not restored: {None if not r else r.get('status')}")
+        self.c.authed("END_WRITE_SESSION", secret)

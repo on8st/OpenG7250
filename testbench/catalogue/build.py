@@ -153,8 +153,9 @@ OVERRIDES: dict[str, dict] = {
     **{t: TXR for t in [f"T-A3-{n:02d}" for n in range(1, 58)]},
     "T-A3-03": {"target": "emulator", "also": ["host"], "tx_part": False,
                 "notes": ["LIMIT_* writes need register group 2 only, no arm"]},
-    "T-A3-06": {"target": "emulator", "also": ["host", "needs-radio"], "needs": ["hw.observe",
-                "power.cycle"], "notes": ["HIS 85 safe state via hw.observe"]},
+    "T-A3-06": {"target": "emulator", "also": ["host", "needs-radio"], "tx_part": False,
+                "needs": ["hw.observe", "hw.trace", "power.cycle"],
+                "notes": ["HIS 85 safe state via hw.observe and hw.trace, from the boot event + 20 us (0045)"]},
     "T-A3-07": {"scope": "not-v1.0"}, "T-A3-42": {"scope": "not-v1.0"},
     "T-A3-15": {"target": "emulator", "also": ["host"], "needs": ["reset.wdt"]},
     "T-A3-38": {"target": "emulator", "also": ["host"], "needs": ["power.cycle", "reset.wdt"],
@@ -208,6 +209,19 @@ OVERRIDES: dict[str, dict] = {
     "T-A3-58": {"target": "emulator", "also": ["host"], "tx_part": False, "needs": ["hw.input"],
                 "notes": ["needs the local inputs PH6, PH3, PH4 driven: fixture hw.input"]},
     "T-A1-63": {"target": "host", "also": ["emulator"]},
+    "T-A1-66": {"target": "emulator", "also": [], "needs": ["dhcp.server", "power.cycle"], "timeout_s": 300,
+                "notes": ["DHCP fixtures of the emulator (format v1.4); the reference model has no DHCP"]},
+    "T-A1-67": {"target": "host", "also": ["emulator"]},
+    "T-A1-68": {"target": "host", "also": ["emulator"]},
+    "T-A3-59": {"target": "emulator", "also": ["host"], "tx_part": False,
+                "notes": ["needs the debug console (USART1) of the runner; no fixture for it yet"]},
+    "T-B4-18": {"target": "emulator", "also": ["host"], "tx_part": False},
+    "T-B6-27": {"target": "emulator", "also": ["host"]},
+    **{t: {"pending": ["P-RX-2"], "notes": ["DDC0 is not offered before P-RX-2 (B6.1; 0042): blocked there"]}
+       for t in ["T-B5-11", "T-B6-02", "T-B6-03", "T-B6-04", "T-B6-05", "T-B6-06", "T-B6-13",
+                 "T-B6-14", "T-B6-15", "T-B6-16", "T-B6-24", "T-B6-25"]},
+    **{t: {"target": "needs-radio", "also": ["emulator"], "pending": ["P-RX-2"]}
+       for t in ["T-B6-08", "T-B6-09", "T-B6-11", "T-B6-12", "T-B6-17"]},
     "T-A1-64": {"target": "emulator", "also": ["host"]},
     "T-B10-08": {"target": "emulator", "also": ["host"]},
     "T-B10-16": {"target": "emulator", "also": ["host"],
@@ -246,6 +260,9 @@ BENCH_TESTS = [
      "`LIMIT_FWD_POWER` writes are answered as in Table B8-2 (accepted values, `BAD_VALUE`, "
      "`LOOSER_LIMIT`, 0 = back to the persistent value) and are reset at the session end; none "
      "moves a pin of the RF section.", ["B8.4", "Table B8-2", "A3.6", "HIS 85"], ["hw.observe"]),
+    ("T-B6-L01", "FPGA bus ([HIS] HIS 80) during a session: no command 0x05, 0x06, 0x09 or 0x0A; a "
+     "0x01 frame only with the RF section in the safe state (B6.1; 0042); D0-D7 back to outputs "
+     "only after STB is low. Needs hw.trace with PE0-PE10.", ["B6.1", "0042", "HIS 80"], ["hw.trace"]),
     ("T-B10-L11", "TX frozen: the HIS 85 safe state is held, traced from power-on, through idle, "
      "a session with PTT held, a takeover, a watchdog standby and a power cycle: no T/R line "
      "leaves its RX level, chain A bit 7 is never set, bias channels 2, 7, 8 are never non-zero, "

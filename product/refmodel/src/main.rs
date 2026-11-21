@@ -3,7 +3,7 @@
 //! (testbench/docs/testlist-format.md section 4) on TCP.
 //!
 //!   g7250-refmodel [--ip 127.0.0.1] [--netmask 255.0.0.0] [--mac 02:00:00:00:72:50]
-//!                  [--tx locked|unlocked] [--port-base 20000]
+//!                  [--tx locked|unlocked] [--cal none|rx|full] [--port-base 20000]
 //!                  [--control 127.0.0.1:<base+7290>] [--endpoint-file PATH]
 //!
 //! Port base: the model binds each spec port p (Table B2-1) at local port base + p and writes
@@ -52,6 +52,14 @@ fn main() {
             // locked: no calibration set (r1.0 before measurement); unlocked: a complete simulated
             // calibration set at start (Annex P "Tests")
             "--tx" => cfg.calibrated = v == "unlocked",
+            // calibration set at start: none (DDC0 not offered, TX frozen), rx (P-RX-2 only: DDC0
+            // offered, TX frozen; the default), full (complete simulated set, as --tx unlocked)
+            "--cal" => match v.as_str() {
+                "none" => { cfg.calibrated = false; cfg.rx_params = false; }
+                "rx" => { cfg.calibrated = false; cfg.rx_params = true; }
+                "full" => cfg.calibrated = true,
+                o => panic!("--cal none|rx|full, not {o}"),
+            },
             "--control" => control = Some(v),
             "--port-base" => base = v.parse().expect("port base"),
             "--endpoint-file" => endpoint_file = Some(v),
