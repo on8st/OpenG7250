@@ -76,9 +76,11 @@ fn clock_config() -> embassy_stm32::Config {
     c.rcc.apb3_pre = APBPrescaler::DIV1;
     c.rcc.apb4_pre = APBPrescaler::DIV1;
     c.rcc.voltage_scale = VoltageScale::Scale1;
-    // The power-on value of PWR_CR3 on the H72x (SMPS and LDO on); the board's supply wiring is
-    // not in the HIS (question F1-Q3), so nothing else is written.
-    c.rcc.supply_config = SupplyConfig::Default;
+    // [HIS] HIS 10 (`d199d33`, MEDIUM): the board is wired for "SMPS supplies the LDO, SMPS output
+    // 2.5 V also available to external circuits" (RM0468), and firmware selects this
+    // configuration and no other. PWR_CR3 is write-once per power-on: if the vendor bootloader
+    // already wrote it, this write has no effect (the boot stage reports the value it found).
+    c.rcc.supply_config = SupplyConfig::SMPSExternalLDO(SMPSSupplyVoltage::V2_5);
     c
 }
 

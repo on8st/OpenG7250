@@ -60,7 +60,7 @@ the reverse-engineering side (`re/`), from disassembly or from stock firmware.
 
 ## Platform rules from the HIS
 
-Every rule below is a MUST from the HIS (cleared at `9d10e72`; first listed at `2a38b7f`). They are listed so that nobody starts
+Every rule below is a MUST from the HIS (cleared at `d199d33`; first listed at `2a38b7f`). They are listed so that nobody starts
 without them; the HIS section is the authority.
 
 - **Image placement** (HIS 10): the image starts at 0x08020000 with its vector table there.

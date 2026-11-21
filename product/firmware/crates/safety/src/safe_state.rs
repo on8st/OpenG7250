@@ -3,10 +3,11 @@
 //! The RF safe state as data. The board applies [`SAFE_STATE`] before anything else at every
 //! start (boot stage and application) and again whenever it leaves transmit.
 //!
-//! Source: [HIS] HIS 85 "Safe state at reset" (`9d10e72`), with HIS 20 and decision 0029 (PH9
+//! Source: [HIS] HIS 85 "Safe state at reset" (`d199d33`), with HIS 20 and decision 0029 (PH9
 //! held high), HIS 70 (PD5 never low), HIS 40 (CH394 RST# held low), HIS 50 and decision 0031
 //! (codec in reset), decision 0030 (PH6, PH3, PH4 not used), decision 0032 (ATU latches
-//! unwritten: bypass).
+//! unwritten: bypass). Since HIS `d199d33` the ATU latch strobes are driven to their inactive
+//! level, high (MEDIUM), and never pulsed, so no latch is ever written.
 
 /// GPIO port letter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,15 +89,18 @@ pub const SAFE_STATE: &[PinRule] = &[
     r(C, 7, DriveLow, "T/R line, RX level"),
     r(H, 11, DriveLow, "T/R line, RX level"),
     r(D, 12, DriveLow, "unknown output, keep low (HIS 85)"),
+    // ATU latch strobes inactive (high, HIS 85 `d199d33`, MEDIUM). Driven high from the
+    // high-impedance reset state: the level is written before the pin becomes an output, so the
+    // strobe never goes through its active level and no latch is clocked.
+    r(D, 13, DriveHigh, "ATU latch strobe (network style, bypass, antenna) inactive; never pulsed (HIS 85; 0032)"),
+    r(G, 2, DriveHigh, "ATU latch strobe (reactance bank) inactive; never pulsed (HIS 85; 0032)"),
+    r(G, 5, DriveHigh, "ATU latch strobe (reactance bank) inactive; never pulsed (HIS 85; 0032)"),
     // Not RF, held in reset until used.
     r(B, 5, DriveLow, "CH394 RST# held (HIS 40, HIS 85)"),
     r(B, 10, DriveLow, "Main codec reset held (HIS 50, HIS 85; 0031)"),
     // Power hold (HIS 20 HYPOTHESIS; 0029 item 1).
     r(H, 9, DriveHigh, "power hold"),
     // Never driven by the safe state.
-    r(D, 13, LeaveUntouched, "ATU latch (network style, bypass, antenna): no safe value known (HIS 85; 0032)"),
-    r(G, 2, LeaveUntouched, "ATU latch (reactance bank): no safe value known (HIS 85; 0032)"),
-    r(G, 5, LeaveUntouched, "ATU latch (reactance bank): no safe value known (HIS 85; 0032)"),
     r(A, 4, LeaveUntouched, "DAC1 OUT1 RF gain: safe level unknown (HIS 85)"),
     r(A, 12, LeaveUntouched, "unknown output, no safe level known (HIS 85)"),
     r(A, 11, LeaveUntouched, "chain A latch: outputs disabled by PA10 instead (HIS 85)"),
@@ -133,6 +137,11 @@ mod tests {
         assert_eq!(act(D, 12), DriveLow);
         assert_eq!(act(B, 5), DriveLow);
         assert_eq!(act(B, 10), DriveLow);
+        // ATU strobes inactive high (HIS 85 `d199d33`).
+        for (p, n) in [(D, 13), (G, 2), (G, 5)] {
+            assert_eq!(act(p, n), DriveHigh, "P{p:?}{n}");
+            assert_eq!(rule(p, n).unwrap().kind, Kind::Rf);
+        }
     }
 
     #[test]
@@ -142,7 +151,7 @@ mod tests {
 
     #[test]
     fn never_driven() {
-        for (p, n) in [(D, 13), (G, 2), (G, 5), (A, 4), (A, 12), (D, 5), (H, 6), (H, 3), (H, 4), (H, 5)] {
+        for (p, n) in [(A, 4), (A, 12), (D, 5), (H, 6), (H, 3), (H, 4), (H, 5)] {
             assert_eq!(act(p, n), LeaveUntouched, "P{p:?}{n}");
         }
     }

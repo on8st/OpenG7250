@@ -20,6 +20,22 @@ each row, chosen to stay on the safe side.
 | F2-Q4 | Is INT# (PC13) pulled up on the board, or must the MCU pull it up (HIS 40: "needs a pull-up")? | Interrupt-driven receive. | INT# not used yet; the driver polls every 2 ms. |
 | F2-Q5 | Does the CH394 report the destination address of a received UDP datagram (unicast, directed broadcast, limited broadcast)? The W5500 UDP header carries only the source. | B3.9 / T-B3-32: Set IP from outside the subnet is accepted only to 255.255.255.255. | See SQ-F2-2. |
 
+## HIS answers (cleared HIS `d199d33`, gate review 6)
+
+| Id | Answer | Firmware change |
+|---|---|---|
+| F1-Q1 | STM32H725xG or H735xG (MEDIUM), DEV_ID 0x483; package not known. | None: `stm32h725ig` stays; the pins used (PH3–PH12) need a package that bonds them out. |
+| F1-Q2 | HSE not recorded until read from the board. | None: HSI 64 MHz only, no HSE, no PLL. |
+| F1-Q3 | Board wired for "SMPS supplies the LDO, 2.5 V SMPS output also available to external circuits" (MEDIUM); select it and no other; PWR_CR3 write-once. | App: `SupplyConfig::SMPSExternalLDO(V2_5)` instead of the power-on default. Boot stage reports PWR_CR3 as found. |
+| F1-Q4 | State at application start not known. | Boot stage captures PWR_CR3, RCC_CR/CFGR/CSR, PRIMASK, CCR, NVIC_ISER, IWDG PR/RLR at its first instruction and prints them (`boot: start …`). VTOR is already ours by then (cortex-m-rt `set-vtor`). |
+| F1-Q5 | ATU strobes inactive high (MEDIUM): drive to the inactive level, never pulse. Board pulls not known. | Safe state drives PD13, PG2, PG5 high (level first, then output). |
+| F1-Q6 | AXI SRAM 320 KiB as shipped (HIGH), may differ per unit. | None yet: the images keep using 128 KiB, valid for every option setting. |
+| F2-Q1 | No access 12–19 ms after RST# high (VERIFIED); minimum low time and maximum SCK open; ~17 MHz seen in use. | None: RST# low since start + 10 ms, then 200 ms before the first access; 16 MHz. |
+| F2-Q2 | CHIPV at 0x0039, value not known; PHY register 0x002E as W5500 (HIGH), bits MEDIUM. | None: any CHIPV except 0x00/0xFF accepted. |
+| F2-Q3 | MAC from the chip; uniqueness open. | None. |
+| F2-Q4 | INT# board pull-up unknown: use the MCU's internal pull-up. | INT# not used yet (polling); when used, input with internal pull-up. |
+| F2-Q5 | Destination address not known from the sources. | None: B3.9 rule of 56197e4 applies (own subnet, or any source while link-local). |
+
 ## Spec answers (spec/draft 56197e4)
 
 | Id | Answer | Firmware |
