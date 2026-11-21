@@ -42,6 +42,9 @@ impl Keyer for BoardRf {
         safe::reassert();
         false
     }
+    /// The CW waveform goes through the DUC on the FPGA bus, which stays closed (fpga_gate):
+    /// nothing to write. Never called, since `key` never reports keyed.
+    fn cw_element(&mut self, _on: bool) {}
 }
 
 #[cfg(not(feature = "slot-b"))]

@@ -339,7 +339,12 @@ impl P2 {
             match kind {
                 CnC::HighPriority if self.session.running() => {
                     let ctx = self.key_ctx();
-                    self.key.on_high_priority(Requests::parse(p), now, &mut self.tx, &ctx, false, &mut rf);
+                    self.key.on_high_priority(Requests::parse(p), now, &mut self.tx, &ctx, &mut rf);
+                }
+                CnC::DucSpecific => {
+                    if self.key.on_duc_specific(p) {
+                        println!("p2: DUC-specific hang delay above 2000 ms clamped to 2000 ms (Table B10-1)");
+                    }
                 }
                 CnC::General => {
                     let on = self.session.general.is_some_and(|g| g.pa_enable);

@@ -83,9 +83,14 @@ refused with 12 `NOT_CALIBRATED`, and no TX request keys (B10 intro). The key pa
 (crates/safety keypath: PTT and CWX edges, keyed timeout, CWX 1 s cap, maximum TX time, PA
 enable and mode-class unkeys) runs on the owner's High Priority packets, but every edge is
 refused before any pin is touched: `TX_STATE` reads bit 0 = 0, source 0, unkey reason 0, and
-bit 4 = 1 (PA disabled) until the owner's General packet sets byte 58 bit [0]. Not yet:
-break-in, the CWX keyer and KEY, the CW hang delay, the DUC FIFO and underrun check, the RF-path
-checks, the ATU cycle, and the A3.9a key sequence on the pins.
+bit 4 = 1 (PA disabled) until the owner's General packet sets byte 58 bit [0]. The
+DUC-specific packet (B10.6) is followed: break-in, CW select, the keyer bits, speed, weight,
+hang delay (above 2000 ms clamped, logged `p2: DUC-specific hang delay above 2000 ms clamped`),
+EER and the DUC0 format refusals; a packet while keyed waits for the unkey. The CWX keyer
+(crates/safety cw: iambic A/B, straight key with iambic clear, weight, strict spacing) and the
+hang delay exist but form nothing here. KEY keys nothing in v1.0 (Table B10-1, 0030). Not yet:
+the DUC FIFO and underrun check, the TX frequency and RF-path checks, the ATU cycle, and the
+A3.9a key sequence on the pins.
 
 ## DHCP retry and renewal (A1.11, A1.11a)
 

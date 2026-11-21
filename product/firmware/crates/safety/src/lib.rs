@@ -6,6 +6,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod fpga_gate;
+pub mod cw;
 pub mod keypath;
 pub mod safe_state;
 pub mod supply;
