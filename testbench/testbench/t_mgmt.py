@@ -6,7 +6,7 @@ import struct
 import time
 
 from .core import Ctx, Skip, test
-from .mgmt import CMD, Mgmt, build, identify, tlv
+from .mgmt import CMD, Mgmt, build, identify, req_retransmit, tlv
 
 
 def m(ctx: Ctx) -> Mgmt:
@@ -61,11 +61,8 @@ def t_a1_01(ctx):
 
 @test("T-A1-53")
 def t_a1_53(ctx):
-    secret = ctx.params.get("secret") or ctx.endpoint.get("_learned", {}).get("secret")
+    s = secret_of(ctx)
     with m(ctx) as c:
-        if secret is None:
-            raise Skip("needs params.secret (the radio's management secret)")
-        s = bytes.fromhex(secret)
         for cmd in ("RETURN_TO_STOCK", "ENTER_VENDOR_RECOVERY"):
             r = c.authed(cmd, s)
             ctx.eq(f"{cmd}: 56", r["status"] if r else None, 56)
@@ -167,10 +164,7 @@ def t_a2_01(ctx):
 
 @test("T-A2-05")
 def t_a2_05(ctx):
-    secret = ctx.params.get("secret") or ctx.endpoint.get("_learned", {}).get("secret")
-    if not secret:
-        raise Skip("needs params.secret")
-    s = bytes.fromhex(secret)
+    s = secret_of(ctx)
     with m(ctx) as c:
         r = c.authed("SWITCH_LEVEL", s, b"\x01")
         ctx.eq("to the active level: 0", r["status"] if r else None, 0)
@@ -187,10 +181,23 @@ from .p2 import (ARM_MAGIC, LIMIT_SWR, LIMIT_PA_TEMP, PORT_REG, TX_ARM, TX_ARM_S
 
 
 def secret_of(ctx) -> bytes:
+    """The management secret: params.secret, else one the bench set earlier in this process,
+    else, with the first-secret window open (factory state, A1.10; IDENTIFY tag 12), a random
+    secret the bench sets now with SET_FIRST_SECRET and keeps for the following tests."""
     s = ctx.params.get("secret") or ctx.endpoint.get("_learned", {}).get("secret")
-    if not s:
-        raise Skip("needs params.secret (the radio's management secret)")
-    return bytes.fromhex(s)
+    if s:
+        return bytes.fromhex(s)
+    with Mgmt(ctx.net) as c:
+        r = req_retransmit(c, "IDENTIFY")
+        win = tlv(r["payload"]).get(12, b"") if r and r.get("status") == 0 else b""
+        if win[:1] == b"\x01":
+            new = os.urandom(32)
+            r = c.req("SET_FIRST_SECRET", new)
+            if r and r.get("status") == 0:
+                ctx.endpoint.setdefault("_learned", {})["secret"] = new.hex()
+                ctx.notes.append("secret set by the bench in the open first-secret window (A1.10)")
+                return new
+    raise Skip("needs params.secret (the radio's management secret), and the first-secret window is not open")
 
 
 def tx_bit4(h: Host) -> int | None:
@@ -351,12 +358,12 @@ def retry_exchanges(log, linklocal: str) -> list[int]:
     borrow of at most 2 s, 0041)."""
     t = sorted(m["t_us"] for m in log if str(m.get("type", "")).upper().replace("DHCP", "") == "DISCOVER"
                and str(m.get("src", "")).split(":")[0] == linklocal)
+    # one exchange: every DISCOVER within 2.5 s of the exchange's first (a borrow lasts at most
+    # 2 s, and may hold DISCOVERs 2 s apart); exchanges are at least 3 s apart (gap 4 s -1 s)
     starts: list[int] = []
-    last = None
     for x in t:
-        if last is None or x - last > 2_000_000:
+        if not starts or x - starts[-1] > 2_500_000:
             starts.append(x)
-        last = x
     return starts
 
 
