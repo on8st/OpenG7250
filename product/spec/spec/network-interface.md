@@ -1729,6 +1729,19 @@ Table B2-2 — Socket buffers (0053)
 
 Nothing is sent from ports 1026 and 1029, and nothing is received on 1035.
 
+**High Priority bursts** (0054). Reading one 1444-byte datagram from the CH394 takes about
+0.7 ms at the SPI clock known to work (about 17 MHz, P-NET-1), against about 0.12 ms on a
+100 Mbit/s wire, so no firmware can take an unlimited burst at wire speed. On port 1027 the
+G7250 MUST process without loss:
+
+1. any two High Priority packets that arrive back to back at wire speed, if no third one
+   arrives within 2 ms of the first; and
+2. a sequence of any length in which the packets arrive at least 1 ms apart.
+
+These figures hold at the SPI clock known to work and do not depend on P-NET-1; a faster clock
+(up to 62 MHz, [CH394]) only adds margin. A host SHOULD NOT send High Priority packets closer
+than 1 ms apart, except a stop or run directly after another packet, which item 1 covers.
+
 B2.4 **Remote endpoint.** The G7250 MUST reply to the discovery from local port 1024 to the
 IP address and source port of the host's discovery packet ([P2] "Detailed operation";
 Discovery reply, "Source Port", "Destination Port"). The G7250 MUST send every stream of a
@@ -3824,7 +3837,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-17 | Host A streams DDC0 at 192 ksps on 7.1 MHz with PA enable and CW select set; its C&C is cut for 1.5 s (watchdog standby), after which it continues its High Priority keepalive with run = 1 unchanged: the first packet restarts the session without a run 0→1 edge, DDC0 resumes at 192 ksps on 7.1 MHz with sequence numbers continuing from before the standby, PA enable and CW select read cleared (Table A3-4), and an arm is rejected with `WATCHDOG_DISABLED` until A sends a General packet with byte 38 bit [0] set, then accepted (A2.3, B5.4, B2.7). The same after a link loss and return to 100 Mbit/s; after a stop and run the counters start at 0. |
 | T-B5-18 | After host A's session ends by a watchdog standby, a run bit alone from host B gives DDC0 `STREAM_STATUS` reason 1 and counters starting at 0; A's RX settings are not used for B (B5.4 item 3, B2.7). |
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
-| T-B5-20 | Two High Priority packets sent back to back on port 1027, run = 1 then run = 0, and the reverse: the radio processes both, so the session ends (or starts) as the last one says; with ten in a burst none is lost while the firmware reads the socket within the time two packets take to arrive (emulator; B2.3, Table B2-2; 0053). |
+| T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost (emulator, at the SPI clock known to work; B2.3 "High Priority bursts", Table B2-2; 0053, 0054). |
 
 ### Streams (B6)
 
