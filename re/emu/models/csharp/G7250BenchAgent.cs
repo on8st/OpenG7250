@@ -53,17 +53,20 @@ namespace Antmicro.Renode.Peripherals.SPI
         private string[] tracePins = SafePins;
         private readonly Dictionary<string, int> lastLevel = new Dictionary<string, int>();
         private readonly Dictionary<string, int> drivenLevel = new Dictionary<string, int>();
+        private readonly Dictionary<string, string> lastState = new Dictionary<string, string>();
         private readonly LimitTimer sampler;
 
-        public G7250BenchAgent(IMachine machine, int agentPort = 0, long sampleRate = 20000)
+        public G7250BenchAgent(IMachine machine, int agentPort = 0, long sampleRate = 20000, string consoleTimedPath = "")
         {
             this.machine = machine;
             this.agentPort = agentPort;
+            timedPath = consoleTimedPath;
             sampler = new LimitTimer(machine.ClockSource, (ulong)sampleRate, this, "sample", 1,
                                      direction: Direction.Descending, enabled: false,
                                      workMode: WorkMode.Periodic, eventEnabled: true);
             sampler.LimitReached += Sample;
             if(agentPort > 0) new Thread(Serve) { IsBackground = true, Name = "bench-agent" }.Start();
+            HookConsole();
             machine.MachineReset += _ => OnMachineReset();
         }
 
@@ -104,7 +107,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             {
                 bool rising = value && !latchLevel[number];
                 latchLevel[number] = value;
-                if(tracing) ev = Gpio(LatchPins[number], value ? 1 : 0);
+                if(tracing) ev = GpioState(LatchPins[number]);
                 if(rising && shifted.Count > 0)
                 {
                     int n = number == 1 ? Math.Min(3, shifted.Count) : 1;
@@ -127,17 +130,50 @@ namespace Antmicro.Renode.Peripherals.SPI
             return int.TryParse(pin.Substring(2), out bit) && port >= 0 && port < 11 && bit >= 0 && bit < 16;
         }
 
-        private int Level(string pin)
+        // pin state per format v1.4: mode (output/input/af/analog), pull, and the
+        // electrical level: 0/1 when driven (output, pull, or hw.input), "z" when
+        // nothing drives it, null for an alternate-function pin the emulator does
+        // not model at pin level
+        private struct PinState { public string Mode, Pull, Level; }
+
+        private PinState State(string pin)
         {
-            int driven;
-            lock(sync) if(drivenLevel.TryGetValue(pin, out driven)) return driven;   // electrical level set by hw.input
+            var st = new PinState { Mode = "?", Pull = "none", Level = "null" };
             int port, bit;
-            if(!ParsePin(pin, out port, out bit)) return -1;
+            if(!ParsePin(pin, out port, out bit)) return st;
             ulong b = 0x58020000UL + 0x400UL * (ulong)port;
             var bus = machine.SystemBus;
-            uint moder = bus.ReadDoubleWord(b + 0x00);
-            uint reg = ((moder >> (2 * bit)) & 3u) == 1u ? bus.ReadDoubleWord(b + 0x14) : bus.ReadDoubleWord(b + 0x10);
-            return (int)((reg >> bit) & 1u);
+            uint moder = (bus.ReadDoubleWord(b + 0x00) >> (2 * bit)) & 3u;
+            uint otyper = (bus.ReadDoubleWord(b + 0x04) >> bit) & 1u;
+            uint pupdr = (bus.ReadDoubleWord(b + 0x0C) >> (2 * bit)) & 3u;
+            st.Mode = moder == 0 ? "input" : moder == 1 ? "output" : moder == 2 ? "af" : "analog";
+            st.Pull = pupdr == 1 ? "up" : pupdr == 2 ? "down" : "none";
+            int driven;
+            bool byBench;
+            lock(sync) byBench = drivenLevel.TryGetValue(pin, out driven);
+            if(moder == 1)
+            {
+                uint odr = (bus.ReadDoubleWord(b + 0x14) >> bit) & 1u;
+                if(otyper == 1 && odr == 1)      // open drain released
+                    st.Level = pupdr == 1 ? "1" : pupdr == 2 ? "0" : (byBench ? driven.ToString() : "\"z\"");
+                else st.Level = odr.ToString();
+            }
+            else if(moder == 0)
+            {
+                if(byBench) st.Level = driven.ToString();
+                else st.Level = pupdr == 1 ? "1" : pupdr == 2 ? "0" : "\"z\"";
+            }
+            else if(moder == 3) st.Level = "\"z\"";
+            else st.Level = "null";              // alternate function: driven by a peripheral the emulator does not model at pin level
+            return st;
+        }
+
+        private string Level(string pin) { return State(pin).Level; }
+
+        private string PinJson(string pin)
+        {
+            var s = State(pin);
+            return "{\"level\": " + s.Level + ", \"mode\": \"" + s.Mode + "\", \"pull\": \"" + s.Pull + "\"}";
         }
 
         private string Input(string pin, int level)
@@ -152,7 +188,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             lock(sync)
             {
                 drivenLevel[pin] = level != 0 ? 1 : 0;
-                if(tracing) { lastLevel[pin] = drivenLevel[pin]; Send("ev " + Gpio(pin, drivenLevel[pin])); }
+                if(tracing) { var st = State(pin); lastState[pin] = st.Level + "/" + st.Mode + "/" + st.Pull; Send("ev " + GpioState(pin)); }
             }
             return "ok";
         }
@@ -164,6 +200,11 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         private string Event(string body) { return "{\"seq\": " + (seq++) + ", \"t_us\": " + NowUs() + ", " + body + "}"; }
         private string Gpio(string pin, int level) { return Event("\"kind\": \"gpio\", \"pin\": \"" + pin + "\", \"level\": " + level); }
+        private string GpioState(string pin)
+        {
+            var s = State(pin);
+            return Event("\"kind\": \"gpio\", \"pin\": \"" + pin + "\", \"level\": " + s.Level + ", \"mode\": \"" + s.Mode + "\", \"pull\": \"" + s.Pull + "\"");
+        }
 
         private void Sample()
         {
@@ -173,16 +214,17 @@ namespace Antmicro.Renode.Peripherals.SPI
                 if(!tracing) return;
                 foreach(var pin in tracePins)
                 {
-                    int l = Level(pin), prev;
-                    if(lastLevel.TryGetValue(pin, out prev) && prev == l) continue;
-                    lastLevel[pin] = l;
-                    (evs = evs ?? new List<string>()).Add(Gpio(pin, l));
+                    var s = State(pin);
+                    string key = s.Level + "/" + s.Mode + "/" + s.Pull, prev;
+                    if(lastState.TryGetValue(pin, out prev) && prev == key) continue;
+                    lastState[pin] = key;
+                    (evs = evs ?? new List<string>()).Add(GpioState(pin));
                 }
             }
             if(evs != null) foreach(var e in evs) Send("ev " + e);
         }
 
-        private string DacWords(out int resetLevel)
+        private string DacWords(out string resetLevel)
         {
             resetLevel = Level("PB14");
             IPeripheral pa;
@@ -199,7 +241,7 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         private string Observe()
         {
-            int rst;
+            string rst;
             string dac = DacWords(out rst);
             lock(sync)
             {
@@ -209,7 +251,8 @@ namespace Antmicro.Renode.Peripherals.SPI
                     + ", \"spi1_b\": {\"oe_PH10\": " + Level("PH10") + ", \"last_frame\": " + (chainB == null ? "null" : "\"" + chainB + "\"") + "}"
                     + ", \"atu_latch_writes\": {\"PD13\": " + atuWrites[0] + ", \"PG2\": " + atuWrites[1] + ", \"PG5\": " + atuWrites[2] + "}"
                     + ", \"pa_dac\": {\"reset_PB14\": " + rst + ", \"ch\": [" + dac + "]}"
-                    + ", \"codec_reset_PB10\": " + Level("PB10") + ", \"PD12\": " + Level("PD12") + "}";
+                    + ", \"codec_reset_PB10\": " + Level("PB10") + ", \"PD12\": " + Level("PD12")
+                    + ", \"pins\": {" + string.Join(", ", Array.ConvertAll(SafePins, x => "\"" + x + "\": " + PinJson(x))) + "}}";
             }
         }
 
@@ -227,7 +270,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             lock(sync)
             {
                 drivenLevel.Clear();
-                if(tracing) { ev = Event("\"kind\": \"reset\", \"cause\": \"" + cause + "\""); lastLevel.Clear(); }
+                if(tracing) { ev = Event("\"kind\": \"reset\", \"cause\": \"" + cause + "\""); lastState.Clear(); }
             }
             if(ev != null) Send("ev " + ev);
         }
@@ -262,9 +305,38 @@ namespace Antmicro.Renode.Peripherals.SPI
         // the flash banks (0x08000000, 2 MiB) to a file: flash keeps its contents without power
         private string FlashDump(string path)
         {
+            // through the flash timing layer if present: an erase in progress is only partly done
+            IPeripheral ft;
+            if(machine.TryGetByName("sysbus.flashtiming", out ft))
+            {
+                var m = ft.GetType().GetMethod("DumpFlash");
+                if(m != null) { m.Invoke(ft, new object[] { path }); return "ok"; }
+            }
             var data = machine.SystemBus.ReadBytes(0x08000000UL, 0x200000);
             System.IO.File.WriteAllBytes(path, data);
             return "ok";
+        }
+
+        // the flash timing layer (store checks): "ft info", "ft cut-words K", "ft cut-erase F"
+        private string FlashTiming(string[] w)
+        {
+            IPeripheral ft;
+            if(!machine.TryGetByName("sysbus.flashtiming", out ft)) return "err no flash timing layer";
+            var t = ft.GetType();
+            if(w.Length >= 2 && w[1] == "info")
+            {
+                var parts = new List<string>();
+                foreach(var n in new[] { "Erases", "FetchesDuringErase", "FirstFetchPc", "RefreshesDuringLastErase", "WordsProgrammed" })
+                    parts.Add("\"" + n + "\": " + Convert.ToString(t.GetProperty(n).GetValue(ft), CultureInfo.InvariantCulture));
+                foreach(var n in new[] { "PrimaskAtErase", "StopReason" })
+                    parts.Add("\"" + n + "\": \"" + t.GetProperty(n).GetValue(ft) + "\"");
+                foreach(var n in new[] { "Erasing", "StoppedByCut" })
+                    parts.Add("\"" + n + "\": " + ((bool)t.GetProperty(n).GetValue(ft) ? "true" : "false"));
+                return "info {" + string.Join(", ", parts) + "}";
+            }
+            if(w.Length >= 3 && w[1] == "cut-words") { t.GetMethod("CutAfterWords").Invoke(ft, new object[] { long.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok"; }
+            if(w.Length >= 3 && w[1] == "cut-erase") { t.GetMethod("CutDuringErase").Invoke(ft, new object[] { double.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok"; }
+            return "err usage: ft info | cut-words K | cut-erase F";
         }
 
         private string WatchdogReset()
@@ -275,6 +347,42 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(m == null) return "err watchdog model has no reset";
             m.Invoke(wd, null);
             return "ok";
+        }
+
+        // ---- console with emulated-time stamps (a second artifact; console.txt stays as the image wrote it) ----
+        private readonly string timedPath;
+        private readonly StringBuilder consoleLine = new StringBuilder();
+        private ulong lineStartUs;
+        private bool consoleHooked;
+
+        private void HookConsole()
+        {
+            if(consoleHooked || string.IsNullOrEmpty(timedPath)) return;
+            IPeripheral u;
+            if(!machine.TryGetByName("sysbus.usart1", out u)) return;
+            var ev = u.GetType().GetEvent("CharReceived");
+            if(ev == null) return;
+            ev.AddEventHandler(u, new Action<byte>(OnConsoleChar));
+            consoleHooked = true;
+        }
+
+        private void OnConsoleChar(byte b)
+        {
+            string line = null;
+            lock(consoleLine)
+            {
+                if(consoleLine.Length == 0) lineStartUs = NowUs();
+                if(b == (byte)'\n') { line = consoleLine.ToString().TrimEnd('\r'); consoleLine.Clear(); }
+                else consoleLine.Append((char)b);
+            }
+            if(line != null)
+            {
+                try
+                {
+                    System.IO.File.AppendAllText(timedPath, string.Format(CultureInfo.InvariantCulture, "{0,12:F6} {1}\n", lineStartUs / 1e6, line));
+                }
+                catch(Exception) { }
+            }
         }
 
         // ---- link to the runner ----
@@ -308,6 +416,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 switch(w[0])
                 {
                     case "time": return "time " + NowUs();
+                    case "ft": return FlashTiming(w);
                     case "wdt": return WatchdogReset();
                     case "cut": return ScheduleCut(ulong.Parse(w[1], CultureInfo.InvariantCulture));
                     case "flashdump": return FlashDump(line.Substring(10));
@@ -341,7 +450,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                                     if(!pins.Contains(w[i])) pins.Add(w[i]);
                                 }
                                 tracePins = pins.ToArray();
-                                lastLevel.Clear(); seq = first; tracing = true;
+                                lastState.Clear(); seq = first; tracing = true;
                                 Array.Clear(atuWrites, 0, 3);
                             }
                             sampler.Enabled = true;

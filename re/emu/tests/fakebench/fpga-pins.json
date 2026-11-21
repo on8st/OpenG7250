@@ -1,0 +1,7 @@
+{
+  "format": "g7250-testlist", "version": 1, "minor": 3,
+  "defaults": { "timeout_s": 30 },
+  "tests": [
+    { "id": "T-EMU-14", "title": "PE0-PE10 stay undriven (FPGA bus gate closed)", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["hw.trace"] }
+  ]
+}

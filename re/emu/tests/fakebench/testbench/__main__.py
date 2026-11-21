@@ -142,6 +142,48 @@ def run_test(tid, ep):
                 check("one reset event, cause power", len(resets) == 1 and resets[0].get("cause") == "power", json.dumps(resets)),
                 check("no events after the cut time before the reset", last_before <= t + 200000 + 100, str(last_before)),
                 check("bad at_us refused", bad.get("ok") is False, str(bad))]
+    if tid == "T-EMU-13":
+        # supply-fault evidence: RST# (PB5) stays low, no network answer; the
+        # power cycle at the end makes the runner dump the flash for comparison
+        r1 = ctl.op("hw.trace", action="start", pins=["PB5"])
+        f = (r1.get("value") or {}).get("file")
+        time.sleep(3.5)
+        d, _ = echo(ep, 0, c, b"discovery?", wait=4.0)
+        ctl.op("hw.trace", action="stop")
+        evs = [json.loads(l) for l in open(f)] if f and os.path.isfile(f) else []
+        pb5 = [e["level"] for e in evs if e.get("kind") == "gpio" and e.get("pin") == "PB5"]
+        pc = ctl.op("power.cycle")
+        return [check("RST# (PB5) held low", pb5 != [] and all(l == 0 for l in pb5), json.dumps(pb5[:8])),
+                check("no network answer", d is None, repr(d)),
+                check("power cycle for the flash dump", pc.get("ok"), str(pc))]
+    if tid == "T-EMU-14":
+        # FPGA bus pins PE0-PE10 never driven by the image (bus gate closed)
+        pins = ["PE%d" % i for i in range(11)]
+        r1 = ctl.op("hw.trace", action="start", pins=pins)
+        f = (r1.get("value") or {}).get("file")
+        time.sleep(10.0)
+        ctl.op("hw.trace", action="stop")
+        evs = [json.loads(l) for l in open(f)] if f and os.path.isfile(f) else []
+        pe = [e for e in evs if e.get("kind") == "gpio" and e.get("pin") in pins]
+        driven = [e for e in pe if e.get("level") in (0, 1) or e.get("mode") == "output"]
+        seen = sorted({e["pin"] for e in pe}, key=lambda x: int(x[2:]))
+        return [check("all PE0-PE10 seen in the trace", len(seen) == 11, ",".join(seen)),
+                check("none driven (level 0/1 or mode output)", not driven, json.dumps(driven[:4])),
+                check("modes", True, json.dumps(sorted({(e["pin"], e.get("mode"), str(e.get("level"))) for e in pe})[:11]))]
+    if tid == "T-EMU-15":
+        # clock check: TIM2 toggles PB0 and SysTick toggles PB1 every 50 ms of the image's clock
+        r1 = ctl.op("hw.trace", action="start", pins=["PB0", "PB1"])
+        f = (r1.get("value") or {}).get("file")
+        time.sleep(3.0)
+        ctl.op("hw.trace", action="stop")
+        evs = [json.loads(l) for l in open(f)] if f and os.path.isfile(f) else []
+        def periods(pin):
+            t = [e["t_us"] for e in evs if e.get("kind") == "gpio" and e.get("pin") == pin and e.get("level") in (0, 1)]
+            d = sorted(b - a for a, b in zip(t[1:], t[2:]))
+            return d[len(d) // 2] / 1000.0 if d else None
+        p0, p1 = periods("PB0"), periods("PB1")
+        return [check("TIM2 period 50 ms (emulated)", p0 is not None and abs(p0 - 50) < 1.0, "median %s ms" % p0),
+                check("SysTick period 50 ms (emulated)", p1 is not None and abs(p1 - 50) < 1.0, "median %s ms" % p1)]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

@@ -78,6 +78,12 @@ GENERIC = [
     ("str", 'pwr: Miscellaneous.G7250Pwr @ sysbus <0x58024800, +0x400>'),
     ("cs", P("models", "csharp", "G7250Dbgmcu.cs")),
     ("str", 'dbgmcu: Miscellaneous.G7250Dbgmcu @ sysbus <0x5C001000, +0x1000>'),
+    # flash timing, lock and power-loss layer on Renode's flash controller (docs/FLASH-model.md)
+    ("cs", P("models", "csharp", "G7250FlashTiming.cs")),
+    ("str", 'flashtiming: Miscellaneous.G7250FlashTiming @ sysbus <0x5FFF0000, +0x10>'),
+    # clock tree from the RCC: timer kernel clocks, SysTick, CPU rate (docs/CLOCKS-model.md)
+    ("cs", P("models", "csharp", "G7250Clocks.cs")),
+    ("str", 'clocks: Miscellaneous.G7250Clocks @ sysbus <0x5FFF0100, +0x10>'),
     # IWDG1 with the RCC_RSR reset flags (docs/IWDG-model.md)
     ("cs", P("models", "csharp", "G7250Iwdg.cs")),
     ("cmd", "sysbus Unregister sysbus.watchdog"),
@@ -208,7 +214,6 @@ def build_resc(elf, out, run_s, bench):
                       "str": 'machine LoadPlatformDescriptionFromString "%s"', "cmd": "%s"}[kind] % val)
     lines += platform_extras.all_tag_commands(exclude=("MDMA",))
     lines += [
-        'nvic Frequency 275000000',
         'logFile @%s' % os.path.join(out, "renode.log"),
         'logLevel 2',
         'sysbus.usart1 CreateFileBackend @%s true' % os.path.join(out, "console.txt"),
@@ -241,7 +246,8 @@ def iwdg_repl(out, boot_address):
     return rp
 
 
-def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standin", flash_image=None):
+def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standin", flash_image=None, pwr_cr3=None,
+                       flash_erase_us=0, flash_preload=()):
     """A product boot for a g7250-testlist run: the generic models, the CH394
     with the runner's network bridge and the bench agent; runs until the
     runner quits it. Power-on and every reset boot per BOOT_MODES[boot]."""
@@ -250,6 +256,19 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
     for kind, val in GENERIC:
         if kind == "repl" and val == IWDG_REPL:
             lines.append("machine LoadPlatformDescription @%s" % iwdg_repl(out, BOOT_MODES[boot][0]))
+            continue
+        if kind == "str" and val.startswith("flashtiming:"):
+            rp = os.path.join(out, "flashtiming.repl")
+            open(rp, "w").write("flashtiming: Miscellaneous.G7250FlashTiming @ sysbus <0x5FFF0000, +0x10>\n"
+                                "    eraseSectorUs: %d\n" % flash_erase_us)
+            lines.append("machine LoadPlatformDescription @%s" % rp)
+            continue
+        if kind == "str" and val.startswith("pwr:") and pwr_cr3 is not None:
+            # power-on state as if an earlier stage had locked this supply configuration
+            rp = os.path.join(out, "pwr.repl")
+            open(rp, "w").write("pwr: Miscellaneous.G7250Pwr @ sysbus <0x58024800, +0x400>\n"
+                                "    powerOnCr3: 0x%08X\n    powerOnLocked: true\n" % pwr_cr3)
+            lines.append("machine LoadPlatformDescription @%s" % rp)
             continue
         if kind == "repl" and val == CH394_REPL:
             rp = os.path.join(out, "ch394.repl")
@@ -261,19 +280,22 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
         lines.append({"cs": "i @%s", "repl": "machine LoadPlatformDescription @%s",
                       "str": 'machine LoadPlatformDescriptionFromString "%s"', "cmd": "%s"}[kind] % val)
     ap_ = os.path.join(out, "agent.repl")
-    open(ap_, "w").write("agent: Antmicro.Renode.Peripherals.SPI.G7250BenchAgent @ spi1\n    agentPort: %d\n\n"
-                         "gpioPortA:\n    11 -> agent@0\n\ngpioPortH:\n    12 -> agent@1\n\n"
-                         "gpioPortD:\n    13 -> agent@2\n\ngpioPortG:\n    2 -> agent@3\n    5 -> agent@4\n" % agent_port)
+    base = os.path.basename(console)
+    timed = os.path.join(os.path.dirname(console), base.replace("console", "console-timed", 1) if base.startswith("console") else base + ".timed")
+    open(ap_, "w").write(("agent: Antmicro.Renode.Peripherals.SPI.G7250BenchAgent @ spi1\n    agentPort: %d\n"
+                          "    consoleTimedPath: \"%s\"\n\n"
+                          "gpioPortA:\n    11 -> agent@0\n\ngpioPortH:\n    12 -> agent@1\n\n"
+                          "gpioPortD:\n    13 -> agent@2\n\ngpioPortG:\n    2 -> agent@3\n    5 -> agent@4\n") % (agent_port, timed))
     lines += ['i @%s' % P("models", "csharp", "G7250BenchAgent.cs"),
               'machine LoadPlatformDescription @%s' % ap_]
     lines += platform_extras.all_tag_commands(exclude=("MDMA",))
     lines += [
-        'nvic Frequency 275000000',
         'logFile @%s' % log,
         'logLevel 2',
         'sysbus.usart1 CreateFileBackend @%s true' % console,
         # after a power cycle or cut the flash keeps what it held (dump of both banks)
         ('sysbus LoadBinary @%s 0x08000000' % flash_image) if flash_image else ('sysbus LoadELF @%s' % elf),
+    ] + ['sysbus LoadBinary @%s 0x%08X' % (f, a) for a, f in (flash_preload if not flash_image else ())] + [
         'sysbus.watchdog PowerOnBoot',
         'start',
     ]
@@ -316,6 +338,14 @@ def main():
     ap.add_argument("--host-timeout", type=float, default=600.0)
     ap.add_argument("-o", "--output", help="result file (default: <run dir>/result.json)")
     ap.add_argument("--scope", default="v1.0")
+    ap.add_argument("--pwr-cr3", type=lambda x: int(x, 0),
+                    help="start with PWR_CR3 locked at this supply configuration (as if an earlier stage wrote it)")
+    ap.add_argument("--flash-erase-us", type=int, default=0,
+                    help="sector erase duration in us (0 = instant; the datasheet value is not set yet)")
+    ap.add_argument("--flash-preload", action="append", default=[],
+                    help="ADDR=FILE: load FILE into flash at ADDR before the first boot (e.g. a pre-filled store sector)")
+    ap.add_argument("--no-address", action="store_true",
+                    help="do not wait for the image to configure a network address (fault-path runs)")
     ap.add_argument("--boot", choices=sorted(BOOT_MODES), default="standin",
                     help="reset path: standin = vendor-bootloader stand-in starts the image at 0x08020000 "
                          "(assumption F1 passes, HIS-19 open); none = F1 fails, nothing starts")
@@ -327,7 +357,10 @@ def main():
         import testlist_run
         run_id = args.run_id or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         sys.exit(testlist_run.run(sys.modules[__name__], os.path.abspath(args.elf), os.path.abspath(args.tests),
-                                  run_id, scope=args.scope, out_path=args.output, boot=args.boot))
+                                  run_id, scope=args.scope, out_path=args.output, boot=args.boot,
+                                  pwr_cr3=args.pwr_cr3, no_address=args.no_address,
+                                  flash_erase_us=args.flash_erase_us,
+                                  flash_preload=[(int(x.split("=", 1)[0], 0), os.path.abspath(x.split("=", 1)[1])) for x in args.flash_preload]))
     if not args.selftest:
         sys.exit("unknown test list format (expected g7250-testlist, or --selftest for own programs)")
     run_s = float(spec.get("run_s", 5))

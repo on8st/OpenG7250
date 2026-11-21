@@ -29,8 +29,24 @@ import threading
 import time
 
 SPEC_PORTS = list(range(1024, 1036)) + [7250, 7251]
-CONNECT_BASE, LIMITED_BASE, DIRECTED_BASE = 40000, 40100, 40200
-HOST_PORT_BASE = 52000
+# Local port plan per run (format section 3): connect = B + P, limited send_to =
+# B + 100 + P, directed send_to = B + 200 + P, host ranges from B + 8000. The
+# base B is chosen per boot from bases whose whole span (B + 1024 .. B + 8299)
+# stays clear of the ports the format doc uses as examples (41024-47451,
+# 52000-52299), and only if every port in that span can be bound.
+PORT_BASES = (20000, 30000, 10000)
+CONNECT_OFF, LIMITED_OFF, DIRECTED_OFF, HOST_OFF = 0, 100, 200, 8000
+# hosts[0] owns 1024..7250, so the fixed source ports the spec tests need (1024,
+# 7250) are bound at the same numbers; both must be free. No runner port lies in
+# that range (every base puts them above 11000).
+HOST0_FIXED = (1024, 7250)
+# RE-side runs that need no fixed source ports (self-checks, store checks) may
+# set G7250_NO_FIXED_PORTS=1: hosts[0] then gets a range like the others
+# Default (2026-11-21): no fixed ports. With hosts[0] = [1024, 7250] the bench
+# binds its ordinary host-0 sockets at 1024, which changes what every host-0
+# test sends; opt in with G7250_FIXED_PORTS=1 until the format has a separate
+# field for fixed ports.
+NO_FIXED = os.environ.get("G7250_FIXED_PORTS") != "1" or os.environ.get("G7250_NO_FIXED_PORTS") == "1"
 RADIO_MAC = "02:00:00:00:72:50"
 
 
@@ -104,18 +120,58 @@ class Bridge:
         self.by_port = {}     # radio port -> connect socket
         self.stop = False
         self.stats = {"to_radio": 0, "from_radio": 0, "unroutable": 0}
-        for p in SPEC_PORTS:
-            for kind, base in (("connect", CONNECT_BASE), ("limited", LIMITED_BASE), ("directed", DIRECTED_BASE)):
-                if kind != "connect" and p not in (1024, 7251):
-                    continue
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(("127.0.0.1", base + p))
-                self.socks[s] = (kind, p)
-                if kind == "connect":
-                    self.by_port[p] = s
+        self.dhcp = DhcpServer(self._dhcp_send, lambda: self.now_us() if self.now_us else None)
+        self.now_us = None
+        self.base = None
+        for b in PORT_BASES:
+            if self._claim(b):
+                self.base = b
+                break
+        if self.base is None:
+            self.close()
+            raise RuntimeError("no free local port base (tried %s): a port of every span is in use" %
+                               ", ".join(str(b) for b in PORT_BASES))
         threading.Thread(target=self._accept, daemon=True).start()
         threading.Thread(target=self._udp_loop, daemon=True).start()
+
+    def _dhcp_send(self, src_ip, dst_ip, dport, payload, broadcast):
+        """A datagram from the DHCP server on the LAN into the Ethernet controller."""
+        self.pcap.udp(src_ip, 67, dst_ip, dport, payload, False)
+        if self.ch is None:
+            return
+        frame = socket.inet_aton(src_ip) + struct.pack("!HHB", 67, dport, 1 if broadcast else 0) + payload
+        try:
+            self.ch.sendall(struct.pack("!BH", 2, len(frame)) + frame)
+        except OSError:
+            pass
+
+    def _claim(self, b):
+        """Bind the bridge sockets for base b, without SO_REUSEADDR so that a port
+        another process holds makes the bind fail; check the host ranges are free."""
+        got = []
+        try:
+            for p in SPEC_PORTS:
+                for kind, off in (("connect", CONNECT_OFF), ("limited", LIMITED_OFF), ("directed", DIRECTED_OFF)):
+                    if kind != "connect" and p not in (1024, 7251):
+                        continue
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    got.append((s, kind, p))
+                    s.bind(("127.0.0.1", b + off + p))
+            for port in list(range(b + HOST_OFF, b + HOST_OFF + 300)) + ([] if NO_FIXED else list(HOST0_FIXED)):
+                t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    t.bind(("127.0.0.1", port))
+                finally:
+                    t.close()
+        except OSError:
+            for s, _, _ in got:
+                s.close()
+            return False
+        for s, kind, p in got:
+            self.socks[s] = (kind, p)
+            if kind == "connect":
+                self.by_port[p] = s
+        return True
 
     def set_radio(self, ip, netmask="255.255.255.0"):
         if netmask == "0.0.0.0":
@@ -132,8 +188,9 @@ class Bridge:
         outside = "10.99.0.20" if not ipaddress.ip_address("10.99.0.20") in net else "192.0.2.20"
         hosts = []
         for i, hip in enumerate(hosts_in + [outside]):
-            lo = HOST_PORT_BASE + 100 * i
-            hosts.append({"ip": hip, "in_subnet": i < 2, "bind": "127.0.0.1", "ports": [lo, lo + 99]})
+            lo = self.base + HOST_OFF + 100 * i
+            rng = [HOST0_FIXED[0], HOST0_FIXED[1]] if i == 0 and not NO_FIXED else [lo, lo + 99]
+            hosts.append({"ip": hip, "in_subnet": i < 2, "bind": "127.0.0.1", "ports": rng})
         # publish the address last: the runner waits for radio_ip
         self.hosts, self.directed, self.netmask = hosts, str(net.broadcast_address), netmask
         self.radio_ip = ip
@@ -142,13 +199,14 @@ class Bridge:
         return {
             "format": "g7250-endpoint", "version": 1, "minor": 1, "kind": "emulator",
             "radio": {"ip": self.radio_ip, "netmask": self.netmask, "mac": RADIO_MAC,
-                      "connect": {str(p): "127.0.0.1:%d" % (CONNECT_BASE + p) for p in SPEC_PORTS}},
+                      "connect": {str(p): "127.0.0.1:%d" % (self.base + CONNECT_OFF + p) for p in SPEC_PORTS}},
             "hosts": self.hosts,
             "broadcast": {"limited": True, "directed": self.directed,
-                          "send_to": {"limited": {str(p): "127.0.0.1:%d" % (LIMITED_BASE + p) for p in (1024, 7251)},
-                                      "directed": {str(p): "127.0.0.1:%d" % (DIRECTED_BASE + p) for p in (1024, 7251)}}},
+                          "send_to": {"limited": {str(p): "127.0.0.1:%d" % (self.base + LIMITED_OFF + p) for p in (1024, 7251)},
+                                      "directed": {str(p): "127.0.0.1:%d" % (self.base + DIRECTED_OFF + p) for p in (1024, 7251)}}},
             "control": {"transport": "tcp", "address": "127.0.0.1:%d" % control_port},
             "fixtures": fixtures, "time_scale": 1.0,
+            "runner": {"port_base": self.base},
         }
 
     def _host_for_port(self, p):
@@ -197,6 +255,9 @@ class Bridge:
         data = p[8:]
         self.stats["from_radio"] += 1
         self.pcap.udp(self.radio_ip or "0.0.0.0", sport, dip, dport, data, True)
+        if dport == 67 and sport == 68:
+            self.dhcp.handle(self.radio_ip or "0.0.0.0", dip, data)
+            return
         bcast = dip == "255.255.255.255" or dip == getattr(self, "directed", None)
         if not bcast and dip not in [h["ip"] for h in self.hosts]:
             self.stats["unroutable"] += 1
@@ -252,6 +313,129 @@ class Bridge:
         self.pcap.close()
 
 
+class DhcpServer:
+    """A DHCP server on the emulated LAN (RFC 2131), for the dhcp.* fixtures.
+    Answers DISCOVER with OFFER and REQUEST with ACK or NAK by the client state
+    (SELECTING: options 50 + 54; INIT-REBOOT: 50 only; RENEWING/REBINDING:
+    ciaddr, no 50/54); RELEASE and DECLINE drop the binding. Replies go to
+    ciaddr:68 when the client has an address and the broadcast flag is clear,
+    else to 255.255.255.255:68; a NAK is always broadcast. Off until started."""
+
+    def __init__(self, send, now_us):
+        self.send = send            # send(src_ip, dst_ip, dport, payload, broadcast)
+        self.now_us = now_us
+        self.running = False
+        self.server = "192.168.73.1"
+        self.address = "192.168.73.10"
+        self.netmask = "255.255.255.0"
+        self.router = "192.168.73.1"
+        self.lease_s = 3600
+        self.nak_next = 0
+        self.binding = None         # address bound to the client, if any
+        self.log = []
+
+    def configure(self, args):
+        for k in ("server", "address", "netmask", "router"):
+            if k in args:
+                socket.inet_aton(args[k])
+                setattr(self, k, args[k])
+        if "lease_s" in args:
+            self.lease_s = int(args["lease_s"])
+
+    @staticmethod
+    def _opts(data):
+        o, i = {}, 240
+        while i < len(data):
+            t = data[i]
+            if t == 255:
+                break
+            if t == 0:
+                i += 1
+                continue
+            n = data[i + 1]
+            o[t] = data[i + 2:i + 2 + n]
+            i += 2 + n
+        return o
+
+    def _record(self, direction, kind, **kw):
+        e = {"t_wall": round(time.time(), 3), "dir": direction, "type": kind}
+        try:
+            e["t_us"] = self.now_us()
+        except Exception:  # noqa: BLE001
+            e["t_us"] = None
+        e.update(kw)
+        self.log.append(e)
+
+    def handle(self, src_ip, dst_ip, data):
+        if len(data) < 240 or data[236:240] != b"\x63\x82\x53\x63":
+            return
+        o = self._opts(data)
+        mtype = o.get(53, b"\x00")[0]
+        names = {1: "DISCOVER", 3: "REQUEST", 4: "DECLINE", 7: "RELEASE", 8: "INFORM"}
+        ciaddr = socket.inet_ntoa(data[12:16])
+        req = socket.inet_ntoa(o[50]) if 50 in o else None
+        sid = socket.inet_ntoa(o[54]) if 54 in o else None
+        bflag = (data[10] & 0x80) != 0
+        self._record("from_radio", names.get(mtype, str(mtype)), src=src_ip, dst=dst_ip, ciaddr=ciaddr,
+                     opt50=req, opt54=sid, broadcast_flag=bflag, running=self.running)
+        if not self.running:
+            return
+        if mtype == 1:                                   # DISCOVER
+            self._reply(data, 2, self.address, ciaddr, bflag)
+        elif mtype == 3:                                 # REQUEST
+            if sid is not None and sid != self.server:
+                self.binding = None                      # the client chose another server
+                return
+            if self.nak_next > 0:
+                self.nak_next -= 1
+                self._reply(data, 6, "0.0.0.0", ciaddr, True)
+                return
+            if sid is not None:                          # SELECTING
+                if req == self.address:
+                    self.binding = self.address
+                    self._reply(data, 5, self.address, ciaddr, bflag)
+                else:
+                    self._reply(data, 6, "0.0.0.0", ciaddr, True)
+            elif req is not None:                        # INIT-REBOOT
+                if req == self.address and (self.binding in (None, req)):
+                    self.binding = req
+                    self._reply(data, 5, req, ciaddr, bflag)
+                else:
+                    self._reply(data, 6, "0.0.0.0", ciaddr, True)
+            elif ciaddr != "0.0.0.0":                    # RENEWING / REBINDING
+                if self.binding is None:
+                    self._reply(data, 6, "0.0.0.0", ciaddr, True)
+                else:
+                    self.binding = self.address          # dhcp.offer may have changed the address (A1.11a)
+                    self._reply(data, 5, self.address, ciaddr, False)
+        elif mtype in (4, 7):                            # DECLINE, RELEASE
+            self.binding = None
+
+    def _reply(self, req, mtype, yiaddr, ciaddr, broadcast):
+        pkt = bytearray(240)
+        pkt[0] = 2; pkt[1] = 1; pkt[2] = 6
+        pkt[4:8] = req[4:8]                              # xid
+        pkt[10:12] = req[10:12]                          # flags
+        pkt[12:16] = req[12:16] if mtype != 6 else b"\0\0\0\0"
+        pkt[16:20] = socket.inet_aton(yiaddr)
+        pkt[20:24] = socket.inet_aton(self.server)
+        pkt[28:44] = req[28:44]                          # chaddr
+        pkt[236:240] = b"\x63\x82\x53\x63"
+        o = bytearray([53, 1, mtype, 54, 4]) + socket.inet_aton(self.server)
+        if mtype in (2, 5):
+            L = self.lease_s
+            o += bytes([51, 4]) + struct.pack("!I", L)
+            o += bytes([58, 4]) + struct.pack("!I", L // 2) + bytes([59, 4]) + struct.pack("!I", L * 7 // 8)
+            o += bytes([1, 4]) + socket.inet_aton(self.netmask) + bytes([3, 4]) + socket.inet_aton(self.router)
+        o += b"\xff"
+        pkt += o
+        bcast = broadcast or mtype == 6 or ciaddr == "0.0.0.0"
+        dst = "255.255.255.255" if bcast else ciaddr
+        name = {2: "OFFER", 5: "ACK", 6: "NAK"}[mtype]
+        self._record("to_radio", name, src=self.server, dst=dst, yiaddr=yiaddr, lease_s=self.lease_s if mtype != 6 else None)
+        self.send(self.server, dst, 68, bytes(pkt), bcast)
+
+
 class Agent:
     """Link to the bench agent inside the emulator (line protocol)."""
 
@@ -281,8 +465,13 @@ class Agent:
             except OSError:
                 return
             self.conn = c
-            f = c.makefile("r")
-            for line in f:
+            try:
+                self._serve(c.makefile("r"))
+            except (OSError, ValueError):
+                pass    # the emulator went away (power cycle, cut): accept the next one
+
+    def _serve(self, f):
+        for line in f:
                 line = line.rstrip("\n")
                 if line.startswith("cut "):
                     if self.on_cut:
@@ -351,9 +540,11 @@ class FixtureServer:
     """JSON Lines control socket for the test bench (format section 4)."""
 
     OFFERED = ["hw.observe", "hw.trace", "hw.input", "ctrl.set", "time.scale",
-               "net.broadcast", "net.hosts", "power.cycle", "power.cut", "reset.wdt", "link.set"]
+               "net.broadcast", "net.hosts", "power.cycle", "power.cut", "reset.wdt", "link.set",
+               "dhcp.server"]
 
-    def __init__(self, agent_getter, on_power_cycle):
+    def __init__(self, agent_getter, on_power_cycle, bridge_getter=None):
+        self.bridge_getter = bridge_getter
         self.srv = _listen_tcp()
         self.port = self.srv.getsockname()[1]
         self.agent_getter = agent_getter
@@ -426,6 +617,33 @@ class FixtureServer:
                 return {"ok": False, "error": "state must be absent|silent"}
             self.ctrl_state = st   # both: no bytes on the Main's interlink RX
             return {"ok": True}
+        if op.startswith("dhcp."):
+            br = self.bridge_getter() if self.bridge_getter else None
+            if br is None:
+                return {"ok": False, "error": "no network bridge"}
+            d = br.dhcp
+            try:
+                if op == "dhcp.start":
+                    d.configure(args); d.running = True
+                elif op == "dhcp.stop":
+                    d.running = False
+                elif op == "dhcp.offer":
+                    d.configure(args); d.running = True
+                elif op == "dhcp.nak":
+                    d.nak_next = int(args.get("count", 1))
+                elif op == "dhcp.expire":
+                    d.binding = None             # the server forgets the lease: a renewal gets NAK
+                elif op == "dhcp.log":
+                    return {"ok": True, "value": {"messages": list(d.log)}}
+                else:
+                    return {"ok": False, "error": "fixture not offered: %s" % op}
+            except (ValueError, OSError) as e:
+                return {"ok": False, "error": "bad arguments: %s" % e}
+            return {"ok": True, "value": {"running": d.running, "server": d.server, "address": d.address,
+                                          "lease_s": d.lease_s, "nak_next": d.nak_next, "binding": d.binding}}
+        if op == "net.endpoint":
+            br = self.bridge_getter() if self.bridge_getter else None
+            return {"ok": True, "value": br.endpoint(self.port, self.OFFERED)} if br else {"ok": False, "error": "no bridge"}
         if op == "link.set":
             sp = args.get("speed")
             if sp not in (0, 10, 100):

@@ -92,7 +92,8 @@ namespace Antmicro.Renode.Peripherals.GPIOPort
         {
             lock(sync)
             {
-                moder = otyper = ospeedr = pupdr = odr = lckr = afrl = afrh = 0;
+                otyper = ospeedr = pupdr = odr = lckr = afrl = afrh = 0;
+                moder = 0xFFFFFFFFu;            // RM0468 reset value of GPIOE: every pin analog
                 cmd = -1; readIdx = 0; stbPrev = false; testReg = dataOut = 0;
                 frame.Clear(); lastFrame = new byte[0];
                 sample = 0; sampleByte = 0; txBytes = forbidden = drdyCount = 0;

@@ -71,12 +71,15 @@ def testbench_commit(tbdir, repo):
 class Boot:
     """One emulator process with its bridge, agent and fixture server."""
 
-    def __init__(self, pr, elf, out, boot="standin"):
+    def __init__(self, pr, elf, out, boot="standin", pwr_cr3=None, no_address=False, flash_erase_us=0, flash_preload=()):
         self.pr, self.elf, self.out, self.boot = pr, elf, out, boot
+        self.pwr_cr3, self.no_address = pwr_cr3, no_address
+        self.flash_erase_us, self.flash_preload = flash_erase_us, list(flash_preload)
         os.makedirs(out, exist_ok=True)
         self.bridge = benchnet.Bridge(os.path.join(out, "network.pcapng"))
         self.agent = benchnet.Agent(out)
-        self.fixtures = benchnet.FixtureServer(lambda: self.agent, self.power_cycle)
+        self.fixtures = benchnet.FixtureServer(lambda: self.agent, self.power_cycle, lambda: self.bridge)
+        self.bridge.now_us = self.agent.now_us
         self.proc = None
         self.boots = 0
         self.log = os.path.join(out, "renode.log")
@@ -92,7 +95,10 @@ class Boot:
         resc = os.path.join(self.out, "run.resc")
         open(resc, "w").write(self.pr.build_product_resc(self.elf, self.out, console, self.log,
                                                          self.bridge.ch_port, self.agent.port, self.boot,
-                                                         flash_image=self.flash))
+                                                         flash_image=self.flash,
+                                                         pwr_cr3=self.pwr_cr3 if self.boots == 1 else None,
+                                                         flash_erase_us=self.flash_erase_us,
+                                                         flash_preload=self.flash_preload))
         self.proc = subprocess.Popen([self.pr.bootcore.RENODE, "--disable-xwt", "--console",
                                       "-e", "path add @%s" % self.pr.REPO, "-e", "include @%s" % resc],
                                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -135,6 +141,11 @@ class Boot:
     def wait_ready(self):
         if not self.agent.wait_connected(BOOT_WALL_TIMEOUT):
             return "emulator did not start"
+        if self.no_address:
+            time.sleep(3.0)
+            if self.bridge.radio_ip is None:
+                self.bridge.set_radio("0.0.0.0", "255.255.255.0")   # endpoint only; the image has no address
+            return None
         t0 = time.time()
         while self.bridge.radio_ip is None and time.time() - t0 < BOOT_WALL_TIMEOUT:
             if self.proc.poll() is not None:
@@ -175,6 +186,8 @@ def run_bench(tbdir, endpoint_path, test, agent, wall_cap):
     t_emu1 = agent.now_us()
     wall = time.time() - t0
     emu = (t_emu1 - t_emu0) / 1e6 if t_emu0 is not None and t_emu1 is not None else None
+    if emu is not None and emu < 0:
+        emu = None      # a power cycle during the test restarted emulated time: no single duration
     entries = []
     for ln in "".join(out).splitlines():
         ln = ln.strip()
@@ -189,7 +202,8 @@ def run_bench(tbdir, endpoint_path, test, agent, wall_cap):
     return entries, err, emu, wall
 
 
-def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"):
+def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin", pwr_cr3=None, no_address=False,
+        flash_erase_us=0, flash_preload=()):
     spec = json.load(open(tests_path))
     tbdir = testbench_dir(pr.REPO)
     root = os.path.join(pr.OUT_ROOT, run_id)
@@ -219,7 +233,11 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             results.append({"id": t["id"], "status": "error", "reason": "runner: no test-bench directory (testbench_dir)"})
             continue
         tdir = os.path.join(root, t["id"]) if not per_list else os.path.join(root, "list")
-        bt = shared if per_list and shared else Boot(pr, elf, tdir, boot)
+        try:
+            bt = shared if per_list and shared else Boot(pr, elf, tdir, boot, pwr_cr3, no_address, flash_erase_us, flash_preload)
+        except Exception as ex:  # noqa: BLE001
+            results.append({"id": t["id"], "status": "error", "reason": "runner: %s" % ex})
+            continue
         if per_list:
             shared = bt
         why = bt.wait_ready()
@@ -252,7 +270,8 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             e["duration_s"] = round(emu, 3)
         e["wall_s"] = round(wall, 3)
         rel = os.path.relpath(tdir, root)
-        arts = {"console": os.path.join(rel, "console.txt"), "network": os.path.join(rel, "network.pcapng")}
+        arts = {"console": os.path.join(rel, "console.txt"), "console_timed": os.path.join(rel, "console-timed.txt"),
+                "network": os.path.join(rel, "network.pcapng")}
         if bt.agent.traces:
             arts["trace"] = [os.path.join(rel, os.path.basename(x)) for x in bt.agent.traces]
         e["artifacts"] = arts
@@ -280,7 +299,10 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         "subject": {"kind": "emulator", "elf_sha256": _sha256(elf)},
         "runner": {"name": "product_run.py", "version": "1.%d" % FORMAT_MINOR, "emulator_commit": commit},
         "testbench": {"commit": tbcommit},
-        "environment": {"boot": pr.BOOT_MODES[boot][1]},
+        "environment": dict({"boot": pr.BOOT_MODES[boot][1]},
+                            **({"pwr_cr3_at_power_on": "0x%08X locked" % pwr_cr3} if pwr_cr3 is not None else {}),
+                            **({"flash_erase_us": flash_erase_us} if flash_erase_us else {}),
+                            **({"flash_preload": ["0x%08X" % a for a, _ in flash_preload]} if flash_preload else {})),
         "started": started,
         "finished": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "results": results, "summary": summary,

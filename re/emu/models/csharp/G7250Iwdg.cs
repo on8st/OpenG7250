@@ -103,6 +103,7 @@ namespace Antmicro.Renode.Peripherals.Timers
             bus.SetHookBeforePeripheralWrite<uint>((IBusPeripheral)rcc, (value, offset) =>
             {
                 if(offset == 0xD0 && (value & RMVF) != 0) lock(sync) rsr = 0;
+                ForwardToClocks(offset, value);
                 return value;
             });
             hooked = true;
@@ -139,6 +140,23 @@ namespace Antmicro.Renode.Peripherals.Timers
                 }
                 catch(Exception e) { this.Log(LogLevel.Error, "IWDG: boot after reset failed: {0}", e.Message); }
             }
+        }
+
+        // the clock model (G7250Clocks, docs/CLOCKS-model.md) follows the RCC
+        // writes through this hook, the only RCC write hook
+        private object clocks;
+        private System.Reflection.MethodInfo clocksWrite;
+        private void ForwardToClocks(long offset, uint value)
+        {
+            if(clocksWrite == null)
+            {
+                IPeripheral c;
+                if(!machine.TryGetByName("sysbus.clocks", out c)) return;
+                clocks = c;
+                clocksWrite = c.GetType().GetMethod("RccWrite");
+                if(clocksWrite == null) return;
+            }
+            clocksWrite.Invoke(clocks, new object[] { offset, value });
         }
 
         private void Reload()

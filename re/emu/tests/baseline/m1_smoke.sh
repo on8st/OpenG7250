@@ -172,11 +172,23 @@ fi
 
 echo "[7] product runner self-check (g7250-testlist, network bridge, fixtures; stand-in bench)"
 if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
-  if G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
+  if G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
        tests/fakebench/runner-selfcheck.json --run-id smoke-runner >/dev/null 2>&1; then
     ok "runner self-check: all pass (host-only and missing-fixture tests skip)"
   else
     bad "runner self-check (see .private/product-runs/smoke-runner/result.json)"
+  fi
+else
+  echo "  skip (no arm-none-eabi-gcc or Renode)"
+fi
+
+echo "[8] clock model: TIM2 and SysTick periods in emulated time (own clock_test)"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
+  if G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/clock_test.elf \
+       tests/fakebench/clock.json --run-id smoke-clock --no-address >/dev/null 2>&1; then
+    ok "clock check: TIM2 and SysTick 50 ms periods in emulated time"
+  else
+    bad "clock check (see .private/product-runs/smoke-clock/result.json)"
   fi
 else
   echo "  skip (no arm-none-eabi-gcc or Renode)"

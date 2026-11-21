@@ -57,7 +57,9 @@ Per test (or once per list with `"boot": "per-list"`):
 5. Stop at `timeout_s` of emulated time (`error` "timeout: ... emulated"), or at
    a wall-clock cap.
 6. Take the bench's JSON line, add `duration_s` (emulated), `wall_s` and
-   `artifacts` (console, network.pcapng, trace files). If the test failed or
+   `artifacts` (console, console_timed, network.pcapng, trace files). The
+   console is exactly what the image wrote; `console-timed.txt` has the same
+   lines, each prefixed with its emulated time in seconds (start of the line). If the test failed or
    broke and the emulator logged accesses to parts it does not model, the
    status becomes `error` with reason "not modelled: <peripheral>/<register>"
    (named by ST RM0468 peripheral and offset only).
@@ -75,18 +77,27 @@ Exit code: 0 no fail and no error, 1 a fail, 2 an error.
 The CH394 model (`docs/CH394-model.md`) exchanges UDP datagrams with the
 runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
 
-- `radio.connect[P]` = 127.0.0.1:(40000 + P) for the spec ports 1024–1035,
+- Port plan per boot: a base B chosen from 20000, 30000, 10000, the first whose
+  whole span (B + 1024 … B + 8299) can be bound, and clear of the ports the
+  format doc uses as examples (41024–47451, 52000–52299). The bridge binds its
+  UDP sockets without SO_REUSEADDR, so a port another process holds fails the
+  check. If no base is free, the test is `error` "runner: no free local port
+  base ...", before anything boots. B is recorded in `endpoint.json` as
+  `runner.port_base`.
+- `radio.connect[P]` = 127.0.0.1:(B + P) for the spec ports 1024–1035,
   7250, 7251. A datagram the bench sends there from local port p reaches the
   image from `hosts[i].ip`:p (host i owns p by its `ports` range).
 - A datagram from the image to `hosts[i].ip`:p is sent to `hosts[i].bind`:p
   from `radio.connect[<radio source port>]`.
-- `broadcast.send_to.limited[P]` = 127.0.0.1:(40100 + P),
-  `directed[P]` = 127.0.0.1:(40200 + P) for 1024 and 7251: the image receives
+- `broadcast.send_to.limited[P]` = 127.0.0.1:(B + 100 + P),
+  `directed[P]` = 127.0.0.1:(B + 200 + P) for 1024 and 7251: the image receives
   the datagram as a broadcast on port P. A datagram from the image to the
   limited or directed broadcast address goes to the bench port it names.
 - `hosts`: two in-subnet addresses (the 20th and 21st host of the image's
-  subnet) and 10.99.0.20 outside it; port ranges 52000–52099, 52100–52199,
-  52200–52299 on 127.0.0.1.
+  subnet) and 10.99.0.20 outside it, on 127.0.0.1. hosts[0] owns 1024 … 7250,
+  so the fixed source ports 1024 and 7250 some spec tests need are bound at the
+  same numbers (both checked free before booting); hosts[1] and hosts[2] have
+  B + 8100 … B + 8199 and B + 8200 … B + 8299.
 - Every datagram in both directions is written to `network.pcapng`
   (Ethernet/IPv4/UDP, wall-clock time stamps).
 
@@ -108,6 +119,15 @@ one of these is skipped with `fixture:<name>`.
   level; pins sampled every 50 µs of emulated time, latch edges exact), `spi`
   (SPI1 transfers, `cs` null, data as hex), `reset` (`power` after a
   `power.cycle`).
+- **Pin state (proposal for format v1.4, agreed):** every `gpio` trace event
+  and every pin in the snapshot's `pins` block carries `mode` (`output`,
+  `input`, `af`, `analog`, from MODER), `pull` (`up`, `down`, `none`) and
+  `level`: 0 or 1 when the pin is driven (push-pull output, open-drain output
+  low, an input pulled up or down, or an input driven by `hw.input`), `"z"` when
+  nothing drives it (analog mode, an input without pull, a released open-drain
+  output without pull), `null` for an alternate-function pin the emulator does
+  not model at pin level. A change of mode or pull alone is also an event. The
+  snapshot's existing keys keep their place and use the same level values.
 - `hw.input {pin, level}`: PH6, PH3, PH4 only (his/85 PTT and key inputs); the
   emulator drives the port input, edges reach EXTI; other pins
   `"pin not offered: <pin>"`.
@@ -130,6 +150,12 @@ one of these is skipped with `fixture:<name>`.
   with RMVF), the core boots from 0x08000000; RAM keeps its contents, as on the
   hardware. An active trace gets a `reset` event with cause `wdt` (a software
   reset of the image gives cause `software`).
+- Runner options for RE-side checks: `--flash-erase-us N` (sector erase
+  duration, `docs/FLASH-model.md`), `--flash-preload ADDR=FILE` (load a file
+  into flash before the first boot, e.g. a pre-filled store sector),
+  `--pwr-cr3 HEX` (supply configuration locked at power-on), `--no-address`
+  (do not wait for a network address), env `G7250_NO_FIXED_PORTS=1` (no fixed
+  source ports for hosts[0], for runs without spec tests that need them).
 - `ctrl.set {absent|silent}`: in both states the Main's interlink receives no
   bytes (no Control unit is emulated in product runs).
 

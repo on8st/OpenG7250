@@ -37,12 +37,14 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private uint cr1, cr2, cr3, cpucr, d3cr, wkupcr, wkupepr;
         private bool supplyLocked, supplyValid = true;
 
-        public G7250Pwr()
+        // power-on: the supply configuration is unlocked and at its reset value.
+        // A test can start from another power-on state (powerOnCr3, powerOnLocked),
+        // e.g. as if an earlier boot stage had already written and locked it.
+        public G7250Pwr(uint powerOnCr3 = CR3Reset, bool powerOnLocked = false)
         {
-            // power-on: the supply configuration is unlocked and at its reset value
-            cr3 = CR3Reset;
-            supplyLocked = false;
-            supplyValid = true;
+            cr3 = powerOnCr3 & SupplyMask;
+            supplyLocked = powerOnLocked;
+            supplyValid = !powerOnLocked && cr3 == CR3Reset ? true : Valid(cr3);
             Reset();
         }
 
