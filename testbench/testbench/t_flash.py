@@ -233,7 +233,7 @@ def t_a1_86(ctx: Ctx):
         v += 1
         with mg(ctx, s) as u:
             flog_start(ctx)
-            ctx.fixture("power.cut", after_flash_words=k)
+            ctx.fixture("power.cut", after_flash_words=k)  # tears the k-th word after the call (v1.8)
             r = set_tx_time(u, v)
             answered0 = r is not None and r["status"] == 0
         wait_reachable(ctx, f"power cut after word {k}")
@@ -279,33 +279,43 @@ def t_a1_87(ctx: Ctx):
     with mg(ctx, s) as u:
         old = tx_time(u)
         lo, hi = store_range(u)
-        set_tx_time(u, 220_000)
-        flog_start(ctx)
-        set_tx_time(u, 220_001)
-        progs = [e for e in flog(ctx) if e.get("op") == "program" and in_range(e, lo, hi)]
-    if not ctx.check("the store write of 220001 seen in flash.log", bool(progs), "no program entry in the store"):
-        return
-    first = progs[0]["address"]
-    first = int(first, 0) if isinstance(first, str) else first
-    last = progs[-1]["address"]
-    last = int(last, 0) if isinstance(last, str) else last
-    for where, addr, want in (("a word of the newest record", first, 220_000), ("the newest commit word", last, 220_000)):
+
+    def newest_write(base: int):
+        """Write base, then base + 1 bracketed in flash.log (v1.8: the program entries between
+        a read before the command and one after its answer); (first word, commit word)."""
+        with mg(ctx, s) as u:
+            set_tx_time(u, base)
+            flog_start(ctx)
+            set_tx_time(u, base + 1)
+            progs = [e for e in flog(ctx) if e.get("op") == "program" and in_range(e, lo, hi)]
+        if not progs:
+            return None
+        addr = lambda e: int(e["address"], 0) if isinstance(e["address"], str) else e["address"]
+        # a program entry covers a run of back-to-back 32-byte words: the commit word is the
+        # last word of the last run
+        return addr(progs[0]), addr(progs[-1]) + int(progs[-1].get("len", 32)) - 32
+
+    for i, where in enumerate(("a word of the newest record", "the newest commit word")):
+        base = 220_000 + 10 * i
+        w = newest_write(base)
+        if not ctx.check(f"{where}: the store write of {base + 1} seen in flash.log", w is not None, "no program entry"):
+            continue
+        addr = w[i]
         ctx.fixture("flash.ecc", address=addr, type="double")
         ctx.fixture("power.cycle")
         wait_reachable(ctx, f"ECC error in {where}")
         with mg(ctx, s) as u:
             got = tx_time(u)
-            ctx.eq(f"{where} unreadable: the store opens and uses the older record or generation", got, want)
+            ctx.eq(f"{where} unreadable: the store opens and uses the older record or generation", got, base)
             ff = fault_flags(ctx)
-            ctx.check("without a fault (FAULT_FLAGS 0)", ff == 0, f"FAULT_FLAGS {ff}")
+            ctx.check(f"{where}: without a fault (FAULT_FLAGS 0)", ff == 0, f"FAULT_FLAGS {ff}")
             ecc = [e for e in flog(ctx) if e.get("op") == "ecc"]
-            ctx.check("the ECC error was seen by the radio", bool(ecc), f"{len(ecc)} ecc entries")
+            ctx.check(f"{where}: the ECC error was seen by the radio", bool(ecc), f"{len(ecc)} ecc entries")
             flog_start(ctx)
-            set_tx_time(u, 220_005)
-            skipped = all(not (int(e["address"], 0) if isinstance(e["address"], str) else e["address"]) == addr
+            set_tx_time(u, base + 5)
+            skipped = all((int(e["address"], 0) if isinstance(e["address"], str) else e["address"]) != addr
                           for e in flog(ctx) if e.get("op") == "program" and "address" in e)
-            ctx.check("later writes skip the word", skipped, f"address {addr:#x}")
-            restart(ctx, u)
+            ctx.check(f"{where}: later writes skip the word", skipped, f"address {addr:#x}")
     with mg(ctx, s) as u:
         if old is not None:
             set_tx_time(u, old)
