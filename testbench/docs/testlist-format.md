@@ -197,6 +197,10 @@ delivery is given in the last column; the reference model offers the ones marked
 A fixture that answers `ok: false` with `"not in HIS: <name>"` makes the test `skip` with that
 reason. The coordinator turns each such reason into a HIS question.
 
+**(v1.4)** During a power cycle the runner answers any request at once with `ok: false`,
+`"emulator not ready"`. The bench retries such a request every 0.2 s for up to 60 s; after
+that the test is an `error` (a runner fault, not a verdict).
+
 `hw.observe` snapshot. Keys and values are taken from the HIS 85 safe-state table only (latching
 per HIS 85, emulator answer c):
 
@@ -220,6 +224,9 @@ latched. `ch` holds the last 10-bit word per DAC channel, `null` if never writte
 `level`, as in a `gpio` event below. The pin fields of v1.3 (`tr_lines`, `codec_reset_PB10`,
 `PD12`, the `oe_*` fields) stay, and their values may now be `"z"` or `null` too. The bench
 judges the pins by `pins` when it is present, else by the v1.3 fields, with the rules below.
+PH9 (the power hold, [HIS] HIS 20) in `pins` is judged in a snapshot only: held at 1 while the
+firmware runs (decision 0029, part A scope). The trace does not judge it, since its level
+during the boot is not in the HIS.
 
 **Pin state (v1.4).** Every `gpio` event, and every entry of `pins`, carries:
 - `mode`: `"output"`, `"input"`, `"af"` (alternate function) or `"analog"`;
@@ -256,9 +263,9 @@ A change of mode alone is also an event.
 - **(v1.4)** Replay at `start`: a trace first replays the last `boot` event and the boot-phase
   `gpio` events (their `t_us` before the start time, all within 10 ms of the boot), then the
   current state of every watched pin, then live events. The latch and strobe pins PA11, PH12,
-  PD13, PG2, PG5 are in that current state and in `hw.observe` `pins`. **Proposal:** `start`
-  also returns `"t_us"`, the emulated start time, so that the bench knows exactly where the
-  replay ends; without it the bench takes the boot + 10 ms.
+  PD13, PG2, PG5 and PH9 are in that current state and in `hw.observe` `pins`. `start` returns
+  `{"file", "t_us"}`: `t_us` is the emulated start time, where the replay ends. A runner that
+  gives no `t_us` (a v1.3 runner) leaves the bench to take the boot + 10 ms.
 - A reader MUST ignore an unknown `kind`.
 - Pins: the HIS 85 safe-state items, plus any pin named in `start {pins: [...]}`.
 - **(v1.3)** `start` returns `{"file": "<path>"}`; `stop` returns `{"count": n, "dropped": n,
@@ -361,8 +368,8 @@ A test with target `emulator` is also run against the reference model. A test wi
 
 1. Settled: the address mapping (section 3, v1.2), the `hw.trace` schema and `hw.input`
    (section 4, v1.2), the live trace file (v1.3), pin modes with `"z"` and `null`,
-   `fixed_ports`, the DHCP fixtures, `net.endpoint`, the `boot` event and the replay (v1.4).
-2. Proposed: `hw.trace start` returns `"t_us"`, the emulated start time (section 4).
-3. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
+   `fixed_ports`, the DHCP fixtures, `net.endpoint`, the `boot` event and the replay, the
+   `t_us` of `hw.trace start`, and `"emulator not ready"` during a power cycle (v1.4).
+2. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
    runs, the 0x04 reads are six strobes per sample; such a trace is meant for a short test
    only, and the runner may drop events (which fails the test) if it cannot keep up.

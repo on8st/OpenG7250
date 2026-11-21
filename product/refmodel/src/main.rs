@@ -225,7 +225,7 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                         ("PF4", out(lvl(!tx))), ("PF6", out(lvl(tx))), ("PC7", out(lvl(tx))), ("PH11", out(lvl(tx))),
                         ("PA10", out(J::Num(0.0))), ("PH10", out(J::Num(1.0))),
                         ("PD13", out(J::Num(1.0))), ("PG2", out(J::Num(1.0))), ("PG5", out(J::Num(1.0))),
-                        ("PD12", out(J::Num(0.0))), ("PB10", out(J::Num(0.0))),
+                        ("PD12", out(J::Num(0.0))), ("PB10", out(J::Num(0.0))), ("PH9", out(J::Num(1.0))),
                         ("PD5", J::obj(vec![("mode", J::Str("analog".into())), ("level", J::Str("z".into()))])),
                     ])
                 }),

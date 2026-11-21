@@ -16,7 +16,8 @@ SNAPSHOT = dict(tr_lines=dict(PF4=1, PF6=0, PC7=0, PH11=0), spi1_a=dict(oe_PA10=
 
 
 class FakeRunner:
-    def __init__(self, trace_lines, dropped=0):
+    def __init__(self, trace_lines, dropped=0, not_ready=0):
+        self.not_ready = not_ready  # answer this many requests with "emulator not ready" first (v1.4)
         self.dir = tempfile.TemporaryDirectory()
         self.file = str(Path(self.dir.name) / "trace-1.jsonl")
         Path(self.file).write_text("".join(json.dumps(e) + "\n" for e in trace_lines))
@@ -34,6 +35,10 @@ class FakeRunner:
             with c:
                 req = json.loads(c.makefile().readline())
                 op, args = req["op"], req.get("args", {})
+                if self.not_ready > 0:
+                    self.not_ready -= 1
+                    c.sendall((json.dumps(dict(ok=False, error="emulator not ready")) + "\n").encode())
+                    continue
                 if op == "hw.observe":
                     v = SNAPSHOT
                 elif op == "hw.trace" and args.get("action") == "start":
@@ -84,6 +89,13 @@ class FlowTest(unittest.TestCase):
             r = run(r_)
             self.assertEqual(r["status"], "fail")
             self.assertTrue(any(c["name"] == "hw.trace: no events dropped" for c in r["checks"]))
+        finally:
+            r_.close()
+
+    def test_not_ready_is_retried(self):
+        r_ = FakeRunner([], not_ready=2)
+        try:
+            self.assertEqual(run(r_)["status"], "pass")
         finally:
             r_.close()
 

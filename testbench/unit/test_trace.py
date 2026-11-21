@@ -73,6 +73,11 @@ class TraceTest(unittest.TestCase):
     def test_snapshot_pins(self):
         pins = {e["pin"]: dict(level=e["level"], mode=e["mode"]) for e in START}
         self.assertTrue(all(ok for _, ok, _ in check_pins(pins)))
+        pins["PH9"] = dict(level=1, mode="output")
+        self.assertTrue(all(ok for _, ok, _ in check_pins(pins)))
+        pins["PH9"] = dict(level=0, mode="output")
+        self.assertEqual([n[:4] for n, ok, _ in check_pins(pins) if not ok], ["PH9:"])
+        pins["PH9"] = dict(level=1, mode="output")
         pins["PG2"] = dict(level="z", mode="analog")
         bad = [n for n, ok, _ in check_pins(pins) if not ok]
         self.assertEqual(len(bad), 1)

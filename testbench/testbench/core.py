@@ -34,6 +34,10 @@ class Blocked(Exception):
     pass
 
 
+NOT_READY_RETRY_S = 60
+NOT_READY_POLL_S = 0.2
+
+
 class RunnerFault(Exception):
     """The runner or its control socket failed (no answer, broken connection): the result is
     "error" with the runner named as the cause, not a verdict on the firmware."""
@@ -110,14 +114,22 @@ class Ctx:
         self.need(op)
         addr = self.endpoint["control"]["address"]
         host, port = addr.rsplit(":", 1)
-        # emulated time can run slower than wall time: allow 30 s per fixture call
-        try:
-            with socket.create_connection((host, int(port)), timeout=30) as s:
-                s.sendall((json.dumps({"op": op, "args": args}) + "\n").encode())
-                line = s.makefile().readline()
-            rep = json.loads(line)
-        except (OSError, ValueError) as e:  # socket.timeout is an OSError
-            raise RunnerFault(f"runner: fixture {op}: {type(e).__name__}: {e}") from None
+        # emulated time can run slower than wall time: allow 30 s per fixture call. During a
+        # power cycle the runner answers "emulator not ready" at once (v1.4): retry for 60 s.
+        deadline = time.monotonic() + NOT_READY_RETRY_S
+        while True:
+            try:
+                with socket.create_connection((host, int(port)), timeout=30) as s:
+                    s.sendall((json.dumps({"op": op, "args": args}) + "\n").encode())
+                    line = s.makefile().readline()
+                rep = json.loads(line)
+            except (OSError, ValueError) as e:  # socket.timeout is an OSError
+                raise RunnerFault(f"runner: fixture {op}: {type(e).__name__}: {e}") from None
+            if rep.get("ok") or "not ready" not in str(rep.get("error", "")):
+                break
+            if time.monotonic() >= deadline:
+                raise RunnerFault(f"runner: fixture {op}: still {rep.get('error')!r} after {NOT_READY_RETRY_S} s")
+            time.sleep(NOT_READY_POLL_S)
         if not rep.get("ok"):
             raise Skip(rep.get("error", f"fixture:{op}"))
         return rep.get("value")

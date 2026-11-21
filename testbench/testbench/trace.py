@@ -47,6 +47,10 @@ OE = {"PA10": "chain A output enable inactive (high) until a frame with bit 7 cl
 # Pins that must never be at a level: pin -> (forbidden level, why)
 NEVER = {"PD5": (0, "USART2 TX never low: idle high or high-impedance (HIS 70 item 2; 0023)")}
 
+# Pins judged only in an hw.observe snapshot taken while the firmware runs (not in the trace:
+# their level during the boot is not in the HIS): pin -> (level, why)
+RUNNING = {"PH9": (1, "power hold kept high while the firmware runs (HIS 20, HYPOTHESIS; 0029; part A scope)")}
+
 CHAIN_A_LATCH, CHAIN_B_LATCH = "PA11", "PH12"
 
 # FPGA bus ([HIS] HIS 80)
@@ -176,9 +180,14 @@ def _result(pin, why, bad, ok_text):
 
 def check_pins(pins: dict):
     """The same rules on an hw.observe v1.4 `pins` map {pin: {mode, pull, level}} at one instant.
-    Output enables are not judged here: whether their chain has latched a frame is in the trace."""
+    Output enables are not judged here: whether their chain has latched a frame is in the trace.
+    PH9 (RUNNING) is judged here only."""
     res = []
     for pin, (want, why) in HOLD.items():
+        if pin in pins:
+            v = _lvl(pins[pin])
+            res.append((f"{pin}: {why}", v == want, f"{_describe(v)}, mode {pins[pin].get('mode', 'n/a')}"))
+    for pin, (want, why) in RUNNING.items():
         if pin in pins:
             v = _lvl(pins[pin])
             res.append((f"{pin}: {why}", v == want, f"{_describe(v)}, mode {pins[pin].get('mode', 'n/a')}"))
