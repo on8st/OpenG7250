@@ -67,6 +67,7 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
 - 0064, 0065 (proposed), from the testbench run-sheet gaps: torn boot-record writes, `ROLLBACK`,
   flash erase timing and failure, power loss in store writes, flash ECC; source [STM32H72x];
   new tests T-A1-83 to T-A1-87 and T-B5-22.
+- SF-28: the update-state test expects `BUSY` for a P2 arm during an update, not `MAINTENANCE`.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 
