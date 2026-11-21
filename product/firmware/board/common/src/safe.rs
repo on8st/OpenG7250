@@ -46,6 +46,18 @@ pub fn drive(port: Port, pin: u8, high: bool) {
     g.moder().modify(|w| w.set_moder(n, Moder::OUTPUT));
 }
 
+/// Input with the internal pull-up. The pull-up is set first, while the pin is still in its
+/// reset (analog) mode, so the pin is never a floating input and is never driven.
+pub fn input_pull_up(port: Port, pin: u8) {
+    let g = gpio(port);
+    let n = pin as usize;
+    // Output register high as well: should anything ever switch the pin to an output, it drives
+    // the idle level, not low.
+    g.bsrr().write(|w| w.set_bs(n, true));
+    g.pupdr().modify(|w| w.set_pupdr(n, Pupdr::PULL_UP));
+    g.moder().modify(|w| w.set_moder(n, Moder::INPUT));
+}
+
 /// Apply the whole safe state, in table order.
 pub fn apply() {
     enable_gpio_clocks();
@@ -53,6 +65,7 @@ pub fn apply() {
         match r.action {
             Action::DriveHigh => drive(r.port, r.pin, true),
             Action::DriveLow => drive(r.port, r.pin, false),
+            Action::InputPullUp => input_pull_up(r.port, r.pin),
             Action::LeaveUntouched => {}
         }
     }
@@ -65,6 +78,7 @@ pub fn reassert() {
         match r.action {
             Action::DriveHigh => drive(r.port, r.pin, true),
             Action::DriveLow => drive(r.port, r.pin, false),
+            Action::InputPullUp => input_pull_up(r.port, r.pin),
             Action::LeaveUntouched => {}
         }
     }
@@ -81,6 +95,7 @@ pub fn holds() -> bool {
         match r.action {
             Action::DriveHigh => out && level,
             Action::DriveLow => out && !level,
+            Action::InputPullUp => g.moder().read().moder(n) == Moder::INPUT && g.pupdr().read().pupdr(n) == Pupdr::PULL_UP,
             Action::LeaveUntouched => true,
         }
     })

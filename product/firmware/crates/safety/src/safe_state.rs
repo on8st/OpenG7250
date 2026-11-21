@@ -30,6 +30,9 @@ pub enum Action {
     DriveHigh,
     /// Push-pull output, driven low (same order).
     DriveLow,
+    /// Input with the internal pull-up: the pin idles high and is never driven. The pull-up is
+    /// set before the pin leaves its reset (analog) mode, so it never floats as an input.
+    InputPullUp,
     /// The pin is not touched: it keeps its reset state (input / analog, high-impedance per
     /// [HIS] HIS 85 "Open"). Listed so that tests can prove nobody drives it.
     LeaveUntouched,
@@ -105,7 +108,10 @@ pub const SAFE_STATE: &[PinRule] = &[
     r(A, 12, LeaveUntouched, "unknown output, no safe level known (HIS 85)"),
     r(A, 11, LeaveUntouched, "chain A latch: outputs disabled by PA10 instead (HIS 85)"),
     r(H, 12, LeaveUntouched, "chain B latch: outputs disabled by PH10 instead (HIS 85)"),
-    r(D, 5, LeaveUntouched, "USART2 TX to the controller: idle or high-impedance, never low (HIS 70)"),
+    // USART2 TX to the controller: idle level or high-impedance, never low (HIS 70, HIS 85). An
+    // input with pull-up is both: it idles high and drives nothing. Earlier builds left it in its
+    // reset (analog) mode; the emulator trace showed it as level 0 (T-B10-L11, 2026-11-21).
+    r(D, 5, InputPullUp, "USART2 TX to the controller: input with pull-up, idles high, never driven (HIS 70, HIS 85)"),
     r(H, 6, LeaveUntouched, "PTT input, not used in v1.0 (0030)"),
     r(H, 3, LeaveUntouched, "key contact, not used in v1.0 (0030)"),
     r(H, 4, LeaveUntouched, "key contact, not used in v1.0 (0030)"),
@@ -145,13 +151,23 @@ mod tests {
     }
 
     #[test]
+    fn pd5_is_never_driven_low() {
+        // HIS 70 / HIS 85: high or high-impedance, never low.
+        let r = rule(D, 5).unwrap();
+        assert_eq!(r.action, InputPullUp);
+        assert!(r.is_safety());
+        // No rule anywhere drives PD5.
+        assert!(!SAFE_STATE.iter().any(|x| x.port == D && x.pin == 5 && matches!(x.action, DriveLow | DriveHigh)));
+    }
+
+    #[test]
     fn power_hold_high_0029() {
         assert_eq!(act(H, 9), DriveHigh);
     }
 
     #[test]
     fn never_driven() {
-        for (p, n) in [(A, 4), (A, 12), (D, 5), (H, 6), (H, 3), (H, 4), (H, 5)] {
+        for (p, n) in [(A, 4), (A, 12), (H, 6), (H, 3), (H, 4), (H, 5)] {
             assert_eq!(act(p, n), LeaveUntouched, "P{p:?}{n}");
         }
     }
