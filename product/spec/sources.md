@@ -145,7 +145,7 @@ the source has been found but not checked.
 
 ### [G7250] Public G7250 product information
 
-- **[HIS] G7250 hardware-interface specification.** `his/` in the OpenG7250 umbrella repository, cleared by gate review 2 on 2026-11-20; read at commit `2a38b7f` (content `89f5b5d`) and, after gate reviews 3 and 4, at `d0a39b0`, `b95f519`, `9d10e72`, `d199d33`, `6e2208a` and `5292ba8` in a read-only worktree without `re/`. Cited by section, e.g. "HIS 15". The only channel for hardware facts into the product side (AGENTS.md rule 2).
+- **[HIS] G7250 hardware-interface specification.** `his/` in the OpenG7250 umbrella repository, cleared by gate review 2 on 2026-11-20; read at commit `2a38b7f` (content `89f5b5d`) and, after gate reviews 3 and 4, at `d0a39b0`, `b95f519`, `9d10e72`, `d199d33`, `6e2208a`, `5292ba8` and `0677c2d` in a read-only worktree without `re/`. Cited by section, e.g. "HIS 15". The only channel for hardware facts into the product side (AGENTS.md rule 2).
 - **[G7250-UPD] Radioddity, "Extended manual for Xiegu G7250 v1.0.1".** File `2026-11-09_Xiegu_G7250_update_V1.0.1.pdf` in the release package `2026-11-09_Xiegu_G7250_V1.0.1.zip`, radioddity.com/pages/xiegu-download. Public vendor update guide; identified by [HIS] HIS 15 (`d0a39b0`). Not yet read by the product side; cited only for the existence of the vendor update path through the controller.
 - **[G7250-MAN] Xiegu G7250 Operation Manual, English.** Primary source. The file name says
   "rev0.1"; the title page says "Rev.1.01".

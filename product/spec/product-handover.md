@@ -77,8 +77,12 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0045 | Safe state holds from 20 µs after the boot stage starts; before that outside the spec (P-SYS-1) | proposed |
 | 0046 | CW keyer timing: unit 1200/S ms, weight as mark/space shift, Curtis iambic A/B, strict spacing, tolerance | proposed |
 | 0047 | Unkey reason 11 when an ATU tune cycle ends by itself; abort gives 1 | proposed |
+| 0048 | Sockets open within 5 s (DHCP) or 15 s (no DHCP) of link up | proposed |
+| 0049 | Link-local probe on socket 0 (MACRAW), defence by giving the address up; conflicts on DHCP/static addresses | proposed |
+| 0050 | Fault counters across a reset: pending hardware P-SYS-9, part of the TX gate | proposed |
+| 0051 | Port 7250 sequence counters per destination (owner, non-owners, old owner) | proposed |
 
-All numbers 0001–0047 are now in use.
+All numbers 0001–0051 are now in use.
 
 ## Open questions for ON8ST
 

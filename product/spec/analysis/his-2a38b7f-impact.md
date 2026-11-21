@@ -195,3 +195,8 @@ with the streaming installer and no rollback. Recommendation: A/B, which keeps U
 - HIS 80: DDC0 cannot run until byte 0 and bytes 9–18 of the 0x01 frame are understood; DDC0
   tuning word, I/Q order and bus timing unknown. New P-RX-2; DDC0 not offered until it is set
   (B6.1, record `streams` bit 0); P-RX-2 joins the TX gate (byte 0 may hold a TX enable); 0042.
+
+## 12. Addendum: `0677c2d` (gate review 9)
+
+- HIS 10, HIS 90: AXI SRAM over a reset without power loss UNKNOWN, with the measurement. This is
+  P-SYS-9 (0050), which now cites it. No other spec change.

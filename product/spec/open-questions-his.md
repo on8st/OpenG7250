@@ -1,6 +1,6 @@
 # Open questions for the hardware-interface spec (HIS)
 
-Questions that only the hardware-interface spec (`g7250-his`, now `his/` in the umbrella repository) can answer. The HIS was cleared by gate review 2 on 2026-11-20 and answered at commit `2a38b7f`; the answers to the follow-up questions passed gate review 3 at `d0a39b0`, the HIS-02 frame layout gate review 4 at `b95f519`, the HIS-02 word roles gate review 5 at `9d10e72`, the answers to the firmware's questions gate review 6 at `d199d33`, the CH394 SPI maximum gate review 7 at `6e2208a`, and the FPGA bus cycle gate review 8 at `5292ba8`. Each question below carries its status; "pending hardware" means only the radio can settle it (HIS 90). This repository
+Questions that only the hardware-interface spec (`g7250-his`, now `his/` in the umbrella repository) can answer. The HIS was cleared by gate review 2 on 2026-11-20 and answered at commit `2a38b7f`; the answers to the follow-up questions passed gate review 3 at `d0a39b0`, the HIS-02 frame layout gate review 4 at `b95f519`, the HIS-02 word roles gate review 5 at `9d10e72`, the answers to the firmware's questions gate review 6 at `d199d33`, the CH394 SPI maximum gate review 7 at `6e2208a`, the FPGA bus cycle gate review 8 at `5292ba8`, and the AXI SRAM reset item gate review 9 at `0677c2d`. Each question below carries its status; "pending hardware" means only the radio can settle it (HIS 90). This repository
 does not look for the answers itself (AGENTS.md rules 1 and 7). Each question says why we
 need it, which decision or milestone waits for it, and what public sources already say.
 
@@ -169,6 +169,7 @@ Priority: **M1** = needed for milestone M1 (discovery, capability block, RX-IQ);
 ### HIS-13 — Fault and reset behaviour (M3)
 
 - **HIS answer** ([HIS] `2a38b7f`): partly (HIS 85); see `analysis/his-2a38b7f-impact.md` §2.
+- **Update** ([HIS] `0677c2d`, gate review 9): whether AXI SRAM content (the firmware's region 0x2401FFE0–0x2401FFFF) survives a software or watchdog reset through the stage before 0x08020000 is UNKNOWN; measurement in HIS 90. Spec: P-SYS-9 (0050).
 - Question: what does the hardware do on a processor reset, brown-out or watchdog reset:
   does the PA drop out by itself, and in which state do relays and switches come up?
 - Why: safe state after reset or fault (0001 spec section 9, 0007).

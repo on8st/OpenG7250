@@ -283,7 +283,7 @@ Table A1-4 — What a factory reset restores (0022 §60)
 | C-7 TCI allow-list | empty (any address in the radio's own subnet) | 0020 §31 |
 | TCI port (part C C2.4) | 50001 | 0021 §2 |
 | Log (A1.7) | kept | 0008 L-2 |
-| Fault entry counters, reset counters, `TRIP_COUNT` (A3.5) | kept; cleared only at power-on | 0022 §27 |
+| Fault entry counters, reset counters, `TRIP_COUNT` (A3.5) | kept; cleared only at power-on (survival across resets: P-SYS-9) | 0022 §27; 0050 |
 | Firmware images and update state (A1.8) | unchanged | 0008 U-5 |
 | Calibration set (A1.12) | kept | 0039 |
 | Write session, challenges, stored replies (A1.4, A1.10) | discarded, as at every reset | 0022 §11 |
@@ -654,6 +654,30 @@ as in [RFC3927] and keep trying DHCP, with retries spaced from 4 s doubling up t
 64 s (RFC 2131 section 4.1 retransmission back-off); a lease, when it comes, is an address
 change under A1.11a (0035).
 
+- **Bound on start-up** (0048). Counted from link up (the CH394 reports the link,
+  B5.8), the management socket and the P2 sockets MUST be open within 5 s when a DHCP server
+  answers the first DISCOVER, and within 15 s when none answers: at most 6 s of DHCP attempts at
+  power-on, then the RFC 3927 probe and announce on the link-local address ([RFC3927] section
+  9: about 7 s at most), then the sockets. The time from power-on to link up (boot and
+  auto-negotiation) is not part of this bound.
+- **Link-local address** (0049). The G7250 chooses, probes and announces its link-local
+  address as [RFC3927] section 2. Only socket 0 can work in MACRAW ([CH394]), and no socket is
+  free (0008, 0017), so:
+  - the probe and announce run on socket 0 in MACRAW, at start-up before the P2 and
+    management sockets open, and again whenever a link-local address is chosen while running
+    (after the end of a lease, a DHCPNAK or a conflict, each an address change of A1.11a that
+    ends the session). During such a probe, at most 10 s, discovery (port 1024, socket 0) and
+    the other sockets are closed;
+  - the DHCP attempts and the probe run one after the other, as the start-up bound assumes;
+  - defence is [RFC3927] section 2.5 option (a): on a conflict ([CH394] GINT IP_CONFLI) the
+    G7250 gives the address up at once, without a defending ARP, chooses a new one and probes
+    it; after 10 conflicts it waits 60 s before the next probe ([RFC3927] section 9,
+    MAX_CONFLICTS, RATE_LIMIT_INTERVAL). Every conflict is logged.
+- **Conflict on a DHCP or static address** (0049). A conflict on a leased address: the G7250
+  sends DHCPDECLINE ([RFC2131] section 3.1 item 5), uses a link-local address and starts DHCP
+  again. A conflict on a static address: fall back to the previous configuration and log it
+  (A1.6 C-4); if there is none, or it conflicts too, use a link-local address. Each is an
+  address change of A1.11a.
 - **Bound on a borrow** (0041). One borrow MUST last at most 2 s, so that a host's
   retransmission of A1.4 (every 500 ms, up to 5 times) still reaches the management channel
   after it; an exchange not finished in 2 s is abandoned and retried at the next interval, so
@@ -735,8 +759,9 @@ while a level-1 session runs. The G7250 MUST handle it in this order (0022 §3):
 1. End the old session with the actions of A3.2 in their order: unkey, drop the arm
    (`TAKEOVER`), issue a new token, send a last `TX_ARM_STATE` to the old owner. The last
    `TX_ARM_STATE` MUST be sent three times, about 10 ms apart, with identical register content
-   (the same address and data pairs); each copy carries the next sequence number of local
-   port 7250 (B2.7) (0022 §29; §73 item 22). The copies are sent asynchronously: steps 2–5
+   (the same address and data pairs); each copy carries the next sequence number of the old
+   session's port 7250 counter towards the old owner (B2.7, "Port 7250 counters per
+   destination"; 0051) (0022 §29; §73 item 22). The copies are sent asynchronously: steps 2–5
    MUST NOT wait for the second and third copy (0022 §77 item 2). This step applies in full
    also while the old owner is not armed: `TX_ARM_STATE` then reads disarmed with drop reason
    4 `TAKEOVER` ([23:16]), a new token is issued, and the three copies and the repeated notice
@@ -1250,8 +1275,11 @@ A3.5 **Fault state** (0007, Decision 5):
   `NOT_CLEARABLE`.
 - **Counters** (0022 §27). The fault entry counter per code, a reset counter per reset cause
   and `TRIP_COUNT` count since power-on. They MUST survive `RESTART` and every other reset
-  without loss of power and are cleared only at power-on; whether the hardware keeps them
-  across a processor reset: HIS-13. They are read with `GET_STATS` and logged (A1.7). An
+  without loss of power and are cleared only at power-on. They are kept in RAM; whether that RAM
+  content survives a reset without power loss, including the vendor bootloader that runs
+  before the boot stage, is pending hardware (P-SYS-9; HIS-13). P-SYS-9 is part of the freeze
+  rule of Annex P: until it is shown, TX stays locked, so a lost count can never let a
+  `RESTART` lift an escalation (0050). They are read with `GET_STATS` and logged (A1.7). An
   escalated code therefore stays class 2 after a `RESTART`; only a power cycle at the radio
   clears the count.
 
@@ -1709,6 +1737,15 @@ that host is as a takeover. At every other session end (watchdog standby, link l
 address or level change) the counters keep their value (0022 §86 item 10),
 and a restart by the same host (B5.4) continues them, so that the host does not read a
 restart at 0 as a takeover (A2.4, host guidance) (0022 §83 item 4).
+
+**Port 7250 counters per destination** (0051). On local port 7250 the "direction" is the
+destination: the G7250 MUST keep one counter for the packets to the owner's register
+destination (the session's counter, reset and continued as above), and one separate counter
+for all answers to hosts that are not the owner (`NOT_OWNER` and `CAP_REQUEST` answers, B8.4,
+B8.5), which no session event resets, only a reset of the radio. The packets to an old owner
+after a takeover (the three copies of the last `TX_ARM_STATE` and the repeated `TAKEOVER`
+notice, A2.4) continue the old session's counter towards that host. So a host that checks its
+own register stream for loss sees no gap caused by answers to other hosts.
 Exception, as [P2] specifies: the wideband counter restarts at 0 for every frame, so the 8
 packets of a frame carry 0–7 ([P2] Wideband Data packet, pp. 52–53: "set to zero … whenever a
 block of raw samples has been sent"; B6.10; Annex X2, C16; 0022 §21). The discovery reply
@@ -3365,7 +3402,7 @@ unit are written as its calibration set (A1.12); fixing the encoding or a defaul
 is a spec change, made in this table.
 
 **Freeze rule** (0035). Transmit stays disabled until every parameter of groups P-RF, P-PWR,
-P-SEN and P-TIM, and P-RX-2, P-TX-1, P-ATU-1 and P-ANT-1, is set (the configuration frame of P-RX-2
+P-SEN and P-TIM, and P-RX-2, P-TX-1, P-ATU-1, P-ANT-1 and P-SYS-9, is set (the configuration frame of P-RX-2
 may hold a transmit enable, [HIS] HIS 80): the RF path in transmit is only known
 once the ATU and antenna latches have known safe values ([HIS] HIS 85). Until then record `tx`
 bit 4 is 0, and every arm is rejected with `NOT_CALIBRATED` (Table B8-3; B10.2 item 3; part C
@@ -3406,13 +3443,14 @@ Table P-1 — Pending hardware parameters
 | P-NET-2 | Whether the CH394 MAC address is unique per unit ([HIS] HIS 40) | A1.5, B3 | HIS-15 | the CH394 value is used as it is |
 | P-NET-3 | Whether the CH394 reports the destination address (unicast, directed or limited broadcast) of a received UDP datagram ([HIS] HIS 40, HIS 90) | B3.9 (Set IP) | HIS-14 | treat every Set IP as unicast or directed broadcast: own subnet only, any source while link-local (B3.9) |
 | P-SYS-1 | Pin states between reset and the boot stage's GPIO init (board pull resistors on the RF control pins of [HIS] HIS 85, and what the vendor bootloader leaves); whether they hold the safe levels in that window | A3.6, A3.5 | HIS-13 | outside this spec before the boot stage runs; the boot stage sets the safe state within 20 µs of its first instruction (A3.6; 0045) |
-| P-SYS-2 | Reset cause and RAM retained across a warm reset (fault counters, log) | A1.7, A3.5, Table B8-3 `WDT_RESET_AT_START` | HIS-13, HIS-18 | counters and log are lost at every reset |
+| P-SYS-2 | Reset cause (power-on, software, watchdog), and whether the log survives a warm reset | A1.7, Table B8-3 `WDT_RESET_AT_START`, Annex M tag 17 | HIS-13, HIS-18 | reset cause reported as 0 (unknown); the log is lost at every reset |
 | P-SYS-3 | Power-up path without the controller (HIS 20 H1/H2) | part A scope (0029) | HIS-17 | none; observation T0-P2 |
 | P-SYS-4 | Behaviour of the stock controller's panel with a silent main unit | part A scope (0023) | HIS-17 | CTRL idle ([HIS] HIS 70) |
 | P-SYS-5 | Drill F1: the vendor bootloader starts an image of this firmware, and the vendor path installs the stock firmware into an empty application area; whether the vendor bootloader uses an application sector as staging ([HIS] HIS 15 rule 5) | A1.8 (slot layout), A1.8a items 3, 9 (0028) | HIS-19 | no first install before F1; foreign `UPDATE_BEGIN` gets status 56 |
 | P-SYS-6 | Power draw in idle, for a later standby (0029) | part A scope | — | quiet idle only |
 | P-SYS-7 | Start mode of the independent watchdog (IWDG1_SW option byte, [HIS] HIS 10, HIS 90) | A1.8a item 3 (installer), firmware | HIS-13 | the firmware and the installer service the watchdog whenever it may run |
 | P-SYS-8 | SEND and TUNER interfaces on the main unit: whether and how the firmware drives or reads them | A3.6, A3.7, B4.8 `atu` bit 4, `regmap_groups` bit 7 | HIS-09 | released (inactive) and not offered |
+| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`), [HIS] HIS 10, HIS 90 (`0677c2d`: UNKNOWN for the firmware's region 0x2401FFE0–0x2401FFFF). Radio check: write a pattern, then a software reset (`RESTART`) and a watchdog reset, and read it back in the boot stage | A3.5 "Counters", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters are kept as far as the hardware keeps them, and nothing relies on them |
 | P-RX-1 | Physical receive paths behind the two receive tuning words ([HIS] HIS 80) | B2, B3, 0004 | HIS-02 | one DDC |
 | P-RX-2 | FPGA configuration frame (command 0x01, [HIS] HIS 80): meaning and safe values of the status byte 0 and of bytes 9–18 (per-rate calibration among them), position of the spectral-inversion flag; which tuning word (offset 1 or 5) is DDC0; I/Q order of the 0x04 samples; bus set-up, strobe width and turnaround | B6.1, B6.7, B4.8 `streams` | HIS-01, HIS-02 | DDC0 not offered (`streams` bit 0 = 0, `STREAM_STATUS` reason 2); no configuration frame written outside the A3.6 safe state |
 | P-TX-1 | The third tuning word as the transmit word ([HIS] HIS 80, HYPOTHESIS) | B10 (firmware) | HIS-02 | not applicable while TX is disabled |
@@ -3583,6 +3621,11 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-66 | With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041). |
 | T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
 | T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
+| T-A1-69 | From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 15 s, from the link-local address (reference model or emulator; A1.11 "Bound on start-up"; 0048). |
+| T-A1-70 | At start-up with no DHCP server: the radio sends the RFC 3927 probes for its chosen link-local address with the section 9 timing before it answers discovery; an ARP reply claiming that address during the probe makes it choose another and probe again (reference model or emulator; A1.11; 0049). |
+| T-A1-71 | After a successful probe the radio sends the RFC 3927 announcements, and only then answers discovery and `IDENTIFY` on the link-local address, within the start-up bound (A1.11; 0048, 0049). |
+| T-A1-72 | While running on a link-local address, a conflict (IP_CONFLI) makes the radio give the address up at once without a defending ARP, end the session as an address change (A1.11a), probe a new address with discovery and management closed for at most 10 s, and log the conflict; after 10 conflicts it waits 60 s before the next probe (A1.11; 0049). |
+| T-A1-73 | A conflict on a DHCP-leased address sends DHCPDECLINE, moves to link-local and restarts DHCP; a conflict on a static address falls back to the previous configuration (C-4), or to link-local if there is none; each is logged (A1.6 C-4, A1.11; 0049). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
@@ -3593,7 +3636,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A2-08 | After a takeover `TX_MODE_CLASS` is 0, `KEYED_TIMEOUT` 500 ms, session limits are the persistent values, and the RX settings of A are kept until B writes its own. |
 | T-A2-09 | Two hosts alternating C&C every 50 ms: neither can stay armed, every takeover is counted, and the log has at most one takeover entry per second for the pair. |
 | T-A2-10 | At a takeover the old owner receives the final `TX_ARM_STATE` (`TAKEOVER`) exactly three times, about 10 ms apart, with identical register pairs and consecutive sequence numbers, and no stream packet or register push afterwards; a discovery from it is still answered. |
-| T-A2-11 | After B takes over from A, each DUC I&Q or register packet from A within 5 s is answered with one copy of the `TAKEOVER` notice, at most once per 100 ms; a C&C packet from A takes the radio back, B receives three notices, and the streams to A restart at sequence 0. |
+| T-A2-11 | After B takes over from A, each DUC I&Q or register packet from A within 5 s is answered with one copy of the `TAKEOVER` notice, at most once per 100 ms; a C&C packet from A takes the radio back, B receives three notices, and the streams to A restart at sequence 0. On port 7250 the notices to B continue B's session counter (the packet after B's last register packet), and answers sent to A while B was owner do not advance it (B2.7; 0051). |
 | T-A2-12 | While level 2 is active, a General packet on port 1024 has no effect, is counted, and does not count for a later level-1 session (after G6). |
 | T-A2-13 | Host A with General bytes 31–32 = 50000 is taken over by host B: the three copies and every repeated notice arrive at A's address on port 50000 from local port 7250 (with bytes 31–32 = 0: at A's source port); a register write from A within the 5 s gets its `NOT_OWNER` answer at its source port and a notice, at most one notice per 100 ms, and neither limit consumes the other (A2.4). |
 | T-A2-14 | Host A sets PA enable, CW select, break-in, hang delay 500 ms, RF delay 20 ms, keyer speed 20 wpm and EER; host B takes over with a High Priority packet only: `TX_STATE` bit 4 shows PA disabled, KEY keys nothing, CWX forms no element, no EER refusal stands, and DUC rate and bits read 192 and 24; the same holds after A clears run and starts again with a run bit only (A3.6a). |
@@ -3659,6 +3702,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-57 | Level 1, a P2 host sending CW as DUC I&Q with PTT, zero samples (I = Q = 0) between elements and a gap of 300 ms, `t_blank` below the gap (reference model): RF above the "RF while not keyed" threshold injected in a gap is detected, the fault state with `RF_NOT_KEYED` entered, no later than `t_blank` + 10 ms after the last non-zero sample (or after the injection, if later), while PTT stays set; RF that decays within `t_blank` after each element gives no fault; the same with the zero samples fed during an underflow shorter than the underrun time; with non-zero noise samples in the gaps the check does not run there (known limit) (Table A3-2, A3.9a item 6; 0022 §88 item 1). |
 | T-A3-58 | v1.0 (0030): with level 1 active, armed and unarmed, with and without hardware CW selected, toggling the local PTT input (PH6) and the KEY contacts (PH3, PH4) keys nothing, and High Priority status byte 4 bits [0]–[2] stay 0 (reference model with simulated inputs; [HIS] HIS 85). |
 | T-A3-59 | With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040). |
+| T-A3-60 | Needs the radio (P-SYS-9): after two `SWR_REPEATED` entries, a `RESTART` and then a processor watchdog reset leave the fault entry counter and `TRIP_COUNT` unchanged, so the third entry is class 2; a power cycle clears them. Before P-SYS-9 is set the arm is rejected with `NOT_CALIBRATED` (A3.5; Annex P; 0050). |
 
 ### Discovery (B3)
 
@@ -3808,6 +3852,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B8-18 | A `LIMIT_SWR` write looser than the persistent S2 is rejected with `LOOSER_LIMIT`; one between S1 and S2 replaces S2 and leaves S1; one below S1 lowers both; an `ATU_TUNE` = 1 that is both unarmed and from a non-owner gets `NOT_OWNER`, unarmed and with DUC0 outside the ranges gets `NOT_ARMED`, not `NOT_KEYABLE` (A3.9b item 1). |
 | T-B8-19 | A register write from a non-owner whose source port is 7250 gets no answer and is counted; from another port it gets `NOT_OWNER` (B8.5). |
 | T-B8-20 | Writing 0 to `LIMIT_FWD_POWER` after 10 000 mW returns the answer with the limit in force at the persistent value, and RF is not stopped (B8.6). |
+| T-B8-21 | During A's session: register writes and `CAP_REQUEST`s from host C get answers on port 7250 numbered by the non-owner counter (0, 1, 2, …), and A's register stream shows no gap; the non-owner counter is not reset by A's session ending or by a takeover, only by a reset of the radio (B2.7; 0051). |
 
 ### Telemetry (B9)
 
