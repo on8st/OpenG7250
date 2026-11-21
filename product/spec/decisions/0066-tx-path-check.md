@@ -50,6 +50,19 @@ pin as the hardware sees it, nor how fast. The test bench and the firmware need 
 8. SEND and the TUNER trigger, while P-SYS-8 is pending: no pin, not driven, not offered, not
    checked. When P-SYS-8 is set, their pins join Table A3-6b with their released level.
 
+## Addendum: start of the check and the DAC rows (firmware questions, 2026-11-21)
+
+9. **Start.** A bounded gap is accepted rather than a check loop in the boot stage. The first
+   check runs no later than 100 ms after the boot stage's first instruction. Between the boot
+   stage's safe-state set-up (0045) and that check, no code writes the Table A3-6b pins or
+   their configuration. So the pins stay as set, and only a board fault could change them
+   unseen for at most that time. Measured on the emulator as for the 20 µs of 0045. In T-A3-61,
+   a pin forced from power-on gives the fault within 120 ms of the first instruction.
+10. **DAC rows.** Confirmed. While the firmware never writes the DAC and holds PB14 low, the
+    rows hold by construction, and PB14 itself is checked on its pin level. The DAC part of
+    T-A3-61 is judged by host tests of the check until a DAC driver exists, then also on the
+    emulator. No test hook goes into the product image.
+
 ## Alternatives considered
 
 - Configuration only: misses a board fault that holds a line, which is the case that matters
