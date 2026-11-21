@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "ad52c8d",
-  "sha256_of_inputs": "8d63157dc298f4d989506ec058738dfa373b0c6049a73e3b5c620c29fe1fca5d"
+  "commit": "af03893",
+  "sha256_of_inputs": "63f49b2f39e5f53d61684d7f2dda22cc43f1f89d1af43ab18177c5875add25b1"
  },
  "his": {
   "commit": "72591aa"
@@ -413,10 +413,11 @@
    "id": "T-A1-23",
    "origin": "spec",
    "part": "A-B",
-   "title": "After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 \"After `UPDATE_ABORT`\"; 0063). `CAP_REQUEST` is still answered, and an arm after `UPDATE_BEGIN` is rejected with `MAINTENANCE` (A1.8; 0022 §10).",
+   "title": "After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 \"After `UPDATE_ABORT`\"; 0063). `CAP_REQUEST` is still answered; a `TX_ARM` write after `UPDATE_BEGIN` gets `BUSY` in `WRITE_STATUS` and `TX_ARM_STATE` stays disarmed, because `BUSY` takes precedence (B8.4); `MAINTENANCE` belongs to the arm-update race (A1.8 \"Arm and update serialise\") and to level 2 (A1.8; 0022 §10, §13).",
    "reqs": [
     "A1",
     "A1.8",
+    "B8.4",
     "0022 §10"
    ],
    "scope": "v1.0",
@@ -1762,7 +1763,8 @@
    "target": "emulator",
    "also": [],
    "needs": [
-    "power.cycle"
+    "power.cut",
+    "time.advance"
    ],
    "pending": [],
    "tx_part": false,
@@ -1804,7 +1806,9 @@
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
-   "needs": [],
+   "needs": [
+    "flash.fault"
+   ],
    "pending": [],
    "tx_part": false,
    "notes": []
@@ -1822,7 +1826,8 @@
    "target": "emulator",
    "also": [],
    "needs": [
-    "power.cycle"
+    "flash.log",
+    "power.cut"
    ],
    "pending": [],
    "tx_part": false,
@@ -1841,7 +1846,11 @@
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
-   "needs": [],
+   "needs": [
+    "flash.log",
+    "flash.ecc",
+    "power.cycle"
+   ],
    "pending": [],
    "tx_part": false,
    "notes": []
@@ -4837,7 +4846,10 @@
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
-   "needs": [],
+   "needs": [
+    "flash.log",
+    "flash.timing"
+   ],
    "pending": [],
    "tx_part": false,
    "notes": []

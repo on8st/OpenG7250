@@ -582,8 +582,26 @@ def t_a1_68(ctx: Ctx):
                 t = u.identify()
                 ctx.eq("after 60 s: rolled back to the previous slot and version", (t.get(10), t.get(23, b"")[:1], version_of(t)),
                        (b"\x02", bytes([a[0]]), a[2]))
+    elif "gpio.force" in ctx.endpoint.get("fixtures", []):
+        # a safe-state pin forced away from its HIS 85 level during the trial (PF4 held at 1)
+        a = activate_new(ctx, s, 684)
+        if ctx.check("update activated (class 2 case)", a is not None, "the update did not complete"):
+            with updating(ctx, s, restart_at_end=False) as u:
+                ctx.fixture("gpio.force", pin="PF4", level=0)
+                try:
+                    advance(ctx, 30)
+                    ctx.eq("30 s after start with PF4 forced low: still not confirmed", u.identify().get(10), b"\x01")
+                    advance(ctx, 35)
+                    wait_reachable(ctx, "trial rollback (class 2)")
+                    t = u.identify()
+                    ctx.eq("after 60 s: rolled back to the previous slot and version", (t.get(10), t.get(23, b"")[:1], version_of(t)),
+                           (b"\x02", bytes([a[0]]), a[2]))
+                finally:
+                    ctx.fixture("gpio.force", pin="PF4", level=None)
+        ctx.notes.append("the class 2 fault code (FAULT_CODE 16) is not judged here: A3.5 tests; what 'a safe-state pin forced' "
+                         "means (pin level or output register) is asked of the spec session (SF-29)")
     else:
-        ctx.notes.append("class 2 case not run: no trial.sim; on the emulator a forced safe-state pin (TX_PATH_NOT_BLOCKED) is its stimulus")
+        ctx.notes.append("class 2 case not run: neither trial.sim nor gpio.force offered")
     # resets before confirming: the previous image at the next start
     a = activate_new(ctx, s, 683)
     if ctx.check("update activated (reset case)", a is not None, "the update did not complete"):

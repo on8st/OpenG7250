@@ -498,6 +498,26 @@ A test with target `emulator` is also run against the reference model. A test wi
    program of sector 0, no option-byte write, nothing outside the main flash (a test that
    starts `flash.log` itself opts out). Sector 1 and the store sectors are judged by their own
    tests (T-A1-56, T-A1-77, T-A1-78; 0061).
-7. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
+7. Accepted for v1.8, with the emulator's flash controller (0064, 0065):
+   - `flash.timing {erase_us, program_us}` → `{erase_us, program_us, source}`; the endpoint
+     carries `flash_timing` with the values in use, `t_erase_max_us` and their `source` (a
+     labelled stand-in until the datasheet value is known); T-B5-22 stretches every erase to
+     `t_erase_max_us` and names the value in its result.
+   - `flash.fault {op: "erase"|"program", after?, flag, never_end?}`: the next matching operation
+     sets that RM0468 error flag; `never_end` keeps BSY set until a reset (T-A1-85).
+   - `power.cut {after_flash_words: n} | {during_erase: 0..1} | {at_address: a}`; a cut entry in
+     `flash.log` has `result: "cut"` with `words_written` or `fraction_done` (T-A1-83, T-A1-86).
+   - `flash.ecc {address, type: "double"|"single"}`; each detection is a `flash.log` entry
+     `{op: "ecc", type, address, boot}` (T-A1-87).
+   - Every erase and program entry carries `fpga_bus: "idle"|"open"` at its start (T-B5-22).
+   - `gpio.force {pin, level: 0|1|null, from_us?}` → `{pin, level, t_us}`: the pin reads `level`
+     whatever the image drives; `null` releases; a `hw.trace` event `{"kind": "force", ...}`;
+     `hw.observe` `pins` shows `forced`; kept across `reset.wdt`, released by `power.cycle`. The
+     bench forces a safe-state pin away from its HIS 85 level for the class 2 case of T-A1-68
+     (PF4 low); what "a safe-state pin forced" means (the pin level, an output register) is a
+     spec question (SF-29).
+   - The bench writes T-B5-22, T-A1-83, T-A1-85, T-A1-86 and T-A1-87 to these shapes; they skip
+     where a fixture is not offered.
+8. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
    runs, the 0x04 reads are six strobes per sample; such a trace is meant for a short test
    only, and the runner may drop events (which fails the test) if it cannot keep up.
