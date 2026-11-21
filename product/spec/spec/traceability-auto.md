@@ -64,4 +64,5 @@
 | 0060 | 0060 — DDC0 frame values from the unit's factory calibration, confirmed on the radio | 3 | 2 | network-interface: Annex P — Pending hardware parameters; network-interface: Streams (B6) |  |
 | 0061 | 0061 — The store is in flash sectors 6 and 7, checked in F1 | 1 | 3 | network-interface: A1 Management channel; network-interface: Annex P — Pending hardware parameters; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0062 | 0062 — The flash layout is reported in IDENTIFY (tag 25) | 1 | 3 | network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0063 | 0063 — Status codes for an unreadable package header and for update commands with no transfer | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 
