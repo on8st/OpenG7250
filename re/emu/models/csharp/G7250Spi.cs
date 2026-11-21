@@ -45,8 +45,105 @@ namespace Antmicro.Renode.Peripherals.SPI
         private uint cr1, cr2, cfg1, cfg2, ier, flags, crcpoly = 0x107, udrdr, i2scfgr;
         private uint done;   // frames transferred since CSTART
 
+        // ---- timing (Timed = true; SPI6 in product runs): every data frame takes
+        // bits / f_SCK of emulated time, f_SCK = kernel clock / 2^(MBR+1) (CFG1 MBR);
+        // a received frame is visible (RXP, RXDR, an RX DMA request) only from its
+        // completion, EOT/TXTF/TXC only from the last frame's completion, and TXP only
+        // while the TX FIFO has room. Time comes from a free-running timer of the
+        // emulated clock, so it advances inside a quantum. ----
+        private readonly IMachine machine;
+        private readonly Antmicro.Renode.Peripherals.Timers.LimitTimer clockRef;   // 1 GHz, free running
+        private readonly Antmicro.Renode.Peripherals.Timers.LimitTimer wake;       // next pending completion
+        private long kernelHz = 64000000;
+        private double busyNs;                // completion time of the last frame on the bus
+        private double eotNs = -1;            // completion of the transfer's last frame, -1 = none pending
+        private double lastReady;             // completion time of the newest received frame
+        private readonly Queue<double> rxReady = new Queue<double>();   // completion time per received frame
+        public bool Timed { get; set; }
+
+        public void SetKernelClock(long hz) { lock(sync) kernelHz = Math.Max(1, hz); }
+        public long KernelClock { get { return kernelHz; } }
+        public double FrameNs { get { lock(sync) return FrameTimeNs(); } }
+
+        // the wake timer and the reference timer can differ by a few ns: at a wake-up the
+        // time is at least the wake-up's own target (a monotonic floor), so a frame due at
+        // that moment counts as complete and the timer is not re-armed for the same instant
+        private double timeFloor, wakeTarget;
+        private double NowNs() { return Math.Max((double)clockRef.Value, timeFloor); }
+        private double FrameTimeNs()
+        {
+            int mbr = (int)((cfg1 >> 28) & 7);
+            double fsck = kernelHz / (double)(2 << mbr);
+            return Bits() * 1e9 / fsck;
+        }
+        private int ReadyCount()
+        {
+            if(!Timed) return rx.Count;
+            double now = NowNs();
+            int n = 0;
+            foreach(var t in rxReady) { if(t <= now) n++; else break; }
+            return n;
+        }
+
+        // arm the wake timer for the next completion that matters (RX DMA request, EOT, IRQ)
+        private void ArmWake()
+        {
+            if(!Timed) return;
+            // one wake-up per transfer, not per frame: at the transfer's end (EOT), or for an
+            // endless transfer at the last frame in flight; the DMA then takes every frame
+            // completed by then. The transfer time stays exact at a fraction of the events.
+            double now = NowNs(), next = double.MaxValue;
+            if((cfg1 & RXDMAEN) != 0)
+            {
+                // DMA: one wake-up per transfer (at EOT, or at the newest frame of an endless
+                // transfer); the DMA then takes every completed frame
+                if(eotNs >= 0 && eotNs > now) next = eotNs;
+                else if(rxReady.Count > 0 && lastReady > now) next = lastReady;
+            }
+            else
+            {
+                // core polling: wake-ups so the reference time advances while the core polls
+                // SR, batched to at least 2 us of frames (a frame becomes visible at most
+                // 2 us late; the transfer's total time stays exact at its EOT)
+                if(rxReady.Count > 0 && rxReady.Peek() > now)
+                {
+                    double target = rxReady.Peek() + 2000.0;
+                    double last = rxReady.Peek();
+                    foreach(var t in rxReady) { if(t <= target) last = t; else break; }
+                    next = last;
+                }
+                if(eotNs >= 0 && eotNs > now) next = Math.Min(next, eotNs);
+            }
+            wake.Enabled = false;
+            if(next == double.MaxValue) return;
+            ulong d = (ulong)Math.Max(1.0, Math.Ceiling(next - now));
+            wakeTarget = now + d;
+            wake.Value = (1UL << 40) - d;
+            wake.Enabled = true;
+        }
+
+        private void OnWake()
+        {
+            bool rxReq;
+            lock(sync)
+            {
+                wake.Enabled = false;
+                timeFloor = Math.Max(timeFloor, wakeTarget);
+                rxReq = (cfg1 & RXDMAEN) != 0 && ReadyCount() > 0;
+                ArmWake();
+            }
+            if(rxReq) Edge(RxDma);
+            UpdateIrq();
+        }
+
         public G7250Spi(IMachine machine, string spiName = "SPI", int fifoDepth = 16) : base(machine)
         {
+            this.machine = machine;
+            clockRef = new Antmicro.Renode.Peripherals.Timers.LimitTimer(machine.ClockSource, 1000000000UL, this, "spiclock", 1UL << 62,
+                direction: Antmicro.Renode.Time.Direction.Ascending, enabled: true, workMode: Antmicro.Renode.Time.WorkMode.Periodic, eventEnabled: false);
+            wake = new Antmicro.Renode.Peripherals.Timers.LimitTimer(machine.ClockSource, 1000000000UL, this, "spiwake", 1UL << 40,
+                direction: Antmicro.Renode.Time.Direction.Ascending, enabled: false, workMode: Antmicro.Renode.Time.WorkMode.Periodic, eventEnabled: true);
+            wake.LimitReached += OnWake;
             label = spiName;
             this.fifoDepth = fifoDepth;
             IRQ = new GPIO(); RxDma = new GPIO(); TxDma = new GPIO();
@@ -65,7 +162,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 cr1 = cr2 = cfg2 = ier = flags = udrdr = i2scfgr = 0;
                 cfg1 = 0x00070007;      // reset value: DSIZE 8 bit
                 crcpoly = 0x107; done = 0;
-                rx.Clear();
+                rx.Clear(); rxReady.Clear(); busyNs = 0; eotNs = -1;
             }
             IRQ.Unset(); RxDma.Unset(); TxDma.Unset();
         }
@@ -99,15 +196,26 @@ namespace Antmicro.Renode.Peripherals.SPI
         private bool Shift(uint value)
         {
             uint reply = Frame(value);
+            double ready = 0;
+            if(Timed)
+            {
+                double now = NowNs();
+                busyNs = Math.Max(now, busyNs) + FrameTimeNs();
+                ready = busyNs;
+            }
             if(Comm() != 1)
             {
-                if(rx.Count >= fifoDepth) flags |= OVR;
-                else rx.Enqueue(reply);
+                // RX FIFO overrun: frames received and not read; with timing, frames still in
+                // flight on the bus are in the TX FIFO, not yet in the RX FIFO
+                int inRx = Timed ? ReadyCount() : rx.Count;     // completed and unread now
+                if(inRx >= fifoDepth) flags |= OVR;
+                else { rx.Enqueue(reply); if(Timed) { rxReady.Enqueue(ready); lastReady = ready; } }
             }
             done++;
             if(Tsize() > 0 && done >= Tsize())
             {
                 flags |= EOT | TXTF | TXC;
+                if(Timed) eotNs = busyNs;
                 cr1 &= ~CSTART;
                 return true;
             }
@@ -123,12 +231,21 @@ namespace Antmicro.Renode.Peripherals.SPI
         private uint Status()
         {
             uint v = flags & (EOT | TXTF | OVR | TXC | (1u << 5) | (1u << 7) | (1u << 8) | (1u << 9) | (1u << 10) | (1u << 11));
+            bool eotDue = !Timed || eotNs < 0 || NowNs() >= eotNs;
+            if(!eotDue) v &= ~(EOT | TXTF | TXC);
             int thr = (int)((cfg1 >> 5) & 0xF) + 1;
-            if(rx.Count >= thr || (rx.Count > 0 && (flags & EOT) != 0)) v |= RXP;
-            if((cr1 & SPE) != 0 && Remaining()) v |= TXP;
+            int avail = ReadyCount();
+            if(avail >= thr || (avail > 0 && (v & EOT) != 0)) v |= RXP;
+            bool room = true;
+            if(Timed)
+            {
+                double pending = (busyNs - NowNs()) / Math.Max(1e-3, FrameTimeNs());
+                room = pending < fifoDepth;
+            }
+            if((cr1 & SPE) != 0 && Remaining() && room) v |= TXP;
             if((v & RXP) != 0 && (v & TXP) != 0) v |= DXP;
-            if(Tsize() == 0 || !Running()) v |= TXC;
-            int lvl = Math.Min(rx.Count, 3);
+            if((Tsize() == 0 || !Running()) && eotDue) v |= TXC;
+            int lvl = Math.Min(avail, 3);
             v |= (uint)lvl << 13;
             if(rx.Count > 0 && FrameBytes() <= 2 && rx.Count * FrameBytes() < 4) v |= 1u << 15;   // RXWNE: less than a word left
             uint ct = Tsize() > done ? Tsize() - done : 0;
@@ -168,10 +285,12 @@ namespace Antmicro.Renode.Peripherals.SPI
                                 ended |= Shift(0);                     // simplex receive: clock in on demand
                             if(rx.Count == 0) break;
                             v |= rx.Dequeue() << (8 * fb * i);
+                            if(Timed && rxReady.Count > 0) rxReady.Dequeue();
                         }
                         if(rx.Count == 0 && Comm() == 2 && (cfg1 & RXDMAEN) != 0 && Running() && Remaining())
                             ended |= Shift(0);                         // simplex receive by DMA: next frame
-                        rxAgain = rx.Count > 0 && (cfg1 & RXDMAEN) != 0;
+                        rxAgain = ReadyCount() > 0 && (cfg1 & RXDMAEN) != 0;
+                        ArmWake();
                         break;
                     }
                     case 0x40: v = crcpoly; break;
@@ -196,10 +315,10 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case 0x00:
                     {
                         bool wasOn = (cr1 & SPE) != 0;
-                        if((value & SPE) == 0 && wasOn) { rx.Clear(); done = 0; }
+                        if((value & SPE) == 0 && wasOn) { rx.Clear(); rxReady.Clear(); done = 0; eotNs = -1; }
                         bool start = (value & CSTART) != 0 && (cr1 & CSTART) == 0 && (value & SPE) != 0;
                         cr1 = value;
-                        if(start) { done = 0; flags &= ~(EOT | TXTF | TXC); started = true; }
+                        if(start) { done = 0; flags &= ~(EOT | TXTF | TXC); eotNs = -1; started = true; }
                         break;
                     }
                     case 0x04: if((cr1 & SPE) == 0) cr2 = value & 0xFFFFFFFF; break;
@@ -225,14 +344,15 @@ namespace Antmicro.Renode.Peripherals.SPI
                 }
                 bool txOn = (cfg1 & TXDMAEN) != 0 && Running() && Remaining() && Comm() != 2;
                 txReq = txOn && ((offset & ~3L) == 0x20 || started || (offset & ~3L) == 0x08);
-                rxReq = (cfg1 & RXDMAEN) != 0 && rx.Count > 0;
+                rxReq = (cfg1 & RXDMAEN) != 0 && ReadyCount() > 0;
                 if(Comm() == 2 && started && (cfg1 & RXDMAEN) != 0 && Tsize() > 0)
                 {
                     // simplex receive with DMA: the master clocks in the first frame
                     ended |= Shift(0);
-                    rxReq = true;
+                    rxReq = ReadyCount() > 0;
                 }
                 if((cfg1 & TXDMAEN) == 0 || !txOn) txReq = false;
+                ArmWake();
             }
             if(ended) EndOfTransfer();
             bool txIdle;
@@ -240,7 +360,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(txIdle) TxDma.Unset();               // no TX request while the SPI cannot take data
             else if(txReq) Edge(TxDma);
             bool rxEmpty;
-            lock(sync) rxEmpty = rx.Count == 0 || (cfg1 & RXDMAEN) == 0;
+            lock(sync) rxEmpty = ReadyCount() == 0 || (cfg1 & RXDMAEN) == 0;
             if(rxReq && !rxEmpty) Edge(RxDma); else if(rxEmpty) RxDma.Unset();
             UpdateIrq();
         }

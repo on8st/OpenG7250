@@ -31,9 +31,27 @@ numbers, a consistency check).
   FIFO empty), so a DMA channel enabled before the next CSTART does not
   transfer early.
 
+## Timing (SPI6 in product runs: `sysbus.spi6 Timed true`)
+
+- f_SCK = SPI6 kernel clock / 2^(MBR+1) (CFG1 MBR). The kernel clock comes from
+  the clock model (RM0468 RCC_D3CCIPR SPI6SEL: rcc_pclk4, the reset choice, =
+  HCLK / D3PPRE from RCC_D3CFGR; hsi_ker; the PLL, CSI and HSE choices are not
+  modelled, pclk4 is used with a warning).
+- Every data frame takes its bit count / f_SCK of emulated time, back to back on
+  the bus. A received frame is visible (RXP, RXDR, an RX DMA request) only from
+  its completion; EOT, TXTF and TXC only from the last frame's completion; TXP
+  only while fewer than the FIFO depth of frames are still in flight. The device
+  (CH394) sees each frame when it is written; only its visibility to the core
+  and the DMA is timed. Inter-frame gaps (MIDI, MSSI) are not modelled.
+- Time is read from a free-running timer of the emulated clock, so it advances
+  inside a quantum while the core polls.
+- Other SPI instances, and stock runs, stay untimed.
+- Self-test `firmware-tests/bench/spi6time_test.c` (m1_smoke step [6]): 1003
+  frames at 4 MHz, by polling and by BDMA, measured with TIM2 at 1 MHz.
+
 ## Not modelled
 
-Slave mode, timing and baud rate, CRC calculation, underrun, mode fault, TI
+Slave mode, timing and baud rate of the untimed instances, CRC calculation, underrun, mode fault, TI
 mode, I2S, suspend (CSUSP, MASRX), SS pin management.
 
 ## Self-test

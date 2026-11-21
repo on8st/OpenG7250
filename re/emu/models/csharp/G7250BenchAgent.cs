@@ -246,6 +246,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             string act = w.Length > 1 ? w[1] : "";
             int from = w.Length > 2 ? int.Parse(w[2], CultureInfo.InvariantCulture) : 0;
             string r = act == "start" ? Call(ch, "NetLogStart") : act == "read" ? Call(ch, "NetLogRead", from)
+                     : act == "runner" ? Call(ch, "RunLogRead", from)
                      : act == "stop" ? Call(ch, "NetLogStop", from) : null;
             return r == null ? "err net.log action" : "ok " + r;
         }

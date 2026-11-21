@@ -29,6 +29,52 @@ sys.path.insert(0, HERE)
 import benchnet  # noqa: E402
 
 FORMAT_MINOR = 4
+
+# Not modelled with a known, limited reach: the image's own console or the log
+# shows it, and only the tests that judge that function are marked; every other
+# result stays as it is, with a run-level note (the coordinator's rule).
+MACRAW_LOG = "CH394/Sn_MR protocol 0x04"
+MACRAW_TESTS = {"T-A1-69", "T-A1-70", "T-A1-71", "T-A1-72", "T-A1-73", "T-A3-06"}   # T-A1-69: its bound counts the claim; T-A1-76 (the failure path itself) not
+MACRAW_NOTE = ("not modelled: MACRAW (CH394 socket 0 with Sn_MODE 0x04 stays closed in the emulator); "
+               "the image's link-local claim ran its failure path (address used without probe or announcement)")
+
+
+# Datagram delivery shift (CH394 arrival pacing): reported per burst of datagrams
+# to the radio (a burst ends at 100 ms without one), so a test's judged burst can be
+# told apart from the rest; the status is not converted.
+
+
+def shift_bursts(tdir):
+    path = os.path.join(tdir, "net-log.jsonl")
+    if not os.path.isfile(path):
+        return []
+    ents = []
+    for ln in open(path):
+        try:
+            e = json.loads(ln)
+        except ValueError:
+            continue
+        if e.get("dir") in ("to_radio", "dropped"):
+            ents.append(e)
+    bursts, cur = [], None
+    for e in ents:
+        if cur is None or e["t_us"] - cur["last"] > 100000 or e.get("boot") != cur["boot"]:
+            cur = {"boot": e.get("boot"), "first_t_us": e["t_us"], "last": e["t_us"], "count": 0, "dropped": 0, "max_shift_us": 0}
+            bursts.append(cur)
+        cur["last"] = e["t_us"]
+        cur["count"] += 1
+        cur["dropped"] += e["dir"] == "dropped"
+        cur["max_shift_us"] = max(cur["max_shift_us"], abs(int(e.get("shift_us", 0))))
+    for b in bursts:
+        b["last_t_us"] = b.pop("last")
+    return bursts
+
+
+def macraw_seen(log_path):
+    try:
+        return any(MACRAW_LOG in ln for ln in open(log_path, errors="replace"))
+    except OSError:
+        return False
 BOOT_WALL_TIMEOUT = 180.0     # host seconds for the image to bring up its address
 
 
@@ -121,6 +167,25 @@ class Boot:
         self.agent.conn = None
         self.bridge.ch = None
 
+    def save_netlog(self):
+        """Append the CH394's own datagram log of this emulator (always on: every
+        datagram at the radio and every drop, emulated time) to net-log.jsonl."""
+        path = os.path.join(self.out, "net-log.jsonl")
+        nxt = 0
+        with open(path, "a") as f:
+            for _ in range(200):
+                r = self.agent.ask("netlog runner %d" % nxt, timeout=30, internal=True)
+                if not r or not r.startswith("ok "):
+                    break
+                v = json.loads(r[3:])
+                for e in v.get("entries", []):
+                    e["boot"] = self.boots
+                    f.write(json.dumps(e) + "\n")
+                if v.get("next", 0) >= v.get("count", 0) or v.get("next", 0) == nxt:
+                    break
+                nxt = v["next"]
+        return path
+
     def power_cycle(self, cut=False):
         """Power off and on again. Flash keeps its contents (dumped from the
         running emulator and loaded into the new one); RAM does not."""
@@ -136,6 +201,7 @@ class Boot:
                 seq = sum(1 for _ in open(self.agent.trace.name))
             if not cut:
                 self.agent.ask("halt", internal=True)          # supply gone: the core stops first
+            self.save_netlog()
             dump = os.path.join(self.out, "flash-%d.bin" % self.boots)
             if self.agent.ask("flashdump " + dump, timeout=30, internal=True) == "ok":
                 self.flash = dump
@@ -224,6 +290,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
     defaults = spec.get("defaults", {})
     per_list = spec.get("boot") == "per-list"
     results = []
+    run_notes = set()
     shared = None
 
     def skip(t, reason):
@@ -271,6 +338,13 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         wall_cap = 30.0 * float(t.get("timeout_s", 30)) + 120.0
         entries, err, emu, wall = run_bench(tbdir, ep_path, t, bt.agent, wall_cap)
         nm = pr.not_modelled(bt.log) if os.path.isfile(bt.log) else []
+        macraw = macraw_seen(bt.log)
+        if macraw:
+            run_notes.add(MACRAW_NOTE)
+        try:
+            bt.save_netlog()
+        except Exception:  # noqa: BLE001
+            pass
         if not per_list:
             bt.close()
         got = {e.get("id"): e for e in entries}
@@ -284,9 +358,22 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         rel = os.path.relpath(tdir, root)
         arts = {"console": os.path.join(rel, "console.txt"), "console_timed": os.path.join(rel, "console-timed.txt"),
                 "network": os.path.join(rel, "network.pcapng")}
+        if os.path.isfile(os.path.join(tdir, "net-log.jsonl")):
+            arts["net_log"] = os.path.join(rel, "net-log.jsonl")
         if bt.agent.traces:
             arts["trace"] = [os.path.join(rel, os.path.basename(x)) for x in bt.agent.traces]
         e["artifacts"] = arts
+        bursts = shift_bursts(tdir)
+        if bursts:
+            em = e.setdefault("emulator", {})
+            em["max_delivery_shift_us"] = max(b["max_shift_us"] for b in bursts)
+            em["bursts"] = [b for b in bursts if b["count"] >= 3 or b["max_shift_us"] or b["dropped"]]
+        if macraw and t["id"] in MACRAW_TESTS:
+            if e.get("status") in ("fail", "error"):
+                e["status"] = "error"
+                e["reason"] = "not modelled: MACRAW" + (" (bench: %s)" % e["reason"] if e.get("reason") else "")
+            else:
+                e.setdefault("reason", "emulator coverage: not modelled: MACRAW")
         if nm and e.get("status") in ("fail", "error"):
             e["status"] = "error"
             e["reason"] = "not modelled: " + ", ".join(nm)
@@ -319,6 +406,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         "started": started,
         "finished": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "results": results, "summary": summary,
+        **({"notes": sorted(run_notes)} if run_notes else {}),
     }
     out_path = out_path or os.path.join(root, "result.json")
     json.dump(result, open(out_path, "w"), indent=2)

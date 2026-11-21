@@ -21,6 +21,8 @@ def report(run, lines=60, grep=None):
         os.path.basename(run.rstrip("/")), r["subject"]["elf_sha256"][:16],
         r.get("environment", {}).get("boot", "?"), r.get("testbench", {}).get("commit") or "?")]
     out.append("SUMMARY: " + ", ".join("%s %d" % kv for kv in r["summary"].items()))
+    for n in r.get("notes", []):
+        out.append("RUN NOTE: " + n)
     out.append("")
     out.append("PER TEST (id status reason):")
     nm = []

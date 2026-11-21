@@ -54,6 +54,10 @@ GENERIC = [
     ("cmd", "sysbus Unregister sysbus.spi6"),
     ("cmd", "sysbus Unregister sysbus.bdma"),
     ("repl", P("platforms", "g7250_main_spi6_dma.repl")),
+    # SPI6 frames take their time at f_SCK (docs/SPI-model.md "Timing"), product runs only
+    # Off by default: the image polls SPI6, and with real frame times its status polling
+    # slows emulation about tenfold. G7250_SPI6_TIMED=1 for chosen timing tests.
+    ("cmd", "sysbus.spi6 Timed " + ("true" if os.environ.get("G7250_SPI6_TIMED") == "1" else "false")),
     ("cs", P("models", "csharp", "G7250Ch394.cs")),
     ("repl", P("platforms", "g7250_main_spi6_ch394.repl")),
     ("cs", P("models", "csharp", "G7250Mdma.cs")),

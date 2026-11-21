@@ -158,8 +158,9 @@ echo "[5] m1_run.py refuses an absent image-map (exit 2)"
 echo "[6] bench self-tests on the generic models (firmware-tests/bench, product_run --selftest)"
 if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
   make -s -C firmware-tests/bench >/dev/null 2>&1 || bad "bench build"
-  for prog in smoke dma_test usart_test adc_test mdma_test fpga_test wdt_test spi6dma_test dbgmcu_test pwr_test pwr_bad_test; do
-    if python3 harness/g7250emu/product_run.py ".private/bench/$prog.elf" firmware-tests/bench/tests-bench.json \
+  for prog in smoke dma_test usart_test adc_test mdma_test fpga_test wdt_test spi6dma_test spi6time_test dbgmcu_test pwr_test pwr_bad_test; do
+    timed=0; [ "$prog" = spi6time_test ] && timed=1     # SPI6 timing is off by default (product runs)
+    if G7250_SPI6_TIMED=$timed python3 harness/g7250emu/product_run.py ".private/bench/$prog.elf" firmware-tests/bench/tests-bench.json \
          --selftest --run-id "smoke-$prog" --host-timeout 180 >/dev/null 2>&1; then
       ok "bench $prog: all self-tests pass"
     else

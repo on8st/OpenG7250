@@ -53,6 +53,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public long HclkHz { get; private set; }
         public long Apb1TimerHz { get; private set; }
         public long Apb2TimerHz { get; private set; }
+        public long Spi6KernelHz { get; private set; }
 
         private void ResetValues()
         {
@@ -60,6 +61,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             reg[0x10] = 0;              // CFGR: SW = HSI, TIMPRE = 0
             reg[0x18] = 0;              // D1CFGR
             reg[0x1C] = 0;              // D2CFGR
+            reg[0x20] = 0;              // D3CFGR (D3PPRE: APB4 prescaler)
+            reg[0x58] = 0;              // D3CCIPR (SPI6SEL)
             reg[0x28] = 0x02020200;     // PLLCKSELR reset value
             reg[0x2C] = 0x01FF0000;     // PLLCFGR reset value
             reg[0x30] = 0x01010280;     // PLL1DIVR reset value
@@ -125,6 +128,14 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             Apb1TimerHz = TimerHz(HclkHz, p1, timpre);
             Apb2TimerHz = TimerHz(HclkHz, p2, timpre);
             Set("nvic", CoreHz);
+            // SPI6 kernel clock (RM0468 RCC_D3CCIPR SPI6SEL): 000 rcc_pclk4 (reset), 011 hsi_ker;
+            // the PLL and CSI/HSE choices are not modelled (pclk4 is used, with a warning)
+            int p4 = ApbDiv(reg[0x20] >> 4);
+            long pclk4 = HclkHz / p4;
+            uint s6 = (reg[0x58] >> 28) & 7;
+            if(s6 != 0 && s6 != 3) this.Log(LogLevel.Warning, "not modelled: RCC/D3CCIPR SPI6SEL {0} (pclk4 used)", s6);
+            Spi6KernelHz = s6 == 3 ? HsiHz() : pclk4;
+            Set("sysbus.spi6", Spi6KernelHz);
             foreach(var t in Apb1Timers) Set("sysbus." + t, Apb1TimerHz);
             foreach(var t in Apb2Timers) Set("sysbus." + t, Apb2TimerHz);
             foreach(var cpu in setCpuRate ? machine.SystemBus.GetCPUs() : new Antmicro.Renode.Peripherals.CPU.ICPU[0])
