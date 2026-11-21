@@ -88,9 +88,9 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
 
 ## Fixtures (format section 4)
 
-Offered now: `hw.observe`, `hw.trace`, `hw.input`, `power.cycle`, `reset.wdt`,
-`ctrl.set`, `time.scale` (fixed 1.0), `net.broadcast`, `net.hosts`. Not yet:
-`link.set`, `time.advance`, `power.cut`, `dhcp.*`, `sensor.set` (needs the HIS
+Offered now: `hw.observe`, `hw.trace`, `hw.input`, `power.cycle`, `power.cut`,
+`reset.wdt`, `link.set`, `ctrl.set`, `time.scale` (fixed 1.0), `net.broadcast`,
+`net.hosts`. Not yet: `time.advance`, `dhcp.*`, `sensor.set` (needs the HIS
 scales). A test that needs
 one of these is skipped with `fixture:<name>`.
 
@@ -107,8 +107,20 @@ one of these is skipped with `fixture:<name>`.
 - `hw.input {pin, level}`: PH6, PH3, PH4 only (his/85 PTT and key inputs); the
   emulator drives the port input, edges reach EXTI; other pins
   `"pin not offered: <pin>"`.
-- `power.cycle`: the emulator restarts the image from reset; the bridge,
-  control socket and an active trace continue.
+- `power.cycle`: the core stops, power goes off and on: flash keeps its
+  contents (both banks are dumped from the running emulator and loaded into
+  the new one), RAM does not; the image boots through the run's reset path.
+  The bridge, the control socket and an active trace continue; the trace gets
+  a `reset` event with cause `power`.
+- `power.cut {at_us}`: at emulated time `at_us` (microseconds since boot, the
+  trace time base; a time in the past cuts at once) the core stops at once,
+  then power returns as with `power.cycle`. The reply gives the cut time.
+  Whatever the image wrote to flash before the cut stays; the flash
+  programming interface is Renode's `STM32H7_FlashController`, not yet checked
+  against RM0468 (a self-test of erase and program comes before the first
+  update-path test).
+- `link.set {speed: 0|10|100}`: the Ethernet controller's PHY status (link,
+  speed); while the link is down, datagrams in both directions are lost.
 - `reset.wdt`: the MCU is reset as by an IWDG1 timeout (`docs/IWDG-model.md`):
   RCC_RSR then shows IWDG1RSTF and PINRSTF (plus any flags not yet cleared
   with RMVF), the core boots from 0x08000000; RAM keeps its contents, as on the

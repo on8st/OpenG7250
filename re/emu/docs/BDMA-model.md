@@ -25,7 +25,8 @@ interrupts 129–136. No firmware-specific behaviour.
   (0x38800000) and the D3 peripherals (0x58000000–0x5FFFFFFF); any other
   address gives TEIF and disables the channel, as on the hardware. A product
   image with an SPI6 DMA buffer in AXI or D2 SRAM fails here as it would on
-  the radio.
+  the radio. For the product side: SPI6 DMA buffers go in SRAM4; the backup
+  SRAM stays unused (his/15), although the hardware would reach it.
 
 DMAMUX2 is Renode's DMAMUX model with 32 request inputs and 8 outputs; the
 SPI6 requests are inputs 11 (RX) and 12 (TX). Request generators and

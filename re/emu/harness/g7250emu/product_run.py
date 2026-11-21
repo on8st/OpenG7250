@@ -235,7 +235,7 @@ def iwdg_repl(out, boot_address):
     return rp
 
 
-def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standin"):
+def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standin", flash_image=None):
     """A product boot for a g7250-testlist run: the generic models, the CH394
     with the runner's network bridge and the bench agent; runs until the
     runner quits it. Power-on and every reset boot per BOOT_MODES[boot]."""
@@ -266,7 +266,8 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
         'logFile @%s' % log,
         'logLevel 2',
         'sysbus.usart1 CreateFileBackend @%s true' % console,
-        'sysbus LoadELF @%s' % elf,
+        # after a power cycle or cut the flash keeps what it held (dump of both banks)
+        ('sysbus LoadBinary @%s 0x08000000' % flash_image) if flash_image else ('sysbus LoadELF @%s' % elf),
         'sysbus.watchdog PowerOnBoot',
         'start',
     ]

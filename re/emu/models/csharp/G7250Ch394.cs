@@ -46,7 +46,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         private TcpClient link;
         private NetworkStream stream;
         private Thread reader;
-        private bool linkUp = true, softReset;
+        private bool linkUp = true, speed100 = true, softReset;
         private byte[] addressPending;
         private ulong sent, received, dropped;
 
@@ -94,10 +94,17 @@ namespace Antmicro.Renode.Peripherals.SPI
             UpdateIrq();
         }
 
-        // test-bench fixture link.set: false = link down
+        // test-bench fixture link.set: 0 = link down, 10 or 100 Mbit/s full duplex
         public void SetLink(bool up) { lock(sync) { linkUp = up; SetPhy(); } }
+        public void SetLinkSpeed(int mbps)
+        {
+            lock(sync) { linkUp = mbps > 0; speed100 = mbps != 10; SetPhy(); }
+            this.Log(LogLevel.Info, "CH394: link {0}", mbps > 0 ? mbps + " Mbit/s" : "down");
+        }
+        public int LinkSpeed { get { return linkUp ? (speed100 ? 100 : 10) : 0; } }
 
-        private void SetPhy() { common[0x2E] = (byte)(0xB8 | 0x06 | (linkUp ? 1 : 0)); }   // OPMD/config, FDX, 100M, LNK
+        // PHYCFGR: RST/OPMD/OPMDC as written, DPX (bit 2), SPD (bit 1, 1 = 100 Mbit/s), LNK (bit 0)
+        private void SetPhy() { common[0x2E] = (byte)(0xB8 | 0x04 | (speed100 ? 2 : 0) | (linkUp ? 1 : 0)); }
 
         private static int U16(byte[] r, int a) { return (r[a] << 8) | r[a + 1]; }
         private static void P16(byte[] r, int a, int v) { r[a] = (byte)(v >> 8); r[a + 1] = (byte)v; }
@@ -238,6 +245,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             P16(r, 0x22, wr);
             r[0x02] |= 0x10;                                               // SEND_OK
             if(r[0x03] != 0x22) return;
+            if(!linkUp) { dropped++; return; }                        // no link: the datagram is lost
             var frame = new byte[8 + len];
             frame[0] = r[0x04]; frame[1] = r[0x05];                        // source port
             Array.Copy(r, 0x0C, frame, 2, 4);                              // destination IP

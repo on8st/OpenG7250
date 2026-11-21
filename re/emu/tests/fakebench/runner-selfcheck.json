@@ -12,6 +12,8 @@
     { "id": "T-EMU-06", "title": "hw.input refuses pins not offered", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["hw.input"] },
     { "id": "T-EMU-09", "title": "power.cycle", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["power.cycle", "hw.trace"], "timeout_s": 60 },
     { "id": "T-EMU-10", "title": "reset.wdt", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["reset.wdt", "hw.trace"], "timeout_s": 60 },
+    { "id": "T-EMU-11", "title": "link.set", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["link.set"], "timeout_s": 60 },
+    { "id": "T-EMU-12", "title": "power.cut", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["power.cut", "hw.trace", "hw.observe"], "timeout_s": 60 },
     { "id": "T-EMU-07", "title": "a host-only test is not sent", "reqs": ["runner"], "target": "host", "scope": "v1.0" },
     { "id": "T-EMU-08", "title": "a missing fixture skips", "reqs": ["runner"], "target": "emulator", "scope": "v1.0", "needs": ["dhcp.server"] }
   ]

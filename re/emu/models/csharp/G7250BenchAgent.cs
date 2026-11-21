@@ -232,6 +232,41 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(ev != null) Send("ev " + ev);
         }
 
+        // power.cut: at emulated time t_us the core stops at once (supply gone);
+        // the runner then dumps the flash and powers the MCU on again
+        private LimitTimer cutTimer;
+
+        private string ScheduleCut(ulong atUs)
+        {
+            ulong now = NowUs();
+            ulong delta = atUs > now ? atUs - now : 1;
+            if(cutTimer == null)
+            {
+                cutTimer = new LimitTimer(machine.ClockSource, 1000000, this, "cut", delta,
+                                          direction: Direction.Descending, enabled: false,
+                                          workMode: WorkMode.Periodic, eventEnabled: true);
+                cutTimer.LimitReached += () =>
+                {
+                    cutTimer.Enabled = false;
+                    foreach(var cpu in machine.SystemBus.GetCPUs()) cpu.IsHalted = true;
+                    Send("cut " + NowUs());
+                };
+            }
+            cutTimer.Enabled = false;
+            cutTimer.Limit = delta;
+            cutTimer.Value = delta;
+            cutTimer.Enabled = true;
+            return "ok " + (now + delta);
+        }
+
+        // the flash banks (0x08000000, 2 MiB) to a file: flash keeps its contents without power
+        private string FlashDump(string path)
+        {
+            var data = machine.SystemBus.ReadBytes(0x08000000UL, 0x200000);
+            System.IO.File.WriteAllBytes(path, data);
+            return "ok";
+        }
+
         private string WatchdogReset()
         {
             IPeripheral wd;
@@ -274,6 +309,20 @@ namespace Antmicro.Renode.Peripherals.SPI
                 {
                     case "time": return "time " + NowUs();
                     case "wdt": return WatchdogReset();
+                    case "cut": return ScheduleCut(ulong.Parse(w[1], CultureInfo.InvariantCulture));
+                    case "flashdump": return FlashDump(line.Substring(10));
+                    case "halt":
+                        foreach(var cpu in machine.SystemBus.GetCPUs()) cpu.IsHalted = true;
+                        return "ok";
+                    case "link":
+                    {
+                        IPeripheral ch;
+                        if(!machine.TryGetByName("sysbus.spi6.ch394", out ch)) return "err no Ethernet controller";
+                        var m = ch.GetType().GetMethod("SetLinkSpeed");
+                        if(m == null) return "err no link control";
+                        m.Invoke(ch, new object[] { int.Parse(w[1], CultureInfo.InvariantCulture) });
+                        return "ok";
+                    }
                     case "halted":
                         foreach(var cpu in machine.SystemBus.GetCPUs()) if(!cpu.IsHalted) return "halted 0";
                         return "halted 1";

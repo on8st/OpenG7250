@@ -12,6 +12,8 @@ of the runner itself against firmware-tests/bench/net_test.c:
   T-EMU-06  hw.input on a pin that is not offered is refused
   T-EMU-09  power.cycle: the image boots again, the trace carries a reset event
   T-EMU-10  reset.wdt: watchdog reset, the image boots again, reset event "wdt"
+  T-EMU-11  link.set: no traffic while the link is down, traffic again at 100
+  T-EMU-12  power.cut: the core stops at at_us, the image boots again from the kept flash
 """
 import argparse
 import json
@@ -113,6 +115,33 @@ def run_test(tid, ep):
         resets = [e for e in evs if e.get("kind") == "reset"]
         return [check("reset.wdt ok", w.get("ok"), str(w)), check("echo after reset", d == b"after-wdt", repr(d)),
                 check("reset event wdt", len(resets) == 1 and resets[0].get("cause") == "wdt", json.dumps(resets))]
+    if tid == "T-EMU-11":
+        d0, _ = echo(ep, 0, c, b"before", wait=20.0)
+        r0 = ctl.op("link.set", speed=0)
+        d1, _ = echo(ep, 0, c, b"link-down", wait=3.0)
+        r1 = ctl.op("link.set", speed=100)
+        d2, _ = echo(ep, 0, c, b"link-up", wait=20.0)
+        bad = ctl.op("link.set", speed=55)
+        return [check("echo before", d0 == b"before", repr(d0)), check("link down ok", r0.get("ok"), str(r0)),
+                check("no echo while down", d1 is None, repr(d1)), check("echo after link up", d2 == b"link-up", repr(d2)),
+                check("bad speed refused", bad.get("ok") is False, str(bad))]
+    if tid == "T-EMU-12":
+        r1 = ctl.op("hw.trace", action="start")
+        f = (r1.get("value") or {}).get("file")
+        t = ctl.op("hw.observe")["value"]["t_us"]
+        pc = ctl.op("power.cut", at_us=t + 200000)
+        time.sleep(3.0)
+        d, src = echo(ep, 0, c, b"after-cut", wait=60.0)
+        ctl.op("hw.trace", action="stop")
+        evs = [json.loads(l) for l in open(f)] if f and os.path.isfile(f) else []
+        resets = [e for e in evs if e.get("kind") == "reset"]
+        last_before = max([e["t_us"] for e in evs if e.get("kind") != "reset" and evs.index(e) < evs.index(resets[0])] or [0]) if resets else 0
+        bad = ctl.op("power.cut", at_us=-1)
+        return [check("power.cut ok", pc.get("ok") and pc["value"]["at_us"] >= t + 200000, str(pc)),
+                check("image runs again (from the kept flash)", d == b"after-cut", repr(d)),
+                check("one reset event, cause power", len(resets) == 1 and resets[0].get("cause") == "power", json.dumps(resets)),
+                check("no events after the cut time before the reset", last_before <= t + 200000 + 100, str(last_before)),
+                check("bad at_us refused", bad.get("ok") is False, str(bad))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

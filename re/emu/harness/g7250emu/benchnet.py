@@ -256,6 +256,7 @@ class Agent:
         self.trace = None
         self.traces = []
         self.closed = False
+        self.on_cut = None
         self.events = 0
         self.lock = threading.Lock()
         threading.Thread(target=self._accept, daemon=True).start()
@@ -275,6 +276,10 @@ class Agent:
             f = c.makefile("r")
             for line in f:
                 line = line.rstrip("\n")
+                if line.startswith("cut "):
+                    if self.on_cut:
+                        threading.Thread(target=self.on_cut, daemon=True).start()
+                    continue
                 if line.startswith("ev "):
                     self.events += 1
                     t = self.trace
@@ -338,7 +343,7 @@ class FixtureServer:
     """JSON Lines control socket for the test bench (format section 4)."""
 
     OFFERED = ["hw.observe", "hw.trace", "hw.input", "ctrl.set", "time.scale",
-               "net.broadcast", "net.hosts", "power.cycle", "reset.wdt"]
+               "net.broadcast", "net.hosts", "power.cycle", "power.cut", "reset.wdt", "link.set"]
 
     def __init__(self, agent_getter, on_power_cycle):
         self.srv = _listen_tcp()
@@ -413,9 +418,23 @@ class FixtureServer:
                 return {"ok": False, "error": "state must be absent|silent"}
             self.ctrl_state = st   # both: no bytes on the Main's interlink RX
             return {"ok": True}
+        if op == "link.set":
+            sp = args.get("speed")
+            if sp not in (0, 10, 100):
+                return {"ok": False, "error": "speed must be 0, 10 or 100"}
+            r = agent.ask("link %d" % sp) if agent else None
+            return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
         if op == "reset.wdt":
             r = agent.ask("wdt") if agent else None
             return {"ok": True} if r == "ok" else {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+        if op == "power.cut":
+            at = args.get("at_us")
+            if not isinstance(at, int) or at < 0:
+                return {"ok": False, "error": "at_us must be a non-negative integer (emulated us since boot)"}
+            r = agent.ask("cut %d" % at) if agent else None
+            if not r or not r.startswith("ok"):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"at_us": int(r.split()[1])}}
         if op == "power.cycle":
             self.on_power_cycle()
             return {"ok": True}

@@ -17,7 +17,8 @@ firmware-specific behaviour.
   reset.
 - Common registers: GAR, SUBR, SHAR (the chip's own MAC, set at
   construction: 02:00:00:00:72:50), SIPR, IR/IMR, SIR/SIMR, RTR, RCR, PHYCFGR
-  (link up, 100 Mbit/s full duplex; `SetLink` changes it), VERSIONR (0x04, the
+  (link up, 100 Mbit/s full duplex; `SetLinkSpeed` 0/10/100 changes it; no
+  traffic while the link is down), VERSIONR (0x04, the
   W5500 value; the CH394 value is a HYPOTHESIS).
 - 8 sockets: Sn_MR, Sn_CR (OPEN, CLOSE, SEND, SEND_MAC, RECV), Sn_IR (write 1
   to clear), Sn_SR, Sn_PORT, Sn_DIPR, Sn_DPORT, buffer sizes, Sn_TX_FSR,

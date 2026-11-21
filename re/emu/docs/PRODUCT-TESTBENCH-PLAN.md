@@ -161,5 +161,5 @@ also gets a product-style test. Total about 11–15 sessions.
 | 3 product runner (g7250-testlist v1.3) | core, network bridge, fixtures hw.observe/trace/input, power.cycle, ctrl.set: done (`docs/PRODUCT-RUNNER.md`) | c1cacd7 |
 | 3 reset.wdt (IWDG1 + RCC_RSR reset flags) | done | e059b2c |
 | Boot path for product runs (bootloader stand-in, `--boot none`) | done | 95cfbe8 |
-| 1g BDMA + DMAMUX2 + SPI DMA requests | done (SPI6; `docs/SPI-model.md`, `docs/BDMA-model.md`) | (this commit) |
-| link.set, power.cut | after 1g | |
+| 1g BDMA + DMAMUX2 + SPI DMA requests | done (SPI6; `docs/SPI-model.md`, `docs/BDMA-model.md`) | d282451 |
+| link.set, power.cut (flash kept over power cycles) | done | (this commit) |

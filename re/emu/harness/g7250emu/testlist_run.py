@@ -64,6 +64,9 @@ class Boot:
         self.proc = None
         self.boots = 0
         self.log = os.path.join(out, "renode.log")
+        self.flash = None
+        self.cycle_lock = threading.Lock()
+        self.agent.on_cut = lambda: self.power_cycle(cut=True)
         self.start()
 
     def start(self):
@@ -72,7 +75,8 @@ class Boot:
         open(console, "w").close()
         resc = os.path.join(self.out, "run.resc")
         open(resc, "w").write(self.pr.build_product_resc(self.elf, self.out, console, self.log,
-                                                         self.bridge.ch_port, self.agent.port, self.boot))
+                                                         self.bridge.ch_port, self.agent.port, self.boot,
+                                                         flash_image=self.flash))
         self.proc = subprocess.Popen([self.pr.bootcore.RENODE, "--disable-xwt", "--console",
                                       "-e", "path add @%s" % self.pr.REPO, "-e", "include @%s" % resc],
                                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -89,11 +93,22 @@ class Boot:
         self.agent.conn = None
         self.bridge.ch = None
 
-    def power_cycle(self):
+    def power_cycle(self, cut=False):
+        """Power off and on again. Flash keeps its contents (dumped from the
+        running emulator and loaded into the new one); RAM does not."""
+        with self.cycle_lock:
+            self._power_cycle(cut)
+
+    def _power_cycle(self, cut):
         tracing = self.agent.trace is not None and not self.agent.trace.closed
         seq = 0
         if tracing:
             seq = sum(1 for _ in open(self.agent.trace.name))
+        if not cut:
+            self.agent.ask("halt")          # supply gone: the core stops first
+        dump = os.path.join(self.out, "flash-%d.bin" % self.boots)
+        if self.agent.ask("flashdump " + dump, timeout=30) == "ok":
+            self.flash = dump
         self.stop_emulator()
         self.start()
         self.agent.wait_connected(BOOT_WALL_TIMEOUT)
