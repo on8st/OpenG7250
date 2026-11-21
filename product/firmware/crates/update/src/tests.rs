@@ -397,6 +397,28 @@ fn abort_and_abandonment() {
 }
 
 #[test]
+fn after_the_blocks_the_staging_slot_holds_the_image_t_a1_83_84() {
+    // The coordinator's T-A1-84 finding (fw-6ca08d1): every block answered 0, then the verify 55.
+    // Here the staging slot is read back after each block: the bytes received so far are there
+    // (the erase and the programs happened), and the rest of the slot is erased.
+    let (mut s, _) = installed(false);
+    let run = running(Slot::A, V1);
+    let b = image(Slot::B, V2, 2148, 9);
+    let mut g = Stager::new();
+    let n = g.begin(&offer(&b, V2), &run, 0).unwrap();
+    assert_eq!(n, 5, "2148 bytes in 512-byte blocks");
+    let base = (Slot::B.range().start - g7250_layout::APPLICATION_AREA.start) as usize;
+    for k in 0..n {
+        let d = &b[(k * stage::BLOCK) as usize..((k + 1) * stage::BLOCK).min(b.len() as u32) as usize];
+        assert_eq!(g.block(&mut s, &run, k, true, d, 1), Ok(k + 1));
+        let upto = ((k + 1) * stage::BLOCK).min(b.len() as u32) as usize;
+        assert_eq!(&s.mem[base..base + upto], &b[..upto], "after block {k}");
+    }
+    assert!(s.mem[base + b.len()..base + Slot::B.range().len() as usize].iter().all(|&x| x == 0xFF), "the rest erased");
+    assert!(g.verify(&mut s, &run, 2).is_ok());
+}
+
+#[test]
 fn the_stager_writes_only_the_other_slot() {
     // Every flash operation of a full update lies in slot B or the store: never sector 0, the
     // boot stage or the running slot.
