@@ -78,6 +78,8 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
 - P-SYS-9: the persist block's range is named as the firmware's design (now 128 bytes at
   0x2401FF80); radio check over the whole block.
 - 2026-11-21: ON8ST accepted 0060 and the 0061 addendum.
+- 2026-11-21: ON8ST accepted 0062–0066 with their addenda; every decision 0001–0066 is
+  accepted. `t_erase_max` from [STM32H72x] (DS13311 Rev 5, Table 48): at most 4 s.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 

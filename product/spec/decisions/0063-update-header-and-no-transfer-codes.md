@@ -1,7 +1,7 @@
 # 0063 — Status codes for an unreadable package header and for update commands with no transfer
 
-- Status: proposed (to the repository owner, ON8ST); answers two testbench readings,
-  2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers two testbench
+  readings, 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0008 (U-2, U-3), 0039 (Annex M, Table M-4), 0056 (malformed payload is 17), 0061
   addendum (`UPDATE_BEGIN` order 51, 56, 63, 61, 52).
@@ -12,7 +12,7 @@ The reference model answers `UPDATE_BLOCK` with no transfer in progress with 54,
 `UPDATE_VERIFY` and `UPDATE_ACTIVATE` with 55. It answers a package header with a wrong magic,
 header version or component with 17. The spec stated neither case.
 
-## Decision (proposed)
+## Decision
 
 1. **No transfer in progress** (no accepted `UPDATE_BEGIN`, or after `UPDATE_ABORT` or an
    activation): `UPDATE_BLOCK` gets 54 (block out of order: no block is expected);

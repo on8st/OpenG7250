@@ -1891,7 +1891,8 @@ holds may be lost, and a P2 session may end by its watchdog (B5.6) and be restar
 - the host learns of it from the management reply, which is sent after the flash work has
   ended, and from the update state (`UPDATE_STATUS`, `IDENTIFY`);
 - **during flash work** (0065), up to `t_erase_max`, the maximum 128 KiB sector erase time of
-  the datasheet of the MCU fitted ([STM32H72x]; [HIS] HIS 10): the processor watchdog MUST NOT
+  the MCU's datasheet for the program/erase parallelism the firmware sets: 4 s at x8, 3.6 s at
+  x16, 2.2 s at x32, so at most 4 s ([STM32H72x] Table 48; [HIS] HIS 10): the processor watchdog MUST NOT
   expire, the RF control pins MUST hold their A3.6 levels, no FPGA bus cycle may be open: while
   the bus gate is closed ([HIS] HIS 80; 0042) the MCU drives none of PE0–PE10, which is the
   required state (no strobe, no command; the levels are then the board's); once it is open,
