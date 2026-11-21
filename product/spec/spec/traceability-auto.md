@@ -53,4 +53,5 @@
 | 0049 | 0049 — Link-local probe on socket 0, defence by giving the address up | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0050 | 0050 — Fault counters across a reset: pending hardware, part of the TX gate | 0 | 3 | network-interface: A1 Management channel; network-interface: A3 Safety behaviour visible on the network; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0051 | 0051 — Port 7250 sequence counters per destination | 1 | 4 | network-interface: A2 Ownership and level selection; network-interface: B2 Transport; network-interface: Field table and register map (B7, B8); network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0052 | 0052 — DHCP messages while link-local carry the link-local source address | 0 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 
