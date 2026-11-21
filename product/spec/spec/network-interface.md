@@ -190,6 +190,12 @@ Table A1-3 — Management status codes (0020 §27)
 | | | 62 | refused: the value needs the calibration set (A1.12; 0039) |
 | | | 63 | image linked for the running slot (A1.8; 0043) |
 
+**Malformed payload** (0056). Status 17 also covers a payload that does not have the size or
+structure Annex M gives for its command (a wrong length, a TLV that runs past the end, a missing
+fixed field): such a request cannot be read, so it is answered with 17 in the framing group,
+before authentication and every state check (36, 35, 58, 57, 50). A payload that decodes but
+carries a value that is not allowed is a command-specific fault (48, 49, 51–56, 59–63).
+
 Where several codes apply, the reply carries the first of: framing and version (19 for a
 declared length above 1000 bytes, then 17, 18, 16, and 19 for any other datagram size limit), authentication and rate (32, 33, 34, 36), 35, 58, 57, 50, then the command-specific codes
 (48, 49, 51–56, 59, 60, 61, 62, 63) (0022 §51, §59; 0028, 0039, 0043). A region change while a P2 session runs and TX is armed therefore
@@ -3695,6 +3701,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-72 | While running on a link-local address, a conflict (IP_CONFLI) makes the radio give the address up at once without a defending ARP, end the session as an address change (A1.11a), probe a new address with discovery and management closed for at most 10 s, and log the conflict; after 10 conflicts it waits 60 s before the next probe (A1.11; 0049). |
 | T-A1-73 | A conflict on a DHCP-leased address sends DHCPDECLINE, moves to link-local and restarts DHCP; a conflict on a static address falls back to the previous configuration (C-4), or to link-local if there is none; each is logged (A1.6 C-4, A1.11; 0049). |
 | T-A1-74 | At power-on before any address, DHCPDISCOVER has IP source 0.0.0.0; while link-local, DHCPDISCOVER and DHCPREQUEST have the link-local address as IP source, `ciaddr` 0.0.0.0 and the BROADCAST flag set, and a server's broadcast OFFER and ACK give the radio its lease (emulator or reference model; A1.11; 0052). |
+| T-A1-75 | While armed and during a P2 session: `SET_FIRST_SECRET` with a 31-byte payload and `SET_CALIBRATION` with a TLV that runs past the end get 17, not 50 or 57; `SET_CALIBRATION` with a well-formed payload and an unknown parameter id gets 57 during the session and, outside it while armed, 50; unarmed and outside a session, 48 (A1.4 "Malformed payload", Table A1-3; 0056). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
