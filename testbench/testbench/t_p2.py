@@ -624,3 +624,54 @@ def t_b6_27(ctx):
     from .mgmt import Mgmt, identify
     with Mgmt(ctx.net) as c:
         ctx.eq("management channel answers (IDENTIFY model)", identify(ctx, c).get(1), b"G7250")
+
+
+def running_seen_by(obs: Host) -> int | None:
+    """Discovery byte 4 as another host sees it: 3 while a session runs, 2 idle (B3.3)."""
+    r = obs.discover(0.3)
+    return r[0][4] if r else None
+
+
+def status_seqs(h: Host, t: float):
+    return [struct.unpack_from(">I", d, 0)[0] for p, d, _ in h.recv(t) if p == PORT_DDC]
+
+
+@test("T-B5-20")
+def t_b5_20(ctx):
+    """B2.3, Table B2-2 (0053): the port 1027 receive buffer holds two High Priority packets, so
+    back-to-back packets and a burst of ten are all processed."""
+    with Host(ctx.net) as h, Host(ctx.net) as obs:
+        # running, then run = 1 and run = 0 back to back: the session ends
+        h.start()
+        keep_until = time.monotonic() + 0.3
+        while time.monotonic() < keep_until:
+            h.keepalive()
+            h.recv(0.05)
+        h.s.sendto(high_priority(run=True), ctx.net.dest(PORT_HP))
+        h.s.sendto(high_priority(run=False), ctx.net.dest(PORT_HP))
+        h.running = False
+        h.recv(0.2)
+        ctx.eq("run = 1 then run = 0 back to back: the session ends (discovery byte 4 for another host)",
+               running_seen_by(obs), 2)
+        ctx.eq("and no High Priority status packet follows", len(status_seqs(h, 0.3)), 0)
+        # idle, then run = 0 and run = 1 back to back: a session starts
+        h.s.sendto(high_priority(run=False), ctx.net.dest(PORT_HP))
+        h.s.sendto(high_priority(run=True), ctx.net.dest(PORT_HP))
+        h.running = True
+        h.recv(0.1)
+        ctx.eq("run = 0 then run = 1 back to back: a session runs", running_seen_by(obs), 3)
+        before = status_seqs(h, 0.3)
+        h.keepalive()
+        before += status_seqs(h, 0.2)
+        # a burst of ten: four run, a stop, five run. The stop resets the outgoing counters
+        # (B2.7), so the status sequence restarts near 0 only if no packet was lost
+        burst = [high_priority(run=True)] * 4 + [high_priority(run=False)] + [high_priority(run=True)] * 5
+        for pkt in burst:
+            h.s.sendto(pkt, ctx.net.dest(PORT_HP))
+        after = status_seqs(h, 0.25)
+        h.keepalive()
+        ctx.eq("burst of ten: the session runs at the end (the last packet processed)", running_seen_by(obs), 3)
+        ctx.check("burst of ten: the stop inside it was processed (status sequence restarted, B2.7)",
+                  bool(after) and bool(before) and after[0] <= 2 and after[0] < before[-1],
+                  f"status sequence before {before[-3:]}, after {after[:3]}")
+        h.stop()

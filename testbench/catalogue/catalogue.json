@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "6f51cde",
-  "sha256_of_inputs": "ba514289a7b98bb24c63bc6069c83c2818b20b632687ae498154275b3e44eff0"
+  "commit": "5cbcd4b",
+  "sha256_of_inputs": "cd224cd46b7901ee230c00f88930be68a5ea2783326650f106d1ba8a11a0b23e"
  },
  "his": {
   "commit": "72591aa"
@@ -4413,6 +4413,29 @@
    "pending": [],
    "tx_part": false,
    "notes": []
+  },
+  {
+   "id": "T-B5-20",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Two High Priority packets sent back to back on port 1027, run = 1 then run = 0, and the reverse: the radio processes both, so the session ends (or starts) as the last one says; with ten in a burst none is lost while the firmware reads the socket within the time two packets take to arrive (emulator; B2.3, Table B2-2; 0053).",
+   "reqs": [
+    "B5",
+    "B2.3",
+    "B2",
+    "Table B2-2"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "the reference model has no socket buffers: it always passes there; the emulator honours the sizes of Table B2-2"
+   ]
   },
   {
    "id": "T-B6-01",
