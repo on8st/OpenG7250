@@ -7,6 +7,7 @@
 
 pub mod ddc;
 pub mod dhcp_client;
+pub mod duc_fifo;
 pub mod mgmt;
 pub mod record;
 pub mod regmap;

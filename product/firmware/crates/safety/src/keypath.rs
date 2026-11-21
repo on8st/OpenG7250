@@ -330,6 +330,24 @@ impl KeyPath {
         true
     }
 
+    /// The underrun check applies: the TX source is PTT and its RF is DUC I&Q, i.e. not the
+    /// keyer's with break-in clear and CW selected (B10.5; B10.5b item 2.3).
+    pub fn duc_iq_in_use(&self) -> bool {
+        self.source == Some(Source::Ptt) && !(!self.duc.break_in && self.duc.cw_select)
+    }
+
+    /// The DUC FIFO underflow check (B10.5): an underflow lasting longer than the underrun time,
+    /// bounded by `KEYED_TIMEOUT`, unkeys with reason 3, arm kept. `since` is the start of the
+    /// underflow. Returns true if `TX_STATE` changed.
+    pub fn underrun(&mut self, now: u64, since: Option<u64>, underrun_ms: u32, keyed_timeout_ms: u32, tx: &mut TxCore, rf: &mut impl RfActuator) -> bool {
+        let limit = underrun_ms.min(keyed_timeout_ms) as u64;
+        if self.duc_iq_in_use() && since.is_some_and(|s| now.saturating_sub(s) > limit) {
+            self.unkey(UnkeyReason::Underrun, tx, rf);
+            return true;
+        }
+        false
+    }
+
     /// General byte 58 bit [0] (B10.10): clearing it while keyed unkeys; setting it never keys.
     pub fn pa_enable(&mut self, enabled: bool, tx: &mut TxCore, rf: &mut impl RfActuator) -> bool {
         let before = self.tx_state();
@@ -401,6 +419,7 @@ mod tests {
             supply: Some(()),
             rf_off: Some(()),
             tr_timing: Some(()),
+            underrun_ms: Some(50),
             atu: None,
         }
     }
@@ -654,6 +673,30 @@ mod tests {
         assert!(k.mode_class_changed(&mut tx, &mut rf));
         assert_eq!(k.tx_state() >> 16 & 0xFF, UnkeyReason::ModeClass as u32);
         assert_eq!(rf.log, ["key", "unkey", "key", "unkey"]);
+    }
+
+    #[test]
+    fn underrun_unkeys_ptt_after_the_underrun_time_bounded_by_the_keyed_timeout() {
+        let (mut tx, mut k, mut rf) = path();
+        k.on_high_priority(ptt(true), 0, &mut tx, &ctx(), &mut rf);
+        assert!(k.duc_iq_in_use());
+        // Underflow from 10 ms, underrun time 50 ms: not before 60, unkeyed at 61.
+        assert!(!k.underrun(60, Some(10), 50, 500, &mut tx, &mut rf));
+        assert!(k.underrun(61, Some(10), 50, 500, &mut tx, &mut rf));
+        assert_eq!(k.tx_state() >> 16 & 0xFF, UnkeyReason::Underrun as u32);
+        assert_eq!(tx.state(), crate::tx::ArmState::Armed, "arm kept");
+        // KEYED_TIMEOUT 100 ms bounds an underrun time above it.
+        k.on_high_priority(ptt(false), 70, &mut tx, &ctx(), &mut rf);
+        k.on_high_priority(ptt(true), 80, &mut tx, &ctx(), &mut rf);
+        assert!(!k.underrun(180, Some(80), 300, 100, &mut tx, &mut rf));
+        assert!(k.underrun(181, Some(80), 300, 100, &mut tx, &mut rf));
+        // Break-in clear with CW selected: the keyer forms the RF, the check is waived.
+        let (mut tx, mut k, mut rf) = path();
+        k.on_duc_specific(&duc(CW | IAMBIC, 20, 0));
+        k.on_high_priority(ptt(true), 0, &mut tx, &ctx(), &mut rf);
+        assert!(!k.duc_iq_in_use());
+        assert!(!k.underrun(1000, Some(0), 50, 500, &mut tx, &mut rf));
+        assert_eq!(k.keyed(), Some(Source::Ptt));
     }
 
     #[test]

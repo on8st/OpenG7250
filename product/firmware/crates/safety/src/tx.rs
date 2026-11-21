@@ -105,6 +105,9 @@ pub struct Measured {
     pub rf_off: Option<()>,
     /// T/R timing and relay settle times (A3.9a; HIS-07).
     pub tr_timing: Option<()>,
+    /// The TX IQ underrun time, ms (B10.5; P-TIM-2, HIS-18): at least the key latency plus one
+    /// DUC packet period, at most 500 ms; the check uses the lower of it and `KEYED_TIMEOUT`.
+    pub underrun_ms: Option<u32>,
     /// ATU latch meanings, safe values, tune power and timing (0032 item 2; HIS-08).
     pub atu: Option<()>,
 }
@@ -119,6 +122,7 @@ impl Measured {
         supply: None,
         rf_off: None,
         tr_timing: None,
+        underrun_ms: None,
         atu: None,
     };
 
@@ -132,6 +136,7 @@ impl Measured {
             && self.supply.is_some()
             && self.rf_off.is_some()
             && self.tr_timing.is_some()
+            && matches!(self.underrun_ms, Some(2..=500))
     }
 }
 
@@ -144,12 +149,16 @@ pub const MEASURED: Measured = Measured::NONE;
 #[derive(Debug)]
 pub struct Calibration {
     atu: bool,
+    underrun_ms: u32,
     _sealed: (),
 }
 
 impl Calibration {
     pub fn from_measured(m: &Measured) -> Option<Calibration> {
-        if m.complete_for_tx() { Some(Calibration { atu: m.atu.is_some(), _sealed: () }) } else { None }
+        match (m.complete_for_tx(), m.underrun_ms) {
+            (true, Some(u)) => Some(Calibration { atu: m.atu.is_some(), underrun_ms: u, _sealed: () }),
+            _ => None,
+        }
     }
 }
 
@@ -297,6 +306,10 @@ impl TxCore {
 
     pub fn calibrated(&self) -> bool {
         self.cal.is_some()
+    }
+    /// The underrun time of the calibration set (B10.5; P-TIM-2); none in this build.
+    pub fn underrun_ms(&self) -> Option<u32> {
+        self.cal.as_ref().map(|c| c.underrun_ms)
     }
     pub fn token(&self) -> u32 {
         self.token
@@ -495,6 +508,7 @@ mod tests {
             supply: Some(()),
             rf_off: Some(()),
             tr_timing: Some(()),
+            underrun_ms: Some(50),
             atu: if atu { Some(()) } else { None },
         }
     }

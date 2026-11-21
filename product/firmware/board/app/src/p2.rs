@@ -9,8 +9,19 @@ use g7250_ch394::{Ch394, Error as ChError};
 use g7250_proto::ratelimit::RateLimit;
 use g7250_radio::regmap::{self, Pair, RegMap, WriteCtx};
 use g7250_radio::session::{Addr, CnC, EndReason, Event, Session};
+use core::cell::RefCell;
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use g7250_radio::duc_fifo::DucFifo;
 use g7250_safety::keypath::{KeyPath, Requests};
 use g7250_safety::tx::{ArmContext, DropReason, KeyContext, TxCore};
+
+/// The DUC FIFO (B10.7), 20 packets; static, so its 29 KB stay out of the task's stack.
+static DUC: Mutex<CriticalSectionRawMutex, RefCell<DucFifo<20>>> = Mutex::new(RefCell::new(DucFifo::new()));
+
+fn duc<R>(f: impl FnOnce(&mut DucFifo<20>) -> R) -> R {
+    DUC.lock(|d| f(&mut d.borrow_mut()))
+}
 
 /// Socket numbers (Table B2-1 rows 1-8).
 pub const S1024: u8 = 0;
@@ -49,7 +60,11 @@ pub struct P2 {
     pub link_ok: bool,
     pub dropped_reg_from_7250: u64,
     pub dropped_not_owner: u64,
+    /// DUC I&Q discarded whole before the FIFO (B10.7: not the owner's, no session, record
+    /// `tx` bit 1 or 4 = 0, a DUC-specific refusal standing; `GET_STATS`).
     pub duc_iq_ignored: u64,
+    /// The key path was keyed after the last call (to empty and arm the FIFO on a change).
+    was_keyed: bool,
     pub dropped_record: u64,
     /// A firmware update is in progress (A1.8: STREAM_STATUS reason 10, register writes BUSY).
     pub update_in_progress: bool,
@@ -100,6 +115,7 @@ impl P2 {
             dropped_reg_from_7250: 0,
             dropped_not_owner: 0,
             duc_iq_ignored: 0,
+            was_keyed: false,
             dropped_record: 0,
             update_in_progress: false,
             trial: false,
@@ -174,9 +190,17 @@ impl P2 {
 
     /// Bring `TX_STATE` up to date and push it to the owner on change (Table B8-2: on every
     /// change). An arm that dropped under a key (Table A3-1) is reported as reason 5.
-    fn sync_tx_state(&mut self, chip: &mut Chip) {
+    fn sync_tx_state(&mut self, chip: &mut Chip, now: u64) {
         if self.key.keyed().is_some() && self.tx.keyed().is_none() {
             self.key.arm_dropped();
+        }
+        // The FIFO follows the key: armed for the underflow at a key, emptied at every unkey
+        // (B10.5, B10.7); a transmission whose RF the keyer forms takes no I&Q (B10.5b).
+        let keyed = self.key.keyed().is_some();
+        if keyed != self.was_keyed {
+            self.was_keyed = keyed;
+            let iq = self.key.duc_iq_in_use();
+            duc(|f| if keyed { f.key(now, iq) } else { f.unkey() });
         }
         let v = self.key.tx_state();
         if v != self.regs.tx_state {
@@ -203,6 +227,8 @@ impl P2 {
                     self.tx.session_end(&mut rf);
                     self.key.arm_dropped();
                     self.key.session_end();
+                    self.was_keyed = false;
+                    duc(|f| f.unkey());
                     self.regs.tx_state = self.key.tx_state();
                     self.regs.session_end();
                     self.regs.armed = false;
@@ -316,6 +342,8 @@ impl P2 {
         let _ = self.tx.drop(DropReason::Maintenance, &mut rf);
         self.key.arm_dropped();
         self.key.session_end();
+        self.was_keyed = false;
+        duc(|f| f.unkey());
         self.regs.tx_state = self.key.tx_state();
         if let Some(owner) = self.session.owner() {
             self.tx.session_end(&mut rf);
@@ -365,7 +393,7 @@ impl P2 {
                 }
                 _ => {}
             }
-            self.sync_tx_state(chip);
+            self.sync_tx_state(chip, now);
         }
         if kind == CnC::General && self.session.owner() == Some(from) && self.foreign_port(self.session.general) {
             if let Some(dest) = self.session.register_destination() {
@@ -404,7 +432,7 @@ impl P2 {
         if self.regs.tx_mode_class != class {
             self.key.mode_class_changed(&mut self.tx, &mut rf);
         }
-        self.sync_tx_state(chip);
+        self.sync_tx_state(chip, now);
         if ans.pairs.is_empty() {
             return;
         }
@@ -439,10 +467,25 @@ impl P2 {
             self.events(chip, &[e], now);
             self.update_stream_status(chip);
         }
-        // Keyed timeout, CWX cap, maximum TX time (B10.5, B10.5a, Table A3-2).
+        // Keyed timeout, CWX cap, maximum TX time, hang delay (B10.5, B10.5a, B10.5b, Table A3-2).
         let mut rf = crate::BoardRf;
-        if self.key.tick(now, self.regs.keyed_timeout_ms, self.regs.tx_time_in_force(), &mut self.tx, &mut rf) {
-            self.sync_tx_state(chip);
+        let mut changed = self.key.tick(now, self.regs.keyed_timeout_ms, self.regs.tx_time_in_force(), &mut self.tx, &mut rf);
+        // The DUC takes its samples while keyed; unkeyed, old I&Q ages out (B10.7). The underrun
+        // check needs the underrun time of the calibration set (P-TIM-2), none in this build.
+        let keyed = self.was_keyed;
+        let since = duc(|f| {
+            if keyed {
+                f.consume(now);
+            } else {
+                f.idle(now);
+            }
+            f.underflow_since()
+        });
+        if let Some(u) = self.tx.underrun_ms() {
+            changed |= self.key.underrun(now, since, u, self.regs.keyed_timeout_ms, &mut self.tx, &mut rf);
+        }
+        if changed {
+            self.sync_tx_state(chip, now);
         }
         if let Some(owner) = self.session.owner() {
             if now >= self.next_status_ms {
@@ -451,10 +494,31 @@ impl P2 {
                 // v1.0, 0030; ADC words follow with the sensor driver, P-SEN-1).
                 let mut b = [0u8; 60];
                 b[0..4].copy_from_slice(&self.seq_status.to_be_bytes());
+                // Byte 30 bit [2]: DUC FIFO underflow from the firmware's own buffer (Table B9-1).
+                if duc(|f| f.underflow_since().is_some()) {
+                    b[30] |= 0x04;
+                }
                 self.seq_status = self.seq_status.wrapping_add(1);
                 let _ = chip.udp_send(S1025, owner.0, owner.1, &b);
             }
         }
+    }
+
+    /// A DUC I&Q packet on port 1029 (B10.7). It enters the FIFO only from the owner during its
+    /// session, with record `tx` bits 1 and 4 set and no DUC-specific refusal standing; anything
+    /// else is discarded whole and counted, with no other effect.
+    pub fn duc_iq(&mut self, from: Addr, p: &[u8], now: u64) {
+        let ok = self.session.owner() == Some(from)
+            && !self.update_in_progress
+            && self.tx.record_tx_bit1()
+            && self.tx.record_tx_bit4()
+            && !self.key.duc().refused();
+        if !ok {
+            self.duc_iq_ignored += 1;
+            return;
+        }
+        // A full FIFO while keyed, or I&Q while the keyer forms the RF: counted in the FIFO.
+        let _ = duc(|f| f.push(p, now));
     }
 
     /// The radio's address changes (Set IP, B3.9; A1.6 C-1): a running session ends, the arm
@@ -466,6 +530,8 @@ impl P2 {
             self.tx.session_end(&mut rf);
             self.key.arm_dropped();
             self.key.session_end();
+            self.was_keyed = false;
+            duc(|f| f.unkey());
             self.regs.tx_state = self.key.tx_state();
             self.regs.session_end();
             self.regs.armed = false;
