@@ -67,4 +67,5 @@
 | 0063 | 0063 — Status codes for an unreadable package header and for update commands with no transfer | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0064 | 0064 — Torn boot-record writes and the ROLLBACK command | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0065 | 0065 — Flash work: erase timing, failure, power loss and ECC errors | 1 | 4 | network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Management channel, ownership, safety (A1–A3); network-interface: Session, ownership, watchdog (B5) |  |
+| 0066 | 0066 — What `TX_PATH_NOT_BLOCKED` detects, and how fast | 1 | 2 | network-interface: A3 Safety behaviour visible on the network; network-interface: Management channel, ownership, safety (A1–A3) |  |
 

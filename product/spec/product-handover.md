@@ -95,6 +95,7 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0063 | Update codes: no transfer in progress gives 54 (block) or 55 (verify, activate); unreadable package header 17, unsupported component 56 | proposed |
 | 0064 | Torn boot-record writes; `ROLLBACK` needs a confirmed image and a good other slot (else 55), starts it as a trial | proposed |
 | 0065 | Flash work: no watchdog or pin change up to `t_erase_max`; failure is 55 and `INTERNAL_ERROR`; store survives power loss; ECC errors are torn records | proposed |
+| 0066 | TX path check (`TX_PATH_NOT_BLOCKED`): MCU configuration and the level at the pin, every 10 ms, fault after two checks | proposed |
 
 All numbers 0001–0059 are now in use.
 
