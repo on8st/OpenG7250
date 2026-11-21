@@ -48,4 +48,5 @@
 | 0044 | 0044 — Self-confirmation of a trial boot | 0 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0045 | 0045 — The safe state holds from 20 µs after the boot stage starts | 0 | 3 | network-interface: A3 Safety behaviour visible on the network; network-interface: Annex P — Pending hardware parameters; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0046 | 0046 — CW keyer timing, weight, strict spacing and iambic modes | 1 | 2 | network-interface: B10 Transmit (milestone M4); network-interface: Transmit (B10) |  |
+| 0047 | 0047 — Unkey reason at the end of an ATU tune cycle | 1 | 4 | network-interface: A3 Safety behaviour visible on the network; network-interface: B8 G7250 register map; network-interface: Transmit (B10); part-c-tci-profile: C5.5 TX arm on TCI |  |
 

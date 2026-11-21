@@ -54,7 +54,7 @@ registers:
   - name: TX_STATE
     address: 0x0203
     access: "RO"
-    content: "bit 0 keyed (PA actually keyed); bit 1 `WARN` active; bit 2 `REDUCE` active; bit 3 last TX request outside the TX ranges; bit 4 PA disabled by the host (General byte 58 bit [0]); bit 5 inhibit active; [11:8] TX source 0 none, 1 PTT, 2 CWX, 3 KEY, 4 ATU; [23:16] last unkey reason 0 none, 1 TX request released, 2 keyed timeout, 3 TX IQ underrun, 4 limit, 5 arm dropped, 6 retune needs RF-path change, ATU memory recall included (A3.9), 7 PA disabled by the host while keyed (B10.10), 8 keying client lost (TCI only, part C C8.2; never set by the radio over P2), 9 CW key-down longer than 1 s (B10.5a; TCI `KEYER`), 10 TX mode class changed while keyed (A3.9c); [31:24] limit id when reason 4"
+    content: "bit 0 keyed (PA actually keyed); bit 1 `WARN` active; bit 2 `REDUCE` active; bit 3 last TX request outside the TX ranges; bit 4 PA disabled by the host (General byte 58 bit [0]); bit 5 inhibit active; [11:8] TX source 0 none, 1 PTT, 2 CWX, 3 KEY, 4 ATU; [23:16] last unkey reason 0 none, 1 TX request released, 2 keyed timeout, 3 TX IQ underrun, 4 limit, 5 arm dropped, 6 retune needs RF-path change, ATU memory recall included (A3.9), 7 PA disabled by the host while keyed (B10.10), 8 keying client lost (TCI only, part C C8.2; never set by the radio over P2), 9 CW key-down longer than 1 s (B10.5a; TCI `KEYER`), 10 TX mode class changed while keyed (A3.9c), 11 ATU tune cycle ended by itself, tuned or failed (A3.9b item 6; 0047); [31:24] limit id when reason 4"
     sent: "on every change (event)"
     source: "0007 Decisions 1, 2, 4; 0006; 0020 §8, §22; 0022 §1, §14, §25, §26, §28, §32"
   - name: TX_MODE_CLASS
