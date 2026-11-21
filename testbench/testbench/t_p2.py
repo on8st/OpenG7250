@@ -676,9 +676,9 @@ def t_b5_20(ctx):
     third within 2 ms, and a sequence of 20 packets 1 ms apart, are all processed. Precondition
     (0055): no management write, store compaction or update in progress; the test sends none.
     Waits and host spacing are in the radio's time: stretched by 1 / time_scale.
-    What it can see: the stop and the last packet of each burst. A lost run packet among
-    identical ones changes nothing observable, so "none lost" for every packet needs the
-    runner's per-datagram drop log (or a received-packet counter the spec does not name)."""
+    What it can see from outside: the stop and the last packet of each burst. "No loss in the
+    burst" for every packet is judged from the net.log "dropped" entries (v1.6) where offered,
+    else noted as not judged (a received-packet counter is asked of the spec session)."""
     ts = time_scale(ctx)
 
     def W(sec: float) -> float:
@@ -686,6 +686,30 @@ def t_b5_20(ctx):
 
     def eq(name: str, got, want, b: Burst):
         return ctx.check(f"{name} [burst {b.name}]", got == want, f"got {got!r}, want {want!r} {b.tag()}")
+
+    netlog = "net.log" in ctx.endpoint.get("fixtures", [])
+    if not netlog:
+        ctx.notes.append("'no loss in the burst' not judged: no net.log (v1.6) to show drops")
+
+    def log_start():
+        if netlog:
+            ctx.fixture("net.log", action="start")
+
+    def no_loss(b: Burst):
+        """0054: no datagram to radio port 1027 dropped in the burst (net.log "dropped" entries
+        since log_start; no other High Priority packet was sent meanwhile)."""
+        if not netlog:
+            return
+        entries, n = [], 0
+        for _ in range(1000):
+            r = ctx.fixture("net.log", action="read", **{"from": len(entries)}) or {}
+            entries += r.get("entries", [])
+            n = r.get("count", 0)
+            if len(entries) >= n:
+                break
+        drops = [e for e in entries if e.get("dir") == "dropped" and e.get("radio_port") == PORT_HP]
+        ctx.check(f"no loss in the burst: no High Priority datagram dropped (0054) [burst {b.name}]", not drops,
+                  (f"{len(drops)} dropped, first {drops[0]}" if drops else "none dropped") + f" {b.tag()}")
 
     def send(b: Burst, pkt: bytes):
         h.s.sendto(pkt, ctx.net.dest(PORT_HP))
@@ -701,6 +725,7 @@ def t_b5_20(ctx):
             h.keepalive()
             h.recv(W(0.05))
         time.sleep(W(0.005))  # no packet within 2 ms before the pair either
+        log_start()
         b1 = Burst("pair-1 run1-run0")
         send(b1, high_priority(run=True))
         send(b1, high_priority(run=False))
@@ -708,13 +733,16 @@ def t_b5_20(ctx):
         h.recv(W(0.2))  # nothing sent for 200 ms: no third packet within 2 ms
         eq("run = 1 then run = 0 back to back: the session ends (discovery byte 4 for another host)", running_seen_by(obs, W(0.3)), 2, b1)
         eq("and no High Priority status packet follows", len(status_seqs(h, W(0.3))), 0, b1)
+        no_loss(b1)
         # idle, then run = 0 and run = 1 back to back: a session starts
+        log_start()
         b2 = Burst("pair-2 run0-run1 idle")
         send(b2, high_priority(run=False))
         send(b2, high_priority(run=True))
         h.running = True
         h.recv(W(0.1))
         eq("run = 0 then run = 1 back to back: a session runs", running_seen_by(obs, W(0.3)), 3, b2)
+        no_loss(b2)
         before = status_seqs(h, W(0.3))
         h.keepalive()
         before += status_seqs(h, W(0.2))
@@ -722,10 +750,12 @@ def t_b5_20(ctx):
         # counters (B2.7), so the status sequence restarts; this separates a lost stop in the 20
         # below from counters that a stop with a run right after does not reset
         time.sleep(W(0.005))
+        log_start()
         b3 = Burst("pair-3 run0-run1 running")
         send(b3, high_priority(run=False))
         send(b3, high_priority(run=True))
         pair_after = status_seqs(h, W(0.2))
+        no_loss(b3)
         ctx.check(f"running, run = 0 then run = 1 back to back: the status sequence restarts (B2.7) [burst {b3.name}]",
                   bool(before) and bool(pair_after) and restarted(before[-1], pair_after),
                   f"before {before[-3:]}, after {pair_after[:3]} {b3.tag()}")
@@ -736,6 +766,7 @@ def t_b5_20(ctx):
         # 20 packets at least 1 ms apart: nine run, a stop, ten run. The stop resets the outgoing
         # counters (B2.7), so the status sequence restarts near 0 only if no packet was lost
         seq_ = [high_priority(run=True)] * 9 + [high_priority(run=False)] + [high_priority(run=True)] * 10
+        log_start()
         b4 = Burst("seq20 1ms")
         gaps, last = [], None
         for pkt in seq_:
@@ -749,6 +780,7 @@ def t_b5_20(ctx):
         ctx.check(f"20 packets sent at least 1 ms apart (host side, radio time) [burst {b4.name}]", min(gaps) >= W(0.001),
                   f"gaps {min(gaps) * 1000:.2f}-{max(gaps) * 1000:.2f} ms wall {b4.tag()}")
         after = status_seqs(h, W(0.25))
+        no_loss(b4)
         h.keepalive()
         eq("20 packets 1 ms apart: the session runs at the end (the last packet processed)", running_seen_by(obs, W(0.3)), 3, b4)
         ctx.check(f"20 packets 1 ms apart: the stop inside them was processed (status sequence restarted, B2.7) [burst {b4.name}]",

@@ -367,7 +367,9 @@ image keys (record `tx` bit 4 = 1), these tests are `blocked` on the calibration
 `net.log` **(v1.6)**. `start` empties the log and records from now on; `read {from?: n}` →
 `{"t_us", "count", "dropped", "entries": [...]}` from index `n` on (paged); `stop` reads, then
 stops. Each entry: `{"t_us", "dir": "to_radio"|"from_radio", "socket", "radio_port", "peer":
-"ip:port", "len", "head"}`, `head` the first 16 payload bytes in hex. `to_radio` `t_us` is when
+"ip:port", "len", "head"}`, `head` the first 16 payload bytes in hex; a datagram the radio
+did not take is an entry `{"t_us", "dir": "dropped", "socket", "radio_port", "reason"}` (T-B5-20
+fails "no loss in the burst" on one for port 1027 inside a judged burst, 0054). `to_radio` `t_us` is when
 the datagram is placed in the socket receive buffer, `from_radio` `t_us` when the image's SEND
 executes, both on the clock of `hw.trace`. Cap and `dropped` as `key.log` (dropped fails the
 test). The bench judges radio behaviour in time (the copies about 10 ms apart, the 5 s notice
