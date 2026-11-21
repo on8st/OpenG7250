@@ -412,6 +412,23 @@ fn package(len: u32, slot: u8) -> Vec<u8> {
     mgmt::payload::update_begin(0, &pkg).to_vec()
 }
 
+#[test]
+fn update_begin_with_an_unreadable_header_is_17() {
+    // T-A1-81 (0063): a wrong magic or header version 2 cannot be read: 17 in the framing group,
+    // nothing begun. (Component 2: 56, in the stager's order; update crate tests.)
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let mut magic = package(1300, 2);
+    magic[1] ^= 0xFF;
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::UpdateBegin, &magic, 0).0, Status::Malformed);
+    let mut ver = package(1300, 2);
+    ver[1 + 4] = 2;
+    assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::UpdateBegin, &ver, 10).0, Status::Malformed);
+    assert!(!w.up.began);
+    assert!(s.take_effects().is_empty());
+}
+
 fn block(n: u32, data: &[u8]) -> Vec<u8> {
     let mut b = [0u8; 600];
     let k = mgmt::payload::Block::encode(n, data, &mut b).unwrap();

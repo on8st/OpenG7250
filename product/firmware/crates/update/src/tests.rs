@@ -409,3 +409,76 @@ fn a_trial_reset_before_confirmation_is_never_tried_again() {
         assert_eq!(s.bytes(Slot::A.range().start, a.len() as u32), &a[..]);
     }
 }
+
+#[test]
+fn begin_component_other_than_main_is_56_in_the_order() {
+    // T-A1-81 (0063): a readable header with component 2 gets 56; with the wrong hardware id 51
+    // first; 56 before 63, 61 and 52 (A1.8, Table A1-3).
+    let (s, _) = installed(false);
+    let b = image(Slot::B, V2, 2600, 9);
+    let run = running(Slot::A, V1);
+    let mut g = Stager::new();
+    let before = s.mem.clone();
+    let o = Offer { component: 2, ..offer(&b, V2) };
+    assert_eq!(g.begin(&o, &run, 0), Err(Refusal::NotSupported));
+    assert_eq!(g.begin(&Offer { hardware_id: 0x00C9, ..o }, &run, 0), Err(Refusal::WrongHardware));
+    assert_eq!(g.begin(&Offer { target_slot: 1, ..o }, &run, 0), Err(Refusal::NotSupported));
+    assert_eq!(g.begin(&Offer { length: Slot::B.range().len() + 1, ..o }, &run, 0), Err(Refusal::NotSupported));
+    assert_eq!(g.begin(&Offer { version: header::version(1, 0, 0), ..o }, &run, 0), Err(Refusal::NotSupported));
+    assert!(!g.in_progress());
+    assert_eq!(s.mem, before);
+}
+
+#[test]
+fn no_transfer_in_progress_block_54_verify_and_activate_55() {
+    // T-A1-80 (0063): after a restart, after UPDATE_ABORT and after an activation, a block gets
+    // 54 (also with a bad CRC), verify and activate 55; nothing is written, the status stays.
+    let (mut s, _) = installed(false);
+    let run = running(Slot::A, V1);
+    let check = |g: &mut Stager, s: &mut Sim, idle: (u8, u32, u32)| {
+        let before = s.mem.clone();
+        assert_eq!(g.block(&mut *s, &run, 0, true, &[1; 512], 5), Err(Refusal::OutOfOrder));
+        assert_eq!(g.block(&mut *s, &run, 0, false, &[1; 512], 5), Err(Refusal::OutOfOrder), "54 before 53");
+        assert_eq!(g.verify(&mut *s, &run, 5).err(), Some(Refusal::VerifyFailed));
+        {
+            let mut st = Store::open(&mut *s, Writer::Application { running: run.slot }).unwrap();
+            assert_eq!(g.activate(&mut st, &run, 5), Err(Refusal::VerifyFailed));
+        }
+        assert_eq!(s.mem, before, "nothing written");
+        assert_eq!(g.status(), idle);
+    };
+    // After a restart: a new stager.
+    let mut g = Stager::new();
+    check(&mut g, &mut s, (0, 0, 0));
+    // After UPDATE_ABORT.
+    let b = image(Slot::B, V2, 2600, 9);
+    let n = g.begin(&offer(&b, V2), &run, 0).unwrap();
+    g.block(&mut s, &run, 0, true, &b[..stage::BLOCK as usize], 1).unwrap();
+    g.abort(2);
+    let st = g.status();
+    check(&mut g, &mut s, st);
+    assert!(n > 1);
+    // After an activation.
+    let (mut s, _, _) = activated(false);
+    let mut g = Stager::new();
+    let b2 = image(Slot::B, V2, 2600, 3);
+    let m = g.begin(&offer(&b2, V2), &run, 0).unwrap();
+    for k in 0..m {
+        let d = &b2[(k * stage::BLOCK) as usize..((k + 1) * stage::BLOCK).min(b2.len() as u32) as usize];
+        g.block(&mut s, &run, k, true, d, 1).unwrap();
+    }
+    g.verify(&mut s, &run, 2).unwrap();
+    {
+        let mut st = Store::open(&mut s, Writer::Application { running: run.slot }).unwrap();
+        g.activate(&mut st, &run, 3).unwrap();
+    }
+    let st = g.status();
+    let before = s.mem.clone();
+    assert_eq!(g.block(&mut s, &run, 0, false, &[1; 512], 5), Err(Refusal::OutOfOrder));
+    assert_eq!(g.verify(&mut s, &run, 5).err(), Some(Refusal::VerifyFailed));
+    {
+        let mut stw = Store::open(&mut s, Writer::Application { running: run.slot }).unwrap();
+        assert_eq!(g.activate(&mut stw, &run, 5), Err(Refusal::VerifyFailed));
+    }
+    assert_eq!((s.mem == before, g.status()), (true, st));
+}

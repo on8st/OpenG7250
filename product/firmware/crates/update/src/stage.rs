@@ -150,14 +150,18 @@ impl Stager {
         if run.trial {
             return Err(Refusal::UpdateInProgress);
         }
-        if o.header_version != PACKAGE_VERSION || o.component != COMPONENT_MAIN || o.signature_len != 0 || o.length == 0 || o.target_slot > 2 {
+        // Magic and header version are framing (17 before authentication, payload.rs; 0063);
+        // checked here again for an Offer made another way.
+        if o.header_version != PACKAGE_VERSION || o.signature_len != 0 || o.length == 0 || o.target_slot > 2 {
             return Err(Refusal::Malformed);
         }
         if o.hardware_id != HARDWARE_ID || (o.min_hw_revision != 0 && o.min_hw_revision > run.hw_revision) {
             return Err(Refusal::WrongHardware);
         }
-        if o.foreign {
-            // The stock image path (A1.8a item 3) stays closed until P-SYS-5 is set.
+        // 56: a readable header with a component other than 1 (0063), or a foreign image (the
+        // stock image path, A1.8a item 3, stays closed until P-SYS-5 is set); after 51, before
+        // 63, 61 and 52.
+        if o.component != COMPONENT_MAIN || o.foreign {
             return Err(Refusal::NotSupported);
         }
         // An image for the running slot cannot be staged (0043; T-A1-67). 0 ("either slot")
@@ -188,6 +192,7 @@ impl Stager {
 
     /// `UPDATE_BLOCK` `n` with its data; `crc_ok` from the request. Returns blocks received.
     pub fn block<F: FlashIo>(&mut self, io: &mut F, run: &Running, n: u32, crc_ok: bool, data: &[u8], now: u64) -> Result<u32, Refusal> {
+        // No transfer in progress: 54, before the CRC (53), nothing changes (0063).
         if self.phase != Phase::Receiving {
             return Err(Refusal::OutOfOrder);
         }
@@ -232,6 +237,10 @@ impl Stager {
     /// `UPDATE_VERIFY` (U-4): SHA-256 over the staged image, compared with the package; then the
     /// image header (as the boot stage will check it). Returns the computed hash.
     pub fn verify<F: FlashIo>(&mut self, io: &mut F, run: &Running, now: u64) -> Result<[u8; 32], Refusal> {
+        // No transfer in progress: 55, nothing changes (0063).
+        if !matches!(self.phase, Phase::Receiving | Phase::Verified) {
+            return Err(Refusal::VerifyFailed);
+        }
         self.last_ms = now;
         let o = match (self.phase, self.offer) {
             (Phase::Receiving | Phase::Verified, Some(o)) if self.received == self.count => o,
@@ -253,10 +262,11 @@ impl Stager {
     /// `UPDATE_ACTIVATE` (U-5): only after a good verify. Writes the boot record (one record,
     /// atomic); the caller then makes the commanded reset (A1.9).
     pub fn activate<F: FlashIo>(&mut self, store: &mut Store<F>, run: &Running, now: u64) -> Result<(), Refusal> {
-        self.last_ms = now;
+        // No transfer in progress (or not verified): 55, nothing changes (0063).
         if self.phase != Phase::Verified {
             return Err(Refusal::VerifyFailed);
         }
+        self.last_ms = now;
         crate::boot::activate(store, run.slot).map_err(|_| Refusal::VerifyFailed)?;
         self.phase = Phase::Activated;
         Ok(())

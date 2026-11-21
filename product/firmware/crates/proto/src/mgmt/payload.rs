@@ -302,6 +302,10 @@ pub const PACKAGE_LEN: usize = 53;
 /// Target hardware id of the G7250 (Table M-4 bytes 6-7).
 pub const HARDWARE_ID_G7250: u16 = 0x00C8;
 pub const COMPONENT_MAIN: u8 = 1;
+/// Header version of Table M-4 byte 4. A package with another one (or another magic) cannot be
+/// read: `UPDATE_BEGIN` gets 17 in the framing group (A1.8 "Unreadable or unsupported header";
+/// 0063).
+pub const PACKAGE_HEADER_VERSION: u8 = 1;
 
 impl Package {
     pub fn encode(&self) -> [u8; PACKAGE_LEN] {
@@ -320,7 +324,7 @@ impl Package {
     }
 
     pub fn decode(b: &[u8]) -> Result<Self, Bad> {
-        if b.len() < PACKAGE_LEN || u32_at(b, 0)? != PACKAGE_MAGIC {
+        if b.len() < PACKAGE_LEN || u32_at(b, 0)? != PACKAGE_MAGIC || b[4] != PACKAGE_HEADER_VERSION {
             return Err(Bad);
         }
         Ok(Package {
