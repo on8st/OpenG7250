@@ -81,8 +81,9 @@ without them; the HIS section is the authority.
 - a **boot stage** at 0x08020000 that picks one of two image slots and is never updated over
   the network; trial boot and rollback come with the update path (the F1 boot stage writes no
   flash);
-- two **image slots** of 256 KiB (sectors 2–3 and 4–5), sector 6 kept free, configuration, boot
-  record and log in sector 7;
+- two **image slots** of 256 KiB (sectors 2–3 and 4–5);
+- the **store** (configuration, calibration set, secret, boot record, boot counter, log) in
+  sectors 6 and 7, used in turn (A1.8 "Store location"; 0061);
 - a **streaming installer** that runs from RAM and writes an owner-supplied stock image over
   the network (spec A1.8a item 3): not built yet.
 
