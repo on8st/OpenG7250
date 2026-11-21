@@ -34,6 +34,11 @@ class Blocked(Exception):
     pass
 
 
+# Operations of a fixture group whose name is not the group's own (testlist-format section 4)
+FIXTURE_GROUP = {op: "dhcp.server" for op in ("dhcp.start", "dhcp.stop", "dhcp.offer", "dhcp.nak",
+                                              "dhcp.expire", "dhcp.log")}
+FIXTURE_GROUP["time.advance"] = "time.scale"
+
 NOT_READY_RETRY_S = 60
 NOT_READY_POLL_S = 0.2
 
@@ -106,8 +111,14 @@ class Ctx:
         return self.check(name, got == want, f"got {fmt(got)}, want {fmt(want)}")
 
     def need(self, fixture: str):
-        if fixture not in self.endpoint.get("fixtures", []):
-            raise Skip(f"fixture:{fixture}")
+        """A fixture is offered when `fixtures` lists it by its group name (section 4 table) or
+        by the operation name; either form satisfies a need for the other."""
+        have = set(self.endpoint.get("fixtures", []))
+        group = FIXTURE_GROUP.get(fixture, fixture)
+        ops = {op for op, g in FIXTURE_GROUP.items() if g == group}
+        if fixture in have or group in have or ops & have:
+            return
+        raise Skip(f"fixture:{fixture}")
 
     def fixture(self, op: str, **args):
         """Call a fixture on the control socket (section 4)."""

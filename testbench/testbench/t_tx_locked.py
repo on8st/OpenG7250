@@ -278,9 +278,20 @@ def t_a3_06(ctx):
     else:
         ctx.notes.append("power-on part not run: fixture power.cycle not offered")
     with host(ctx) as a, host(ctx) as b:
+        # TX_MODE_CLASS, KEYED_TIMEOUT and TX_STATE are group 2 registers, present "from M3"
+        # and announced by regmap_groups bit 2 (Table B8-1, B8.3). Without that bit they are
+        # absent by the spec and their part of A3.6 cannot be read: only the pins are judged.
+        # With bit 2 set they are judged whatever record tx bit 1 says: A3.6 sets them at every
+        # session end, with no exception for a build without TX.
+        groups = record(ctx, a)[0x53]
+        group2 = bool(groups & 0x4)
+        if not group2:
+            ctx.notes.append(f"TX register part not run: regmap_groups {groups:#x} without bit 2 "
+                             "(group 2 absent before M3, Table B8-1); RF control pins judged only")
         for end in ("stop", "watchdog standby", "takeover"):
             session(a)
-            a.write([(TX_MODE_CLASS, 2), (KEYED_TIMEOUT, 200)])
+            if group2:
+                a.write([(TX_MODE_CLASS, 2), (KEYED_TIMEOUT, 200)])
             if end == "stop":
                 a.stop()
             elif end == "watchdog standby":
@@ -290,6 +301,9 @@ def t_a3_06(ctx):
                 time.sleep(0.05)
             safe(ctx, f"after {end}")
             owner = b if end == "takeover" else a
+            if not group2:
+                owner.stop()
+                continue
             owner.start()
             owner.drain(0.1)
             ctx.eq(f"after {end}: TX_MODE_CLASS back to 0", value(owner.write([(TX_MODE_CLASS, 9)]), TX_MODE_CLASS), 0)

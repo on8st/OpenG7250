@@ -174,7 +174,7 @@ never share local ports. They run on the same machine.
 
 The control socket carries JSON Lines, one request and one reply per line:
 `{"op": "<name>", "args": {…}}` → `{"ok": true, "value": …}` or `{"ok": false, "error": "…"}`.
-A runner offers any subset and lists it in `fixtures`. **(v1.1)** The emulator's order of
+A runner offers any subset and lists it in `fixtures`, by the group name of the first column, by the operation names, or both (v1.4): the bench counts a group as offered when its name or any of its operations is listed, and an operation when it or its group is listed. **(v1.1)** The emulator's order of
 delivery is given in the last column; the reference model offers the ones marked "model".
 
 | Fixture | Ops | Used for | Plan |
