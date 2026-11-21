@@ -8,7 +8,7 @@
 //! sockets are opened, and borrowed for each later exchange, at most 2 s (A1.11; 0041).
 
 use embassy_stm32::gpio::{Level, Output, Speed};
-use embassy_stm32::mode::Blocking;
+use embassy_stm32::mode::Async;
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::Hertz;
 use embassy_time::{Duration, Instant, Timer};
@@ -107,8 +107,39 @@ const SOCK_MGMT: u8 = crate::p2::S7251;
 /// `transfer_in_place` on a copy, reads send zeros, and OVR is cleared before each transaction
 /// and after an error.
 pub struct CsDevice<'d> {
-    bus: Spi<'d, Blocking, spi::mode::Master>,
+    bus: Spi<'d, Async, spi::mode::Master>,
     cs: Output<'d>,
+}
+
+/// Transfers of at least this many bytes go by BDMA; shorter ones (command headers, register
+/// accesses) by the CPU, where the DMA set-up would cost more than it saves.
+const DMA_MIN: usize = 32;
+/// The BDMA buffer: SPI6 is in D3 and its BDMA reaches only SRAM4 (RM0468), so the bytes of a
+/// transfer are copied through this buffer in section `.sram4` (memory-slot-*.x). The data cache
+/// is off, so no cache maintenance is needed around it.
+const DMA_BUF: usize = 1536;
+#[unsafe(link_section = ".sram4")]
+static mut SPI6_DMA: core::mem::MaybeUninit<[u8; DMA_BUF]> = core::mem::MaybeUninit::uninit();
+
+embassy_stm32::bind_interrupts!(struct Spi6DmaIrqs {
+    BDMA_CHANNEL0 => embassy_stm32::dma::InterruptHandler<embassy_stm32::peripherals::BDMA_CH0>;
+    BDMA_CHANNEL1 => embassy_stm32::dma::InterruptHandler<embassy_stm32::peripherals::BDMA_CH1>;
+});
+
+impl CsDevice<'_> {
+    /// One full-duplex transfer of `data` in place by BDMA, through the SRAM4 buffer, waited for
+    /// here (the CH394 driver is synchronous). The CPU does no per-byte work: a transfer costs its
+    /// wire time (0054).
+    fn dma_in_place(&mut self, data: &mut [u8]) -> Result<(), spi::Error> {
+        for chunk in data.chunks_mut(DMA_BUF) {
+            // SAFETY: SPI6_DMA is used only here, by the one CsDevice, one transfer at a time.
+            let buf = unsafe { &mut (*core::ptr::addr_of_mut!(SPI6_DMA)).assume_init_mut()[..chunk.len()] };
+            buf.copy_from_slice(chunk);
+            embassy_futures::block_on(self.bus.transfer_in_place(buf))?;
+            chunk.copy_from_slice(buf);
+        }
+        Ok(())
+    }
 }
 
 /// Clear OVR (and the other error flags) of SPI6: SPI_IFCR, RM0468.
@@ -135,7 +166,20 @@ impl SpiDevice for CsDevice<'_> {
             r = match op {
                 Operation::Read(b) => {
                     b.fill(0);
-                    SpiBus::transfer_in_place(&mut self.bus, b)
+                    if b.len() >= DMA_MIN { self.dma_in_place(b) } else { SpiBus::transfer_in_place(&mut self.bus, b) }
+                }
+                Operation::Write(b) if b.len() >= DMA_MIN => {
+                    let mut res = Ok(());
+                    for chunk in b.chunks(DMA_BUF) {
+                        // SAFETY: as in dma_in_place.
+                        let buf = unsafe { &mut (*core::ptr::addr_of_mut!(SPI6_DMA)).assume_init_mut()[..chunk.len()] };
+                        buf.copy_from_slice(chunk);
+                        res = embassy_futures::block_on(self.bus.transfer_in_place(buf));
+                        if res.is_err() {
+                            break;
+                        }
+                    }
+                    res
                 }
                 Operation::Write(b) => {
                     let mut tmp = [0u8; 64];
@@ -174,6 +218,9 @@ pub struct NetPins<'d> {
     pub miso: embassy_stm32::Peri<'d, embassy_stm32::peripherals::PG12>,
     pub cs: embassy_stm32::Peri<'d, embassy_stm32::peripherals::PG15>,
     pub rst: embassy_stm32::Peri<'d, embassy_stm32::peripherals::PB5>,
+    /// BDMA channels for SPI6 (D3; the only DMA that reaches SPI6, RM0468).
+    pub rx_dma: embassy_stm32::Peri<'d, embassy_stm32::peripherals::BDMA_CH0>,
+    pub tx_dma: embassy_stm32::Peri<'d, embassy_stm32::peripherals::BDMA_CH1>,
 }
 
 type Chip = Ch394<CsDevice<'static>>;
@@ -224,7 +271,7 @@ async fn bring_up(pins: NetPins<'static>) -> Result<Chip, ChError<spi::Error>> {
     let mut cfg = spi::Config::default();
     cfg.frequency = Hertz(SPI_HZ);
     cfg.mode = spi::MODE_0;
-    let bus = Spi::new_blocking(pins.spi, pins.sck, pins.mosi, pins.miso, cfg);
+    let bus = Spi::new(pins.spi, pins.sck, pins.mosi, pins.miso, pins.tx_dma, pins.rx_dma, Spi6DmaIrqs, cfg);
     let cs = Output::new(pins.cs, Level::High, Speed::VeryHigh);
     let mut chip = Ch394::new(CsDevice { bus, cs });
     let mut last = Err(ChError::NoChip(0));

@@ -218,7 +218,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(watchdog(wd).unwrap());
 
     let id = g7250_proto::discovery::Identity { mac: [0; 6], fw_major: FW_MAJOR, fw_minor: FW_MINOR, beta: FW_BETA, num_ddc: 1 };
-    let pins = net::NetPins { spi: p.SPI6, sck: p.PG13, mosi: p.PG14, miso: p.PG12, cs: p.PG15, rst: p.PB5 };
+    let pins = net::NetPins { spi: p.SPI6, sck: p.PG13, mosi: p.PG14, miso: p.PG12, cs: p.PG15, rst: p.PB5, rx_dma: p.BDMA_CH0, tx_dma: p.BDMA_CH1 };
     let mgmt = mgmt_init::MgmtInit::new(store, tx.arm_state_reg(), SLOT);
     spawner.spawn(net::run(pins, id, mgmt, tx).unwrap());
     // From here the console no longer blocks: lines go into a ring that the net loop and this
