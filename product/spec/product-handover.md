@@ -86,8 +86,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0054 | High Priority bursts without loss: two at wire speed, or any number at >= 1 ms | proposed |
 | 0055 | Flash work exempt from the burst rule; never while armed or keyed; secret writes refused while armed | proposed |
 | 0056 | A malformed command payload is status 17, in the framing group | proposed |
+| 0057 | Link-local used unprobed (visible) if MACRAW fails; start-up bound 17 s | proposed |
 
-All numbers 0001–0056 are now in use.
+All numbers 0001–0057 are now in use.
 
 ## Open questions for ON8ST
 

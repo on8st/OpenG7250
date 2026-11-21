@@ -2,6 +2,7 @@
 
 - Status: proposed (to the repository owner, ON8ST); answers firmware questions of 2026-11-21
 - Date: 2026-11-21
+- Amended by 0057 (start-up bound 17 s; MACRAW failure).
 - Builds on: 0008, 0017 (socket budget), 0035, 0041, 0048; [RFC3927], [RFC2131], [CH394].
 
 ## Context
