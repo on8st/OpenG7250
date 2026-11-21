@@ -13,6 +13,10 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   (tag 9: none, good, bad, and when each is judged) and "Packages that are not a runnable
   image". A1.5 integrity bullet, Table A1-3 status 55, Table M-2 tag 9. Tests T-A1-88,
   T-A1-89, T-A1-90.
+- 0067, testbench points before acceptance: Context states the contract only, with no pointer
+  into firmware documents; "Blocks sent again" (a block sent again with a new request id
+  replaces the received data); slots named `A` or `B` in log lines, with the check names;
+  `ROLLBACK` to a slot whose trial failed is accepted (tag 9 = 1) and starts a trial.
 
 ## 1.0 — version 1.0, 2026-11-21 (tag `spec-v1.0`)
 

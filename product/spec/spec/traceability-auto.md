@@ -68,5 +68,5 @@
 | 0064 | 0064 — Torn boot-record writes and the ROLLBACK command | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0065 | 0065 — Flash work: erase timing, failure, power loss and ECC errors | 1 | 4 | network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Management channel, ownership, safety (A1–A3); network-interface: Session, ownership, watchdog (B5) |  |
 | 0066 | 0066 — What `TX_PATH_NOT_BLOCKED` detects, and how fast | 1 | 4 | network-interface: (top); network-interface: A3 Safety behaviour visible on the network; network-interface: Management channel, ownership, safety (A1–A3); network-interface: Session, ownership, watchdog (B5) |  |
-| 0067 | 0067 — What an image of this firmware must be: the image check, VERIFY and IDENTIFY tag 9 | 1 | 4 | network-interface: (top); network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0067 | 0067 — What an image of this firmware must be: the image check, VERIFY and IDENTIFY tag 9 | 2 | 4 | network-interface: (top); network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
 
