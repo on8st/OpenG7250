@@ -102,10 +102,13 @@ class Boot:
                                                          pwr_cr3=self.pwr_cr3 if self.boots == 1 else None,
                                                          flash_erase_us=self.flash_erase_us,
                                                          flash_preload=self.flash_preload))
+        env = dict(os.environ)
+        # CH394 socket log of this boot (OPEN/CLOSE with port and emulated time)
+        env["G7250_SOCKLOG"] = os.path.join(self.out, "sockets.jsonl" if self.boots == 1 else "sockets-boot%d.jsonl" % self.boots)
         self.proc = subprocess.Popen([self.pr.bootcore.RENODE, "--disable-xwt", "--console",
                                       "-e", "path add @%s" % self.pr.REPO, "-e", "include @%s" % resc],
                                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL, text=True)
+                                     stderr=subprocess.DEVNULL, text=True, env=env)
 
     def stop_emulator(self):
         if self.proc and self.proc.poll() is None:

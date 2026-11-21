@@ -50,8 +50,27 @@ namespace Antmicro.Renode.Peripherals.SPI
         private byte[] addressPending;
         private ulong sent, received, dropped;
 
-        public G7250Ch394(string macAddress = "02:00:00:00:72:50", int bridgePort = 0)
+        // socket log (RE-side evidence, e.g. DHCP borrows of a management socket): one
+        // JSON line per OPEN and CLOSE with the socket, its source port (Sn_PORT) and the
+        // emulated time, to the file in G7250_SOCKLOG (none when unset)
+        private readonly IMachine machine;
+        private readonly string sockLog = Environment.GetEnvironmentVariable("G7250_SOCKLOG");
+
+        private void LogSocket(string op, int n, byte[] r)
         {
+            if(string.IsNullOrEmpty(sockLog)) return;
+            ulong t = machine == null ? 0 : (ulong)machine.LocalTimeSource.ElapsedVirtualTime.TotalMicroseconds;
+            try
+            {
+                System.IO.File.AppendAllText(sockLog, "{\"t_us\": " + t + ", \"op\": \"" + op + "\", \"socket\": " + n
+                    + ", \"port\": " + U16(r, 0x04) + ", \"mode\": " + (r[0x00] & 0x0F) + "}\n");
+            }
+            catch(Exception) { }
+        }
+
+        public G7250Ch394(IMachine machine, string macAddress = "02:00:00:00:72:50", int bridgePort = 0)
+        {
+            this.machine = machine;
             mac = new byte[6];
             var parts = macAddress.Split(':');
             for(int i = 0; i < 6 && i < parts.Length; i++) mac[i] = Convert.ToByte(parts[i], 16);
@@ -218,6 +237,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 {
                     int proto = r[0x00] & 0x0F;
                     P16(r, 0x22, 0); P16(r, 0x24, 0); P16(r, 0x28, 0); P16(r, 0x2A, 0);
+                    LogSocket("open", n, r);
                     if(proto == 0x02) r[0x03] = 0x22;                      // SOCK_UDP
                     else
                     {
@@ -226,7 +246,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                     }
                     break;
                 }
-                case 0x10: r[0x03] = 0x00; break;                          // CLOSE
+                case 0x10: LogSocket("close", n, r); r[0x03] = 0x00; break;   // CLOSE
                 case 0x20: case 0x21: Send(n); break;                      // SEND, SEND_MAC
                 case 0x40: break;                                          // RECV: RX_RD already updated
                 default:
