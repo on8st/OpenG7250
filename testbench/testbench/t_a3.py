@@ -103,7 +103,8 @@ def t_a3_61(ctx: Ctx):
     # (0066 addendum). The fault's log entry names the pin and carries the uptime in ms since
     # that boot (A1.7), which the bench takes as the time of the fault.
     if "power.cycle" in ctx.endpoint.get("fixtures", []):
-        ctx.fixture("gpio.force", pin="PF4", level=0, target="idr", from_power_on=True)
+        # applied in the next start-up before the first instruction (idr only), kept until released
+        ctx.fixture("gpio.force", pin="PF4", level=0, target="idr", at_power_on=True)
         try:
             ctx.fixture("power.cycle")
             wait_reachable(ctx, "power-on with PF4 forced")
