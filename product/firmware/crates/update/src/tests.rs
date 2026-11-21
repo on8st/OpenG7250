@@ -284,6 +284,10 @@ fn begin_checks_in_order_and_writes_nothing() {
     assert_eq!(g.begin(&Offer { hardware_id: 0x00C9, ..big }, &run, 0), Err(Refusal::WrongHardware));
     assert_eq!(g.begin(&Offer { target_slot: 1, ..big }, &run, 0), Err(Refusal::RunningSlot));
     assert_eq!(g.begin(&Offer { length: u32::MAX, target_slot: 1, ..o }, &run, 0), Err(Refusal::RunningSlot));
+    // 56 (foreign) before 63 and 61; a too-large older image gets 61, not 52 (Table A1-3;
+    // 0061 addendum item 4).
+    assert_eq!(g.begin(&Offer { foreign: true, target_slot: 1, ..big }, &run, 0), Err(Refusal::NotSupported));
+    assert_eq!(g.begin(&Offer { version: header::version(1, 0, 0), ..big }, &run, 0), Err(Refusal::TooLarge));
     assert!(!g.in_progress());
     assert_eq!(s.mem, before);
     assert!(g.begin(&Offer { length: slot, target_slot: 2, ..o }, &run, 0).is_ok(), "exactly the slot size");

@@ -390,7 +390,7 @@ fn p_rx_2_that_does_not_decode_gets_48() {
     let bad = entry(&[0, 3]); // offset 3, no rate
     assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::SetCalibration, &bad, 0).0, Status::InvalidConfig);
     assert!(s.take_effects().is_empty(), "nothing stored");
-    let mut good = vec![0x01, 1, 3, 0x40];
+    let mut good = vec![0x01, 1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0x40];
     good.extend_from_slice(&[0; 10]);
     let (st, _) = authed(&mut w, &mut s, HOST, 20, Command::SetCalibration, &entry(&good), 10);
     assert_eq!(st, Status::Ok);

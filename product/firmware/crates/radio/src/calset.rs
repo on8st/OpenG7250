@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn p_rx_2_from_the_set() {
-        let mut good = std::vec![0u8, 5, 3, 0x40];
+        let mut good = std::vec![0u8, 5, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0x40];
         good.extend_from_slice(&[0; 10]);
         let s = set(&[("P-RF-2", &[1, 2]), ("P-RX-2", &good)]);
         let c = rx_cal_of_set(&s).unwrap();
