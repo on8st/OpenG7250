@@ -146,8 +146,8 @@ impl Updater for Port<'_> {
         self.u.stager.activate(s, &self.u.run, now).map_err(status)
     }
 
-    fn abort(&mut self, now: u64) {
-        self.u.stager.abort(now);
+    fn abort(&mut self, now: u64) -> bool {
+        self.u.stager.abort(now)
     }
 
     fn status(&self) -> (u8, u32, u32) {
@@ -157,7 +157,9 @@ impl Updater for Port<'_> {
     fn rollback(&mut self, _now: u64) -> Result<(), Status> {
         // Not during an update (staging may have overwritten the other slot), nor without a
         // valid image there.
-        if self.u.stager.in_progress() || !other_slot_valid(self.u.run.slot) {
+        // In the update state (after UPDATE_BEGIN, an abort or an activation): 58.
+        self.u.stager.rollback_allowed().map_err(status)?;
+        if !other_slot_valid(self.u.run.slot) {
             return Err(Status::VerificationFailed);
         }
         let Some(s) = self.store.as_deref_mut() else { return Err(Status::VerificationFailed) };

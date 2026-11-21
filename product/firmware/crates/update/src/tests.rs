@@ -482,3 +482,49 @@ fn no_transfer_in_progress_block_54_verify_and_activate_55() {
     }
     assert_eq!((s.mem == before, g.status()), (true, st));
 }
+
+#[test]
+fn refused_commands_and_a_second_abort_never_delay_the_restart() {
+    // T-A1-82 (0063 addendum): after UPDATE_ABORT, stray commands every 60 s are refused (block
+    // 54, verify and activate 55, begin and ROLLBACK 58, a second abort 0 with no effect), and
+    // the restart into the running image still comes 10 min after the reply to the first abort.
+    let (mut s, _) = installed(false);
+    let run = running(Slot::A, V1);
+    let b = image(Slot::B, V2, 2600, 9);
+    let mut g = Stager::new();
+    g.begin(&offer(&b, V2), &run, 0).unwrap();
+    assert!(g.abort(1_000));
+    let t0 = 1_000u64;
+    for k in 1..10u64 {
+        let now = t0 + 60_000 * k;
+        assert_eq!(g.block(&mut s, &run, 0, true, &b[..stage::BLOCK as usize], now), Err(Refusal::OutOfOrder));
+        assert_eq!(g.verify(&mut s, &run, now).err(), Some(Refusal::VerifyFailed));
+        {
+            let mut st = Store::open(&mut s, Writer::Application { running: run.slot }).unwrap();
+            assert_eq!(g.activate(&mut st, &run, now), Err(Refusal::VerifyFailed));
+        }
+        assert_eq!(g.begin(&offer(&b, V2), &run, now), Err(Refusal::UpdateInProgress));
+        assert_eq!(g.rollback_allowed(), Err(Refusal::UpdateInProgress));
+        assert!(!g.abort(now), "a second abort has no effect");
+        assert_eq!(g.status().0, 0, "UPDATE_STATUS idle");
+        assert!(g.in_progress(), "the update state remains until a restart");
+    }
+    assert!(!g.abandoned(t0 + stage::ABANDON_MS - 1));
+    assert!(g.abandoned(t0 + stage::ABANDON_MS), "restart 10 min after the first abort");
+
+    // During a transfer: a block refused with 53 every 60 s, and a verify of an incomplete
+    // transfer (55), do not delay the abandonment; a block answered 0 does.
+    let mut g = Stager::new();
+    g.begin(&offer(&b, V2), &run, 0).unwrap();
+    for k in 1..10u64 {
+        let now = 60_000 * k;
+        assert_eq!(g.block(&mut s, &run, 0, false, &b[..stage::BLOCK as usize], now), Err(Refusal::BadCrc));
+        assert_eq!(g.verify(&mut s, &run, now).err(), Some(Refusal::VerifyFailed));
+    }
+    assert!(g.abandoned(stage::ABANDON_MS));
+    g.block(&mut s, &run, 0, true, &b[..stage::BLOCK as usize], 590_000).unwrap();
+    assert!(!g.abandoned(stage::ABANDON_MS));
+    assert!(g.abandoned(590_000 + stage::ABANDON_MS));
+    // With no update state, ROLLBACK is not refused by the stager.
+    assert_eq!(Stager::new().rollback_allowed(), Ok(()));
+}

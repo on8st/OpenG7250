@@ -147,7 +147,9 @@ impl Stager {
     /// `UPDATE_BEGIN`. Nothing is written here (U-2). Returns the block count. The same package
     /// again while receiving resumes the transfer (U-3); another one starts it anew.
     pub fn begin(&mut self, o: &Offer, run: &Running, now: u64) -> Result<u32, Refusal> {
-        if run.trial {
+        // During a trial boot, and after UPDATE_ABORT or an activation until the restart (the
+        // update state remains): 58 (0043; A1.8 "After UPDATE_ABORT", 0063 addendum).
+        if run.trial || matches!(self.phase, Phase::Discarded | Phase::Activated) {
             return Err(Refusal::UpdateInProgress);
         }
         // Magic and header version are framing (17 before authentication, payload.rs; 0063);
@@ -178,6 +180,8 @@ impl Stager {
         if o.version < run.version && !o.downgrade {
             return Err(Refusal::Older);
         }
+        // Answered with 0: the timer restarts (A1.8 "What restarts the timer"). A refused
+        // command never restarts or extends it.
         self.last_ms = now;
         let count = o.length.div_ceil(BLOCK);
         let resume = self.phase == Phase::Receiving && self.offer == Some(*o);
@@ -196,7 +200,6 @@ impl Stager {
         if self.phase != Phase::Receiving {
             return Err(Refusal::OutOfOrder);
         }
-        self.last_ms = now;
         let o = self.offer.ok_or(Refusal::OutOfOrder)?;
         if !crc_ok {
             return Err(Refusal::BadCrc);
@@ -209,6 +212,7 @@ impl Stager {
             return Err(Refusal::Malformed);
         }
         if n < self.received {
+            self.last_ms = now; // answered with 0
             return Ok(self.received); // a repeat after a lost reply (resumable, U-3)
         }
         if self.write_block(io, run, n, data).is_err() {
@@ -216,6 +220,7 @@ impl Stager {
             return Err(Refusal::VerifyFailed);
         }
         self.received += 1;
+        self.last_ms = now; // answered with 0
         Ok(self.received)
     }
 
@@ -241,7 +246,6 @@ impl Stager {
         if !matches!(self.phase, Phase::Receiving | Phase::Verified) {
             return Err(Refusal::VerifyFailed);
         }
-        self.last_ms = now;
         let o = match (self.phase, self.offer) {
             (Phase::Receiving | Phase::Verified, Some(o)) if self.received == self.count => o,
             _ => return Err(Refusal::VerifyFailed),
@@ -256,6 +260,7 @@ impl Stager {
             return Err(Refusal::VerifyFailed);
         }
         self.phase = Phase::Verified;
+        self.last_ms = now; // answered with 0
         Ok(hash)
     }
 
@@ -266,15 +271,21 @@ impl Stager {
         if self.phase != Phase::Verified {
             return Err(Refusal::VerifyFailed);
         }
-        self.last_ms = now;
         crate::boot::activate(store, run.slot).map_err(|_| Refusal::VerifyFailed)?;
+        self.last_ms = now; // answered with 0
         self.phase = Phase::Activated;
         Ok(())
     }
 
     /// `UPDATE_ABORT`: the staging area is discarded (the slot keeps whatever was written; it is
-    /// never activated). The update state lasts until a restart.
-    pub fn abort(&mut self, now: u64) {
+    /// never activated). The update state lasts until a restart; the timer runs from this reply
+    /// and ends in the restart into the running image (A1.8 "After UPDATE_ABORT"). A second
+    /// UPDATE_ABORT is answered 0 and has no effect, the timer included (0063 addendum).
+    /// Returns whether this abort had an effect.
+    pub fn abort(&mut self, now: u64) -> bool {
+        if self.phase == Phase::Discarded {
+            return false;
+        }
         self.last_ms = now;
         if self.phase != Phase::Activated {
             self.phase = Phase::Discarded;
@@ -282,6 +293,15 @@ impl Stager {
             self.received = 0;
             self.count = 0;
         }
+        true
+    }
+
+    /// Whether `ROLLBACK` may go ahead as far as the update is concerned: not in the update
+    /// state (staging may have overwritten the other slot): 58 (A1.8 "After UPDATE_ABORT";
+    /// 0063 addendum). A trial boot is not the update state of the stager; ROLLBACK is its way
+    /// back.
+    pub fn rollback_allowed(&self) -> Result<(), Refusal> {
+        if self.in_progress() { Err(Refusal::UpdateInProgress) } else { Ok(()) }
     }
 }
 

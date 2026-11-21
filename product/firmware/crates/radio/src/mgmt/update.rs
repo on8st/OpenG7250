@@ -18,7 +18,8 @@ pub trait Updater {
     fn verify(&mut self, now: u64) -> Result<[u8; 32], Status>;
     /// `UPDATE_ACTIVATE`: the boot record names the staged image as the trial (U-5).
     fn activate(&mut self, now: u64) -> Result<(), Status>;
-    fn abort(&mut self, now: u64);
+    /// `UPDATE_ABORT`; false if it had no effect (a second abort: 0063 addendum).
+    fn abort(&mut self, now: u64) -> bool;
     /// `UPDATE_STATUS`: state, blocks received, block count.
     fn status(&self) -> (u8, u32, u32);
     /// `ROLLBACK`: the other slot (valid, confirmed before) becomes the active image.
@@ -44,7 +45,9 @@ impl Updater for NoUpdate {
     fn activate(&mut self, _: u64) -> Result<(), Status> {
         Err(Status::NotSupported)
     }
-    fn abort(&mut self, _: u64) {}
+    fn abort(&mut self, _: u64) -> bool {
+        false
+    }
     fn status(&self) -> (u8, u32, u32) {
         (0, 0, 0)
     }

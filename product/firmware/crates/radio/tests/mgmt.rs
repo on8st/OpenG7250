@@ -60,10 +60,11 @@ impl Updater for Model {
         self.activated = true;
         Ok(())
     }
-    fn abort(&mut self, _: u64) {
+    fn abort(&mut self, _: u64) -> bool {
         self.received = 0;
         self.count = 0;
         self.verified = false;
+        true
     }
     fn status(&self) -> (u8, u32, u32) {
         (if self.verified { 2 } else if self.began { 1 } else { 0 }, self.received, self.count)

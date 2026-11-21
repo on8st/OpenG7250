@@ -333,8 +333,10 @@ impl Server {
                 if !payload.is_empty() {
                     return (Status::Malformed, 0);
                 }
-                ctx.update.abort(now);
-                self.log.push(now, format_args!("update aborted by {a}.{b}.{c}.{d}:{}", src.1));
+                // A second abort: 0, no effect, not logged again (0063 addendum).
+                if ctx.update.abort(now) {
+                    self.log.push(now, format_args!("update aborted by {a}.{b}.{c}.{d}:{}", src.1));
+                }
                 p[0] = 1; // a RESTART is needed to leave the update state (A1.8)
                 (Status::Ok, 1)
             }
