@@ -23,7 +23,7 @@ pin as the hardware sees it, nor how fast. The test bench and the firmware need 
    2. The level at the pin, from its input register. This catches a line held from outside,
       a board fault. Bias channels have no pin read and are checked by item 1 only.
 3. A mismatch seen by every check over at least 10 ms is drop event 13, `TX_PATH_NOT_BLOCKED`,
-   class 2. So a mismatch of 10 ms or less never counts, and one of 20 ms or more always does,
+   class 2. So a mismatch shorter than 10 ms never counts, and one of 20 ms or more always does,
    within 20 ms of its start. The rule is in time rather than in a number of checks, so that a
    firmware that checks more often than every 5 ms does not latch on a shorter glitch.
    - The log names the pin and which comparison failed.
@@ -32,7 +32,7 @@ pin as the hardware sees it, nor how fast. The test bench and the firmware need 
 5. Tests:
    - T-A3-61 (new) covers both stimuli: the pin level forced from outside with the output
      register unchanged, and the register or mode changed; it also checks the 20 ms bound,
-     that a pulse of 10 ms or less gives no fault, and the behaviour after a reset;
+     that a 5 ms pulse gives no fault, and the behaviour after a reset;
    - T-A1-68 uses the first stimulus.
 
 ## Alternatives considered

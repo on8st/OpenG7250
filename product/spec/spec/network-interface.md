@@ -1432,7 +1432,7 @@ things with the safe state:
    that a line held at the other level from outside (a board fault) is seen as well; bias
    channels have no such read and are checked by item 1 only.
 
-A mismatch seen by every check over at least 10 ms (so a mismatch that lasts 10 ms or less never
+A mismatch seen by every check over at least 10 ms (so a mismatch shorter than 10 ms never
 counts, and one that lasts 20 ms always does, within 20 ms of its start) is drop event 13 (Table A3-1), fault code 16 `TX_PATH_NOT_BLOCKED`, class 2 (A3.5):
 TX stays locked until a reset, RX goes on, and the log names the pin and which comparison
 failed. The firmware does not try to correct the pin and then go on; it sets the safe state
@@ -3927,7 +3927,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-58 | v1.0 (0030): with level 1 active, armed and unarmed, with and without hardware CW selected, toggling the local PTT input (PH6) and the KEY contacts (PH3, PH4) keys nothing, and High Priority status byte 4 bits [0]–[2] stay 0 (reference model with simulated inputs; [HIS] HIS 85). |
 | T-A3-59 | With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040). |
 | T-A3-60 | Needs the radio (P-SYS-9): after two `SWR_REPEATED` entries, a `RESTART` and then a processor watchdog reset leave the fault entry counter and `TRIP_COUNT` unchanged, so the third entry is class 2; a power cycle clears them. Before P-SYS-9 is set the arm is rejected with `NOT_CALIBRATED` (A3.5; Annex P; 0050). |
-| T-A3-61 | Not armed: forcing the level at each TX-side pin of A3.6b to the other level from outside (output register unchanged), and, separately, changing a pin's output register or making it an input (emulator memory write): each held for 20 ms or more gives `FAULT_CODE` 16 `TX_PATH_NOT_BLOCKED`, class 2, within 20 ms of its start; a pulse of 10 ms or less gives no fault; RX goes on; the log names the pin and the comparison; after a `RESTART` with the force removed the fault is gone, with it kept it comes back at start-up; armed with the TX path open, no fault (emulator; A3.6b; 0066). |
+| T-A3-61 | Not armed: forcing the level at each TX-side pin of A3.6b to the other level from outside (output register unchanged), and, separately, changing a pin's output register or making it an input (emulator memory write): each held for 20 ms or more gives `FAULT_CODE` 16 `TX_PATH_NOT_BLOCKED`, class 2, within 20 ms of its start; a pulse of 5 ms gives no fault; RX goes on; the log names the pin and the comparison; after a `RESTART` with the force removed the fault is gone, with it kept it comes back at start-up; armed with the TX path open, no fault (emulator; A3.6b; 0066). |
 
 ### Discovery (B3)
 
