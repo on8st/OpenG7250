@@ -81,9 +81,12 @@ pub struct P2 {
     /// The key path was keyed after the last call (to empty and arm the FIFO on a change).
     was_keyed: bool,
     notice: Option<Notice>,
-    /// The unasked record is due: sent from the next tick, not in the pass that starts the
-    /// session (its 1246 bytes are the longest send; 0054).
+    /// The unasked record is due: sent from the next ticks, not in the pass that starts the
+    /// session, in parts of RECORD_PART pairs, one part per tick, so that no tick holds the
+    /// whole 1246-byte send (0054). B4.4 item 2 asks for one record, not one packet (only the
+    /// CAP_REQUEST answer is one packet, item 1).
     record_due: bool,
+    record_next: Option<(Addr, usize)>,
     /// The longest session-event handling and the longest single register-packet send, us
     /// (GET_STATS step_events_us, step_send_us).
     pub max_events_us: u64,
@@ -137,6 +140,10 @@ struct Notice {
     seq: u32,
 }
 
+/// Pairs per part of the unasked record: 207 registers in three parts of up to 70 pairs (424
+/// bytes each), so that one send stays near a third of the whole (0054).
+const RECORD_PART: usize = 70;
+
 const NOTICE_COPIES: u8 = 3;
 const NOTICE_SPACING_MS: u64 = 10;
 const NOTICE_REPEAT_FOR_MS: u64 = 5000;
@@ -170,6 +177,7 @@ impl P2 {
             was_keyed: false,
             notice: None,
             record_due: false,
+            record_next: None,
             max_events_us: 0,
             max_send_us: 0,
             takeovers: 0,
@@ -441,11 +449,22 @@ impl P2 {
         }
         self.unasked_sent = true;
         self.last_unasked = Some((dest, now));
-        let mut pairs: heapless::Vec<Pair, 240> = heapless::Vec::new();
-        for (i, v) in self.regs.record.iter().enumerate() {
-            let _ = pairs.push((i as u16, *v));
+        self.send_record_part(chip, dest, 0);
+    }
+
+    /// One part of the unasked record (RECORD_PART pairs from `at`); the next part on the next
+    /// tick, while the session's register destination is still `dest`.
+    fn send_record_part(&mut self, chip: &mut Chip, dest: Addr, at: usize) {
+        if self.session.register_destination() != Some(dest) {
+            return;
+        }
+        let end = (at + RECORD_PART).min(self.regs.record.len());
+        let mut pairs: heapless::Vec<Pair, RECORD_PART> = heapless::Vec::new();
+        for i in at..end {
+            let _ = pairs.push((i as u16, self.regs.record[i]));
         }
         self.send_regs(chip, dest, &pairs);
+        self.record_next = (end < self.regs.record.len()).then_some((dest, end));
     }
 
     /// The takeover log: at most one entry per second per pair of hosts, with the number of
@@ -644,6 +663,8 @@ impl P2 {
             if let Some(dest) = self.session.register_destination() {
                 self.send_unasked_record(chip, dest, now);
             }
+        } else if let Some((dest, at)) = self.record_next.take() {
+            self.send_record_part(chip, dest, at);
         }
         // The second and third copy of the takeover notice, about 10 ms apart (A2.4 step 1).
         if let Some(n) = self.notice.as_mut() {

@@ -34,6 +34,34 @@ use g7250_radio::mgmt::{Ctx, Server};
 /// is measured (P-NET-1). SPI6 kernel clock is PCLK4 = 64 MHz here; 64 / 4 = 16 MHz.
 const SPI_HZ: u32 = 16_000_000;
 const SOCK_DISCOVERY: u8 = 0;
+/// Record the time of a pass step (GET_STATS step_*_us).
+fn step(steps: &mut [u64; g7250_radio::mgmt::STEPS], i: usize, t: Instant) {
+    steps[i] = steps[i].max(t.elapsed().as_micros());
+}
+
+/// Read and handle what the High Priority socket holds (up to two packets, Table B2-2), only
+/// the parsed bytes over SPI. Called at the start of every pass and after every step that can
+/// take long (each tick, DHCP, a General packet, a management request), so that 1027 is read
+/// between any two of them (0054; T-B5-20). Returns true if a packet was handled.
+fn read_hp(chip: &mut Chip, p2: &mut crate::p2::P2, rx: &mut [u8], hp_rx: &mut u64, steps: &mut [u64; g7250_radio::mgmt::STEPS]) -> bool {
+    let mut any = false;
+    for _ in 0..HP_DUC_PER_PASS {
+        let t = Instant::now();
+        let want = g7250_radio::session::HP_BYTES_USED.min(rx.len());
+        let Ok(Some(mut d)) = chip.udp_recv(crate::p2::S1027, &mut rx[..want]) else { break };
+        if d.truncated > 0 {
+            let full = (d.len + d.truncated).min(rx.len());
+            rx[d.len..full].fill(0);
+            d.len = full;
+        }
+        *hp_rx += 1;
+        p2.cnc(chip, (d.src_ip, d.src_port), g7250_radio::session::CnC::HighPriority, &rx[..d.len], Instant::now().as_millis());
+        step(steps, 2, t);
+        any = true;
+    }
+    any
+}
+
 /// The most datagrams read from the High Priority and the DUC I&Q socket in one pass: what their
 /// 4 KiB holds (two 1452-byte packets), so that each pass empties them (T-B5-20).
 const HP_DUC_PER_PASS: usize = 2;
@@ -593,26 +621,26 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     // High Priority packets read (GET_STATS hp_rx; 0058).
     let mut steps = [0u64; g7250_radio::mgmt::STEPS];
     let mut hp_rx: u64 = 0;
-    fn step(steps: &mut [u64; g7250_radio::mgmt::STEPS], i: usize, t: Instant) {
-        steps[i] = steps[i].max(t.elapsed().as_micros());
-    }
     // Unprobed link-local claims already written to the log.
     let mut unprobed_logged: u32 = 0;
     loop {
         let pass_start = Instant::now();
         // Console bytes into the USART FIFO (never waits): the loop may not yield for a while.
         g7250_board::console::pump();
+        read_hp(&mut chip, &mut p2, &mut rx, &mut hp_rx, &mut steps);
         // Session watchdog and status first, on every pass, so that no branch below can delay
         // the standby beyond B5.6's 1100 ms (T-B5-10).
         let t = Instant::now();
         p2.tick(&mut chip, Instant::now().as_millis());
         step(&mut steps, 0, t);
+        read_hp(&mut chip, &mut p2, &mut rx, &mut hp_rx, &mut steps);
         // DHCP after the power-on exchange (A1.11), also on every pass: no traffic on the other
         // sockets can hold a borrow of socket 7 past its 2 s (0041).
         if let Some(c) = dhcpc.as_mut() {
             let t = Instant::now();
             let relink_now = dhcp_step(&mut chip, c, &mut dhcp_borrowed, &mut cfg, &mut p2, &mut mrx, Instant::now().as_millis());
             step(&mut steps, 1, t);
+            read_hp(&mut chip, &mut p2, &mut rx, &mut hp_rx, &mut steps);
             if relink_now {
                 // Lease end or DHCPNAK: the link-local address is probed again (0049).
                 claim.restart(Instant::now().as_millis());
@@ -651,6 +679,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 let t = Instant::now();
                 p2.cnc(&mut chip, (d.src_ip, d.src_port), g7250_radio::session::CnC::General, &rx[..d.len], now);
                 step(&mut steps, 7, t);
+                read_hp(&mut chip, &mut p2, &mut rx, &mut hp_rx, &mut steps);
             }
             Ok(Some(d)) => {
                 let now = Instant::now().as_millis();
@@ -774,6 +803,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 let t = Instant::now();
                 p2.tick(&mut chip, Instant::now().as_millis());
                 step(&mut steps, 0, t);
+                handled |= read_hp(&mut chip, &mut p2, &mut rx, &mut hp_rx, &mut steps);
                 if handled {
                     busy_pass_max_us = busy_pass_max_us.max(pass_start.elapsed().as_micros());
                     continue;
@@ -889,6 +919,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         }
                     }
                     step(&mut steps, 8, t_mgmt);
+                    read_hp(&mut chip, &mut p2, &mut rx, &mut hp_rx, &mut steps);
                     continue;
                 }
                 if let Ok(irq) = chip.take_irq() {
