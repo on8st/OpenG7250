@@ -39,6 +39,24 @@ def header(img_len: int, sha: bytes, version=(1, 0, 1), slot: int = 0, hw: int =
     return h
 
 
+def parse_package(data: bytes):
+    """A Table M-4 package file as opaque bytes: the 53-byte header, then the image of the
+    header's length. Returns (header bytes, image bytes, fields) or raises ValueError. The bench
+    reads only the header fields it knows and sends both parts unchanged."""
+    if len(data) < 53:
+        raise ValueError("shorter than the 53-byte header")
+    h = data[:53]
+    magic, hver, comp, hw, rev = struct.unpack(">IBBHH", h[:10])
+    version = (h[10], h[11], struct.unpack(">H", h[12:14])[0])
+    length = struct.unpack(">I", h[14:18])[0]
+    if magic != PK_MAGIC or hver != 1:
+        raise ValueError(f"not a version-1 G7PK header (magic {magic:#x}, version {hver})")
+    img = data[53:53 + length]
+    if len(img) != length:
+        raise ValueError(f"image of {len(img)} bytes, the header says {length}")
+    return h, img, dict(component=comp, hw=hw, hw_rev=rev, version=version, length=length, sha=h[18:50], slot=h[52])
+
+
 def begin_payload(flags: int, hdr: bytes) -> bytes:
     return bytes([flags]) + hdr
 

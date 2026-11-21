@@ -15,7 +15,7 @@ import struct
 import time
 from contextlib import contextmanager
 
-from .core import Blocked, Ctx, Skip, test
+from .core import Blocked, Ctx, PartSkip, Skip, test
 from .mgmt import Mgmt
 from .p2 import (PORT_REG, STREAM_STATUS, TX_MODE_CLASS, Host, parse_regs, value, wait_reachable, write_status)
 from .update import HW_ID, SECTOR, Updater, header, image, layout, version_of
@@ -75,6 +75,26 @@ def slot_bytes(lay, slot: int) -> int:
 
 def pkg(img: bytes, version, slot: int, **kw) -> bytes:
     return header(len(img), hashlib.sha256(img).digest(), version=version, slot=slot, **kw)
+
+
+def trial_package(ctx, slot: int, ver, seed: int):
+    """(image, header, version) for an update whose trial must run. A real package of this
+    firmware for that slot where the runner passes one (params.package_slot_a, package_slot_b:
+    paths to Table M-4 packages built on the firmware side, read as opaque bytes); else the
+    synthetic SMALL image on the reference model, whose trial is a model; else Skip, since a
+    synthetic image cannot run on an emulator or a radio."""
+    from pathlib import Path
+    from .update import parse_package
+    path = ctx.params.get(f"package_slot_{'ab'[slot - 1]}")
+    if path:
+        h, img, f = parse_package(Path(path).read_bytes())
+        if f["slot"] not in (0, slot):
+            raise PartSkip(f"params.package_slot_{'ab'[slot - 1]} is linked for slot {f['slot']}")
+        return img, h, f["version"]
+    if "model" in ctx.endpoint:
+        img = image(SMALL, seed=seed)
+        return img, pkg(img, newer(ver), slot), newer(ver)
+    raise PartSkip(f"needs a real package (params.package_slot_{'ab'[slot - 1]}) for a running trial")
 
 
 @test("T-A1-79")
@@ -173,7 +193,8 @@ def t_a1_67(ctx: Ctx):
         r = u.begin(pkg(img, newer(ver), run))
         ctx.eq(f"running in slot {run}: a package for slot {run} gets 63", r["status"] if r else None, 63)
         ctx.eq("and nothing is written", (u.status() or {}).get("state"), 0)
-        st, step = u.full(img, pkg(img, newer(ver), other))
+        img, hdr, newver = trial_package(ctx, other, ver, 67)
+        st, step = u.full(img, hdr)
         if not ctx.eq(f"a package for slot {other}: accepted, transferred and verified", (st, step), (0, "verified")):
             return
         r = u.req("UPDATE_ACTIVATE", b"\x00")
@@ -187,7 +208,7 @@ def t_a1_67(ctx: Ctx):
     with updating(ctx, s) as u:
         t = u.identify()
         ctx.eq("the trial boot runs the new slot (tag 23) with the new version (tag 4)", (t.get(23, b"")[:1], version_of(t)),
-               (bytes([other]), newer(ver)))
+               (bytes([other]), newver))
         ctx.eq("IDENTIFY update state: trial boot (tag 10 = 1)", t.get(10), b"\x01")
         r = u.begin(pkg(image(SMALL, seed=68), newer(newer(ver)), run))
         ctx.eq("during the unconfirmed trial boot UPDATE_BEGIN gets 58", r["status"] if r else None, 58)
@@ -337,8 +358,8 @@ def t_a1_80(ctx: Ctx):
     activated = []
     with updating(ctx, s, restart_at_end=False) as u:
         run, other, ver, lay = facts(ctx, u)
-        img = image(SMALL, seed=82)
-        st, step = u.full(img, pkg(img, newer(ver), other))
+        img, hdr, _ = trial_package(ctx, other, ver, 82)
+        st, step = u.full(img, hdr)
         if ctx.eq("a complete transfer for the activation part", (st, step), (0, "verified")):
             r = u.req("UPDATE_ACTIVATE", b"\x00")
             if r and r["status"] == 0:
@@ -539,8 +560,8 @@ def activate_new(ctx, s, seed: int, net_down: bool = False):
             else:
                 ctx.need("ch394.silent")
                 ctx.fixture("ch394.silent", boots=1)
-        img = image(SMALL, seed=seed)
-        st, step = u.full(img, pkg(img, newer(ver), other))
+        img, hdr, newver = trial_package(ctx, other, ver, seed)
+        st, step = u.full(img, hdr)
         if (st, step) != (0, "verified"):
             ctx.__dict__["_upd_fail"] = f"{step} answered {st}"
             return None
@@ -550,7 +571,7 @@ def activate_new(ctx, s, seed: int, net_down: bool = False):
             return None
     time.sleep(0.3)
     wait_reachable(ctx, "UPDATE_ACTIVATE")
-    return run, other, ver, newer(ver)
+    return run, other, ver, newver
 
 
 @test("T-A1-68", "T-A1-09")

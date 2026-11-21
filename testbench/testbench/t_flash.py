@@ -385,12 +385,12 @@ def t_a1_83(ctx: Ctx):
     """A1.8 "Torn boot-record writes" (0064)."""
     need(ctx, "power.cut", "time.advance")
     s = secret(ctx)
-    from .t_update import advance, facts, newer, pkg
+    from .t_update import advance, facts, trial_package
     # a power loss during the trial-attempt write (at the activation)
     with mg(ctx, s) as u:
         run, other, ver, lay = facts(ctx, u)
-        img = image(2148, seed=831)
-        st, step = u.full(img, pkg(img, newer(ver), other))
+        img, hdr, _ = trial_package(ctx, other, ver, 831)
+        st, step = u.full(img, hdr)
         if (st, step) != (0, "verified"):
             ctx.check("update transferred", False, f"{step} answered {st}")
             return
@@ -407,8 +407,8 @@ def t_a1_83(ctx: Ctx):
     # a power loss during the self-confirmation write
     with mg(ctx, s) as u:
         run, other, ver, lay = facts(ctx, u)
-        img = image(2148, seed=832)
-        if u.full(img, pkg(img, newer(ver), other)) == (0, "verified"):
+        img, hdr, _ = trial_package(ctx, other, ver, 832)
+        if u.full(img, hdr) == (0, "verified"):
             u.req("UPDATE_ACTIVATE", b"\x00")
     wait_reachable(ctx, "UPDATE_ACTIVATE")
     with mg(ctx, s) as u:

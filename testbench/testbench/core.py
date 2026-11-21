@@ -30,6 +30,11 @@ class Skip(Exception):
     pass
 
 
+class PartSkip(Skip):
+    """A later part of a test cannot run here: with checks already made, the test is judged on
+    them and the part is noted; with none, it is a skip."""
+
+
 class Blocked(Exception):
     pass
 
@@ -203,6 +208,14 @@ def run_one(tid: str, ctx: Ctx) -> dict:
     except Missing as e:
         ctx.checks.append({"name": str(e).split(":")[0], "ok": False, "detail": str(e)})
         res.update(status="fail", reason=str(e))
+    except PartSkip as e:  # the rest of the test cannot run: the checks so far still judge it
+        if ctx.checks:
+            bad = [c for c in ctx.checks if not c["ok"]]
+            res.update(status="fail" if bad else "pass",
+                       reason=f"{bad[0]['name']}: {bad[0]['detail']}" if bad else f"part not run: {e}")
+            ctx.notes.append(f"part not run: {e}")
+        else:
+            res.update(status="skip", reason=str(e))
     except Skip as e:
         res.update(status="skip", reason=str(e))
     except Blocked as e:

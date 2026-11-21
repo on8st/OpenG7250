@@ -95,7 +95,7 @@ hand-written subset.
 | `scope` | yes | `v1.0`; `not-v1.0` (for example 0030); `after-G6` (level 2); `from-M2` (wideband). The runner runs only `v1.0` unless told otherwise |
 | `needs` | no | fixtures the test uses (section 4). If the runner lacks one, the result is `skip` with reason `fixture:<name>` |
 | `timeout_s` | no | **(v1.1)** limit in **emulated** seconds; the result reports wall time separately |
-| `params` | no | test parameters; opaque to the runner. **(v1.1)** `params.pending` lists the Annex P parameters the test needs measured (on the radio the result is `blocked` until the calibration set holds them) |
+| `params` | no | test parameters; opaque to the runner. **(v1.1)** `params.pending` lists the Annex P parameters the test needs measured (on the radio the result is `blocked` until the calibration set holds them). `params.package_slot_a` and `params.package_slot_b`: paths to Table M-4 packages of the firmware under test for slot A and slot B (built on the firmware side, `g7250-update-a.pkg` and `-b.pkg`), given by the runner; the bench reads them as opaque bytes (the 53-byte header, then the image of its length), parses only the header and sends both unchanged. The update tests use them where a trial must run; without them those parts are not run ("needs a real package", noted) and the test is judged on the rest |
 | `boot` (list level) | no | **(v1.1)** `per-test` (default) or `per-list` |
 
 ## 3. Endpoint file (runner → test bench)
