@@ -127,3 +127,31 @@ underrun logic stays on the RE side. OK.
 - R4: a step-safety rule for the F4 captures with a signal generator.
 
 Points 1, 3 (the line itself), 4 and 5 pass as written.
+
+## Final check (diff 7cfd57e..5292ba8, his)
+
+| Item | Result |
+| --- | --- |
+| R1 (80, 90) | Applied. DRDY is "most likely rising", MEDIUM, worded as an inference from the edge stock chose; the 90 row now reads "all MEDIUM". |
+| R2 (80) | Applied. f_clk is stated as the phase-word scale (MEDIUM, inferred), and "half of 245.76 MHz" is gone. |
+| R3 and point 3 (80) | Applied in a new section, "0x01 frame and DDC0". It says that DDC0 cannot run until byte 0 and bytes 9–18 are understood. Measurement is the route, and factory calibration reuse needs ON8ST and is not open. Every 0x01 write while byte 0 is not understood happens only in the 85 safe state. |
+| R4 (90) | Applied as a signal-generator rule that both F4 rows refer to: a TX-rated attenuator or a reverse-power-protected generator, a dummy load on the other port, no PTT, keys or CAT transmit, passive probes. |
+
+No stock values, timing or sequence are added.
+
+### Nits (do not block)
+
+- R2 leaves out the pointer I proposed, "the physical FPGA clock is not
+  recorded, see `30-i2c-devices.md` (HYPOTHESIS)". The meaning is intact
+  without it.
+- In the signal-generator rule, "CAT transmit command" could also name a
+  network transmit command, if the factory firmware has one reachable over
+  LAN.
+- One reflowed line in 80, under "NCO:", is longer than its neighbours.
+
+### Verdict (final)
+
+**CLEARED** at 5292ba8 (his/next).
+
+Follow-up for the emu session: update the status in `his/README.md` to
+5292ba8 and review 8.
