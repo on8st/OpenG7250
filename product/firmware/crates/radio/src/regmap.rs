@@ -437,6 +437,14 @@ mod tests {
         // Session end resets the session values.
         m.session_end();
         assert_eq!((m.tx_mode_class, m.read(LIMIT_TX_TIME, &tx)), (0, Some(300_000)));
+        // T-A3-06: after the end, with no session, a write (B8.4a: a read) gets the values of
+        // A3.6a with NOT_OWNER, all pairs in one answer.
+        let a = run(&mut m, &mut tx, false, &[(TX_MODE_CLASS, 3), (KEYED_TIMEOUT, 300), (TX_STATE, 1)]);
+        assert!(a.not_owner);
+        assert_eq!(a.pairs[0], (TX_MODE_CLASS, 0));
+        assert_eq!(a.pairs[2], (KEYED_TIMEOUT, 500));
+        assert_eq!(a.pairs[4], (TX_STATE, 0));
+        assert_eq!(a.pairs.len(), 6);
     }
 
     #[test]
