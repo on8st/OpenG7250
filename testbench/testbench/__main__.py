@@ -53,7 +53,7 @@ def cmd_list(a) -> int:
         if t.get("pending"):
             e["params"] = {"pending": t["pending"]}
         tests.append(e)
-    doc = {"format": "g7250-testlist", "version": 1, "minor": 3, "spec": cat["spec"], "his": cat["his"],
+    doc = {"format": "g7250-testlist", "version": 1, "minor": 4, "spec": cat["spec"], "his": cat["his"],
            "catalogue": {"commit": git_commit(),
                          "sha256": hashlib.sha256(CATALOGUE.read_bytes()).hexdigest()},
            "defaults": {"timeout_s": 30}, "boot": a.boot, "tests": tests}
@@ -105,7 +105,7 @@ def cmd_run(a) -> int:
     if a.o:
         summary = {s: sum(1 for r in results if r["status"] == s)
                    for s in ("pass", "fail", "skip", "blocked", "error", "not_run")}
-        doc = {"format": "g7250-testresult", "version": 1, "minor": 3, "testlist": {"sha256": tl_hash},
+        doc = {"format": "g7250-testresult", "version": 1, "minor": 4, "testlist": {"sha256": tl_hash},
                "subject": {"kind": endpoint.get("kind"), "model": endpoint.get("model")},
                "runner": {"name": "testbench", "version": 1}, "testbench": {"commit": git_commit()},
                "started": started,

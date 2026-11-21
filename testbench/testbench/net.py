@@ -18,6 +18,9 @@ import socket
 from .core import Skip
 
 
+_CURSOR: dict[int, int] = {}  # per host index: the next port offset in its range (per process)
+
+
 def _addr(s: str) -> tuple[str, int]:
     h, p = s.rsplit(":", 1)
     return h, int(p)
@@ -55,9 +58,17 @@ class Net:
                 where = "hosts[%d].bind" % idx if "bind" in h else "hosts[%d].ip (no bind given)" % idx
                 raise Skip(f"cannot bind {ip}:{port} from {where}: {e}")
             return s.getsockname()[1]
-        for p in range(lo_hi[0], lo_hi[1] + 1):
+        # Rotate through the range: a socket never takes the port of the one before it. Reusing
+        # a port would make the next test's host the same host to the radio (A2.2), with its RX
+        # settings carried over (B5.4) and its record limit still running (B4.4).
+        lo, hi = lo_hi
+        n = hi - lo + 1
+        start = _CURSOR.get(idx, 0)
+        for k in range(n):
+            p = lo + (start + k) % n
             try:
                 s.bind((ip, p))
+                _CURSOR[idx] = (start + k + 1) % n
                 return p
             except OSError:
                 continue

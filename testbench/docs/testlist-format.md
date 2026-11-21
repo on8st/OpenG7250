@@ -1,14 +1,16 @@
-# Test list and result format (v1.3)
+# Test list and result format (v1.4)
 
-- Status: **v1.3**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
+- Status: **v1.4**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
   the first answers of the emulator side (openg7250-emu, relayed by openg7250): the address
   mapping of section 3, the fixture plan of section 4, and its four proposals (emulated-time
   timeouts, boot per test, artifacts, "not modelled" errors), all accepted. v1.2 folded in its
   answers to the open points of v1.1: the mapping confirmed, the `hw.trace` event schema, and
-  `hw.input`. v1.3 takes over the emulator's live trace file and its field names (`count`, not
-  `events`). Changes are marked **(v1.1)**, **(v1.2)** and **(v1.3)**. Each version only adds
-  fields, apart from that one rename of a count nobody reads, so a reader of an earlier version
-  stays valid.
+  `hw.input`. v1.3 took over the emulator's live trace file and its field names (`count`, not
+  `events`). v1.4 takes over the emulator's proposal of pin modes and the levels `"z"` and
+  `null`, so that "not driven" is no longer reported as "low", with the bench's rule per pin
+  for them. Changes are marked **(v1.1)** to **(v1.4)**. Each version only adds fields, apart
+  from that one rename of a count nobody reads. A v1.3 reader keeps working if it treats an
+  unknown level as "not driven".
 - Purpose: the file that `product_run.py <elf> <tests> -o <result>` reads (`<tests>`), and the file
   it writes (`<result>`). The test bench uses the same two formats against the reference model
   and against the radio, so that results from all three compare per test id.
@@ -48,7 +50,7 @@ hand-written subset.
 ```json
 {
   "format": "g7250-testlist",
-  "version": 1, "minor": 3,
+  "version": 1, "minor": 4,
   "spec":  { "branch": "spec/draft", "commit": "0e075f2" },
   "his":   { "commit": "d07627e" },
   "catalogue": { "commit": "<tb/main commit>", "sha256": "<of catalogue.json>" },
@@ -92,7 +94,7 @@ hand-written subset.
 
 ```json
 {
-  "format": "g7250-endpoint", "version": 1, "minor": 3,
+  "format": "g7250-endpoint", "version": 1, "minor": 4,
   "kind": "emulator",
   "radio": { "ip": "192.168.73.10", "netmask": "255.255.255.0", "mac": "02:00:00:00:72:50",
              "connect": { "1024": "127.0.0.1:41024", "1025": "127.0.0.1:41025",
@@ -142,6 +144,25 @@ the test host cannot bind those addresses without root. So:
 
 The implementation is `testbench/testbench/net.py`.
 
+**Local ports on a shared machine (v1.4).** The reference model and the emulator runner MUST
+never share local ports. They run on the same machine.
+- The emulator runner uses its per-run port base, plus the fixed source ports 1024 and 7250 on
+  `hosts[0]`.
+- The reference model uses its own port base: spec port *p* at base + *p*, control at
+  base + 7290, bench hosts at base + 9000 … base + 9199. The default base is 20000, so every
+  port lies below the ephemeral range (49152 and up on macOS), where client sockets take ports.
+  `tools/run_refmodel.sh` picks the first of the bases 20000, 17000, 14000, 11000, 8000 whose
+  every port is free, because the runner's per-run base can be anywhere else. The model
+  writes the mapping into its endpoint file as `radio.connect` and `hosts[].bind`/`ports`, so
+  the bench needs nothing else.
+- The model never binds the spec ports 1024–7251 or 30000–38299. `--port-base 0` (the spec
+  ports themselves) is allowed only when no emulator run can be going; `tools/run_refmodel.sh`
+  refuses it without `G7250_ALLOW_SPEC_PORTS=1`.
+- Before it starts the model, `tools/run_refmodel.sh` checks that every port it and the bench
+  need is free (`tools/ports_free.py`), and it does not start if one is taken.
+- Under a port base the bench's fixed source ports 1024 and 7250 lie outside the host range, so
+  T-B3-33 and T-B8-19 skip against the model.
+
 ## 4. Fixtures (control socket)
 
 The control socket carries JSON Lines, one request and one reply per line:
@@ -178,26 +199,43 @@ per HIS 85, emulator answer c):
   "spi1_b": { "oe_PH10": 1, "last_frame": null },
   "atu_latch_writes": { "PD13": 0, "PG2": 0, "PG5": 0 },
   "pa_dac": { "reset_PB14": 0, "ch": [null, null, null, null, null, null, null, null] },
-  "codec_reset_PB10": 0, "PD12": 0 }
+  "codec_reset_PB10": 0, "PD12": 0,
+  "pins": { "PF4": { "mode": "output", "level": 1 },
+            "PG2": { "mode": "output", "level": 1 },
+            "PD5": { "mode": "analog", "level": "z" } } }
 ```
 
 `last_frame` is the last byte latched into chain A (or chain B's 3 bytes), `null` if never
 latched. `ch` holds the last 10-bit word per DAC channel, `null` if never written.
-`atu_latch_writes` counts writes since the last `hw.trace start` (since boot without one). The
-bench checks: T/R lines at RX levels, chain A bit 7 clear in every latched frame, bias channels
-2, 7 and 8 at 0 or never written, ATU latches never written (0032), codec in reset (0031).
+`atu_latch_writes` counts writes since the last `hw.trace start` (since boot without one).
+**(v1.4)** `pins` gives every watched pin as an object with `mode`, `pull` (inputs only) and
+`level`, as in a `gpio` event below. The pin fields of v1.3 (`tr_lines`, `codec_reset_PB10`,
+`PD12`, the `oe_*` fields) stay, and their values may now be `"z"` or `null` too. The bench
+judges the pins by `pins` when it is present, else by the v1.3 fields, with the rules below.
+
+**Pin state (v1.4).** Every `gpio` event, and every entry of `pins`, carries:
+- `mode`: `"output"`, `"input"`, `"af"` (alternate function) or `"analog"`;
+- `pull`: `"up"`, `"down"` or `"none"`, for an input;
+- `level`: `0` or `1` when something drives the pin: an output (push-pull; open-drain only
+  when low), an input's pull (the pull level), or `hw.input`; `"z"` when nothing drives it
+  (analog mode, an input without pull that is not driven, open-drain released without pull);
+  for an `af` pin the level the peripheral drives, where the emulator models it, else `null`
+  (unknown), never a guess.
+A change of mode alone is also an event.
 
 `hw.trace` **(v1.2)**. A trace records, from `start` to `stop`, JSON Lines in emulated time:
 
 ```
-{"seq": 17, "t_us": 81234, "kind": "gpio", "pin": "PB14", "level": 1}
+{"seq": 17, "t_us": 81234, "kind": "gpio", "pin": "PB14", "mode": "output", "level": 1}
 {"seq": 18, "t_us": 81240, "kind": "spi", "bus": "SPI1", "cs": null, "data": "01"}
-{"seq": 19, "t_us": 81300, "kind": "reset", "cause": "power"}
+{"seq": 19, "t_us": 81300, "kind": "gpio", "pin": "PD5", "mode": "analog", "level": "z"}
+{"seq": 20, "t_us": 81310, "kind": "reset", "cause": "power"}
 ```
 
 - `seq` orders the events; `t_us` is microseconds since boot.
-- `kind` `gpio`: one pin changed to the electrical `level`. Latch and output-enable edges are
-  `gpio` events.
+- `kind` `gpio`: one pin changed its level or its mode (the pin state of v1.4 above). Latch and
+  output-enable edges are `gpio` events. **(v1.4)** `start` first emits the state of every
+  watched pin as `gpio` events.
 - `kind` `spi`: one transfer between chip-select edges on `SPI1` or `SPI2`; `cs` is the
   chip-select pin or `null`; `data` is the bytes as hex.
 - `kind` `reset`: `cause` `power`, `wdt` or `software`.
@@ -210,20 +248,31 @@ bench checks: T/R lines at RX levels, chain A bit 7 clear in every latched frame
 
 The bench starts a trace at the beginning of every test, keeps the `file` from `start`, and at
 each safe-state checkpoint of the test reads that file. At the end of the test it calls `stop`;
-`dropped` > 0 makes the test `fail`, because its trace checks are then incomplete. The bench
-(`testbench/testbench/trace.py`) checks every event since the trace start:
-- no T/R line leaves its RX level;
-- chain A bit 7 is clear in every frame latched into chain A (the last 1-byte SPI1 transfer
-  before an edge of latch PA11);
-- the ATU strobes PD13, PG2, PG5 are only ever driven to their inactive level, high, and never
-  pulsed (no event at level 0; [HIS] HIS 85 from `d199d33`; 0032);
-- PD12 stays low, and USART2 TX (PD5) is never low (CTRL idle; HIS 85, 0023);
-- the codec stays in reset (0031);
-- `dropped` is 0.
-The bias check uses the snapshot's `pa_dac.ch`, because the HIS doesn't give the DAC word layout
-per channel. The reference model has no raw events: `stop` returns zero counts and no file, and
-its snapshot carries two summary flags, `spi1_a.bit7_ever` and `pa_dac.bias_nonzero_ever`,
-latched since the trace start.
+`dropped` > 0 makes the test `fail`, because its trace checks are then incomplete.
+
+**Rules per pin (v1.4).** The bench (`testbench/testbench/trace.py`) checks every event since
+the trace start, the start snapshot included, and the snapshot's `pins`. What each pin must do
+follows the wording of the HIS for that pin. A pin the HIS wants **held** at a level fails on
+any other state, `"z"` (not held) and `null` (unknown) included. A pin the HIS only forbids a
+level for fails only on that level.
+
+| Pin | HIS | Required | Fails on |
+|---|---|---|---|
+| PF4; PF6, PC7, PH11 (T/R lines) | HIS 85: RX levels, MUST be established | held at 1; held at 0 | any other level, `"z"`, `null` |
+| PA10 (chain A OE) | HIS 85: inactive (high) until a frame with bit 7 clear is latched | held at 1 until such a frame is latched, then free | before that frame: 0, `"z"`, `null` |
+| PH10 (chain B OE) | HIS 85: inactive (high) until a known frame is latched | held at 1 until a 3-byte frame is latched, then free | before that frame: 0, `"z"`, `null` |
+| PD13, PG2, PG5 (ATU strobes) | HIS 85 (from `d199d33`): drive to the inactive level (high), never pulse | held at 1 | 0 (a pulse), `"z"` (a floating strobe is the risk the HIS names), `null` |
+| PD12 | HIS 85: keep low | held at 0 | 1, `"z"`, `null` |
+| PB10 (codec reset) | HIS 85, HIS 50: held in reset; reset is active low (AIC3204 datasheet) | held at 0 | 1, `"z"`, `null` |
+| PD5 (USART2 TX) | HIS 70 item 2: UART idle level (high) or high-impedance, never low | never 0 | 0 only; `null` is noted in the detail, not failed |
+
+Further: chain A bit 7 is clear in every frame latched into chain A (the last 1-byte SPI1
+transfer before an edge of latch PA11; any edge, because the latch chip is a HYPOTHESIS in the
+HIS). A frame with bit 7 set does not free PA10. The bias check uses the snapshot's
+`pa_dac.ch`, because the HIS doesn't give the DAC word layout per channel. A v1.3 event without
+`mode` is read with its integer level. The reference model has no raw events: `stop` returns
+zero counts and no file. Its snapshot carries `pins` and two summary flags,
+`spi1_a.bit7_ever` and `pa_dac.bias_nonzero_ever`, latched since the trace start.
 
 `hw.input` **(v1.2)**. The level is electrical (0 or 1). The bench drives both levels on every
 pin, because the HIS doesn't give the active level. Edges reach the interrupt controller as from
@@ -233,7 +282,7 @@ a real input.
 
 ```json
 {
-  "format": "g7250-testresult", "version": 1, "minor": 3,
+  "format": "g7250-testresult", "version": 1, "minor": 4,
   "testlist": { "sha256": "…" },
   "subject":  { "kind": "emulator", "elf_sha256": "…", "fw_version": "0.1.0+12" },
   "runner":   { "name": "product_run.py", "version": "…", "emulator_commit": "…" },
@@ -275,7 +324,8 @@ Runner exit code: 0 if there is no `fail` and no `error`, 1 if there is a `fail`
 A test with target `emulator` is also run against the reference model. A test with target
 `host` is not sent to `product_run.py`.
 
-## 7. Open points for the emulator side (v1.3)
+## 7. Open points for the emulator side (v1.4)
 
 None. Settled: the address mapping (section 3, v1.2), the `hw.trace` schema and `hw.input`
-(section 4, v1.2), and the live trace file with `count`, `dropped` and `file` (section 4, v1.3).
+(section 4, v1.2), the live trace file with `count`, `dropped` and `file` (section 4, v1.3),
+and pin modes with the levels `"z"` and `null` (section 4, v1.4).

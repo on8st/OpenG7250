@@ -1,22 +1,43 @@
-"""Reading an hw.trace event list (testlist-format v1.3 section 4) against the HIS 85 safe
-state ([HIS] at d07627e, gate review 7). Only the HIS 85 safe-state table and pin map are used; unknown event kinds are ignored.
+"""Reading an hw.trace event list and an hw.observe snapshot (testlist-format v1.4 section 4)
+against the HIS 85 safe state ([HIS] at d07627e, gate review 7) and HIS 70 (idle link).
 
-GPL-3.0-or-later, (c) 2026 ON8ST.
+Pin levels (v1.4): 0 or 1 when something drives the pin (an output, the pull of an input, or
+hw.input); "z" when nothing drives it; None when the emulator cannot tell (an alternate-function
+pin it does not model). A v1.3 event has no "mode" and an integer level.
+
+What each pin must do comes from the wording of the HIS, pin by pin:
+- "held" or "keep" at a level: anything else fails, "z" (not held) and None (unknown) included;
+- "never" a level: only that level fails; "z" passes, None is noted but cannot fail.
+
+Only the HIS 85 safe-state table and pin map, and HIS 70, are used; unknown event kinds are
+ignored. GPL-3.0-or-later, (c) 2026 ON8ST.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-# [HIS] HIS 85, "Safe state at reset": RX levels of the T/R lines
-TR_RX = {"PF4": 1, "PF6": 0, "PC7": 0, "PH11": 0}
-CHAIN_A_LATCH = "PA11"  # SPI1 chain A (TX low-pass bank + T/R), latch
-CHAIN_A_OE = "PA10"  # active low
-ATU_LATCHES = ("PD13", "PG2", "PG5")  # the CS line is the latch; inactive high (MEDIUM)
-PD12 = "PD12"  # unknown output: keep low
-USART2_TX = "PD5"  # idle level, never low (CTRL idle, HIS 70)
-DAC_RESET = "PB14"  # active low
-CODEC_RESET = "PB10"
+# Pins that the HIS wants held at a level: pin -> (level, why)
+HOLD = {
+    "PF4": (1, "T/R line at its RX level (HIS 85)"),
+    "PF6": (0, "T/R line at its RX level (HIS 85)"),
+    "PC7": (0, "T/R line at its RX level (HIS 85)"),
+    "PH11": (0, "T/R line at its RX level (HIS 85)"),
+    "PD13": (1, "ATU strobe driven to its inactive level, never pulsed (HIS 85; 0032)"),
+    "PG2": (1, "ATU strobe driven to its inactive level, never pulsed (HIS 85; 0032)"),
+    "PG5": (1, "ATU strobe driven to its inactive level, never pulsed (HIS 85; 0032)"),
+    "PD12": (0, "PD12 kept low (HIS 85)"),
+    # codec RESET is active low (TI AIC3204 datasheet, public): "held in reset" = low
+    "PB10": (0, "codec held in reset (HIS 85, HIS 50; 0031)"),
+}
+# Output enables: inactive (high) until their chain has latched a frame (HIS 85)
+OE = {"PA10": "chain A output enable inactive (high) until a frame with bit 7 clear is latched (HIS 85)",
+      "PH10": "chain B output enable inactive (high) until a frame is latched (HIS 85)"}
+# Pins that must never be at a level: pin -> (forbidden level, why)
+NEVER = {"PD5": (0, "USART2 TX never low: idle high or high-impedance (HIS 70 item 2; 0023)")}
+
+CHAIN_A_LATCH, CHAIN_B_LATCH = "PA11", "PH12"
+LEGACY_TR = {"PF4": 1, "PF6": 0, "PC7": 0, "PH11": 0}
 
 
 def load(path: str | Path) -> list[dict]:
@@ -28,40 +49,87 @@ def load(path: str | Path) -> list[dict]:
     return sorted(out, key=lambda e: e.get("seq", 0))
 
 
+def _lvl(e: dict):
+    """The level of a gpio event or snapshot entry: 0, 1, "z" or None."""
+    v = e.get("level")
+    if v in (0, 1, "z"):
+        return v
+    return None
+
+
+def _describe(v) -> str:
+    return {0: "driven low (0)", 1: "driven high (1)", "z": "not driven (z)", None: "unknown (null)"}[v]
+
+
 def check_safe(events: list[dict]) -> list[tuple[str, bool, str]]:
     """(check name, ok, detail) for the trace of a test in which TX stays frozen."""
-    res = []
-    tr_bad = [e for e in events if e.get("kind") == "gpio" and e.get("pin") in TR_RX
-              and e.get("level") != TR_RX[e["pin"]]]
-    res.append(("T/R lines never leave their RX level", not tr_bad, _first(tr_bad)))
-    # chain A (8 bit): the last 1-byte SPI1 transfer before an edge of its latch line is taken as
-    # the latched frame; bit 7 must be clear. Any edge counts: which edge latches is not in the
-    # HIS (the chip type is HYPOTHESIS there).
-    last_spi1, bad_frames = None, []
+    viol: dict[str, list] = {}
+    notes: dict[str, list] = {}
+    oe_free = {"PA10": False, "PH10": False}
+    last_spi1 = None
+    bad_frames = []
     for e in events:
         k = e.get("kind")
         if k == "spi" and e.get("bus") == "SPI1":
             last_spi1 = e
-        elif k == "gpio" and e.get("pin") == CHAIN_A_LATCH and last_spi1 is not None:
+            continue
+        if k != "gpio":
+            continue
+        pin, v = e.get("pin"), _lvl(e)
+        if pin in (CHAIN_A_LATCH, CHAIN_B_LATCH) and last_spi1 is not None:
+            # the last SPI1 transfer before an edge of a latch line is the latched frame (any
+            # edge: which one latches is not in the HIS, the chip type is HYPOTHESIS there)
             data = bytes.fromhex(last_spi1.get("data", ""))
-            if len(data) == 1 and data[0] & 0x80:
-                bad_frames.append(last_spi1)
+            if pin == CHAIN_A_LATCH and len(data) == 1:
+                if data[0] & 0x80:
+                    bad_frames.append(last_spi1)
+                else:
+                    oe_free["PA10"] = True
+            elif pin == CHAIN_B_LATCH and len(data) == 3:
+                oe_free["PH10"] = True
             last_spi1 = None
-    res.append(("chain A bit 7 clear in every latched frame", not bad_frames, _first(bad_frames)))
-    # HIS 85 (d199d33 and later): drive the strobes to the inactive level (high) and never pulse
-    # them. Driving high is allowed; any event at level 0 is an active strobe (a pulse).
-    atu = [e for e in events if e.get("kind") == "gpio" and e.get("pin") in ATU_LATCHES and e.get("level") == 0]
-    res.append(("ATU strobes never active: no level 0 on PD13, PG2, PG5 (0032; HIS 85)", not atu, _first(atu)))
-    pd12 = [e for e in events if e.get("kind") == "gpio" and e.get("pin") == PD12 and e.get("level") == 1]
-    res.append(("PD12 kept low (HIS 85)", not pd12, _first(pd12)))
-    tx = [e for e in events if e.get("kind") == "gpio" and e.get("pin") == USART2_TX and e.get("level") == 0]
-    res.append(("USART2 TX (PD5) never low: CTRL idle (0023; HIS 85)", not tx, _first(tx)))
-    codec = [e for e in events if e.get("kind") == "gpio" and e.get("pin") == CODEC_RESET and e.get("level") == 1]
-    res.append(("codec held in reset (0031)", not codec, _first(codec)))
-    # PA DAC: the word layout per channel is the BU2506 datasheet's, not in the HIS; the bias
-    # check therefore uses the hw.observe snapshot (`pa_dac.ch`) until the HIS gives it.
+        if pin in HOLD and v != HOLD[pin][0]:
+            viol.setdefault(pin, []).append((e, v))
+        if pin in OE and not oe_free[pin] and v != 1:
+            viol.setdefault(pin, []).append((e, v))
+        if pin in NEVER:
+            if v == NEVER[pin][0]:
+                viol.setdefault(pin, []).append((e, v))
+            elif v is None:
+                notes.setdefault(pin, []).append(e)
+    res = [("chain A bit 7 clear in every latched frame (HIS 85)", not bad_frames,
+            "" if not bad_frames else json.dumps(bad_frames[0]))]
+    for pin, (want, why) in HOLD.items():
+        res.append(_result(pin, why, viol.get(pin), f"held at {want}"))
+    for pin, why in OE.items():
+        res.append(_result(pin, why, viol.get(pin), "held at 1 until its chain latched a frame"))
+    for pin, (_, why) in NEVER.items():
+        r = _result(pin, why, viol.get(pin), "never at the forbidden level")
+        if notes.get(pin) and r[1]:
+            r = (r[0], True, f"level unknown in {len(notes[pin])} event(s), e.g. {json.dumps(notes[pin][0])}")
+        res.append(r)
     return res
 
 
-def _first(lst):
-    return "" if not lst else json.dumps(lst[0])
+def _result(pin, why, bad, ok_text):
+    if not bad:
+        return (f"{pin}: {why}", True, ok_text)
+    e, v = bad[0]
+    more = f" (+{len(bad) - 1} more)" if len(bad) > 1 else ""
+    return (f"{pin}: {why}", False, f"{_describe(v)} at seq {e.get('seq')}, t_us {e.get('t_us')}, "
+                                    f"mode {e.get('mode', 'n/a')}{more}")
+
+
+def check_pins(pins: dict) -> list[tuple[str, bool, str]]:
+    """The same rules on an hw.observe v1.4 `pins` map {pin: {mode, pull, level}} at one instant.
+    Output enables are not judged here: whether their chain has latched a frame is in the trace."""
+    res = []
+    for pin, (want, why) in HOLD.items():
+        if pin in pins:
+            v = _lvl(pins[pin])
+            res.append((f"{pin}: {why}", v == want, f"{_describe(v)}, mode {pins[pin].get('mode', 'n/a')}"))
+    for pin, (bad, why) in NEVER.items():
+        if pin in pins:
+            v = _lvl(pins[pin])
+            res.append((f"{pin}: {why}", v != bad, f"{_describe(v)}, mode {pins[pin].get('mode', 'n/a')}"))
+    return res

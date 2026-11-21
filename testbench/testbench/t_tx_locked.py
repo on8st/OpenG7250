@@ -50,8 +50,13 @@ def has_obs(ctx):
 def safe(ctx: Ctx, label: str):
     """Check the HIS 85 safe-state items through hw.observe."""
     o = ctx.fixture("hw.observe")
-    tr = o["tr_lines"]
-    ctx.eq(f"{label}: T/R lines at RX levels (HIS 85)", (tr["PF4"], tr["PF6"], tr["PC7"], tr["PH11"]), (1, 0, 0, 0))
+    if "pins" in o:  # v1.4: mode, pull and level ("z", null) per watched pin
+        from .trace import check_pins
+        for name, ok, detail in check_pins(o["pins"]):
+            ctx.check(f"{label}: {name}", ok, detail)
+    else:
+        tr = o["tr_lines"]
+        ctx.eq(f"{label}: T/R lines at RX levels (HIS 85)", (tr["PF4"], tr["PF6"], tr["PC7"], tr["PH11"]), (1, 0, 0, 0))
     a = o["spi1_a"]
     ctx.check(f"{label}: chain A bit 7 clear", not a.get("bit7_ever", False) and
               (a.get("last_frame") is None or a["last_frame"] & 0x80 == 0), str(a))

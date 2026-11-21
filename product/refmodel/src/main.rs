@@ -3,8 +3,16 @@
 //! (testbench/docs/testlist-format.md section 4) on TCP.
 //!
 //!   g7250-refmodel [--ip 127.0.0.1] [--netmask 255.0.0.0] [--mac 02:00:00:00:72:50]
-//!                  [--tx locked|unlocked]
-//!                  [--control 127.0.0.1:7290] [--endpoint-file PATH]
+//!                  [--tx locked|unlocked] [--port-base 20000]
+//!                  [--control 127.0.0.1:<base+7290>] [--endpoint-file PATH]
+//!
+//! Port base: the model binds each spec port p (Table B2-1) at local port base + p and writes
+//! the mapping into the endpoint file as `radio.connect` (testlist-format v1.3 section 3). The
+//! default base 20000 keeps the model off the spec ports 1024-7251, which the emulator runner
+//! uses (its hosts[0] binds the fixed source ports 1024 and 7250), off 30000-38299, and below the
+//! ephemeral port range (49152 and up on macOS), where client sockets take ports. The model
+//! and the emulator runner must never share local ports. `--port-base 0` binds the spec ports
+//! themselves; use it only when no emulator run can be going on this machine.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, UdpSocket};
@@ -30,7 +38,8 @@ struct Ctl {
 
 fn main() {
     let mut cfg = Config::default();
-    let mut control = "127.0.0.1:7290".to_string();
+    let mut control: Option<String> = None;
+    let mut base: u16 = 20_000;
     let mut endpoint_file: Option<String> = None;
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -43,7 +52,8 @@ fn main() {
             // locked: no calibration set (r1.0 before measurement); unlocked: a complete simulated
             // calibration set at start (Annex P "Tests")
             "--tx" => cfg.calibrated = v == "unlocked",
-            "--control" => control = v,
+            "--control" => control = Some(v),
+            "--port-base" => base = v.parse().expect("port base"),
             "--endpoint-file" => endpoint_file = Some(v),
             "-h" | "--help" => {
                 println!("see the header of src/main.rs and README.md");
@@ -54,9 +64,19 @@ fn main() {
         i += 2;
     }
 
+    if base != 0 {
+        // every local port the model or the bench uses: base+1024 .. base+9199
+        let (lo, hi) = (base as u32 + 1024, base as u32 + 9_199);
+        let overlaps = |a: u32, b: u32| lo <= b && a <= hi;
+        if hi > 65_535 || overlaps(1024, 7251) || overlaps(30_000, 38_299) {
+            panic!("port base {base}: local ports {lo}..{hi} must fit and avoid 1024-7251 and 30000-38299");
+        }
+    }
+    let control = control.unwrap_or_else(|| format!("{}:{}", cfg.ip, base as u32 + 7290));
     let mut socks = Vec::new();
     for p in port::LEVEL1 {
-        let s = UdpSocket::bind(SocketAddrV4::new(cfg.ip, p)).unwrap_or_else(|e| panic!("bind {}:{p}: {e}", cfg.ip));
+        let lp = base + p;
+        let s = UdpSocket::bind(SocketAddrV4::new(cfg.ip, lp)).unwrap_or_else(|e| panic!("bind {}:{lp}: {e}", cfg.ip));
         s.set_nonblocking(true).unwrap();
         s.set_broadcast(true).unwrap();
         socks.push((p, s));
@@ -91,8 +111,23 @@ fn main() {
             ("ip", J::Str(cfg.ip.to_string())),
             ("netmask", J::Str(cfg.netmask.to_string())),
             ("mac", J::Str(cfg.mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":"))),
+            ("connect", if base == 0 { J::obj(vec![]) } else {
+                // the open ports of Table B2-1, plus closed ports (nothing bound at base + p) so
+                // that T-B3-21 can probe them (B11.9)
+                J::Obj(port::LEVEL1.iter().chain([1028u16, 1030, 1036, 1100, 7249, 7252].iter())
+                    .map(|p| (p.to_string(), J::Str(format!("{}:{}", cfg.ip, base + p)))).collect())
+            }),
         ])),
-        ("hosts", J::Arr(vec![J::obj(vec![("ip", J::Str(cfg.ip.to_string())), ("in_subnet", J::Bool(true))])])),
+        // with a port base, the bench binds its host sockets in base+9000 .. base+9199 (two hosts
+        // on one address, different ports: different hosts, A2.2)
+        ("hosts", if base == 0 {
+            J::Arr(vec![J::obj(vec![("ip", J::Str(cfg.ip.to_string())), ("in_subnet", J::Bool(true))])])
+        } else {
+            let h = |lo: u32| J::obj(vec![("ip", J::Str(cfg.ip.to_string())), ("in_subnet", J::Bool(true)),
+                                         ("bind", J::Str(cfg.ip.to_string())),
+                                         ("ports", J::Arr(vec![J::Num(lo as f64), J::Num((lo + 99) as f64)]))]);
+            J::Arr(vec![h(base as u32 + 9_000), h(base as u32 + 9_100)])
+        }),
         ("broadcast", J::obj(vec![("limited", J::Bool(false)), ("directed", J::Null)])),
         ("control", J::obj(vec![("transport", J::Str("tcp".into())), ("address", J::Str(control.clone()))])),
         ("fixtures", J::Arr(fixtures.iter().map(|f| J::Str(f.to_string())).collect())),
@@ -174,6 +209,18 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 ("pa_dac", J::obj(vec![("reset_PB14", J::Num(0.0)), ("bias_nonzero_ever", J::Bool(r.hw.bias_nonzero_ever || tx))])),
                 ("codec_reset_PB10", J::Num(0.0)),
                 ("PD12", J::Num(0.0)),
+                // v1.4: mode and level per watched pin; the model drives every HIS 85 item as the
+                // HIS asks and leaves PD5 high-impedance (allowed by HIS 70)
+                ("pins", {
+                    let out = |l: J| J::obj(vec![("mode", J::Str("output".into())), ("level", l)]);
+                    J::obj(vec![
+                        ("PF4", out(lvl(!tx))), ("PF6", out(lvl(tx))), ("PC7", out(lvl(tx))), ("PH11", out(lvl(tx))),
+                        ("PA10", out(J::Num(0.0))), ("PH10", out(J::Num(1.0))),
+                        ("PD13", out(J::Num(1.0))), ("PG2", out(J::Num(1.0))), ("PG5", out(J::Num(1.0))),
+                        ("PD12", out(J::Num(0.0))), ("PB10", out(J::Num(0.0))),
+                        ("PD5", J::obj(vec![("mode", J::Str("analog".into())), ("level", J::Str("z".into()))])),
+                    ])
+                }),
                 ("model_note", J::Str("notional state of the reference model, not pins".into())),
             ]))
         }
