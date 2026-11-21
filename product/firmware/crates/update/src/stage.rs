@@ -296,12 +296,12 @@ impl Stager {
         true
     }
 
-    /// Whether `ROLLBACK` may go ahead as far as the update is concerned: not in the update
-    /// state (staging may have overwritten the other slot): 58 (A1.8 "After UPDATE_ABORT";
-    /// 0063 addendum). A trial boot is not the update state of the stager; ROLLBACK is its way
-    /// back.
-    pub fn rollback_allowed(&self) -> Result<(), Refusal> {
-        if self.in_progress() { Err(Refusal::UpdateInProgress) } else { Ok(()) }
+    /// Whether `ROLLBACK` may go ahead as far as the update is concerned: only with a confirmed
+    /// running image, not during a trial boot or in the update state (staging may have
+    /// overwritten the other slot): 58 (A1.8 "ROLLBACK", 0064 point 3.1; "After UPDATE_ABORT",
+    /// 0063 addendum). The caller then checks the other slot (55).
+    pub fn rollback_allowed(&self, run: &Running) -> Result<(), Refusal> {
+        if run.trial || self.in_progress() { Err(Refusal::UpdateInProgress) } else { Ok(()) }
     }
 }
 

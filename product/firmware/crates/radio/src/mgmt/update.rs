@@ -22,11 +22,20 @@ pub trait Updater {
     fn abort(&mut self, now: u64) -> bool;
     /// `UPDATE_STATUS`: state, blocks received, block count.
     fn status(&self) -> (u8, u32, u32);
-    /// `ROLLBACK`: the other slot (valid, confirmed before) becomes the active image.
-    fn rollback(&mut self, now: u64) -> Result<(), Status>;
+    /// `ROLLBACK` (A1.8; 0064 point 3): with a confirmed running image (else 58) and a good
+    /// image in the other slot (else 55), the boot record names the other slot as a trial.
+    fn rollback(&mut self, now: u64) -> Result<Rollback, Status>;
     /// The update state of A1.8 holds (from `UPDATE_BEGIN` until a restart), or the running image
     /// is an unconfirmed trial.
     fn in_progress(&self) -> bool;
+}
+
+/// What an accepted `ROLLBACK` goes from and to, for its log line: slot (1 A, 2 B) and the
+/// image version ([31:24] major, [23:16] minor, [15:0] build).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rollback {
+    pub from: (u8, u32),
+    pub to: (u8, u32),
 }
 
 /// No update path (host tests of other commands).
@@ -51,7 +60,7 @@ impl Updater for NoUpdate {
     fn status(&self) -> (u8, u32, u32) {
         (0, 0, 0)
     }
-    fn rollback(&mut self, _: u64) -> Result<(), Status> {
+    fn rollback(&mut self, _: u64) -> Result<Rollback, Status> {
         Err(Status::NotSupported)
     }
     fn in_progress(&self) -> bool {

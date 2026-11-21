@@ -89,10 +89,13 @@ pub fn confirm<F: FlashIo>(s: &mut Store<F>, running: Slot) -> Result<bool, Erro
     }
 }
 
-/// `ROLLBACK`: the other slot becomes the active, confirmed image (it was confirmed before; the
-/// caller checks that it holds a valid image). The caller then resets (commanded reset, A1.9).
+/// `ROLLBACK` (A1.8 "ROLLBACK"; 0064 point 3): the other slot starts as a trial (U-6), the
+/// running slot stays the one to return to, so a rollback target that fails (no confirmation
+/// within 60 s, a reset before it) returns to the image that sent ROLLBACK. The caller checks
+/// that the running image is confirmed and the other slot holds a good image, then resets
+/// (commanded reset, A1.9).
 pub fn rollback<F: FlashIo>(s: &mut Store<F>, running: Slot) -> Result<(), Error<F::Error>> {
     let rec = load(s)?;
-    let r = BootRecord { active: running.other(), trial: None, attempts_left: 0, confirmed: true, seq: next_seq(rec), rolled_back: false };
+    let r = BootRecord { active: running, trial: Some(running.other()), attempts_left: 1, confirmed: false, seq: next_seq(rec), rolled_back: false };
     save(s, &r)
 }

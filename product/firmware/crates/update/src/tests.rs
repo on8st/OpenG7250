@@ -251,9 +251,30 @@ fn power_loss_at_every_step_of_a_rollback_command() {
         rb(&mut s);
         let lost = s.lost;
         s.power_on();
-        assert_eq!(boot(&mut s), if lost { Choice::Boot(Slot::B) } else { Choice::Boot(Slot::A) }, "ecc {ecc} cut {cut}/{n}");
+        assert_eq!(boot(&mut s), if lost { Choice::Boot(Slot::B) } else { Choice::Trial(Slot::A) }, "ecc {ecc} cut {cut}/{n}");
     }
   }
+}
+
+#[test]
+fn a_rollback_target_starts_as_a_trial_and_a_failed_one_returns() {
+    // T-A1-84 (0064 point 3.4): the image started by ROLLBACK is a trial; unconfirmed, the next
+    // start returns to the image that sent ROLLBACK; confirmed, it stays.
+    let (mut base, _, _) = activated(false);
+    boot(&mut base);
+    assert!(confirm(&mut base, Slot::B));
+    assert_eq!(boot(&mut base), Choice::Boot(Slot::B));
+    {
+        let mut st = Store::open(&mut base, Writer::Application { running: Slot::B }).unwrap();
+        boot::rollback(&mut st, Slot::B).unwrap();
+    }
+    let mut failed = base.clone();
+    assert_eq!(boot(&mut failed), Choice::Trial(Slot::A), "the target starts as a trial");
+    assert_eq!(boot(&mut failed), Choice::Boot(Slot::B), "not confirmed: back to the image that sent ROLLBACK");
+    let mut good = base.clone();
+    assert_eq!(boot(&mut good), Choice::Trial(Slot::A));
+    assert!(confirm(&mut good, Slot::A));
+    assert_eq!(boot(&mut good), Choice::Boot(Slot::A), "confirmed: it stays");
 }
 
 #[test]
@@ -504,7 +525,7 @@ fn refused_commands_and_a_second_abort_never_delay_the_restart() {
             assert_eq!(g.activate(&mut st, &run, now), Err(Refusal::VerifyFailed));
         }
         assert_eq!(g.begin(&offer(&b, V2), &run, now), Err(Refusal::UpdateInProgress));
-        assert_eq!(g.rollback_allowed(), Err(Refusal::UpdateInProgress));
+        assert_eq!(g.rollback_allowed(&run), Err(Refusal::UpdateInProgress));
         assert!(!g.abort(now), "a second abort has no effect");
         assert_eq!(g.status().0, 0, "UPDATE_STATUS idle");
         assert!(g.in_progress(), "the update state remains until a restart");
@@ -525,6 +546,8 @@ fn refused_commands_and_a_second_abort_never_delay_the_restart() {
     g.block(&mut s, &run, 0, true, &b[..stage::BLOCK as usize], 590_000).unwrap();
     assert!(!g.abandoned(stage::ABANDON_MS));
     assert!(g.abandoned(590_000 + stage::ABANDON_MS));
-    // With no update state, ROLLBACK is not refused by the stager.
-    assert_eq!(Stager::new().rollback_allowed(), Ok(()));
+    // With no update state and a confirmed image, ROLLBACK is not refused by the stager; during
+    // a trial boot it gets 58 (0064 point 3.1).
+    assert_eq!(Stager::new().rollback_allowed(&run), Ok(()));
+    assert_eq!(Stager::new().rollback_allowed(&Running { trial: true, ..run }), Err(Refusal::UpdateInProgress));
 }

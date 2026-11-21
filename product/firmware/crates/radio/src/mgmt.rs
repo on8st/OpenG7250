@@ -16,7 +16,7 @@
 pub mod update;
 pub mod write;
 
-pub use update::{NoUpdate, Updater};
+pub use update::{NoUpdate, Rollback, Updater};
 pub use write::{Effect, Log};
 
 use g7250_proto::mgmt::{self, auth, Command, Incoming, Status};

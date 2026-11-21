@@ -69,8 +69,11 @@ impl Updater for Model {
     fn status(&self) -> (u8, u32, u32) {
         (if self.verified { 2 } else if self.began { 1 } else { 0 }, self.received, self.count)
     }
-    fn rollback(&mut self, _: u64) -> Result<(), Status> {
-        Ok(())
+    fn rollback(&mut self, _: u64) -> Result<g7250_radio::mgmt::Rollback, Status> {
+        if self.trial || self.began {
+            return Err(Status::UpdateInProgress);
+        }
+        Ok(g7250_radio::mgmt::Rollback { from: (1, 0x0001_0002), to: (2, 0x0001_0001) })
     }
     fn in_progress(&self) -> bool {
         self.began || self.trial
@@ -475,6 +478,24 @@ fn update_commands_through_the_updater() {
     assert!(w.up.activated);
     // One commanded reset at a time.
     assert_eq!(authed(&mut w, &mut s, HOST, 430, Command::Rollback, &[], 43000).0, Status::Busy);
+}
+
+#[test]
+fn rollback_is_logged_with_slots_and_versions() {
+    // T-A1-84 (0064 point 3.3): reply 0, the log line, then a commanded reset; 58 during a
+    // trial boot.
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    w.up.trial = true;
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::Rollback, &[], 0).0, Status::UpdateInProgress);
+    assert!(s.take_effects().is_empty());
+    w.up.trial = false;
+    assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::Rollback, &[], 1000).0, Status::Ok);
+    assert_eq!(s.take_effects().as_slice(), &[Effect::Restart]);
+    let log = w.call(&mut s, HOST, &req(30, Command::ReadLog, &[0, 0, 0, 0]), 2000).unwrap().2;
+    let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
+    assert!(e.iter().any(|t| t.contains("rollback commanded: slot A 0.1.2 to slot B 0.1.1")), "{e:?}");
 }
 
 #[test]

@@ -345,10 +345,27 @@ impl Server {
                     return (Status::Malformed, 0);
                 }
                 match ctx.update.rollback(now) {
-                    Ok(()) => {
+                    Ok(r) => {
                         self.reset_pending = true;
                         let _ = self.effects.push(Effect::Restart);
-                        self.log.push(now, format_args!("ROLLBACK by {a}.{b}.{c}.{d}:{}", src.1));
+                        let slot = |s: u8| if s == 2 { 'B' } else { 'A' };
+                        let v = |x: u32| (x >> 24, (x >> 16) & 0xFF, x & 0xFFFF);
+                        let (f, t) = (v(r.from.1), v(r.to.1));
+                        self.log.push(
+                            now,
+                            format_args!(
+                                "rollback commanded: slot {} {}.{}.{} to slot {} {}.{}.{} (by {a}.{b}.{c}.{d}:{})",
+                                slot(r.from.0),
+                                f.0,
+                                f.1,
+                                f.2,
+                                slot(r.to.0),
+                                t.0,
+                                t.1,
+                                t.2,
+                                src.1
+                            ),
+                        );
                         (Status::Ok, 0)
                     }
                     Err(s) => (s, 0),

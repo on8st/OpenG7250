@@ -100,11 +100,12 @@ fn status(r: Refusal) -> Status {
     Status::from_u16(r as u16).unwrap_or(Status::VerificationFailed)
 }
 
-fn other_slot_valid(slot: Slot) -> bool {
+/// The version of the image in the other slot, if it checks good.
+fn other_slot_version(slot: Slot) -> Option<u32> {
     let r = slot.other().range();
     // A slot with an unreadable (ECC) word is not valid, and is never read through a slice.
-    let Ok(image) = g7250_board::flash::mapped(r) else { return false };
-    g7250_layout::header::validate(image, ImageKind::Application, r, APP_RAM).is_ok()
+    let image = g7250_board::flash::mapped(r).ok()?;
+    g7250_layout::header::validate(image, ImageKind::Application, r, APP_RAM).ok().map(|h| h.fw_version)
 }
 
 /// The [`Updater`] of one management request: the stager and the store.
@@ -154,16 +155,15 @@ impl Updater for Port<'_> {
         self.u.stager.status()
     }
 
-    fn rollback(&mut self, _now: u64) -> Result<(), Status> {
-        // Not during an update (staging may have overwritten the other slot), nor without a
-        // valid image there.
-        // In the update state (after UPDATE_BEGIN, an abort or an activation): 58.
-        self.u.stager.rollback_allowed().map_err(status)?;
-        if !other_slot_valid(self.u.run.slot) {
-            return Err(Status::VerificationFailed);
-        }
+    fn rollback(&mut self, _now: u64) -> Result<g7250_radio::mgmt::Rollback, Status> {
+        // During a trial boot or in the update state: 58. Without a good image of this firmware
+        // in the other slot (IDENTIFY tag 9): 55, nothing changes (A1.8 "ROLLBACK"; 0064).
+        self.u.stager.rollback_allowed(&self.u.run).map_err(status)?;
+        let Some(to_ver) = other_slot_version(self.u.run.slot) else { return Err(Status::VerificationFailed) };
         let Some(s) = self.store.as_deref_mut() else { return Err(Status::VerificationFailed) };
-        boot::rollback(s, self.u.run.slot).map_err(|_| Status::VerificationFailed)
+        boot::rollback(s, self.u.run.slot).map_err(|_| Status::VerificationFailed)?;
+        let code = g7250_update::stage::slot_code;
+        Ok(g7250_radio::mgmt::Rollback { from: (code(self.u.run.slot), self.u.run.version), to: (code(self.u.run.slot.other()), to_ver) })
     }
 
     fn in_progress(&self) -> bool {
