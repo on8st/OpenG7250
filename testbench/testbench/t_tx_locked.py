@@ -328,6 +328,7 @@ def t_l11(ctx):
         if "power.cycle" in ctx.endpoint.get("fixtures", []):
             ctx.fixture("power.cycle")
             safe(ctx, "power-on")
+            wait_reachable(ctx)
 
 
 @test("T-A3-06", trace_since="boot")
@@ -341,6 +342,7 @@ def t_a3_06(ctx):
         ctx.fixture("power.cycle")
         time.sleep(1.0)
         safe(ctx, "after power-on")
+        wait_reachable(ctx)
     else:
         ctx.notes.append("power-on part not run: fixture power.cycle not offered")
     with host(ctx) as a, host(ctx) as b:

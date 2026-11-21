@@ -166,9 +166,11 @@ class Host:
         self.send(PORT_DDC, ddc_specific(rate, enable))
         self.send(PORT_DUC, duc_specific())
         self.send(PORT_HP, high_priority(run=True))
+        self.hp_kw = {}
         self.running = True
 
     def keepalive(self, **kw):
+        self.hp_kw = kw  # the High Priority state this host last sent (PTT, CWX, frequencies)
         self.send(PORT_HP, high_priority(run=True, **kw))
         self.running = True
 
@@ -194,7 +196,9 @@ class Host:
         host runs a session, a keepalive goes first (memory-mapped packets do not feed the
         watchdog, B5.6)."""
         if self.running:
-            self.keepalive()
+            # the same High Priority state again: a write must not release a PTT the test holds
+            # (P2 orders nothing between ports, B8.4, so a PTT 0 here could reach the radio first)
+            self.keepalive(**getattr(self, "hp_kw", {}))
         self.send(PORT_REG, regs(pairs))
         out = []
         for p, d, _ in self.recv(timeout, PORT_REG):
@@ -271,3 +275,41 @@ def write_status(pairs):
     """List of (address, counter, reason name) of the WRITE_STATUS pairs."""
     return [((v >> 16) & 0xFFFF, (v >> 8) & 0xFF, WR.get(v & 0xFF, v & 0xFF))
             for a, v in pairs if a == WRITE_STATUS]
+
+
+# After a power cycle the image is not reachable until its power-on DHCP exchange has ended
+# with a lease or a link-local address (A1.11: it runs before the P2 sockets are opened). The
+# spec gives no bound for that (finding SF-24, sent 2026-11-21); the bench waits up to this.
+REACH_S = 20.0
+
+
+def reread_endpoint(ctx):
+    """net.endpoint (v1.4): the endpoint as it is now (hosts[] follow the radio to a new subnet)."""
+    ep = ctx.fixture("net.endpoint")
+    learned = ctx.endpoint.get("_learned")
+    ctx.endpoint.clear()
+    ctx.endpoint.update(ep)
+    if learned:
+        ctx.endpoint["_learned"] = learned
+    ctx.__dict__.pop("_net", None)
+
+
+def wait_reachable(ctx, what: str = "power-on", limit_s: float = REACH_S) -> float:
+    """Poll discovery until the radio answers (rereading the endpoint where the runner offers
+    net.endpoint, since the address can change); the seconds it took. Not reachable within
+    limit_s is a failed test."""
+    from .core import Missing, Skip
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < limit_s:
+        if "net.endpoint" in ctx.endpoint.get("fixtures", []):
+            reread_endpoint(ctx)
+        try:
+            with Host(ctx.net) as h:
+                if h.discover(0.5):
+                    took = time.monotonic() - t0
+                    ctx.notes.append(f"reachable {took:.1f} s after {what} (discovery answered)")
+                    return took
+        except Skip:
+            time.sleep(0.5)
+    raise Missing(f"no discovery reply within {limit_s:.0f} s after {what} (bench bound; the spec "
+                  "gives none for the power-on DHCP exchange, A1.11)")

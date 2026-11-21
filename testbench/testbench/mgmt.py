@@ -120,9 +120,24 @@ class Mgmt:
         return r[0] if r else None
 
 
+RETRANSMIT_S, RETRANSMITS = 0.5, 5  # A1.4 host retransmission: every 500 ms, up to 5 times (0041)
+
+
+def req_retransmit(c: "Mgmt", cmd: str, payload: bytes = b""):
+    """A request sent as a host does (A1.4; A1.11 bound on a borrow): the same request id
+    every 500 ms, up to 5 retransmissions, so a DHCP borrow of at most 2 s is covered."""
+    rid = c.next_id()
+    for _ in range(1 + RETRANSMITS):
+        r = c.raw(build(CMD[cmd], payload, rid), timeout=RETRANSMIT_S)
+        if r:
+            return r[0]
+    return None
+
+
 def identify(ctx, c: Mgmt) -> dict[int, bytes]:
     """IDENTIFY TLVs (Annex M Table M-2), or a failed test."""
-    r = ctx.got(c.req("IDENTIFY"), "IDENTIFY", "no reply on port 7251 within 0.5 s")
+    r = ctx.got(req_retransmit(c, "IDENTIFY"), "IDENTIFY",
+                f"no reply on port 7251 to the request and {RETRANSMITS} retransmissions 500 ms apart (A1.4)")
     if r.get("status") != 0:
         from .core import Missing
         raise Missing(f"IDENTIFY: status {r.get('status')}")

@@ -334,15 +334,7 @@ def _t_a1_65(ctx, s, c):
 
 
 # ---------------- DHCP (A1.11, A1.11a; 0041) ----------------
-def reread_endpoint(ctx):
-    """net.endpoint: the endpoint as it is now (hosts[] follow the radio to a new subnet)."""
-    ep = ctx.fixture("net.endpoint")
-    learned = ctx.endpoint.get("_learned")
-    ctx.endpoint.clear()
-    ctx.endpoint.update(ep)
-    if learned:
-        ctx.endpoint["_learned"] = learned
-    ctx.__dict__.pop("_net", None)
+from .p2 import reread_endpoint, wait_reachable  # noqa: E402
 
 
 def discovers(log):
@@ -360,7 +352,7 @@ def t_a1_66(ctx):
     ctx.need("power.cycle")
     ctx.fixture("dhcp.stop")
     ctx.fixture("power.cycle")
-    time.sleep(3.0)
+    wait_reachable(ctx, "power-on with no DHCP server")
     reread_endpoint(ctx)
     ip = ctx.endpoint["radio"]["ip"]
     ctx.check("link-local address while no lease is held (169.254.0.0/16)", ip.startswith("169.254."), ip)
