@@ -1,18 +1,10 @@
 # G7250 network interface specification
 
-- Version: rc4, 2026-11-19; changes in `spec/CHANGELOG.md`
-- Status: release candidate rc4, for review by ON8ST. Brings the text in line with decisions
-  0003, 0004, 0006, 0007 and 0008, all accepted by ON8ST on 2026-11-19, and applies the
-  detail choices of 0020 (proposed, for ON8ST review at rc1), the points of 0021 that concern
-  parts A and B, and the review fixes of 0022 (proposed, for ON8ST review at rc1), including
-  §22–§32 from a second review of the transmit side, §33–§51 from the final review of rc1,
-  §52–§61 from the review of the rc2 draft, §62–§73 from the review of rc2, §74–§77 from the
-  review of the rc3 draft, §78–§83 from the review of rc3, §84–§86 from the review of
-  the rc4 draft and §87 and §88 from the reviews of rc4, and, after ON8ST's review of rc4
-  (2026-11-20), the scope statement for the controller (0023) and the return to stock
-  firmware (0024), and, after rc5, one installation path on the main unit without the
-  controller (0025, proposed). Focus: milestone M1 (discovery, capability block, RX IQ on G7250-P2); sections for M2–M5 are complete except for
-  values that depend on the hardware.
+- Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
+- Status: version 1.0 (tag `spec-v1.0`). Applies decisions 0001–0066, all accepted by ON8ST
+  (`product-handover.md`). Complete for milestones M1–M5 except for the values that need the
+  radio, which are named in Annex P with a safe placeholder each; level 2 (part C) waits for
+  gate G6 (0011).
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`).
 - Structure: decision 0001, "(2) Network-interface spec", as revised by 0016, split into parts
   A, B and C by 0011.

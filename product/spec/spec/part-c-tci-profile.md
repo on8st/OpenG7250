@@ -1,18 +1,17 @@
 # Part C — Level 2 and the G7250 TCI profile
 
-- Version: rc4, 2026-11-19; changes in `spec/CHANGELOG.md`
-- Status: rc4, for review by ON8ST; the choices it applies are proposed in
-  0021 (§18–§26 added for draft 3, §27–§42 for the rc3 draft, §43 for rc3, §44 for the rc4
-  draft, §45–§47 for rc4) and follow 0022 (proposed; §22–§32 applied in draft 4, §33–§51 in the rc2 draft,
-  §52–§61 in rc2, §62–§74 in rc3, §75–§83 in the rc4 draft, §84–§88 in rc4). This file is part C of the network interface specification;
-  `spec/network-interface.md` points to it ("Part C — Level 2: TCI").
+- Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
+- Status: version 1.0 (tag `spec-v1.0`); applies 0021 and 0022, accepted by ON8ST, and the
+  later decisions that concern level 2 (`product-handover.md`). This file is part C of the
+  network interface specification; `spec/network-interface.md` points to it ("Part C — Level
+  2: TCI"). Level 2 is not offered before gate G6 (0011).
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`); quoted TCI material © Expert Group LLC under its
   MIT notice.
 - Builds on: 0011 (two levels, single owner, shared safety core, level 2 only after G6), 0012
   (full functionality), 0013 (AetherSDR), 0014 (one G7250 TCI profile), 0004 (rates), 0006
   (telemetry), 0007 (watchdog and safety), 0008 (management channel, socket budget), 0015 (TX
-  arm), 0017 (no audio on the main unit), 0019 (reference model), 0021 (profile choices,
-  proposed), 0022 (rc1 review fixes, proposed), and `spec/network-interface.md` rc4
+  arm), 0017 (no audio on the main unit), 0019 (reference model), 0021 (profile choices),
+  0022 (rc1 review fixes), and `spec/network-interface.md` 1.0
   (parts A and B, with 0022 §62–§88; Table B8-3 is the single list of code names, 0022 §19).
 
 Sources are cited by key (see `sources.md`) or by decision number (see `decisions/`).

@@ -2,7 +2,15 @@
 
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`)
 
-All dates 2026-11-19. Decision numbers refer to `decisions/`.
+All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
+
+## 1.0 — version 1.0, 2026-11-21 (tag `spec-v1.0`)
+
+- Accepted by ON8ST on 2026-11-21. Contains every change listed under "After rc7" below;
+  decisions 0001–0066 are all accepted.
+- Headers of `network-interface.md`, part C and the AetherSDR annex set to version 1.0.
+- What still needs the radio is listed in Annex P (Table P-1) with a safe placeholder per
+  value; the radio checks are in HIS 90 and in T-B6-28.
 
 ## After rc7 (2026-11-20)
 
