@@ -209,6 +209,8 @@ pub struct KeyContext {
     pub pa_enabled: bool,
     pub mode_class_declared: bool,
     pub keyed_by_other: bool,
+    /// General byte 37 bit [3] = 0 stands: frequency words, not phase words (B3.8; A3.1a).
+    pub encoding_mismatch: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -397,7 +399,7 @@ impl TxCore {
         if ctx.in_fault {
             return Err(Refusal::Arm(ArmReject::InFault));
         }
-        if !ctx.freq_in_range || !ctx.rf_path_ready || !ctx.pa_enabled || ctx.keyed_by_other {
+        if !ctx.freq_in_range || !ctx.rf_path_ready || !ctx.pa_enabled || ctx.keyed_by_other || ctx.encoding_mismatch {
             return Err(Refusal::Arm(ArmReject::Inhibited));
         }
         if !ctx.mode_class_declared {

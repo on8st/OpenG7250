@@ -37,6 +37,38 @@ pub enum UnkeyReason {
 
 /// Limit id `LIMIT_TX_TIME` (Table B8-3), `TX_STATE` [31:24] with reason 4.
 pub const LIMIT_TX_TIME_ID: u8 = 7;
+/// Limit id `LIMIT_TX_FREQ` (Table B8-3).
+pub const LIMIT_TX_FREQ_ID: u8 = 1;
+
+/// The transmit ranges of region 0 (Table A3-0), Hz, inclusive; the record's `tx_band` entries
+/// (B4.8) are the same ranges. Until the filter plan is known each entry is its own RF-path
+/// state (A3.1b, A3.9; P-RF-1, HIS-07).
+pub const TX_RANGES: [(u32, u32); 10] = [
+    (1_800_000, 2_000_000),
+    (3_500_000, 3_900_000),
+    (7_000_000, 7_200_000),
+    (10_100_000, 10_150_000),
+    (14_000_000, 14_350_000),
+    (18_068_000, 18_168_000),
+    (21_000_000, 21_450_000),
+    (24_890_000, 24_990_000),
+    (28_000_000, 29_700_000),
+    (50_000_000, 54_000_000),
+];
+
+/// The virtual DSP clock of the phase words (B3.8).
+pub const DSP_CLOCK_HZ: u64 = 122_880_000;
+
+/// A phase word of the High Priority frequency fields, in Hz (B3.8).
+pub fn phase_to_hz(w: u32) -> u64 {
+    (w as u64 * DSP_CLOCK_HZ) >> 32
+}
+
+/// The RF-path state a TX frequency needs: the index of its transmit range, `None` outside
+/// every range (A3.1b, A3.9; Table A3-2 `LIMIT_TX_FREQ`).
+pub fn tx_state_of(hz: u64) -> Option<usize> {
+    TX_RANGES.iter().position(|&(lo, hi)| (lo as u64..=hi as u64).contains(&hz))
+}
 
 /// CWX paddle bit held longer than this unkeys (B10.5a): not before 1000 ms.
 pub const CWX_CAP_MS: u64 = 1000;
@@ -60,13 +92,16 @@ pub struct Requests {
     /// Byte 5 bits [1], [2]: the paddles; ignored while bit [0] is clear (B10.5a).
     pub dot: bool,
     pub dash: bool,
+    /// Bytes 329-332: DUC0 frequency, phase word (B3.8; Table A3-2); `None` if not carried.
+    pub duc0: Option<u32>,
 }
 
 impl Requests {
     pub fn parse(p: &[u8]) -> Self {
         let (b4, b5) = (p.get(4).copied().unwrap_or(0), p.get(5).copied().unwrap_or(0));
         let cwx = b5 & 0x01 != 0;
-        Requests { ptt: b4 & 0x02 != 0, cwx, dot: cwx && b5 & 0x02 != 0, dash: cwx && b5 & 0x04 != 0 }
+        let duc0 = p.get(329..333).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+        Requests { ptt: b4 & 0x02 != 0, cwx, dot: cwx && b5 & 0x02 != 0, dash: cwx && b5 & 0x04 != 0, duc0 }
     }
     /// The CWX TX request: bit [0] and at least one paddle (B10.5a).
     pub fn cwx_request(&self) -> bool {
@@ -78,6 +113,8 @@ impl Requests {
 pub struct KeyPath {
     prev: Requests,
     req: Requests,
+    /// The DUC0 frequency in force, Hz (A3.9; `None` before the owner's first one).
+    tx_hz: Option<u64>,
     source: Option<Source>,
     keyed_at: u64,
     last_hp_ms: u64,
@@ -113,6 +150,7 @@ impl KeyPath {
         KeyPath {
             prev: Requests::default(),
             req: Requests::default(),
+            tx_hz: None,
             source: None,
             keyed_at: 0,
             last_hp_ms: 0,
@@ -139,6 +177,27 @@ impl KeyPath {
 
     pub fn duc(&self) -> &DucSettings {
         &self.duc
+    }
+
+    /// The DUC0 frequency in force lies inside a transmit range (A3.1a; Table A3-2).
+    pub fn tx_in_range(&self) -> bool {
+        self.tx_hz.and_then(tx_state_of).is_some()
+    }
+
+    /// The TX frequency of the next High Priority packet (A3.9): followed while keyed if it
+    /// needs the same RF-path state; outside the ranges it unkeys with reason 4 and limit id
+    /// `LIMIT_TX_FREQ`, in another state with reason 6, before it applies; arm kept. With CW
+    /// break-in, keyed includes the hang delay.
+    fn tx_frequency(&mut self, w: u32, tx: &mut TxCore, rf: &mut impl RfActuator) {
+        let hz = phase_to_hz(w);
+        if self.source.is_some() && Some(hz) != self.tx_hz {
+            match tx_state_of(hz) {
+                None => self.unkey_limit(LIMIT_TX_FREQ_ID, tx, rf),
+                s if s != self.tx_hz.and_then(tx_state_of) => self.unkey(UnkeyReason::Retune, tx, rf),
+                _ => {}
+            }
+        }
+        self.tx_hz = Some(hz);
     }
 
     /// `TX_STATE` (Table B8-2): bit 0 keyed, bit 3 last request outside the TX ranges, bit 4 PA
@@ -192,8 +251,16 @@ impl KeyPath {
             rf.unkey();
             tx.unkeyed();
             self.last_unkey = why as u8;
-            self.limit_id = if why == UnkeyReason::Limit { LIMIT_TX_TIME_ID } else { 0 };
+            self.limit_id = 0;
             self.end();
+        }
+    }
+
+    /// `UNKEY` by a limit: reason 4 with its id (Table B8-2, B8-3).
+    fn unkey_limit(&mut self, id: u8, tx: &mut TxCore, rf: &mut impl RfActuator) {
+        if self.source.is_some() {
+            self.unkey(UnkeyReason::Limit, tx, rf);
+            self.limit_id = id;
         }
     }
 
@@ -267,6 +334,10 @@ impl KeyPath {
             self.cwx_blocked = false;
         }
         self.req = r;
+        // A frequency that comes with the edge is applied first (A3.9a item 3).
+        if let Some(w) = r.duc0 {
+            self.tx_frequency(w, tx, rf);
+        }
         if self.source == Some(Source::Ptt) && !r.ptt {
             self.unkey(UnkeyReason::Released, tx, rf);
         }
@@ -319,7 +390,7 @@ impl KeyPath {
             self.unkey(UnkeyReason::CwxCap, tx, rf);
             self.cwx_blocked = true;
         } else if now.saturating_sub(self.keyed_at) > max_tx_ms as u64 {
-            self.unkey(UnkeyReason::Limit, tx, rf);
+            self.unkey_limit(LIMIT_TX_TIME_ID, tx, rf);
         } else if s == Source::Cwx
             && self.cw.idle()
             && !self.req.dot
@@ -380,7 +451,7 @@ impl KeyPath {
         false
     }
 
-    /// Session end or takeover: request levels forgotten, PA enable cleared, DUC-specific
+    /// Session end or takeover: request levels and the TX frequency forgotten, PA enable cleared, DUC-specific
     /// settings back to their power-on values (A3.6a, Table A3-4).
     pub fn session_end(&mut self) {
         let keep = (self.last_unkey, self.limit_id, self.cw_hang_clamped, self.cw_speed_clamped);
@@ -484,7 +555,7 @@ mod tests {
             if i % 7 == 0 {
                 k.on_duc_specific(&duc(if i % 2 == 0 { BREAK_IN | CW | IAMBIC } else { CW }, 20, 100));
             }
-            let r = Requests { ptt: i % 2 == 0, cwx: true, dot: i % 3 == 0, dash: i % 4 == 0 };
+            let r = Requests { ptt: i % 2 == 0, cwx: true, dot: i % 3 == 0, dash: i % 4 == 0, duc0: Some(word(14_100_000 + i as u64 * 1000)) };
             k.on_high_priority(r, i * 10, &mut tx, &ctx(), &mut rf);
             k.tick(i * 10 + 5, 500, 300_000, &mut tx, &mut rf);
         }
@@ -709,12 +780,75 @@ mod tests {
         assert_eq!(k.keyed(), Some(Source::Ptt));
     }
 
+    /// The phase word for a frequency (B3.8), rounded up so that it converts back exactly.
+    fn word(hz: u64) -> u32 {
+        ((hz << 32).div_ceil(DSP_CLOCK_HZ)) as u32
+    }
+
+    #[test]
+    fn a_frequency_encoding_mismatch_refuses_and_does_not_latch() {
+        let (mut tx, mut k, mut rf) = path();
+        let bad = KeyContext { encoding_mismatch: true, ..ctx() };
+        k.on_high_priority(ptt(true), 0, &mut tx, &bad, &mut rf);
+        k.on_high_priority(ptt(true), 10, &mut tx, &ctx(), &mut rf);
+        assert!(k.keyed().is_none() && rf.log.is_empty());
+    }
+
+    #[test]
+    fn phase_words_and_ranges() {
+        for hz in [1_800_000u64, 7_100_000, 14_350_000, 54_000_000] {
+            assert_eq!(phase_to_hz(word(hz)), hz);
+        }
+        assert_eq!(tx_state_of(1_800_000), Some(0));
+        assert_eq!(tx_state_of(2_000_000), Some(0));
+        assert_eq!(tx_state_of(2_000_001), None);
+        assert_eq!(tx_state_of(14_200_000), Some(4));
+        assert_eq!(tx_state_of(0), None);
+    }
+
+    #[test]
+    fn a_retune_while_keyed_is_followed_in_its_state_and_unkeys_otherwise_a3_9() {
+        let hp = |hz: u64, on: bool| Requests { ptt: on, duc0: Some(word(hz)), ..Default::default() };
+        let (mut tx, mut k, mut rf) = path();
+        k.on_high_priority(hp(14_100_000, true), 0, &mut tx, &ctx(), &mut rf);
+        assert_eq!(k.keyed(), Some(Source::Ptt));
+        // Same range (same state until the filter plan, P-RF-1): followed, no unkey.
+        k.on_high_priority(hp(14_300_000, true), 10, &mut tx, &ctx(), &mut rf);
+        assert_eq!(k.keyed(), Some(Source::Ptt));
+        // Another range: unkey reason 6 before it applies; the held PTT does not key again.
+        k.on_high_priority(hp(21_200_000, true), 20, &mut tx, &ctx(), &mut rf);
+        assert!(k.keyed().is_none());
+        assert_eq!(k.tx_state() >> 16, UnkeyReason::Retune as u32);
+        assert!(k.tx_in_range());
+        k.on_high_priority(hp(21_200_000, false), 30, &mut tx, &ctx(), &mut rf);
+        k.on_high_priority(hp(21_200_000, true), 40, &mut tx, &ctx(), &mut rf);
+        // Outside every range: reason 4 with LIMIT_TX_FREQ, arm kept.
+        k.on_high_priority(hp(21_500_000, true), 50, &mut tx, &ctx(), &mut rf);
+        assert_eq!(k.tx_state() >> 16, (LIMIT_TX_FREQ_ID as u32) << 8 | UnkeyReason::Limit as u32);
+        assert!(!k.tx_in_range());
+        assert_eq!(tx.state(), crate::tx::ArmState::Armed);
+        // The same with a CW transmission in its hang delay.
+        let (mut tx, mut k, mut rf) = path();
+        k.on_duc_specific(&duc(BREAK_IN | IAMBIC, 20, 500));
+        let cw = |hz: u64, dot: bool| Requests { duc0: Some(word(hz)), ..cwx(dot, false) };
+        k.on_high_priority(cw(7_050_000, true), 0, &mut tx, &ctx(), &mut rf);
+        k.on_high_priority(cw(7_050_000, false), 10, &mut tx, &ctx(), &mut rf);
+        k.tick(200, 500, 300_000, &mut tx, &mut rf);
+        assert_eq!(k.keyed(), Some(Source::Cwx), "in the hang delay");
+        k.on_high_priority(cw(10_120_000, false), 210, &mut tx, &ctx(), &mut rf);
+        assert!(k.keyed().is_none());
+        assert_eq!(k.tx_state() >> 16, UnkeyReason::Retune as u32);
+    }
+
     #[test]
     fn requests_parse() {
         let mut p = [0u8; 1444];
         p[4] = 0x03;
         p[5] = 0x06; // paddles without bit 0: ignored
-        assert_eq!(Requests::parse(&p), Requests { ptt: true, cwx: false, dot: false, dash: false });
+        assert_eq!(Requests::parse(&p), Requests { ptt: true, cwx: false, dot: false, dash: false, duc0: Some(0) });
+        p[329..333].copy_from_slice(&word(7_100_000).to_be_bytes());
+        assert_eq!(Requests::parse(&p).duc0.map(phase_to_hz), Some(7_100_000));
+        assert_eq!(Requests::parse(&p[..300]).duc0, None);
         p[5] = 0x07;
         assert!(Requests::parse(&p).cwx_request());
     }

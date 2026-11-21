@@ -93,9 +93,14 @@ EER and the DUC0 format refusals; a packet while keyed waits for the unkey. The 
 shift, Curtis iambic A/B decided at the end of each space, element memory in mode B only (the opposite
 paddle held during the mark), strict spacing 3 T from the end
 of the mark; straight key with iambic clear; host tests T-B10-43 to T-B10-46) and the
-hang delay exist but form nothing here. KEY keys nothing in v1.0 (Table B10-1, 0030). Not yet:
-the DUC FIFO and underrun check, the TX frequency and RF-path checks, the ATU cycle, and the
-A3.9a key sequence on the pins.
+hang delay exist but form nothing here. KEY keys nothing in v1.0 (Table B10-1, 0030). The TX frequency (High Priority bytes 329-332, phase word, B3.8) is followed: a request
+outside the ranges of Table A3-0 does not key (`TX_STATE` bit 3); while keyed a retune in the
+same `tx_band` entry is followed, another entry unkeys with reason 6, outside every range with
+reason 4 and limit id 1 (A3.9). General byte 37 bit [3] = 0 refuses every request (B3.8). The
+DUC FIFO and the underrun check exist (B10.5, B10.7), but with record `tx` bit 4 = 0 every DUC
+I&Q packet is discarded and counted before it, and High Priority status byte 30 bit [2] stays 0. Not
+yet: the RF-path relays and their bounded wait (A3.9a; P-RF-1..3, HIS-07), the ATU cycle,
+LIMIT_STATUS, and the A3.9a key sequence on the pins.
 
 ## DHCP retry and renewal (A1.11, A1.11a)
 

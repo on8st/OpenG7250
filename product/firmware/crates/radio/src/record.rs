@@ -96,6 +96,12 @@ pub fn build(p: &Params) -> [u32; LEN] {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_record_ranges_are_the_ranges_the_key_path_checks() {
+        let r: std::vec::Vec<(u32, u32)> = TX_BANDS.iter().map(|b| (b.0, b.1)).collect();
+        assert_eq!(r.as_slice(), &g7250_safety::keypath::TX_RANGES);
+    }
+
     fn rec() -> [u32; LEN] {
         build(&Params { fw_version: 0x0001_0007, tx_implemented: false, tx_calibrated: false, rate_384: false, rx_offered: false })
     }

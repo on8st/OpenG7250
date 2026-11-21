@@ -185,14 +185,21 @@ impl P2 {
         }
     }
 
-    /// Facts at a TX request edge (A3.1a). The TX frequency and the RF path are not followed
-    /// yet (DUC-specific and High Priority frequency words, A3.9), so no request counts as in
-    /// range and no RF path as ready; with the lock closed the request is refused before that.
-    fn key_ctx(&self) -> KeyContext {
+    /// Facts at a TX request edge (A3.1a). The TX frequency comes from the owner's High
+    /// Priority packets (A3.9). The RF-path relays and their switching are pending hardware
+    /// (P-RF-1, P-RF-2; HIS-07), so no RF path counts as ready; with the lock closed the request
+    /// is refused before that.
+    fn key_ctx(&self, p: &[u8]) -> KeyContext {
+        // The packet's own frequency is applied before its edge (A3.9a item 3).
+        let in_range = match Requests::parse(p).duc0 {
+            Some(w) => g7250_safety::keypath::tx_state_of(g7250_safety::keypath::phase_to_hz(w)).is_some(),
+            None => self.key.tx_in_range(),
+        };
         KeyContext {
             in_fault: false,
-            freq_in_range: false,
+            freq_in_range: in_range,
             rf_path_ready: false,
+            encoding_mismatch: self.session.general.is_some_and(|g| !g.phase_word),
             pa_enabled: self.session.general.is_some_and(|g| g.pa_enable),
             mode_class_declared: self.regs.tx_mode_class != 0,
             keyed_by_other: false,
@@ -388,7 +395,7 @@ impl P2 {
             let mut rf = crate::BoardRf;
             match kind {
                 CnC::HighPriority if self.session.running() => {
-                    let ctx = self.key_ctx();
+                    let ctx = self.key_ctx(p);
                     self.key.on_high_priority(Requests::parse(p), now, &mut self.tx, &ctx, &mut rf);
                 }
                 CnC::DucSpecific => {
