@@ -696,3 +696,10 @@ def t_b5_20(ctx):
                   bool(after) and bool(before) and restarted(before[-1], after),
                   f"status sequence before {before[-3:]}, after {after[:3]}")
         h.stop()
+    # information, not judged (the spec sets no figure): the firmware's longest busy-loop pass
+    from .mgmt import Mgmt, stats
+    with Mgmt(ctx.net) as c:
+        st = stats(c)
+    v = (st or {}).get("net_busy_pass_max_us")
+    ctx.check("information (not judged): GET_STATS net_busy_pass_max_us after the bursts", True,
+              f"{v} us" if v is not None else ("GET_STATS has no net_busy_pass_max_us" if st is not None else "no GET_STATS answer"))
