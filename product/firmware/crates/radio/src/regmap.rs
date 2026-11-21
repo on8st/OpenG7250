@@ -106,6 +106,37 @@ pub struct WriteCtx<'a, R: Keyer> {
     pub now: u64,
 }
 
+/// Sequence numbers of local port 7250, per destination (B2.7, "Port 7250 counters per
+/// destination"; 0051): the session's counter for the owner's register destination, reset and
+/// continued with the session (and continued towards an old owner by the takeover notices,
+/// A2.4); and one counter for every answer to a host that is not the owner, which no session
+/// event resets, only a reset of the radio.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Port7250Seq {
+    pub owner: u32,
+    pub other: u32,
+}
+
+impl Port7250Seq {
+    /// The next number for the owner's register destination.
+    pub fn next_owner(&mut self) -> u32 {
+        let n = self.owner;
+        self.owner = n.wrapping_add(1);
+        n
+    }
+    /// The next number for an answer to a host that is not the owner.
+    pub fn next_other(&mut self) -> u32 {
+        let n = self.other;
+        self.other = n.wrapping_add(1);
+        n
+    }
+    /// A stop, a takeover, a session start by another host, an address change (B2.7): the
+    /// session's counter restarts; the non-owner counter does not.
+    pub fn session_reset(&mut self) {
+        self.owner = 0;
+    }
+}
+
 /// Register state of the radio.
 pub struct RegMap {
     pub record: [u32; record::LEN],
@@ -499,6 +530,18 @@ mod tests {
         assert_eq!(a.pairs[0].1 & 0xF, 0);
         assert_eq!((a.pairs[0].1 >> 8) & 0xFF, 12);
         assert!(a.arm_changed);
+    }
+
+    #[test]
+    fn t_b8_21_answers_to_non_owners_have_their_own_counter() {
+        let mut q = Port7250Seq::default();
+        // A's stream and C's answers interleaved: neither shows a gap.
+        assert_eq!((q.next_owner(), q.next_other(), q.next_owner(), q.next_other(), q.next_other(), q.next_owner()), (0, 0, 1, 1, 2, 2));
+        // A's session ends or B takes over: the session's counter restarts, C's does not.
+        q.session_reset();
+        assert_eq!((q.next_owner(), q.next_other()), (0, 3));
+        // Only a reset of the radio (a new value) starts it again.
+        assert_eq!(Port7250Seq::default().next_other(), 0);
     }
 
     #[test]

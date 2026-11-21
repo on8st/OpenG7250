@@ -55,12 +55,11 @@ pub struct P2 {
     /// The network key path (B10.1, B10.5, B10.10; behind the calibration gate).
     pub key: KeyPath,
     seq_status: u32,
-    seq_regs: u32,
-    /// Port 7250 packets to a host that is not the owner (NOT_OWNER and CAP_REQUEST answers,
-    /// the refused-session and update answers): a counter of their own, never reset by a
-    /// session event, so that the owner's register stream has no gaps from them. Interim
-    /// reading of B2.7 (bench T-A2-11; proposal (b) to the spec session), pending its ruling.
-    seq_other: u32,
+    /// Port 7250 sequence numbers per destination (B2.7; 0051): the session's counter for the
+    /// owner's register destination, and one for every answer to a non-owner (NOT_OWNER and
+    /// CAP_REQUEST answers, the refused-session and update answers), reset only by a reset of
+    /// the radio.
+    seq7250: regmap::Port7250Seq,
     /// Last unasked record per destination (B4.4 item 2: at most once per 1 s).
     last_unasked: Option<(Addr, u64)>,
     /// The unasked record of this session has gone out (B4.4 item 2: once per session).
@@ -149,8 +148,7 @@ impl P2 {
             tx,
             key: KeyPath::new(),
             seq_status: 0,
-            seq_regs: 0,
-            seq_other: 0,
+            seq7250: regmap::Port7250Seq::default(),
             last_unasked: None,
             unasked_sent: false,
             record_last: [None; 8],
@@ -223,12 +221,12 @@ impl P2 {
     }
 
     fn send_regs(&mut self, chip: &mut Chip, to: Addr, pairs: &[Pair]) {
-        Self::send_counted(chip, &mut self.seq_regs, to, pairs);
+        Self::send_counted(chip, &mut self.seq7250.owner, to, pairs);
     }
 
-    /// Register packets to a host that is not the owner, on their own counter (`seq_other`).
+    /// Register packets to a host that is not the owner, on the non-owner counter (B2.7; 0051).
     fn send_regs_other(&mut self, chip: &mut Chip, to: Addr, pairs: &[Pair]) {
-        Self::send_counted(chip, &mut self.seq_other, to, pairs);
+        Self::send_counted(chip, &mut self.seq7250.other, to, pairs);
     }
 
     fn send_counted(chip: &mut Chip, seq: &mut u32, to: Addr, pairs: &[Pair]) {
@@ -354,7 +352,7 @@ impl P2 {
                             next_ms: now + NOTICE_SPACING_MS,
                             until_ms: now + NOTICE_REPEAT_FOR_MS,
                             last_repeat_ms: None,
-                            seq: self.seq_regs,
+                            seq: self.seq7250.owner,
                         };
                         Self::send_notice(chip, &mut n);
                         self.notice = Some(n);
@@ -362,7 +360,7 @@ impl P2 {
                     }
                     if matches!(reason, EndReason::Stop | EndReason::Takeover) {
                         self.seq_status = 0;
-                        self.seq_regs = 0;
+                        self.seq7250.session_reset();
                     }
                     // A takeover is logged once with its new owner, at most once per second per
                     // pair (A2.4).
@@ -378,7 +376,7 @@ impl P2 {
                     self.foreign_port(self.session.general);
                     if !restart {
                         self.seq_status = 0;
-                        self.seq_regs = 0;
+                        self.seq7250.session_reset();
                     }
                     self.regs.watchdog_written = self.session.general.map(|g| g.timer);
                     self.next_status_ms = now;
@@ -708,7 +706,7 @@ impl P2 {
         }
         self.session = Session::new();
         self.seq_status = 0;
-        self.seq_regs = 0;
+        self.seq7250.session_reset();
     }
 
     /// Discovery byte 4 (B3.4) and the REDISCOVERY drop (Table A3-1 event 12).
