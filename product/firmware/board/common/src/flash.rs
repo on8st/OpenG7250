@@ -49,11 +49,13 @@ const SR_ERRORS: u32 = 0x07EE_0000;
 /// Returned instead of SR when the operation did not end within [`LIMIT_MS`].
 pub const TIMEOUT: u32 = 1 << 31;
 const FAILED: u32 = SR_ERRORS | TIMEOUT;
-/// `t_erase_max`: the maximum 128 KiB sector erase time of the MCU fitted, from its datasheet
-/// ([STM32H72x]; B2.3; 0065 point 1).
-/// PENDING: the datasheet value is not in the repository yet (the public PDF could not be fetched
-/// here); this placeholder is NOT a datasheet figure, chosen long so that a slow but good erase
-/// is not taken as a failure. Replace it with the datasheet maximum.
+/// `t_erase_max`: the maximum 128 KiB sector erase time of the MCU fitted (B2.3; 0065 point 1):
+/// [STM32H72x] ST DS13311 Rev 5 (November 2023), section 6.3.13, Table 48 "Flash memory
+/// programming", tERASE (sector, 128 KiB) max, guaranteed by characterization: 4 s at
+/// parallelism x8, 3.6 s at x16, 2.2 s at x32; no x64 row. This driver never writes FLASH_CR
+/// PSIZE (it keeps its reset value), so the bound is the largest row, x8, 4 s, which covers every
+/// parallelism. Word programming (266 bits) is at most 580 us (x8, after 10k cycles), far inside
+/// the same 2 x t_erase_max limit.
 pub const T_ERASE_MAX_MS: u32 = 4_000;
 /// An erase or program that does not end within 2 x `t_erase_max` has failed (B2.3 "flash work
 /// that fails"; 0065 point 2).
