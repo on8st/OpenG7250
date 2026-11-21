@@ -169,6 +169,10 @@ pub struct KeyPath {
     atu_last_end: Option<u64>,
     /// The time of the last call, for the end of an ATU cycle.
     now_ms: u64,
+    /// `LIMIT_STATUS` [31:16]: limits tripped (`UNKEY` or stronger) since the last TX request.
+    tripped: u16,
+    /// `TRIP_COUNT`: limit trips with `UNKEY` or stronger since power-on, saturating.
+    pub trips: u32,
     /// Hang delays above 2000 ms and keyer speeds above 60 wpm clamped (Table B10-1, B10.5a
     /// item 1; `GET_STATS`).
     pub cw_hang_clamped: u64,
@@ -209,6 +213,8 @@ impl KeyPath {
             atu_since: 0,
             atu_last_end: None,
             now_ms: 0,
+            tripped: 0,
+            trips: 0,
         }
     }
 
@@ -313,7 +319,16 @@ impl KeyPath {
         if self.source.is_some() {
             self.unkey(UnkeyReason::Limit, tx, rf);
             self.limit_id = id;
+            self.tripped |= 1 << id;
+            self.trips = self.trips.saturating_add(1);
         }
+    }
+
+    /// `LIMIT_STATUS` (Table B8-2): bits 0-15 limiting (`WARN`, `REDUCE`: none of those limits
+    /// exists yet, they need the sensors, P-SEN-1), bits 16 + n tripped since the last TX
+    /// request.
+    pub fn limit_status(&self) -> u32 {
+        (self.tripped as u32) << 16
     }
 
     fn try_key(&mut self, s: Source, now: u64, tx: &mut TxCore, ctx: &KeyContext, rf: &mut impl Keyer) -> bool {
@@ -399,6 +414,10 @@ impl KeyPath {
         }
         let ptt_edge = r.ptt && !self.prev.ptt;
         let cwx_edge = r.cwx_request() && !self.prev.cwx_request();
+        if ptt_edge || cwx_edge {
+            // A new TX request: the trips of LIMIT_STATUS count from here (Table B8-2).
+            self.tripped = 0;
+        }
         match self.source {
             None if ptt_edge => {
                 // A DUC-specific refusal (EER, format) refuses PTT, CW selected or not (B10.5b
@@ -507,6 +526,7 @@ impl KeyPath {
             }
             0 => Ok(AtuWrite::Nothing),
             1 => {
+                self.tripped = 0;
                 if tx.atu_params().is_none() {
                     return Err(WriteReject::NotCalibrated);
                 }
@@ -565,7 +585,9 @@ impl KeyPath {
     pub fn session_end(&mut self) {
         let keep = (self.last_unkey, self.limit_id, self.cw_hang_clamped, self.cw_speed_clamped);
         let atu = (self.atu_state, self.atu_last_end, self.now_ms);
+        let limits = (self.tripped, self.trips);
         *self = KeyPath::new();
+        (self.tripped, self.trips) = limits;
         (self.last_unkey, self.limit_id, self.cw_hang_clamped, self.cw_speed_clamped) = keep;
         // ATU_STATE is the radio's: it stays until the next cycle or an in/out change (A3.9b).
         (self.atu_state, self.atu_last_end, self.now_ms) = atu;
@@ -979,6 +1001,29 @@ mod tests {
         k.session_end();
         assert_eq!(k.atu_state(&tx), 4);
         assert_eq!(rf.log.iter().filter(|e| **e == "key").count(), rf.log.iter().filter(|e| **e == "unkey").count());
+    }
+
+    #[test]
+    fn limit_status_shows_the_trips_since_the_last_request_and_trip_count_counts_them() {
+        let hp = |hz: u64, on: bool| Requests { ptt: on, duc0: Some(word(hz)), ..Default::default() };
+        let (mut tx, mut k, mut rf) = path();
+        // An unkey by a non-limit reason is no trip.
+        k.on_high_priority(hp(14_100_000, true), 0, &mut tx, &ctx(), &mut rf);
+        k.on_high_priority(hp(14_100_000, false), 10, &mut tx, &ctx(), &mut rf);
+        assert_eq!((k.limit_status(), k.trips), (0, 0));
+        // LIMIT_TX_FREQ trips (bit 16 + 1).
+        k.on_high_priority(hp(14_100_000, true), 20, &mut tx, &ctx(), &mut rf);
+        k.on_high_priority(hp(14_400_000, true), 30, &mut tx, &ctx(), &mut rf);
+        assert_eq!((k.limit_status(), k.trips), (1 << 17, 1));
+        // It stays over the session end until the next TX request, and the count stays.
+        k.session_end();
+        k.pa_enable(true, &mut tx, &mut rf);
+        assert_eq!(k.limit_status(), 1 << 17);
+        k.on_high_priority(hp(14_100_000, true), 40, &mut tx, &ctx(), &mut rf);
+        assert_eq!((k.limit_status(), k.trips), (0, 1));
+        // LIMIT_TX_TIME (bit 16 + 7).
+        k.tick(40 + 60_001, 500_000, 60_000, &mut tx, &mut rf);
+        assert_eq!((k.limit_status(), k.trips), (1 << 23, 2));
     }
 
     #[test]

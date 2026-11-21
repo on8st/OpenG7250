@@ -120,6 +120,8 @@ pub struct RegMap {
     pub armed: bool,
     pub fault_flags: u32,
     pub trip_count: u32,
+    /// `LIMIT_STATUS`, from the key path.
+    pub limit_status: u32,
     /// Session values of the `LIMIT_<name>` registers; 0 = back to the persistent value.
     pub limit_tx_time: u32,
     pub limit_fwd_power: u32,
@@ -143,6 +145,7 @@ impl RegMap {
             armed: false,
             fault_flags: 0,
             trip_count: 0,
+            limit_status: 0,
             limit_tx_time: 0,
             limit_fwd_power: 0,
             tx_state: 0,
@@ -195,7 +198,8 @@ impl RegMap {
             TX_MODE_CLASS => self.tx_mode_class as u32,
             KEYED_TIMEOUT => self.keyed_timeout_ms,
             WATCHDOG_STATE => self.watchdog_state(),
-            SAFETY_STATE | FAULT_CODE | FAULT_CLASS | LIMIT_STATUS | LIMIT_INHIBIT => 0,
+            SAFETY_STATE | FAULT_CODE | FAULT_CLASS | LIMIT_INHIBIT => 0,
+            LIMIT_STATUS => self.limit_status,
             FAULT_FLAGS => self.fault_flags,
             TRIP_COUNT => self.trip_count,
             FAULT_CLEAR => 0,

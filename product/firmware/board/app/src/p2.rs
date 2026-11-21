@@ -227,6 +227,14 @@ impl P2 {
                 self.send_regs(chip, dest, &[(regmap::addr::TX_STATE, v)]);
             }
         }
+        // LIMIT_STATUS and TRIP_COUNT are event registers (Table B8-2).
+        let (ls, tc) = (self.key.limit_status(), self.key.trips);
+        if (ls, tc) != (self.regs.limit_status, self.regs.trip_count) {
+            (self.regs.limit_status, self.regs.trip_count) = (ls, tc);
+            if let Some(dest) = self.session.register_destination() {
+                self.send_regs(chip, dest, &[(regmap::addr::LIMIT_STATUS, ls), (regmap::addr::TRIP_COUNT, tc)]);
+            }
+        }
         // ATU_STATE is an event register (Table B8-2): pushed on every change.
         self.regs.atu_tune = self.key.atu_tune_in_force();
         let a = self.key.atu_state(&self.tx);
