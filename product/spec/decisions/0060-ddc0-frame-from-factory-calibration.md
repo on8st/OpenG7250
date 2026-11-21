@@ -49,9 +49,21 @@ Routes:
    The values are per unit: they go into that unit's calibration set (A1.12) as the value of
    P-RX-2, not into the firmware image or this specification. Encoding (Table P-1): flags
    (u8: bit 0 I and Q swapped, bit 1 spectrum inverted, as found by point 3), DDC0 tuning-word
-   offset (u8: 1 or 5), then per offered rate: rate index (u8, byte 23), byte 0 (u8), bytes
+   offset (u8: 1 or 5), the other receive tuning word (u32, the word at offset 5 or 1), the
+   word at offset 19 (u32), then per offered rate: rate index (u8, byte 23), byte 0 (u8), bytes
    9–18 (10 bytes). The firmware writes them as given and does not need to know what each bit
    means.
+   - **The two tuning words that are not DDC0's** (firmware question, 2026-11-21) are carried
+     from the capture, not set to 0: the values the factory firmware wrote at the first
+     capture frequency of point 2.1 (the lowest one), written unchanged whatever DDC0 is tuned
+     to. Reason: they are values this unit's FPGA has run with in receive, while 0 is a value
+     the factory firmware was never seen to write; the word at offset 19 is most likely the
+     transmit word ([HIS] HIS 80, HYPOTHESIS) and stays unchanged until P-TX-1 is set. They are
+     exempt from the "changes with a setting" rule of point 2.2, because they are frozen. The
+     frame T-B6-28 confirms is the frame as the firmware writes it, these words included.
+   - **Flags, in this order** (firmware question, 2026-11-21): bit 0 first, then bit 1. Bit 0
+     swaps I and Q; bit 1 negates Q, after any swap. Both set: (I, Q) becomes (Q, −I). The
+     flags act on the 0x04 samples only, never on a tuning word.
 3. **Confirmation on the first radio** (route (a), before P-RX-2 counts as set). With a test
    build on the bench (as for the drill F1), the RF section in the safe state of A3.6, a dummy
    load on both antenna ports and the generator connected under the signal-generator rule
