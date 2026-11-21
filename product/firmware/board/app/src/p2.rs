@@ -228,6 +228,19 @@ impl P2 {
                     }
                     self.regs.watchdog_written = self.session.general.map(|g| g.timer);
                     self.next_status_ms = now;
+                    // The new owner's set-up packets apply now (B5.1a item 2): PA enable from its
+                    // General packet, if any (after a takeover by a High Priority packet alone it
+                    // stays cleared, A3.6a), and its DUC-specific settings.
+                    let mut rf = crate::BoardRf;
+                    let pa = self.session.general.is_some_and(|g| g.pa_enable);
+                    self.key.pa_enable(pa, &mut self.tx, &mut rf);
+                    if let Some((d, clamped)) = self.session.duc_setup.take() {
+                        self.key.set_duc(d, clamped);
+                        if clamped {
+                            println!("p2: DUC-specific hang delay above 2000 ms clamped to 2000 ms (Table B10-1)");
+                        }
+                    }
+                    self.regs.tx_state = self.key.tx_state();
                     println!(
                         "p2: session of {}:{} started{}{}",
                         crate::net::ip_str(owner.0).as_str(),

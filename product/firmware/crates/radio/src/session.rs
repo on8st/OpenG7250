@@ -10,6 +10,8 @@
 pub type Addr = ([u8; 4], u16);
 
 /// Which C&C packet.
+use g7250_safety::cw::DucSettings;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CnC {
     General,
@@ -122,7 +124,8 @@ struct Kept {
     heard_ms: u64,
     general: Option<General>,
     ddc: Option<Ddc>,
-    duc: bool,
+    /// The last DUC-specific packet, and whether its hang delay was clamped (B10.6).
+    duc: Option<(DucSettings, bool)>,
 }
 
 const KEPT: usize = 4;
@@ -140,6 +143,9 @@ pub struct Session {
     pub general: Option<General>,
     /// DDC0 fields in force for the current session; `None` = no DDC-specific packet (B5.2).
     pub ddc: Option<Ddc>,
+    /// The new owner's DUC-specific packet from its set-up phase, for the key path to take at
+    /// the session start (B5.1a item 2). Never carried over from an ended session (A3.6a).
+    pub duc_setup: Option<(DucSettings, bool)>,
     /// The owner's High Priority byte 4 bit [1] (PTT) as last received (B10.2 item 3).
     pub ptt: bool,
     /// Count of C&C packets discarded as short (B11.3).
@@ -154,7 +160,7 @@ impl Default for Session {
 
 impl Session {
     pub const fn new() -> Self {
-        Session { owner: None, last_cnc_ms: 0, kept: [None; KEPT], last_owner: None, general: None, ddc: None, ptt: false, short_discarded: 0 }
+        Session { owner: None, last_cnc_ms: 0, kept: [None; KEPT], last_owner: None, general: None, ddc: None, duc_setup: None, ptt: false, short_discarded: 0 }
     }
 
     pub fn owner(&self) -> Option<Addr> {
@@ -189,13 +195,13 @@ impl Session {
         });
         let mut k = match self.kept[i] {
             Some(k) if k.from == from => k,
-            _ => Kept { from, heard_ms: now, general: None, ddc: None, duc: false },
+            _ => Kept { from, heard_ms: now, general: None, ddc: None, duc: None },
         };
         k.heard_ms = now;
         match kind {
             CnC::General => k.general = Some(General::parse(p)),
             CnC::DdcSpecific => k.ddc = Some(Ddc::parse(p)),
-            CnC::DucSpecific => k.duc = true,
+            CnC::DucSpecific => k.duc = Some(DucSettings::parse(p)),
             CnC::HighPriority => {}
         }
         self.kept[i] = Some(k);
@@ -260,6 +266,7 @@ impl Session {
         // and byte 58 bit [0]; then the kept set-up packets on top (B5.1a item 2).
         let mut general = None;
         let mut ddc = None;
+        self.duc_setup = None;
         if restart {
             if let Some((_, g, d)) = self.last_owner {
                 general = g.map(|g| General { timer: false, pa_enable: false, ..g });
@@ -273,6 +280,7 @@ impl Session {
             if let Some(d) = k.ddc {
                 ddc = Some(d);
             }
+            self.duc_setup = k.duc;
         }
         match kind {
             CnC::General => general = Some(General::parse(p)),
@@ -337,6 +345,33 @@ mod tests {
         p[38] = timer as u8;
         p[31..33].copy_from_slice(&reg_port.to_be_bytes());
         p
+    }
+
+    #[test]
+    fn set_up_duc_specific_and_pa_enable_reach_the_start_and_are_never_carried_over() {
+        let mut s = Session::new();
+        let mut d = std::vec![0u8; 60];
+        d[5] = 0x80;
+        d[9] = 20;
+        let mut g = general(true, 0);
+        g[58] = 1;
+        s.on_cnc(A, CnC::DucSpecific, &d, 0, true);
+        s.on_cnc(A, CnC::General, &g, 0, true);
+        s.on_cnc(A, CnC::HighPriority, &hp(true), 10, true);
+        let (duc, clamped) = s.duc_setup.unwrap();
+        assert!(duc.break_in && duc.speed_wpm == 20 && !clamped);
+        assert!(s.general.unwrap().pa_enable, "set-up General of the new owner applies (B5.1a)");
+        // Stop and restart by the same host: General carried over without PA enable, no DUC.
+        s.on_cnc(A, CnC::HighPriority, &hp(false), 20, true);
+        s.on_cnc(A, CnC::HighPriority, &hp(true), 30, true);
+        assert!(s.duc_setup.is_none());
+        assert!(!s.general.unwrap().pa_enable);
+        // Another host starts with a High Priority packet alone: no General, so PA enable stays
+        // cleared (A3.6a); a takeover takes the same path through start().
+        s.on_cnc(A, CnC::HighPriority, &hp(false), 40, true);
+        let e = s.on_cnc(B, CnC::HighPriority, &hp(true), 50, true);
+        assert!(matches!(e.as_slice(), [Event::Started { owner: B, .. }]));
+        assert!(s.general.is_none_or(|g| !g.pa_enable) && s.duc_setup.is_none());
     }
 
     #[test]

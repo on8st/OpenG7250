@@ -238,13 +238,19 @@ impl KeyPath {
     /// deferred to the unkey (B10.5b item 3). Returns true if the hang delay was clamped.
     pub fn on_duc_specific(&mut self, p: &[u8]) -> bool {
         let (s, clamped) = DucSettings::parse(p);
+        self.set_duc(s, clamped);
+        clamped
+    }
+
+    /// Settings from a DUC-specific packet already parsed (a set-up packet taken at the session
+    /// start, B5.1a item 2), with the same deferral while keyed.
+    pub fn set_duc(&mut self, s: DucSettings, clamped: bool) {
         self.hang_clamped += clamped as u32;
         if self.source.is_some() {
             self.pending = Some(s);
         } else {
             self.duc = s;
         }
-        clamped
     }
 
     /// A High Priority packet from the owner (B10.1, B10.5b). Returns true if `TX_STATE` changed.
