@@ -75,8 +75,12 @@ every register of Table B8-2 readable by write, the write rules of B8.4/B8.5 (no
 `NOT_OWNER` once per 100 ms, no answer to source port 7250). High Priority status (60 bytes,
 from 1025) every 50 ms while running; all fields 0 except the sequence number.
 
-Not yet: DDC0 I&Q (B6; `STREAM_STATUS` DDC0 reason 1), DUC I&Q (ignored), ADC words in the
-status packet, the three-times notice to an old owner (sent once, and only when it was armed).
+Not yet: DDC0 I&Q (B6; `STREAM_STATUS` DDC0 reason 1), ADC words in the status packet. At a
+takeover the old owner, armed or not, gets the final `TX_ARM_STATE` (`TAKEOVER`) three times
+about 10 ms apart at its session's register destination, then one copy per DUC I&Q or register
+packet for 5 s, at most once per 100 ms (A2.4); takeovers are counted (`GET_STATS` `takeovers`)
+and logged `p2: takeover: session of A taken over by B (n more takeovers of this pair since the
+last entry)`, at most once per second per pair.
 `LINK_STATUS` bit 17 is set for a non-default radio port in a General packet (T-B7-03). TX:
 record `tx` bit 1 = 1 (r1.0, 0036), bit 4 = 0; an arm that meets every other condition is
 refused with 12 `NOT_CALIBRATED`, and no TX request keys (B10 intro). The key path
