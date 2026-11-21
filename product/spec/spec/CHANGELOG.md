@@ -22,6 +22,12 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   firmware documents; its radio check is the spec's own test T-A3-60.
 - 0067 (bench question on T-A1-88): the image check is judged over the length the image record
   gives; an intact image with bytes appended is refused with `header`, not `integrity`.
+- 0068 (proposed; bench question on T-A1-34, firmware input): the log ring is kept over a reset
+  without power loss, each entry with a check word, sequence numbers continuing; the reason
+  is logged before every commanded reset; a start entry `start after <cause>: log kept|lost`
+  and the boot-stage lines follow each start. Survival through the stage before the boot
+  stage is part of P-SYS-9; P-SYS-2 keeps the reset cause only. A1.7, P-SYS-2, P-SYS-9;
+  T-A1-34 rewritten, T-A1-91 new.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 
