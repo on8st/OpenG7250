@@ -654,6 +654,12 @@ as in [RFC3927] and keep trying DHCP, with retries spaced from 4 s doubling up t
 64 s (RFC 2131 section 4.1 retransmission back-off); a lease, when it comes, is an address
 change under A1.11a (0035).
 
+- **Bound on start-up** (0048). Counted from link up (the CH394 reports the link,
+  B5.8), the management socket and the P2 sockets MUST be open within 5 s when a DHCP server
+  answers the first DISCOVER, and within 15 s when none answers: at most 6 s of DHCP attempts at
+  power-on, then the RFC 3927 probe and announce on the link-local address ([RFC3927] section
+  9: about 7 s at most), then the sockets. The time from power-on to link up (boot and
+  auto-negotiation) is not part of this bound.
 - **Bound on a borrow** (0041). One borrow MUST last at most 2 s, so that a host's
   retransmission of A1.4 (every 500 ms, up to 5 times) still reaches the management channel
   after it; an exchange not finished in 2 s is abandoned and retried at the next interval, so
@@ -3583,6 +3589,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-66 | With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041). |
 | T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
 | T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
+| T-A1-69 | From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 15 s, from the link-local address (reference model or emulator; A1.11 "Bound on start-up"; 0048). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
