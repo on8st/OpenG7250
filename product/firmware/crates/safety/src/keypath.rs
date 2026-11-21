@@ -33,6 +33,8 @@ pub enum UnkeyReason {
     PaDisabled = 7,
     CwxCap = 9,
     ModeClass = 10,
+    /// An ATU tune cycle ended by itself, tuned or failed (A3.9b item 6; 0047).
+    AtuEnded = 11,
 }
 
 /// Limit id `LIMIT_TX_TIME` (Table B8-3), `TX_STATE` [31:24] with reason 4.
@@ -496,9 +498,9 @@ impl KeyPath {
             // The ATU tune time (`LIMIT_ATU_TIME`), before the tuner's next step.
             self.unkey_limit(LIMIT_ATU_TIME_ID, tx, rf);
         } else if let (Source::Atu, Some(tuned)) = (s, if s == Source::Atu { rf.atu_step(now) } else { None }) {
-            // The cycle ends unkeyed in every case (A3.9b item 6); unkey reason 1.
+            // The cycle ends unkeyed in every case (A3.9b item 6); ended by itself: reason 11.
             self.atu_tuned = tuned;
-            self.unkey(UnkeyReason::Released, tx, rf);
+            self.unkey(UnkeyReason::AtuEnded, tx, rf);
         } else if now.saturating_sub(self.keyed_at) > max_tx_ms as u64 {
             self.unkey_limit(LIMIT_TX_TIME_ID, tx, rf);
         } else if s == Source::Cwx
@@ -963,6 +965,33 @@ mod tests {
         let mut rf = Rf::default();
         k.pa_enable(true, &mut tx, &mut rf);
         (tx, k, rf)
+    }
+
+    #[test]
+    fn t_b10_47_unkey_reasons_at_the_end_of_an_atu_cycle() {
+        let reason = |k: &KeyPath| k.tx_state() >> 16;
+        let (mut tx, mut k, mut rf) = atu_path();
+        // Tuned by itself: reason 11, ATU_STATE 3.
+        k.atu_tune(1, 0, &mut tx, &ctx(), &mut rf).unwrap();
+        rf.atu = Some(true);
+        k.tick(10, 500, 300_000, &mut tx, &mut rf);
+        assert_eq!((reason(&k), k.atu_state(&tx)), (11, 3));
+        // Failed by itself: reason 11, ATU_STATE 4.
+        k.on_high_priority(ptt(false), 3000, &mut tx, &ctx(), &mut rf);
+        k.atu_tune(1, 3000, &mut tx, &ctx(), &mut rf).unwrap();
+        rf.atu = Some(false);
+        k.tick(3010, 500, 300_000, &mut tx, &mut rf);
+        assert_eq!((reason(&k), k.atu_state(&tx)), (11, 4));
+        // Aborted by ATU_TUNE = 0 (on level 1 the stop request of item 1): reason 1, 4.
+        k.atu_tune(1, 6000, &mut tx, &ctx(), &mut rf).unwrap();
+        k.atu_tune(0, 6010, &mut tx, &ctx(), &mut rf).unwrap();
+        assert_eq!((reason(&k), k.atu_state(&tx)), (1, 4));
+        // The tune time: reason 4, limit id 8, ATU_STATE 4.
+        k.on_high_priority(ptt(false), 9000, &mut tx, &ctx(), &mut rf);
+        k.atu_tune(1, 9000, &mut tx, &ctx(), &mut rf).unwrap();
+        k.on_high_priority(ptt(false), 9900, &mut tx, &ctx(), &mut rf);
+        k.tick(10_001, 500, 300_000, &mut tx, &mut rf);
+        assert_eq!((reason(&k), k.atu_state(&tx)), ((LIMIT_ATU_TIME_ID as u32) << 8 | 4, 4));
     }
 
     #[test]
