@@ -17,6 +17,9 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   into firmware documents; "Blocks sent again" (a block sent again with a new request id
   replaces the received data); slots named `A` or `B` in log lines, with the check names;
   `ROLLBACK` to a slot whose trial failed is accepted (tag 9 = 1) and starts a trial.
+- Annex P, P-SYS-9: the persist block is stated as a firmware-chosen range of AXI SRAM
+  (currently 0x2401FF80–0x2401FFFF, as [HIS] `069ea0b` names it), without a pointer into the
+  firmware documents.
 
 ## 1.0 — version 1.0, 2026-11-21 (tag `spec-v1.0`)
 
