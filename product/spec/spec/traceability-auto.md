@@ -62,5 +62,5 @@
 | 0058 | 0058 — Counter of High Priority packets received | 0 | 2 | network-interface: B2 Transport; network-interface: Session, ownership, watchdog (B5) |  |
 | 0059 | 0059 — The unasked capability record may come in up to three parts | 0 | 3 | annex-aethersdr: G-08 Transmit (0004, 0007, 0012, 0015) — L in total; network-interface: B4 Capability block; network-interface: Capability record (B4) |  |
 | 0060 | 0060 — DDC0 frame values from the unit's factory calibration, confirmed on the radio | 3 | 2 | network-interface: Annex P — Pending hardware parameters; network-interface: Streams (B6) |  |
-| 0061 | 0061 — The store is in flash sectors 6 and 7, checked in F1 | 1 | 2 | network-interface: A1 Management channel; network-interface: Annex P — Pending hardware parameters |  |
+| 0061 | 0061 — The store is in flash sectors 6 and 7, checked in F1 | 1 | 3 | network-interface: A1 Management channel; network-interface: Annex P — Pending hardware parameters; network-interface: Management channel, ownership, safety (A1–A3) |  |
 

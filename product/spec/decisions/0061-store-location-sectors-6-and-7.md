@@ -26,9 +26,18 @@ bootloader uses sector 6 as a staging area; the drill F1 settles it (P-SYS-5).
 3. Nothing else changes: no store in sector 0 or 1, the EEPROM, the Backup SRAM or the RTC
    backup registers ([HIS] HIS 15 rules 1, 3, 4).
 
+## Addendum: updates keep clear of the store (testbench SF-26, 2026-11-21; proposed)
+
+4. An image of this firmware longer than the slot it is linked to gets status 61 before
+   anything is written (after 51 and 63); the slots end where the store begins.
+5. An update to an image of this firmware erases or writes sectors 6 and 7 only as a store
+   write or compaction. Tests T-A1-77 (flash.log on the emulator) and T-A1-78. T-A1-55 (a
+   foreign image may fill sectors 1–7, the one-way installation) is unchanged: a return to
+   stock erases the store on purpose (0024 R5).
+
 ## Consequences
 
-- Spec A1.8, A1.12 item 2, Annex P P-SYS-5.
+- Spec A1.8, A1.12 item 2, Annex P P-SYS-5; Table A1-2 status 61; T-A1-77, T-A1-78.
 
 ## Sources
 

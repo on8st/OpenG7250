@@ -90,7 +90,7 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0058 | GET_STATS `hp_rx`: High Priority packets read from port 1027 | accepted (2026-11-21) |
 | 0059 | Unasked capability record may come in up to three parts | accepted (2026-11-21) |
 | 0060 | DDC0 frame values (P-RX-2) from the unit's factory calibration, confirmed by measurement on the radio (T-B6-28); gate unchanged until then | proposed |
-| 0061 | The store is in flash sectors 6 and 7, used in turn; sector 6 checked in F1 | accepted (2026-11-21) |
+| 0061 | The store is in flash sectors 6 and 7, used in turn; sector 6 checked in F1; addendum: own images too large for their slot get 61, updates touch the store only as store writes | accepted (2026-11-21); addendum proposed |
 
 All numbers 0001–0059 are now in use.
 
