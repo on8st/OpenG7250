@@ -626,9 +626,9 @@ def t_b6_27(ctx):
         ctx.eq("management channel answers (IDENTIFY model)", identify(ctx, c).get(1), b"G7250")
 
 
-def running_seen_by(obs: Host) -> int | None:
+def running_seen_by(obs: Host, timeout: float = 0.3) -> int | None:
     """Discovery byte 4 as another host sees it: 3 while a session runs, 2 idle (B3.3)."""
-    r = obs.discover(0.3)
+    r = obs.discover(timeout)
     return r[0][4] if r else None
 
 
@@ -647,69 +647,110 @@ def restarted(last_before: int, after: list[int]) -> bool:
     return False
 
 
+def time_scale(ctx) -> float:
+    """Emulated seconds per wall second, from the endpoint (1.0 if not given): the bench's waits
+    and host spacing are stretched by 1 / time_scale so that they hold in the radio's time."""
+    ts = float(ctx.endpoint.get("time_scale", 1.0) or 1.0)
+    return ts if 0 < ts <= 1.0 else 1.0
+
+
+class Burst:
+    """A named burst: its id and host wall-clock window (epoch seconds) go into the detail of
+    every timing check that judges it, so a runner can line it up with its own capture."""
+
+    def __init__(self, name: str):
+        self.name, self.t0, self.t1 = name, None, None
+
+    def sent(self):
+        now = time.time()
+        self.t0 = now if self.t0 is None else self.t0
+        self.t1 = now
+
+    def tag(self) -> str:
+        return f"[burst {self.name}, host wall {self.t0:.6f}-{self.t1:.6f}]"
+
+
 @test("T-B5-20")
 def t_b5_20(ctx):
     """B2.3 "High Priority bursts" (0053, 0054): two packets back to back at wire speed with no
     third within 2 ms, and a sequence of 20 packets 1 ms apart, are all processed. Precondition
-    (0055): no management write, store compaction or update in progress; the test sends none."""
+    (0055): no management write, store compaction or update in progress; the test sends none.
+    Waits and host spacing are in the radio's time: stretched by 1 / time_scale."""
+    ts = time_scale(ctx)
+
+    def W(sec: float) -> float:
+        return sec / ts
+
+    def eq(name: str, got, want, b: Burst):
+        return ctx.check(f"{name} [burst {b.name}]", got == want, f"got {got!r}, want {want!r} {b.tag()}")
+
+    def send(b: Burst, pkt: bytes):
+        h.s.sendto(pkt, ctx.net.dest(PORT_HP))
+        b.sent()
+
+    if ts < 1.0:
+        ctx.notes.append(f"time_scale {ts}: waits and spacing stretched by {1 / ts:.1f}")
     with Host(ctx.net) as h, Host(ctx.net) as obs:
         # running, then run = 1 and run = 0 back to back: the session ends
         h.start()
-        keep_until = time.monotonic() + 0.3
+        keep_until = time.monotonic() + W(0.3)
         while time.monotonic() < keep_until:
             h.keepalive()
-            h.recv(0.05)
-        time.sleep(0.005)  # no packet within 2 ms before the pair either
-        h.s.sendto(high_priority(run=True), ctx.net.dest(PORT_HP))
-        h.s.sendto(high_priority(run=False), ctx.net.dest(PORT_HP))
+            h.recv(W(0.05))
+        time.sleep(W(0.005))  # no packet within 2 ms before the pair either
+        b1 = Burst("pair-1 run1-run0")
+        send(b1, high_priority(run=True))
+        send(b1, high_priority(run=False))
         h.running = False
-        h.recv(0.2)  # nothing sent for 200 ms: no third packet within 2 ms
-        ctx.eq("run = 1 then run = 0 back to back: the session ends (discovery byte 4 for another host)",
-               running_seen_by(obs), 2)
-        ctx.eq("and no High Priority status packet follows", len(status_seqs(h, 0.3)), 0)
+        h.recv(W(0.2))  # nothing sent for 200 ms: no third packet within 2 ms
+        eq("run = 1 then run = 0 back to back: the session ends (discovery byte 4 for another host)", running_seen_by(obs, W(0.3)), 2, b1)
+        eq("and no High Priority status packet follows", len(status_seqs(h, W(0.3))), 0, b1)
         # idle, then run = 0 and run = 1 back to back: a session starts
-        h.s.sendto(high_priority(run=False), ctx.net.dest(PORT_HP))
-        h.s.sendto(high_priority(run=True), ctx.net.dest(PORT_HP))
+        b2 = Burst("pair-2 run0-run1 idle")
+        send(b2, high_priority(run=False))
+        send(b2, high_priority(run=True))
         h.running = True
-        h.recv(0.1)
-        ctx.eq("run = 0 then run = 1 back to back: a session runs", running_seen_by(obs), 3)
-        before = status_seqs(h, 0.3)
+        h.recv(W(0.1))
+        eq("run = 0 then run = 1 back to back: a session runs", running_seen_by(obs, W(0.3)), 3, b2)
+        before = status_seqs(h, W(0.3))
         h.keepalive()
-        before += status_seqs(h, 0.2)
+        before += status_seqs(h, W(0.2))
         # running, run = 0 then run = 1 back to back (the pair of 0054 item 1): the stop resets the
         # counters (B2.7), so the status sequence restarts; this separates a lost stop in the 20
         # below from counters that a stop with a run right after does not reset
-        time.sleep(0.005)
-        h.s.sendto(high_priority(run=False), ctx.net.dest(PORT_HP))
-        h.s.sendto(high_priority(run=True), ctx.net.dest(PORT_HP))
-        pair_after = status_seqs(h, 0.2)
-        ctx.check("running, run = 0 then run = 1 back to back: the status sequence restarts (B2.7)",
+        time.sleep(W(0.005))
+        b3 = Burst("pair-3 run0-run1 running")
+        send(b3, high_priority(run=False))
+        send(b3, high_priority(run=True))
+        pair_after = status_seqs(h, W(0.2))
+        ctx.check(f"running, run = 0 then run = 1 back to back: the status sequence restarts (B2.7) [burst {b3.name}]",
                   bool(before) and bool(pair_after) and restarted(before[-1], pair_after),
-                  f"before {before[-3:]}, after {pair_after[:3]}")
+                  f"before {before[-3:]}, after {pair_after[:3]} {b3.tag()}")
         h.keepalive()
-        before = status_seqs(h, 0.3)
+        before = status_seqs(h, W(0.3))
         h.keepalive()
-        before += status_seqs(h, 0.2)
+        before += status_seqs(h, W(0.2))
         # 20 packets at least 1 ms apart: nine run, a stop, ten run. The stop resets the outgoing
         # counters (B2.7), so the status sequence restarts near 0 only if no packet was lost
         seq_ = [high_priority(run=True)] * 9 + [high_priority(run=False)] + [high_priority(run=True)] * 10
+        b4 = Burst("seq20 1ms")
         gaps, last = [], None
         for pkt in seq_:
-            while last is not None and time.monotonic() - last < 0.0011:
-                pass  # busy wait: at least 1 ms between packets (0054)
+            while last is not None and time.monotonic() - last < W(0.0011):
+                pass  # busy wait: at least 1 ms (in the radio's time) between packets (0054)
             now = time.monotonic()
             if last is not None:
                 gaps.append(now - last)
-            h.s.sendto(pkt, ctx.net.dest(PORT_HP))
+            send(b4, pkt)
             last = now
-        ctx.check("20 packets sent at least 1 ms apart (host side)", min(gaps) >= 0.001,
-                  f"gaps {min(gaps) * 1000:.2f}-{max(gaps) * 1000:.2f} ms")
-        after = status_seqs(h, 0.25)
+        ctx.check(f"20 packets sent at least 1 ms apart (host side, radio time) [burst {b4.name}]", min(gaps) >= W(0.001),
+                  f"gaps {min(gaps) * 1000:.2f}-{max(gaps) * 1000:.2f} ms wall {b4.tag()}")
+        after = status_seqs(h, W(0.25))
         h.keepalive()
-        ctx.eq("20 packets 1 ms apart: the session runs at the end (the last packet processed)", running_seen_by(obs), 3)
-        ctx.check("20 packets 1 ms apart: the stop inside them was processed (status sequence restarted, B2.7)",
+        eq("20 packets 1 ms apart: the session runs at the end (the last packet processed)", running_seen_by(obs, W(0.3)), 3, b4)
+        ctx.check(f"20 packets 1 ms apart: the stop inside them was processed (status sequence restarted, B2.7) [burst {b4.name}]",
                   bool(after) and bool(before) and restarted(before[-1], after),
-                  f"status sequence before {before[-3:]}, after {after[:3]}")
+                  f"status sequence before {before[-3:]}, after {after[:3]} {b4.tag()}")
         h.stop()
     # information, not judged (the spec sets no figure): the firmware's longest busy-loop pass
     from .mgmt import Mgmt, stats
