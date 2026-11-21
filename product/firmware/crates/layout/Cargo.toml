@@ -1,0 +1,13 @@
+[package]
+name = "g7250-layout"
+description = "Flash layout, image header, boot selection and the hard write guards of the G7250 main firmware"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+embedded-hal = { workspace = true }
+
+[dev-dependencies]
