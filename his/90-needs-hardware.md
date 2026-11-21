@@ -18,7 +18,7 @@ statements in the other sections stay as tagged there.
 | F1-Q6: AXI SRAM size | 320 KiB (HIGH, `10-reset-clock.md`). | Option bytes (TCM/AXI sharing) in step 2. |
 | F2-Q1: CH394 minimum RST# low time and maximum SPI clock | Not yet taken from the datasheet (`40-ethernet.md`). | From CH394DS1 (not a radio measurement). |
 | F2-Q2, F2-Q3: CH394 version value, MAC uniqueness | CHIPV at 0x0039; MAC read from the chip (`40-ethernet.md`). | Read CHIPV and the MAC on two units. |
-| F2-Q4: INT# board pull-up | Unknown; internal pull-up known to work (`40-ethernet.md`). | Resistance check on PC13 with power off. |
+| F2-Q4: INT# board pull-up | Unknown; use the MCU's internal pull-up unless one is found (`40-ethernet.md`). | Resistance check on PC13 with power off. |
 | F2-Q5: destination address of received UDP | The W5500-style header has the source only (`40-ethernet.md`). | The full CH394 manual, or a test: send to unicast, directed and limited broadcast and compare what the chip reports. |
 
 ## Safe order of the hardware steps for HIS-19 / F1
