@@ -146,6 +146,8 @@ pub struct Session {
     /// The new owner's DUC-specific packet from its set-up phase, for the key path to take at
     /// the session start (B5.1a item 2). Never carried over from an ended session (A3.6a).
     pub duc_setup: Option<(DucSettings, Clamped)>,
+    /// The register destination of the session that ended last (A2.4, notice destination).
+    pub ended_destination: Option<Addr>,
     /// The owner's High Priority byte 4 bit [1] (PTT) as last received (B10.2 item 3).
     pub ptt: bool,
     /// Count of C&C packets discarded as short (B11.3).
@@ -160,7 +162,7 @@ impl Default for Session {
 
 impl Session {
     pub const fn new() -> Self {
-        Session { owner: None, last_cnc_ms: 0, kept: [None; KEPT], last_owner: None, general: None, ddc: None, duc_setup: None, ptt: false, short_discarded: 0 }
+        Session { owner: None, last_cnc_ms: 0, kept: [None; KEPT], last_owner: None, general: None, ddc: None, duc_setup: None, ended_destination: None, ptt: false, short_discarded: 0 }
     }
 
     pub fn owner(&self) -> Option<Addr> {
@@ -296,6 +298,9 @@ impl Session {
     }
 
     fn end(&mut self, reason: EndReason, ev: &mut heapless::Vec<Event, 2>) {
+        // The register destination of the ending session: the old owner's notice goes there
+        // (A2.4, "Notice destination"; carried-over General bytes 31-32 included).
+        self.ended_destination = self.register_destination();
         if let Some(o) = self.owner.take() {
             self.last_owner = match reason {
                 EndReason::Stop | EndReason::Watchdog | EndReason::LinkDown => Some((o, self.general, self.ddc)),

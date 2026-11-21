@@ -450,6 +450,16 @@ impl TxCore {
         true
     }
 
+    /// A takeover (A2.4 step 1): the drop of A3.2 while armed; while not armed too, as an
+    /// exception to the rule for drop events while not armed: drop reason 4 `TAKEOVER` and a
+    /// new token, so that an unarmed old owner learns it lost the radio (0022 §79).
+    pub fn takeover(&mut self, rf: &mut impl RfActuator) {
+        if !self.drop(DropReason::Takeover, rf) {
+            self.token = self.tokens.next();
+            self.last_drop = DropReason::Takeover as u8;
+        }
+    }
+
     /// Session end while not armed: a new token, pushed at the next session start (A3.2,
     /// exception for the session-ending events; T-A3-47).
     pub fn session_end(&mut self, rf: &mut impl RfActuator) {
@@ -593,6 +603,25 @@ mod tests {
         assert_eq!((c.arm_state_reg() >> 16) & 0xFF, DropReason::Takeover as u32);
         // The old arm value no longer arms.
         assert_eq!(c.write_tx_arm(t0 ^ ARM_MAGIC, &ok_ctx(), &mut rf), ArmOutcome::Rejected(Refusal::Arm(ArmReject::BadToken)));
+    }
+
+    #[test]
+    fn takeover_while_not_armed_reports_takeover_with_a_new_token_t_a2_16() {
+        let mut c = TxCore::new(1, &MEASURED);
+        let mut rf = Rf::default();
+        let t0 = c.token();
+        c.takeover(&mut rf);
+        let r = c.arm_state_reg();
+        assert_eq!((r & 0xF, (r >> 16) & 0xFF), (0, DropReason::Takeover as u32));
+        assert_ne!(c.token(), t0);
+        assert!(rf.log.is_empty(), "nothing was keyed");
+        // While armed: the drop of A3.2, unkey first.
+        let mut c = TxCore::new(1, &test_measured(false));
+        let v = c.token() ^ ARM_MAGIC;
+        c.write_tx_arm(v, &ok_ctx(), &mut rf);
+        c.takeover(&mut rf);
+        assert_eq!((c.state(), (c.arm_state_reg() >> 16) & 0xFF), (ArmState::Disarmed, 4));
+        assert_eq!(rf.log, ["unkey"]);
     }
 
     #[test]

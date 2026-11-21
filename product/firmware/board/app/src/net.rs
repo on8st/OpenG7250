@@ -519,7 +519,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                             (_, Some(k)) => p2.cnc(&mut chip, from, k, &rx[..d.len], now),
                             (crate::p2::S7250, None) => p2.register_packet(&mut chip, from, &rx[..d.len], now),
                             // DUC I&Q (B10.7): the FIFO, or discarded whole and counted.
-                            (crate::p2::S1029, None) => p2.duc_iq(from, &rx[..d.len], now),
+                            (crate::p2::S1029, None) => p2.duc_iq(&mut chip, from, &rx[..d.len], now),
                             _ => {}
                         }
                         handled = true;
@@ -532,6 +532,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 // Counters of the key path for GET_STATS (Table B10-1, B10.5a item 1).
                 server.stats.cw_hang_clamped = p2.key.cw_hang_clamped;
                 server.stats.cw_speed_clamped = p2.key.cw_speed_clamped;
+                server.stats.takeovers = p2.takeovers;
                 // Management channel, socket 7 (not while lent to DHCP).
                 if dhcp_borrowed {
                     Timer::after_millis(2).await;

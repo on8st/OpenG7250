@@ -76,6 +76,11 @@ pub struct P2 {
     pub duc_iq_ignored: u64,
     /// The key path was keyed after the last call (to empty and arm the FIFO on a change).
     was_keyed: bool,
+    notice: Option<Notice>,
+    /// Takeovers since start (`GET_STATS`; A2.4), and the log limit: one entry per second per
+    /// pair of hosts, with the count of the takeovers not logged (A2.4).
+    pub takeovers: u64,
+    takeover_log: Option<(Addr, Addr, u64, u32)>,
     pub dropped_record: u64,
     /// A firmware update is in progress (A1.8: STREAM_STATUS reason 10, register writes BUSY).
     pub update_in_progress: bool,
@@ -100,6 +105,31 @@ fn spaced(t: &mut [Option<(Addr, u64)>; 8], from: Addr, now: u64, min_ms: u64) -
 }
 
 pub type Chip = Ch394<crate::net::CsDevice<'static>>;
+
+/// The notice to an old owner after a takeover (A2.4 step 1, "Repeated notice", "Notice
+/// destination", "Notice to every old owner"): the final `TX_ARM_STATE` (`TAKEOVER`) three times
+/// about 10 ms apart, then one copy per packet from the old owner for 5 s, at most one per 100 ms.
+struct Notice {
+    /// The old session's register destination: General bytes 31-32 if non-zero, else its
+    /// source port.
+    to: Addr,
+    /// The old owner (source address and port), whose packets get the repeated notice.
+    from: Addr,
+    /// The register content, identical in every copy.
+    value: u32,
+    sent: u8,
+    next_ms: u64,
+    until_ms: u64,
+    last_repeat_ms: Option<u64>,
+    /// Port 7250 sequence numbers of the copies: they continue the old session's counter
+    /// (consecutive, B2.7), independent of the new owner's, which restarts at 0.
+    seq: u32,
+}
+
+const NOTICE_COPIES: u8 = 3;
+const NOTICE_SPACING_MS: u64 = 10;
+const NOTICE_REPEAT_FOR_MS: u64 = 5000;
+const NOTICE_REPEAT_MIN_MS: u64 = 100;
 
 /// `LINK_STATUS` bit 17: a non-default P2 port was asked for and not honoured (Table B8-2).
 const LINK_PORT_NOT_HONOURED: u32 = 1 << 17;
@@ -127,6 +157,9 @@ impl P2 {
             dropped_not_owner: 0,
             duc_iq_ignored: 0,
             was_keyed: false,
+            notice: None,
+            takeovers: 0,
+            takeover_log: None,
             dropped_record: 0,
             update_in_progress: false,
             trial: false,
@@ -161,6 +194,26 @@ impl P2 {
         self.regs.link_status |= LINK_PORT_NOT_HONOURED;
         println!("p2: General packet asks for a non-default port: not honoured, default ports kept (LINK_STATUS bit 17)");
         true
+    }
+
+    /// One copy of the notice to the old owner (A2.4).
+    fn send_notice(chip: &mut Chip, n: &mut Notice) {
+        let mut out = [0u8; regmap::MAX_LEN];
+        let len = regmap::encode(n.seq, &[(regmap::addr::TX_ARM_STATE, n.value)], &mut out);
+        n.seq = n.seq.wrapping_add(1);
+        let _ = chip.udp_send(S7250, n.to.0, n.to.1, &out[..len]);
+    }
+
+    /// A packet from the old owner that does not make it the owner again (DUC I&Q, a register
+    /// packet): within 5 s of the takeover, one copy of the notice, at most once per 100 ms.
+    /// Its own limit, apart from the `NOT_OWNER` limit of B8.5 (A2.4, "Notice destination").
+    fn old_owner_packet(&mut self, chip: &mut Chip, from: Addr, now: u64) {
+        if let Some(n) = self.notice.as_mut() {
+            if n.from == from && now < n.until_ms && n.last_repeat_ms.is_none_or(|t| now.saturating_sub(t) >= NOTICE_REPEAT_MIN_MS) {
+                n.last_repeat_ms = Some(now);
+                Self::send_notice(chip, n);
+            }
+        }
     }
 
     fn send_regs(&mut self, chip: &mut Chip, to: Addr, pairs: &[Pair]) {
@@ -258,7 +311,12 @@ impl P2 {
                         EndReason::LinkDown => DropReason::LinkDown,
                     };
                     let mut rf = crate::BoardRf;
-                    let was_armed = self.tx.drop(r, &mut rf);
+                    // A takeover drops with TAKEOVER also while not armed (A2.4 step 1).
+                    if reason == EndReason::Takeover {
+                        self.tx.takeover(&mut rf);
+                    } else {
+                        let _ = self.tx.drop(r, &mut rf);
+                    }
                     self.tx.session_end(&mut rf);
                     self.key.arm_dropped();
                     self.key.session_end();
@@ -267,15 +325,32 @@ impl P2 {
                     self.regs.tx_state = self.key.tx_state();
                     self.regs.session_end();
                     self.regs.armed = false;
-                    if reason == EndReason::Takeover && was_armed {
-                        let p = [(regmap::addr::TX_ARM_STATE, self.tx.arm_state_reg())];
-                        self.send_regs(chip, owner, &p);
+                    if reason == EndReason::Takeover {
+                        // The first of the three copies now; the others from tick, so that the
+                        // new session does not wait for them (A2.4 step 1).
+                        let mut n = Notice {
+                            to: self.session.ended_destination.unwrap_or(owner),
+                            from: owner,
+                            value: self.tx.arm_state_reg(),
+                            sent: 1,
+                            next_ms: now + NOTICE_SPACING_MS,
+                            until_ms: now + NOTICE_REPEAT_FOR_MS,
+                            last_repeat_ms: None,
+                            seq: self.seq_regs,
+                        };
+                        Self::send_notice(chip, &mut n);
+                        self.notice = Some(n);
+                        self.takeovers += 1;
                     }
                     if matches!(reason, EndReason::Stop | EndReason::Takeover) {
                         self.seq_status = 0;
                         self.seq_regs = 0;
                     }
-                    println!("p2: session of {}:{} ended ({:?})", crate::net::ip_str(owner.0).as_str(), owner.1, reason);
+                    // A takeover is logged once with its new owner, at most once per second per
+                    // pair (A2.4).
+                    if reason != EndReason::Takeover {
+                        println!("p2: session of {}:{} ended ({:?})", crate::net::ip_str(owner.0).as_str(), owner.1, reason);
+                    }
                 }
                 Event::Started { owner, restart, takeover } => {
                     self.unasked_sent = false;
@@ -300,13 +375,11 @@ impl P2 {
                         log_clamped(clamped);
                     }
                     self.regs.tx_state = self.key.tx_state();
-                    println!(
-                        "p2: session of {}:{} started{}{}",
-                        crate::net::ip_str(owner.0).as_str(),
-                        owner.1,
-                        if restart { " (restart)" } else { "" },
-                        if takeover { " (takeover)" } else { "" }
-                    );
+                    if takeover {
+                        self.log_takeover(owner, now);
+                    } else {
+                        println!("p2: session of {}:{} started{}", crate::net::ip_str(owner.0).as_str(), owner.1, if restart { " (restart)" } else { "" });
+                    }
                     let Some(dest) = self.session.register_destination() else { continue };
                     let pairs = self.regs.session_start_pairs(&self.tx);
                     self.send_regs(chip, dest, &pairs);
@@ -337,6 +410,31 @@ impl P2 {
             let _ = pairs.push((i as u16, *v));
         }
         self.send_regs(chip, dest, &pairs);
+    }
+
+    /// The takeover log: at most one entry per second per pair of hosts, with the number of
+    /// takeovers between this pair since its last entry (A2.4; ping-pong).
+    fn log_takeover(&mut self, new: Addr, now: u64) {
+        let Some(old) = self.notice.as_ref().map(|n| n.from) else { return };
+        let pair = |a: Addr, b: Addr| (a, b) == (old, new) || (a, b) == (new, old);
+        match self.takeover_log.as_mut() {
+            Some((a, b, t, n)) if pair(*a, *b) && now.saturating_sub(*t) < 1000 => *n += 1,
+            other => {
+                let skipped = match other {
+                    Some((a, b, _, n)) if pair(*a, *b) => *n,
+                    _ => 0,
+                };
+                println!(
+                    "p2: takeover: session of {}:{} taken over by {}:{} ({} more takeovers of this pair since the last entry)",
+                    crate::net::ip_str(old.0).as_str(),
+                    old.1,
+                    crate::net::ip_str(new.0).as_str(),
+                    new.1,
+                    skipped
+                );
+                self.takeover_log = Some((old, new, now, 0));
+            }
+        }
     }
 
     /// `STREAM_STATUS` now (Table B8-3, with its reason order).
@@ -454,6 +552,9 @@ impl P2 {
             self.dropped_reg_from_7250 += 1; // another G7250 (B8.5)
             return;
         }
+        if !owner {
+            self.old_owner_packet(chip, from, now);
+        }
         let mut rf = crate::BoardRf;
         let arm = self.arm_ctx();
         let class = self.regs.tx_mode_class;
@@ -499,6 +600,17 @@ impl P2 {
             self.events(chip, &[e], now);
             self.update_stream_status(chip);
         }
+        // The second and third copy of the takeover notice, about 10 ms apart (A2.4 step 1).
+        if let Some(n) = self.notice.as_mut() {
+            if n.sent < NOTICE_COPIES && now >= n.next_ms {
+                n.sent += 1;
+                n.next_ms += NOTICE_SPACING_MS;
+                Self::send_notice(chip, n);
+            }
+            if n.sent >= NOTICE_COPIES && now >= n.until_ms {
+                self.notice = None;
+            }
+        }
         // Keyed timeout, CWX cap, maximum TX time, hang delay (B10.5, B10.5a, B10.5b, Table A3-2).
         let mut rf = crate::BoardRf;
         let mut changed = self.key.tick(now, self.regs.keyed_timeout_ms, self.regs.tx_time_in_force(), &mut self.tx, &mut rf);
@@ -539,7 +651,10 @@ impl P2 {
     /// A DUC I&Q packet on port 1029 (B10.7). It enters the FIFO only from the owner during its
     /// session, with record `tx` bits 1 and 4 set and no DUC-specific refusal standing; anything
     /// else is discarded whole and counted, with no other effect.
-    pub fn duc_iq(&mut self, from: Addr, p: &[u8], now: u64) {
+    pub fn duc_iq(&mut self, chip: &mut Chip, from: Addr, p: &[u8], now: u64) {
+        if self.session.owner() != Some(from) {
+            self.old_owner_packet(chip, from, now);
+        }
         let ok = self.session.owner() == Some(from)
             && !self.update_in_progress
             && self.tx.record_tx_bit1()

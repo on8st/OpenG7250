@@ -51,11 +51,13 @@ pub struct Stats {
     /// (Table B10-1, B10.5a item 1; names fixed by 0046).
     pub cw_hang_clamped: u64,
     pub cw_speed_clamped: u64,
+    /// Level-1 takeovers since start (A2.4).
+    pub takeovers: u64,
 }
 
 impl Stats {
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 13] = [
+        let items: [(&[u8], u64); 14] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
             (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
@@ -69,6 +71,7 @@ impl Stats {
             (b"set_ip_ignored", self.set_ip_ignored),
             (b"cw_hang_clamped", self.cw_hang_clamped),
             (b"cw_speed_clamped", self.cw_speed_clamped),
+            (b"takeovers", self.takeovers),
         ];
         let mut at = 0;
         for (n, v) in items {
@@ -185,6 +188,7 @@ impl Server {
                 set_ip_ignored: 0,
                 cw_hang_clamped: 0,
                 cw_speed_clamped: 0,
+                takeovers: 0,
             },
             writer: None,
             reset_pending: false,
