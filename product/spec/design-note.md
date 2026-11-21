@@ -1,7 +1,7 @@
 # G7250 network firmware — design note
 
 - Version: draft 5 (spec v1.0 candidate), 2026-11-21; illustrated version at
-  https://claude.ai/artifact/PpqRcsDA5pxW23TTwh5qig (version 8)
+  https://claude.ai/artifact/PpqRcsDA5pxW23TTwh5qig (version 9)
 - Status: for review by ON8ST with the v1.0 package
 - Structure: as agreed in 0001, amended by decisions 0002–0038 (status of each in
   `product-handover.md`).
@@ -259,7 +259,7 @@ upstream through the RFC (0038, proposed).
 - **HIS.** Cleared and read at `2a38b7f`, `d0a39b0`, `b95f519` and `9d10e72` (gate reviews
   2–5). Each question in `open-questions-his.md` (HIS-01 to HIS-20) carries its answer status;
   the impact is in `analysis/his-2a38b7f-impact.md`. Everything that needs the radio is in
-  Annex P of the spec (36 parameters, each with a safe placeholder; until the FPGA
+  Annex P of the spec (37 parameters, each with a safe placeholder; until the FPGA
   configuration frame is understood, P-RX-2, DDC0 is not offered, 0042) and in HIS 90.
 - **Reversibility.** Installing the new firmware is reversible. The vendor bootloader and its
   update path through the controller are never touched and are the recovery path. From the new

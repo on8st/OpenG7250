@@ -759,8 +759,9 @@ while a level-1 session runs. The G7250 MUST handle it in this order (0022 §3):
 1. End the old session with the actions of A3.2 in their order: unkey, drop the arm
    (`TAKEOVER`), issue a new token, send a last `TX_ARM_STATE` to the old owner. The last
    `TX_ARM_STATE` MUST be sent three times, about 10 ms apart, with identical register content
-   (the same address and data pairs); each copy carries the next sequence number of local
-   port 7250 (B2.7) (0022 §29; §73 item 22). The copies are sent asynchronously: steps 2–5
+   (the same address and data pairs); each copy carries the next sequence number of the old
+   session's port 7250 counter towards the old owner (B2.7, "Port 7250 counters per
+   destination"; 0051) (0022 §29; §73 item 22). The copies are sent asynchronously: steps 2–5
    MUST NOT wait for the second and third copy (0022 §77 item 2). This step applies in full
    also while the old owner is not armed: `TX_ARM_STATE` then reads disarmed with drop reason
    4 `TAKEOVER` ([23:16]), a new token is issued, and the three copies and the repeated notice
@@ -1736,6 +1737,15 @@ that host is as a takeover. At every other session end (watchdog standby, link l
 address or level change) the counters keep their value (0022 §86 item 10),
 and a restart by the same host (B5.4) continues them, so that the host does not read a
 restart at 0 as a takeover (A2.4, host guidance) (0022 §83 item 4).
+
+**Port 7250 counters per destination** (0051). On local port 7250 the "direction" is the
+destination: the G7250 MUST keep one counter for the packets to the owner's register
+destination (the session's counter, reset and continued as above), and one separate counter
+for all answers to hosts that are not the owner (`NOT_OWNER` and `CAP_REQUEST` answers, B8.4,
+B8.5), which no session event resets, only a reset of the radio. The packets to an old owner
+after a takeover (the three copies of the last `TX_ARM_STATE` and the repeated `TAKEOVER`
+notice, A2.4) continue the old session's counter towards that host. So a host that checks its
+own register stream for loss sees no gap caused by answers to other hosts.
 Exception, as [P2] specifies: the wideband counter restarts at 0 for every frame, so the 8
 packets of a frame carry 0–7 ([P2] Wideband Data packet, pp. 52–53: "set to zero … whenever a
 block of raw samples has been sent"; B6.10; Annex X2, C16; 0022 §21). The discovery reply
@@ -3440,7 +3450,7 @@ Table P-1 — Pending hardware parameters
 | P-SYS-6 | Power draw in idle, for a later standby (0029) | part A scope | — | quiet idle only |
 | P-SYS-7 | Start mode of the independent watchdog (IWDG1_SW option byte, [HIS] HIS 10, HIS 90) | A1.8a item 3 (installer), firmware | HIS-13 | the firmware and the installer service the watchdog whenever it may run |
 | P-SYS-8 | SEND and TUNER interfaces on the main unit: whether and how the firmware drives or reads them | A3.6, A3.7, B4.8 `atu` bit 4, `regmap_groups` bit 7 | HIS-09 | released (inactive) and not offered |
-| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`). Radio check: write a pattern, then a software reset (`RESTART`) and a watchdog reset, and read it back in the boot stage | A3.5 "Counters", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters are kept as far as the hardware keeps them, and nothing relies on them |
+| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`), [HIS] HIS 10, HIS 90 (`0677c2d`: UNKNOWN for the firmware's region 0x2401FFE0–0x2401FFFF). Radio check: write a pattern, then a software reset (`RESTART`) and a watchdog reset, and read it back in the boot stage | A3.5 "Counters", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters are kept as far as the hardware keeps them, and nothing relies on them |
 | P-RX-1 | Physical receive paths behind the two receive tuning words ([HIS] HIS 80) | B2, B3, 0004 | HIS-02 | one DDC |
 | P-RX-2 | FPGA configuration frame (command 0x01, [HIS] HIS 80): meaning and safe values of the status byte 0 and of bytes 9–18 (per-rate calibration among them), position of the spectral-inversion flag; which tuning word (offset 1 or 5) is DDC0; I/Q order of the 0x04 samples; bus set-up, strobe width and turnaround | B6.1, B6.7, B4.8 `streams` | HIS-01, HIS-02 | DDC0 not offered (`streams` bit 0 = 0, `STREAM_STATUS` reason 2); no configuration frame written outside the A3.6 safe state |
 | P-TX-1 | The third tuning word as the transmit word ([HIS] HIS 80, HYPOTHESIS) | B10 (firmware) | HIS-02 | not applicable while TX is disabled |
@@ -3626,7 +3636,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A2-08 | After a takeover `TX_MODE_CLASS` is 0, `KEYED_TIMEOUT` 500 ms, session limits are the persistent values, and the RX settings of A are kept until B writes its own. |
 | T-A2-09 | Two hosts alternating C&C every 50 ms: neither can stay armed, every takeover is counted, and the log has at most one takeover entry per second for the pair. |
 | T-A2-10 | At a takeover the old owner receives the final `TX_ARM_STATE` (`TAKEOVER`) exactly three times, about 10 ms apart, with identical register pairs and consecutive sequence numbers, and no stream packet or register push afterwards; a discovery from it is still answered. |
-| T-A2-11 | After B takes over from A, each DUC I&Q or register packet from A within 5 s is answered with one copy of the `TAKEOVER` notice, at most once per 100 ms; a C&C packet from A takes the radio back, B receives three notices, and the streams to A restart at sequence 0. |
+| T-A2-11 | After B takes over from A, each DUC I&Q or register packet from A within 5 s is answered with one copy of the `TAKEOVER` notice, at most once per 100 ms; a C&C packet from A takes the radio back, B receives three notices, and the streams to A restart at sequence 0. On port 7250 the notices to B continue B's session counter (the packet after B's last register packet), and answers sent to A while B was owner do not advance it (B2.7; 0051). |
 | T-A2-12 | While level 2 is active, a General packet on port 1024 has no effect, is counted, and does not count for a later level-1 session (after G6). |
 | T-A2-13 | Host A with General bytes 31–32 = 50000 is taken over by host B: the three copies and every repeated notice arrive at A's address on port 50000 from local port 7250 (with bytes 31–32 = 0: at A's source port); a register write from A within the 5 s gets its `NOT_OWNER` answer at its source port and a notice, at most one notice per 100 ms, and neither limit consumes the other (A2.4). |
 | T-A2-14 | Host A sets PA enable, CW select, break-in, hang delay 500 ms, RF delay 20 ms, keyer speed 20 wpm and EER; host B takes over with a High Priority packet only: `TX_STATE` bit 4 shows PA disabled, KEY keys nothing, CWX forms no element, no EER refusal stands, and DUC rate and bits read 192 and 24; the same holds after A clears run and starts again with a run bit only (A3.6a). |
@@ -3842,6 +3852,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B8-18 | A `LIMIT_SWR` write looser than the persistent S2 is rejected with `LOOSER_LIMIT`; one between S1 and S2 replaces S2 and leaves S1; one below S1 lowers both; an `ATU_TUNE` = 1 that is both unarmed and from a non-owner gets `NOT_OWNER`, unarmed and with DUC0 outside the ranges gets `NOT_ARMED`, not `NOT_KEYABLE` (A3.9b item 1). |
 | T-B8-19 | A register write from a non-owner whose source port is 7250 gets no answer and is counted; from another port it gets `NOT_OWNER` (B8.5). |
 | T-B8-20 | Writing 0 to `LIMIT_FWD_POWER` after 10 000 mW returns the answer with the limit in force at the persistent value, and RF is not stopped (B8.6). |
+| T-B8-21 | During A's session: register writes and `CAP_REQUEST`s from host C get answers on port 7250 numbered by the non-owner counter (0, 1, 2, …), and A's register stream shows no gap; the non-owner counter is not reset by A's session ending or by a takeover, only by a reset of the radio (B2.7; 0051). |
 
 ### Telemetry (B9)
 
