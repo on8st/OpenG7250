@@ -676,6 +676,22 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let mut server = Server::new();
     server.network_up(Instant::now().as_millis());
     mgmt.identify.mac = mac;
+    // Unreadable store words (double ECC error, 0065 point 5; T-A1-87): logged once per start,
+    // with each item that then had no readable record. No fault, no reset.
+    if mgmt.store_unreadable > 0 {
+        let now = Instant::now().as_millis();
+        server.log.push(now, format_args!("store: {} unreadable flash words (ECC) skipped; the older records are used", mgmt.store_unreadable));
+        let (cfg_f, cal_f, sec_f) = mgmt.fell_back;
+        if cfg_f {
+            server.log.push(now, format_args!("store: no readable configuration; factory values (Table A1-4)"));
+        }
+        if cal_f {
+            server.log.push(now, format_args!("store: no readable calibration set; absent (tx bit 4 = 0)"));
+        }
+        if sec_f {
+            server.log.push(now, format_args!("store: no readable secret; none set"));
+        }
+    }
     // Boot record at start (A1.8 U-6): a rollback is logged; a trial cannot arm until confirmed.
     let slot_name = if mgmt.update.run.slot == g7250_layout::Slot::A { "A" } else { "B" };
     match mgmt.update.state {

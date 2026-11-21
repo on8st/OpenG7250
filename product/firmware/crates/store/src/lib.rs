@@ -144,13 +144,17 @@ pub struct Store<F> {
     /// Address of the next free flash word in the live sector.
     end: u32,
     seq: u32,
+    /// Unreadable flash words (double ECC error) met by the scans since open.
+    unreadable: u32,
+    /// The count after the scans of open: logged once per start (0065 point 5).
+    unreadable_at_open: u32,
 }
 
 impl<F: FlashIo> Store<F> {
     /// Scan both sectors and pick the live one. `writer` is who writes: the application or the
     /// boot stage.
     pub fn open(io: F, writer: Writer) -> Result<Self, Error<F::Error>> {
-        let mut s = Store { io, writer, live: 1, generation: 0, end: STORE_SECTORS[1].start, seq: 0 };
+        let mut s = Store { io, writer, live: 1, generation: 0, end: STORE_SECTORS[1].start, seq: 0, unreadable: 0, unreadable_at_open: 0 };
         let a = s.scan(STORE_SECTORS[0])?;
         let b = s.scan(STORE_SECTORS[1])?;
         let (live, scan) = match (a.generation, b.generation) {
@@ -171,7 +175,15 @@ impl<F: FlashIo> Store<F> {
         s.generation = scan.generation.unwrap_or(0);
         s.end = scan.end;
         s.seq = a.seq.max(b.seq);
+        s.unreadable_at_open = s.unreadable;
         Ok(s)
+    }
+
+    /// Flash words with a double ECC error that the scan at open met in both sectors (each
+    /// treated as a torn record and never programmed again): the start-up logs this once
+    /// (0065 point 5; T-A1-87). 0 on a store with none.
+    pub fn unreadable_at_open(&self) -> u32 {
+        self.unreadable_at_open
     }
 
     pub fn release(self) -> F {
@@ -219,7 +231,8 @@ impl<F: FlashIo> Store<F> {
             let n = (len as usize - at).min(buf.len());
             match self.io.read(addr + (HEADER + at) as u32, &mut buf[..n]) {
                 Ok(()) => {}
-                // An unreadable word in the payload: the record is lost, as a torn one.
+                // An unreadable word in the payload: the record is lost, as a torn one. (The scan
+                // reaches that word as a header next and counts it there, once.)
                 Err(e) if F::unreadable(&e) => return Ok(None),
                 Err(e) => return Err(Error::Io(e)),
             }
@@ -239,6 +252,7 @@ impl<F: FlashIo> Store<F> {
         while addr + FLASH_WORD <= r.end {
             let Some(h) = self.read_header(addr)? else {
                 // Unreadable word (ECC): written, so not free; skip it like a torn word.
+                self.unreadable += 1;
                 addr += FLASH_WORD;
                 out.end = addr;
                 continue;
@@ -598,7 +612,9 @@ mod tests {
         io.bad[w(cal2_at) + 2] = true; // payload of the newest calibration
         let mut s = Store::open(io, APP).unwrap();
         assert_eq!((s.live_sector(), s.generation()), (0, 1));
+        assert_eq!(s.unreadable_at_open(), 2, "both bad words counted once at open (T-A1-87 log)");
         assert_eq!(get(&mut s, Kind::Config).unwrap(), b"old");
+        assert_eq!(s.unreadable_at_open(), 2, "reads after open do not change it");
         assert_eq!(get(&mut s, Kind::Calibration).unwrap(), vec![7u8; 100]);
         assert!(cal_at < cfg_at);
         s.put(Kind::Config, 1, b"again").unwrap();
@@ -676,14 +692,17 @@ mod tests {
             probe.next_boot_counter().unwrap();
             let words = probe.io.programs - before;
             assert!(words > 5);
+            let g0 = Store::open(base.clone(), APP).unwrap().generation();
             for cut in 0..=words {
                 let mut io = base.clone();
                 io.budget = Some(cut);
                 let mut s = Store::open(io, APP).unwrap();
                 let r = s.next_boot_counter();
                 let io = s.release().power_on();
-                // Every value is there after the restart, whatever the cut.
+                // Every value is there after the restart, whatever the cut, and the generation
+                // never goes back (0065 point 3; T-A1-86).
                 let mut s = check_all(io, n);
+                assert!(s.generation() >= g0, "ecc {ecc} cut {cut}: generation {} < {g0}", s.generation());
                 // And the store goes on working.
                 let m = s.next_boot_counter().unwrap();
                 assert!(m > n);

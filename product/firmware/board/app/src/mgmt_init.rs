@@ -22,6 +22,11 @@ pub struct MgmtInit {
     pub identify: Identify<'static>,
     /// The update path and the trial state (A1.8).
     pub update: crate::update::BoardUpdate,
+    /// At start: flash words the store found unreadable (double ECC error), and which items then
+    /// had no readable record (configuration factory values, no calibration set, no secret),
+    /// for the net loop to log once (0065 point 5; T-A1-87).
+    pub store_unreadable: u32,
+    pub fell_back: (bool, bool, bool),
 }
 
 fn version_of(v: u32) -> Version {
@@ -64,12 +69,14 @@ fn factory_config() -> Config {
 impl MgmtInit {
     pub fn new(mut store: Option<NvStore>, tx_arm_state: u32, slot: Slot) -> Self {
         let mut buf = [0u8; g7250_store::MAX_PAYLOAD];
+        let store_unreadable = store.as_ref().map_or(0, |s| s.unreadable_at_open());
         let mut get = |k: Kind, buf: &mut [u8]| store.as_mut().and_then(|s| s.get(k, buf).ok().flatten()).map(|(_, n)| n);
 
         let secret = match get(Kind::Secret, &mut buf) {
             Some(32) => buf[..32].try_into().ok(),
             _ => None,
         };
+        let mut fell_back = (false, false, secret.is_none());
 
         let mut config = heapless::Vec::new();
         match get(Kind::Config, &mut buf) {
@@ -77,6 +84,7 @@ impl MgmtInit {
                 let _ = config.extend_from_slice(&buf[..n]);
             }
             _ => {
+                fell_back.0 = true;
                 let mut b = [0u8; 256];
                 if let Some(n) = factory_config().encode(&mut b) {
                     let _ = config.extend_from_slice(&b[..n]);
@@ -93,6 +101,7 @@ impl MgmtInit {
                 (id, u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]))
             }
             _ => {
+                fell_back.1 = true;
                 // No set: id zeros, date 0, empty source, no entries.
                 let _ = calibration.extend_from_slice(&[0u8; 37]);
                 ([0u8; 32], 0)
@@ -133,7 +142,7 @@ impl MgmtInit {
         let mut identify = identify;
         identify.update_state = update.state as u8;
         identify.running_slot = g7250_update::stage::slot_code(slot);
-        MgmtInit { store, secret, config, calibration, identify, update }
+        MgmtInit { store, secret, config, calibration, identify, update, store_unreadable, fell_back }
     }
 }
 
