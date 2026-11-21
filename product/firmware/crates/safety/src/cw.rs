@@ -299,11 +299,14 @@ impl CwKeyer {
                     }
                     let o = el.other();
                     let next = if !p.dot && !p.dash {
-                        // Both released. After a squeeze: mode A stops, mode B sends the
-                        // opposite element; else the memory of a paddle pressed during the
-                        // element (item 4).
-                        if self.squeeze {
-                            s.mode_b.then_some(o)
+                        // Both released. Mode A stops: its memory acts only while a paddle is
+                        // still held at the end of the space (SF-19, interim reading). Mode B:
+                        // after a squeeze the opposite element, else the memory of a paddle
+                        // pressed during the mark (item 4; SF-20: "during an element" = the mark).
+                        if !s.mode_b {
+                            None
+                        } else if self.squeeze {
+                            Some(o)
                         } else if self.mem.get(o) {
                             Some(o)
                         } else if self.mem.get(el) {
@@ -426,6 +429,23 @@ mod tests {
         assert_eq!(run(&mut k, &s, 0, 500, p)[1].0, 60 + 180);
         let mut k = CwKeyer::default();
         assert_eq!(run(&mut k, &iambic(20, false), 0, 500, p)[1].0, 150, "clear: at once");
+        // SF-21 (interim): a paddle pressed and released before the 3 T starts nothing.
+        let mut k = CwKeyer::default();
+        assert_eq!(run(&mut k, &s, 0, 500, |t| (t < 10 || (150..200).contains(&t), false)), [(0, 60)]);
+    }
+
+    #[test]
+    fn sf_19_mode_a_memory_acts_only_while_a_paddle_is_held_at_the_end_of_the_space() {
+        // Dash held 0-150 (released during the mark), dot tapped 40-60 during the mark: nothing
+        // held at the end of the space (240).
+        let p = |t: u64| ((40..60).contains(&t), t < 150);
+        let mut k = CwKeyer::default();
+        assert_eq!(run(&mut k, &iambic(20, false), 0, 600, p), [(0, 180)], "mode A stops");
+        let mut k = CwKeyer::default();
+        assert_eq!(run(&mut k, &iambic(20, true), 0, 600, p), [(0, 180), (240, 300)], "mode B sends the dot");
+        // Dash still held at 240: the remembered dot follows in mode A too.
+        let mut k = CwKeyer::default();
+        assert_eq!(run(&mut k, &iambic(20, false), 0, 600, |t| ((40..60).contains(&t), t < 250))[..2], [(0, 180), (240, 300)]);
     }
 
     #[test]
