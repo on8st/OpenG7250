@@ -41,6 +41,8 @@ pub struct Mgmt {
     pub conf: Conf,
     /// the transfer of an update to an image of this firmware (A1.8)
     pub upd: Option<Upd>,
+    /// the last update command other than UPDATE_STATUS (A1.8: the 10-minute rule)
+    pub last_update: Option<u64>,
 }
 
 /// One update transfer: the header of Table M-4 and the blocks received so far.
@@ -140,10 +142,12 @@ impl Mgmt {
             rng: 0x9E37_79B9_7F4A_7C15 ^ now,
             conf: Conf::factory(),
             upd: None,
+            last_update: None,
         }
     }
 
     pub fn on_reset(&mut self, now: u64) {
+        self.last_update = None;
         self.challenges.clear();
         self.stored.clear();
         self.holder = None;
@@ -172,8 +176,29 @@ impl Mgmt {
         self.rng
     }
 
-    pub fn tick(&mut self, _r: &mut Radio, _out: &mut [Tx]) {
+    pub fn tick(&mut self, r: &mut Radio, _out: &mut [Tx]) {
         // write-session idle timeout is checked lazily at the next request
+        let now = r.now;
+        // A1.8: 10 min without an update command other than UPDATE_STATUS: abort as
+        // UPDATE_ABORT does, log it, restart into the running image (a commanded reset; RF is
+        // never present in the model)
+        if r.update_in_progress && self.last_update.map_or(false, |t| now >= t + 600 * S) {
+            r.logf("update abandoned: 10 min without an update command; restart into the running image");
+            self.upd = None;
+            self.last_update = None;
+            r.reset("abandoned update");
+            self.on_reset(now);
+            return;
+        }
+        // 0044: a trial image not confirmed 60 s after its start makes a commanded reset, after
+        // which the boot stage starts the previous image
+        if let Some(t) = r.fw.trial {
+            if now >= t + 60 * S {
+                r.logf("trial image not confirmed within 60 s: commanded reset");
+                r.reset("trial not confirmed");
+                self.on_reset(now);
+            }
+        }
     }
 
     fn holder_valid(&mut self, now: u64) -> Option<Host> {
@@ -255,6 +280,7 @@ impl Mgmt {
                 return;
             }
         }
+        let had_upd = self.upd.is_some();
         let authed = d[7] & 1 != 0;
         // authentication and rate (32, 33, 34, 36)
         if needs_auth(cmd) || cmd == GET_CHALLENGE {
@@ -484,6 +510,12 @@ impl Mgmt {
                 }
             }
         }
+        // A1.8 "What restarts the timer" (0063 addendum): only an update command answered with 0
+        // (or 1); not UPDATE_STATUS, not a second UPDATE_ABORT, not a refused command, not a
+        // repeat answered from the stored reply (that one returned above)
+        if is_update(cmd) && (status == st::OK || status == st::IN_PROGRESS) && !(cmd == UPDATE_ABORT && !had_upd) {
+            self.last_update = Some(now);
+        }
         self.send(r, rx, status, &reply_payload, true, cmd, out);
         match after {
             Some("RESTART") => {
@@ -495,7 +527,10 @@ impl Mgmt {
                 if let Some(u) = self.upd.take() {
                     r.fw.slots[(u.slot - 1) as usize] = Some(Image { version: u.version, len: u.len, sha: u.sha, good: false });
                     r.logf(&format!("update activated: slot {} on trial", u.slot));
+                    let net_down = r.fw.sim_net_down;
+                    r.fw.sim_net_down = false;
                     r.reset("UPDATE_ACTIVATE");
+                    r.fw.trial_net_down = net_down;
                     r.fw.running = u.slot;
                     r.fw.rolled_back = false;
                     r.fw.trial = Some(r.now);

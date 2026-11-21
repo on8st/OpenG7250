@@ -240,6 +240,11 @@ OVERRIDES: dict[str, dict] = {
        for t in ["T-B10-33", "T-B10-43", "T-B10-44", "T-B10-45", "T-B10-46"]},
     "T-A1-75": {"target": "emulator", "also": ["host"],
                 "notes": ["the armed part needs TX unlocked; 'outside a session while armed' is not reachable over P2"]},
+    **{t: {"target": "emulator", "also": ["host"], "needs": ["time.advance"],
+           "notes": ["minutes of radio time: time.advance (reference model now; emulator when it offers it)"]}
+       for t in ["T-A1-34", "T-A1-46", "T-A1-82"]},
+    "T-A1-68": {"target": "emulator", "also": ["host"], "needs": ["time.advance", "power.cycle"],
+                "notes": ["the network-down case needs trial.sim (reference model) or a runner that keeps the CH394 silent"]},
     "T-A1-77": {"target": "emulator", "also": [], "needs": ["flash.log"],
                 "notes": ["needs the update client (Table M-4 package) in the bench and the slot layout; flash.log v1.8"]},
     "T-A1-78": {"target": "emulator", "also": ["host"],

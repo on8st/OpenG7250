@@ -40,6 +40,10 @@ pub struct Firmware {
     /// start of an unconfirmed trial boot
     pub trial: Option<u64>,
     pub rolled_back: bool,
+    /// trial.sim (model only): the next trial image keeps its network down
+    pub sim_net_down: bool,
+    /// the running trial image keeps its network down: it never confirms itself (0044)
+    pub trial_net_down: bool,
 }
 
 /// Flash layout of the model (IDENTIFY tag 25, 0062): in 128 KiB sectors, slot A, slot B, store.
@@ -407,7 +411,8 @@ impl Radio {
             keyer: Keyer::new(keyer::Settings { iambic: false, mode_b: false, strict: false, speed: 0, weight: 50 }),
             keylog: None,
             atu: Atu::default(),
-            fw: Firmware { running: 1, slots: [None, None], trial: None, rolled_back: false },
+            fw: Firmware { running: 1, slots: [None, None], trial: None, rolled_back: false, sim_net_down: false,
+                           trial_net_down: false },
             nonowner_seq: 0,
             old_seq: 0,
         };
@@ -431,6 +436,7 @@ impl Radio {
     /// The boot stage after a reset: a trial image that has not confirmed itself is rolled back
     /// (A1.8 U-6; 0044).
     fn boot_choice(&mut self, cause: &str) {
+        self.fw.trial_net_down = false;
         if self.fw.trial.is_some() {
             self.fw.trial = None;
             self.fw.slots[(self.fw.running - 1) as usize] = None;
@@ -444,7 +450,7 @@ impl Radio {
     /// the model) and no class 2 fault (not modelled).
     fn confirm_trial(&mut self) {
         if let Some(t) = self.fw.trial {
-            if self.now >= t + 10 * S {
+            if !self.fw.trial_net_down && self.now >= t + 10 * S {
                 self.fw.trial = None;
                 if let Some(img) = self.fw.slots[(self.fw.running - 1) as usize].as_mut() {
                     img.good = true;

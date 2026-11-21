@@ -110,7 +110,7 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait"];
+    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim"];
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -148,7 +148,9 @@ fn main() {
     eprintln!("g7250-refmodel on {} (tx {}), control {}", cfg.ip, if cfg.calibrated { "unlocked" } else { "locked" }, control);
 
     let t0 = Instant::now();
-    let now = || t0.elapsed().as_micros() as u64;
+    // time.advance (model only) moves the model clock forward
+    let offset = std::cell::Cell::new(0u64);
+    let now = || t0.elapsed().as_micros() as u64 + offset.get();
     let mut radio = Radio::new(cfg, now());
     let mut buf = vec![0u8; 2048];
     let mut next_tick = now();
@@ -199,6 +201,10 @@ fn main() {
                 }
                 inject.sort_by_key(|x| x.0);
                 let _ = c.reply.send(okv(J::obj(vec![("t_us", J::Arr(times))])));
+            } else if op == "time.advance" {
+                let s_ = args.get("s").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                offset.set(offset.get() + (s_ * 1e6) as u64);
+                let _ = c.reply.send(okv(J::obj(vec![("t_us", J::Num(now() as f64))])));
             } else if op == "time.wait" {
                 let us = args.get("us").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64;
                 waits.push((now() + us, c.reply));
@@ -354,6 +360,11 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 r.keylog = None;
             }
             ok(v)
+        }
+        "trial.sim" => {
+            // model only: the next trial image keeps its network down (no self-confirmation)
+            r.fw.sim_net_down = args.get("network_down").map_or(false, |v| *v == J::Bool(true));
+            ok(J::Null)
         }
         "atu.sim" => {
             // model only: how the next ATU tune cycle ends (result "tuned", "failed" or "none",

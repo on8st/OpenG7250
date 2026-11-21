@@ -360,3 +360,214 @@ def t_a1_81(ctx: Ctx):
         r = u.begin(header(len(img), sha, version=newer(ver), slot=other, component=2, hw=HW_ID + 1))
         ctx.eq("component 2 and the wrong hardware id: 51 (51 comes before 56)", r["status"] if r else None, 51)
         ctx.eq("nothing changed: UPDATE_STATUS idle", (u.status() or {}).get("state"), 0)
+
+
+# ---------------- phase 2: the 10-minute rule and the trial rollback ----------------
+def advance(ctx, s: float):
+    """time.advance (the reference model's clock; the emulator's later): s seconds pass."""
+    ctx.fixture("time.advance", s=s)
+    time.sleep(0.05)  # a tick of the model at the new time
+
+
+def uptime_s(u: Updater) -> float | None:
+    v = u.identify().get(16, b"")
+    return struct.unpack(">I", v)[0] / 1000 if len(v) == 4 else None
+
+
+def logs_since(u: Updater, n0: int) -> list[str]:
+    from .mgmt import read_log
+    return [e[2] for e in read_log(u.c) if e[0] > n0]
+
+
+def last_log_seq(u: Updater) -> int:
+    from .mgmt import read_log
+    return max([e[0] for e in read_log(u.c)], default=-1)
+
+
+def rx_works(ctx) -> bool:
+    with Host(ctx.net) as h:
+        h.start()
+        got = [p for p, _, _ in h.recv(0.3) if p == 1025]
+        h.stop()
+        return bool(got)
+
+
+def expect_restart_at(ctx, u: Updater, label: str, total_s: float, already_s: float):
+    """Advance to 5 s before total_s (still in the update state), then past it (restarted)."""
+    advance(ctx, total_s - 5 - already_s)
+    up = uptime_s(u)
+    ctx.check(f"{label}: no restart before {total_s:.0f} s - 5 s (uptime goes on)", up is not None and up >= total_s - 6,
+              f"uptime {up} s")
+    advance(ctx, 10)
+    wait_reachable(ctx, label)
+    up = uptime_s(u)
+    ctx.check(f"{label}: restarted into the running image by {total_s:.0f} s + 5 s (uptime restarted)", up is not None and up < 30,
+              f"uptime {up} s")
+
+
+def need_clock(ctx):
+    ctx.need("time.advance")
+
+
+@test("T-A1-34")
+def t_a1_34(ctx: Ctx):
+    """A1.8: after UPDATE_BEGIN, 10 min without an update command: aborted, logged, restart into
+    the running image; RX works afterwards."""
+    need_clock(ctx)
+    s = secret(ctx)
+    with updating(ctx, s, restart_at_end=False) as u:
+        run, other, ver, lay = facts(ctx, u)
+        n0 = last_log_seq(u)
+        up0 = uptime_s(u) or 0
+        r = u.begin(pkg(image(SMALL, seed=34), newer(ver), other))
+        if not ctx.eq("UPDATE_BEGIN accepted", r["status"] if r else None, 0):
+            return
+        expect_restart_at(ctx, u, "after UPDATE_BEGIN only", 600, 0)
+        ctx.eq("after the restart: the running image unchanged", (u.identify().get(23, b"")[:1]), bytes([run]))
+        texts = logs_since(u, n0)
+        ctx.check("the abandonment is logged (a new log entry; the text is not specified)", bool(texts), f"{texts[-3:]}")
+    ctx.check("RX works afterwards (a session gets status packets)", rx_works(ctx), "no status packet")
+
+
+@test("T-A1-46")
+def t_a1_46(ctx: Ctx):
+    """A1.8: after UPDATE_ABORT, and after UPDATE_VERIFY without UPDATE_ACTIVATE, with only
+    UPDATE_STATUS for 10 min: restart into the running image, logged, RX works afterwards."""
+    need_clock(ctx)
+    s = secret(ctx)
+    for case in ("UPDATE_ABORT", "UPDATE_VERIFY without UPDATE_ACTIVATE"):
+        with updating(ctx, s, restart_at_end=False) as u:
+            run, other, ver, lay = facts(ctx, u)
+            img = image(SMALL, seed=46)
+            if case == "UPDATE_ABORT":
+                r = u.begin(pkg(img, newer(ver), other))
+                ok = r is not None and r["status"] == 0 and u.req("UPDATE_ABORT")["status"] == 0
+            else:
+                ok = u.full(img, pkg(img, newer(ver), other)) == (0, "verified")
+            if not ctx.check(f"{case}: set up", ok, "the update could not be started"):
+                continue
+            n0 = last_log_seq(u)
+            for _ in range(3):
+                u.status()  # only UPDATE_STATUS, which does not restart the timer
+            expect_restart_at(ctx, u, f"after {case}", 600, 0)
+            ctx.check(f"after {case}: logged", bool(logs_since(u, n0)), "no new log entry")
+        ctx.check(f"after {case}: RX works afterwards", rx_works(ctx), "no status packet")
+
+
+@test("T-A1-82")
+def t_a1_82(ctx: Ctx):
+    """A1.8 "What restarts the timer", "After UPDATE_ABORT" (0063 addendum)."""
+    need_clock(ctx)
+    s = secret(ctx)
+    from .update import block_payload
+    with updating(ctx, s, restart_at_end=False) as u:
+        run, other, ver, lay = facts(ctx, u)
+        img = image(SMALL, seed=82)
+        r = u.begin(pkg(img, newer(ver), other))
+        if not ctx.eq("UPDATE_BEGIN accepted", r["status"] if r else None, 0):
+            return
+        r = u.req("UPDATE_ABORT")
+        ctx.eq("UPDATE_ABORT: 0", r["status"] if r else None, 0)
+        n0 = last_log_seq(u)
+        strays = [("UPDATE_BLOCK", block_payload(0, img[:512]), 54), ("UPDATE_VERIFY", b"", 55),
+                  ("UPDATE_ACTIVATE", b"\x00", 55), ("UPDATE_BEGIN", None, 58), ("ROLLBACK", b"", 58),
+                  ("UPDATE_ABORT", b"", 0)]
+        got = []
+        for i in range(9):  # every 60 s, up to 9 min after the reply to UPDATE_ABORT
+            advance(ctx, 60)
+            cmd, p, want = strays[i % len(strays)]
+            r = u.begin(pkg(img, newer(ver), other)) if cmd == "UPDATE_BEGIN" else u.req(cmd, p)
+            got.append((cmd, r["status"] if r else None, want))
+        ctx.all_of("after UPDATE_ABORT the stray commands get 54, 55, 55, 58, 58, 0", got, lambda x: x[1] == x[2])
+        ctx.eq("UPDATE_STATUS stays idle", (u.status() or {}).get("state"), 0)
+        expect_restart_at(ctx, u, "strays every 60 s after UPDATE_ABORT", 600, 540)
+        ctx.check("logged", bool(logs_since(u, n0)), "no new log entry")
+    ctx.check("RX works afterwards", rx_works(ctx), "no status packet")
+    # a RESTART after 2 min restarts at once
+    with updating(ctx, s, restart_at_end=False) as u:
+        run, other, ver, lay = facts(ctx, u)
+        r = u.begin(pkg(img, newer(ver), other))
+        if ctx.eq("UPDATE_BEGIN accepted (RESTART case)", r["status"] if r else None, 0):
+            u.req("UPDATE_ABORT")
+            advance(ctx, 120)
+            r = u.req("RESTART")
+            ctx.eq("RESTART 2 min after UPDATE_ABORT: 0", r["status"] if r else None, 0)
+            time.sleep(0.2)
+            wait_reachable(ctx, "RESTART")
+            up = uptime_s(u)
+            ctx.check("restarted at once (uptime restarted)", up is not None and up < 30, f"uptime {up} s")
+    # during a transfer, a block refused with 53 every 60 s does not delay the abandonment
+    with updating(ctx, s, restart_at_end=False) as u:
+        run, other, ver, lay = facts(ctx, u)
+        r = u.begin(pkg(img, newer(ver), other))
+        if ctx.eq("UPDATE_BEGIN accepted (refused-block case)", r["status"] if r else None, 0):
+            bad = []
+            for _ in range(9):
+                advance(ctx, 60)
+                r = u.req("UPDATE_BLOCK", block_payload(0, img[:512], crc=0xDEADBEEF))
+                bad.append(r["status"] if r else None)
+            ctx.all_of("the bad blocks get 53", bad, lambda x: x == 53)
+            expect_restart_at(ctx, u, "a block refused with 53 every 60 s", 600, 540)
+
+
+def activate_new(ctx, s, seed: int, net_down: bool = False):
+    """A complete update into the other slot and its activation; (old slot, new slot, old
+    version, new version) or None."""
+    with updating(ctx, s, restart_at_end=False) as u:
+        run, other, ver, lay = facts(ctx, u)
+        if net_down:
+            ctx.need("trial.sim")
+            ctx.fixture("trial.sim", network_down=True)
+        img = image(SMALL, seed=seed)
+        if u.full(img, pkg(img, newer(ver), other)) != (0, "verified"):
+            return None
+        r = u.req("UPDATE_ACTIVATE", b"\x00")
+        if not r or r["status"] != 0:
+            return None
+    time.sleep(0.3)
+    wait_reachable(ctx, "UPDATE_ACTIVATE")
+    return run, other, ver, newer(ver)
+
+
+@test("T-A1-68", "T-A1-09")
+def t_a1_68(ctx: Ctx):
+    """0044: a trial image that meets the criterion confirms itself after 10 s without a host; one
+    that keeps its network down rolls back after 60 s through a commanded reset; one that resets
+    before confirming starts the previous image at the next start; each rollback is logged."""
+    need_clock(ctx)
+    s = secret(ctx)
+    # confirms itself after 10 s, without a host
+    a = activate_new(ctx, s, 681)
+    if ctx.check("update activated (confirm case)", a is not None, "the update did not complete"):
+        with updating(ctx, s, restart_at_end=False) as u:
+            advance(ctx, 8)
+            ctx.eq("8 s after start: still a trial (tag 10 = 1)", u.identify().get(10), b"\x01")
+            advance(ctx, 3)
+            t = u.identify()
+            ctx.eq("after 10 s: confirmed (tag 10 = 0), the new slot runs", (t.get(10), t.get(23, b"")[:1]), (b"\x00", bytes([a[1]])))
+    # keeps its network down: rolls back after 60 s
+    a = activate_new(ctx, s, 682, net_down=True)
+    if ctx.check("update activated (network-down case)", a is not None, "the update did not complete"):
+        with updating(ctx, s, restart_at_end=False) as u:
+            n0 = last_log_seq(u)
+            advance(ctx, 55)
+            ctx.eq("55 s after start: still the trial in the new slot", (u.identify().get(10), u.identify().get(23, b"")[:1]),
+                   (b"\x01", bytes([a[1]])))
+            advance(ctx, 10)
+            wait_reachable(ctx, "trial rollback")
+            t = u.identify()
+            ctx.eq("after 60 s: rolled back (tag 10 = 2), the previous slot and version run",
+                   (t.get(10), t.get(23, b"")[:1], version_of(t)), (b"\x02", bytes([a[0]]), a[2]))
+            ctx.check("the rollback is logged", bool(logs_since(u, n0)), "no new log entry")
+    # resets before confirming: the previous image at the next start
+    a = activate_new(ctx, s, 683)
+    if ctx.check("update activated (reset case)", a is not None, "the update did not complete"):
+        ctx.need("power.cycle")
+        with updating(ctx, s, restart_at_end=False) as u:
+            n0 = last_log_seq(u)
+            ctx.fixture("power.cycle")
+            wait_reachable(ctx, "power cycle during the trial")
+            t = u.identify()
+            ctx.eq("a power loss before confirmation: the previous slot and version at the next start (tag 10 = 2)",
+                   (t.get(10), t.get(23, b"")[:1], version_of(t)), (b"\x02", bytes([a[0]]), a[2]))
+            ctx.check("the rollback is logged", bool(logs_since(u, n0)), "no new log entry")

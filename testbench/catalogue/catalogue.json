@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "319089f",
-  "sha256_of_inputs": "3f1b4e8dde9041ee9ef875ef06e77cb23667b2429be78c2b4a0001c30812c7d9"
+  "commit": "50c05f9",
+  "sha256_of_inputs": "7f79db7c8fd0599faa940dc5f0f7f55c80a5bef6fb7592b62a5666d67cf24402"
  },
  "his": {
   "commit": "72591aa"
@@ -413,9 +413,10 @@
    "id": "T-A1-23",
    "origin": "spec",
    "part": "A-B",
-   "title": "After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART`.",
+   "title": "After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 \"After `UPDATE_ABORT`\"; 0063).",
    "reqs": [
-    "A1"
+    "A1",
+    "A1.8"
    ],
    "scope": "v1.0",
    "target": "emulator",
@@ -632,17 +633,18 @@
     "A1"
    ],
    "scope": "v1.0",
-   "target": "host",
+   "target": "emulator",
    "also": [
-    "emulator"
+    "host"
    ],
    "needs": [
-    "time.scale"
+    "time.advance"
    ],
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "minutes of radio time: time.advance (reference model now; emulator when it offers it)"
    ],
    "covers": [
     "UP-09"
@@ -897,17 +899,18 @@
     "A1.8"
    ],
    "scope": "v1.0",
-   "target": "host",
+   "target": "emulator",
    "also": [
-    "emulator"
+    "host"
    ],
    "needs": [
-    "time.scale"
+    "time.advance"
    ],
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "minutes of radio time: time.advance (reference model now; emulator when it offers it)"
    ],
    "covers": [
     "UP-09 (after UPDATE_ABORT and after VERIFY without ACTIVATE)"
@@ -1415,18 +1418,19 @@
     "A1.8"
    ],
    "scope": "v1.0",
-   "target": "host",
+   "target": "emulator",
    "also": [
-    "emulator"
+    "host"
    ],
    "needs": [
-    "power.cycle",
-    "time.scale"
+    "time.advance",
+    "power.cycle"
    ],
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "the network-down case needs trial.sim (reference model) or a runner that keeps the CH394 silent"
    ],
    "covers": [
     "UP-05 (network down: rollback after 60 s)",
@@ -1718,6 +1722,30 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-82",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "After `UPDATE_ABORT`, a stray `UPDATE_BLOCK` (54), `UPDATE_VERIFY` (55), `UPDATE_ACTIVATE` (55), `UPDATE_BEGIN` (58), `ROLLBACK` (58) and a second `UPDATE_ABORT` (0) sent every 60 s do not delay the restart: the radio restarts into the running image 10 min (± 5 s) after the reply to the first `UPDATE_ABORT`, logs it, and RX works afterwards; the same with a `RESTART` after 2 min restarts at once. During a transfer, a block refused with 53 every 60 s does not delay the abandonment either (reference model or emulator; A1.8 \"What restarts the timer\", \"After `UPDATE_ABORT`\"; 0063).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "time.advance"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "minutes of radio time: time.advance (reference model now; emulator when it offers it)"
    ]
   },
   {
