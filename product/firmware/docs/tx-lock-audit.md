@@ -48,7 +48,7 @@ Record `tx` bit 4 (`tx.rs:356`) and every arm (`NOT_CALIBRATED`, 12) follow from
 |---|---|---|
 | T/R lines, chain output enables (PA10, PH10), PA DAC reset (PB14), ATU strobes (PD13, PG2, PG5), PD12 | Written only from the `SAFE_STATE` table, at their safe levels: in `__pre_init` before RAM initialisation, again at start, and at every unkey. | table `crates/safety/src/safe_state.rs` (`SAFE_STATE`); `board/common/src/safe.rs:69` `apply_at_reset`, `:101` `apply`, `:115` `reassert`; `board/boot/src/main.rs:42` |
 | The plan changes no other pin | Host test `reset_plan_gives_the_table_and_touches_nothing_else`. | `safe_state.rs:301` |
-| Any other code naming ports A, C, D, F, G, H, or claiming a pin other than the CH394's (SPI6, PG12-PG15, PB5) and the console's (PB6, PB7) | Build check (new): `rf_ports_and_rf_peripherals_are_named_only_by_the_safe_state`. | `crates/layout/tests/forbidden.rs:180` |
+| Any other code naming ports A, C, D, F, G, H, or claiming a pin other than the CH394's (SPI6, PG12-PG15, PB5, INT# PC13 as an input) and the console's (PB6, PB7) | Build check (new): `rf_ports_and_rf_peripherals_are_named_only_by_the_safe_state`. | `crates/layout/tests/forbidden.rs:180` |
 | SPI1 (relay shift-register chains), SPI2 (PA bias and drive DAC), DAC1 (RF gain, PA4) | Not used anywhere. PA4 is left untouched (no safe level known). Same build check. | `forbidden.rs:180` |
 | SEND and TUNER outputs (HIS-09), KEY and PTT inputs | Not driven, not used in v1.0 (0030). | `safe_state.rs` (`LeaveUntouched` entries) |
 

@@ -125,6 +125,9 @@ embassy_stm32::bind_interrupts!(struct Spi6DmaIrqs {
     BDMA_CHANNEL0 => embassy_stm32::dma::InterruptHandler<embassy_stm32::peripherals::BDMA_CH0>;
     BDMA_CHANNEL1 => embassy_stm32::dma::InterruptHandler<embassy_stm32::peripherals::BDMA_CH1>;
 });
+embassy_stm32::bind_interrupts!(struct Ch394IntIrqs {
+    EXTI15_10 => embassy_stm32::exti::InterruptHandler<embassy_stm32::interrupt::typelevel::EXTI15_10>;
+});
 
 impl CsDevice<'_> {
     /// One full-duplex transfer of `data` in place by BDMA, through the SRAM4 buffer, waited for
@@ -220,6 +223,10 @@ pub struct NetPins<'d> {
     pub rst: embassy_stm32::Peri<'d, embassy_stm32::peripherals::PB5>,
     /// BDMA channels for SPI6 (D3; the only DMA that reaches SPI6, RM0468).
     pub rx_dma: embassy_stm32::Peri<'d, embassy_stm32::peripherals::BDMA_CH0>,
+    /// CH394 INT# ([HIS] HIS 40: PC13, active low, VERIFIED; no board pull-up known, F2-Q4:
+    /// the MCU's pull-up).
+    pub int: embassy_stm32::Peri<'d, embassy_stm32::peripherals::PC13>,
+    pub int_exti: embassy_stm32::Peri<'d, embassy_stm32::peripherals::EXTI13>,
     pub tx_dma: embassy_stm32::Peri<'d, embassy_stm32::peripherals::BDMA_CH1>,
 }
 
@@ -256,7 +263,7 @@ fn mac_or_derived(chip: &mut Chip) -> Result<([u8; 6], bool), ChError<spi::Error
     Ok((d, true))
 }
 
-async fn bring_up(pins: NetPins<'static>) -> Result<Chip, ChError<spi::Error>> {
+async fn bring_up(pins: NetPins<'static>) -> Result<(Chip, embassy_stm32::exti::ExtiInput<'static, Async>), ChError<spi::Error>> {
     // RST# has been low since the safe state at start (HIS 85: held until the product brings it
     // up). Keep it low a while longer, then release. [HIS] HIS 40 (`d199d33`): the chip must not
     // be accessed 12-19 ms after RST# goes high (VERIFIED, CH394DS1 10.4.3); the minimum low
@@ -287,7 +294,11 @@ async fn bring_up(pins: NetPins<'static>) -> Result<Chip, ChError<spi::Error>> {
     // The socket buffers ([BUF_RX_KIB], [BUF_TX_KIB]); the CH394 has no flow control in UDP mode,
     // so a packet that does not fit is lost (T-B10-L13).
     chip.set_buffers(BUF_RX_KIB, BUF_TX_KIB)?;
-    Ok(chip)
+    // INT# on received datagrams of every socket (each socket's Sn_INTE is set to RECV only when
+    // it opens): the net loop sleeps until a datagram arrives, at most 2 ms (0054; T-B5-20).
+    chip.enable_recv_interrupts(0xFF)?;
+    let int = embassy_stm32::exti::ExtiInput::new(pins.int, pins.int_exti, embassy_stm32::gpio::Pull::Up, Ch394IntIrqs);
+    Ok((chip, int))
 }
 
 async fn wait_link(chip: &mut Chip) -> g7250_ch394::Link {
@@ -573,7 +584,7 @@ fn print_cfg(c: &NetConfig, s: Source) {
 
 #[embassy_executor::task]
 pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_init::MgmtInit, tx: g7250_safety::tx::TxCore) {
-    let mut chip = match bring_up(pins).await {
+    let (mut chip, mut int) = match bring_up(pins).await {
         Ok(c) => c,
         Err(e) => {
             println!("net: FAULT no answer from the CH394 ({:?}); network stays down", e);
@@ -1030,7 +1041,12 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         p2.set_link(l); // a session ends on link loss or < 100 Mbit/s (B5.8)
                     }
                 }
-                Timer::after_millis(2).await;
+                // Idle: sleep until the CH394 signals a received datagram (INT# low), at most
+                // 2 ms for the housekeeping. Yield once first: with INT# held low (a datagram
+                // left unread on purpose) the wait returns at once, and the other tasks (the
+                // watchdog among them) must still run.
+                embassy_futures::yield_now().await;
+                let _ = embassy_futures::select::select(int.wait_for_low(), Timer::after_millis(2)).await;
             }
             Err(e) => {
                 println!("net: receive error {:?}", e);

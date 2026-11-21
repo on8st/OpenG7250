@@ -37,6 +37,10 @@ pub mod common {
     pub const SHAR: u16 = 0x0009;
     pub const SIPR: u16 = 0x000F;
     pub const IR: u16 = 0x0015;
+    /// GINTE ([CH394] 7.1.8): global interrupt enables.
+    pub const GINTE: u16 = 0x0016;
+    /// SINTE ([CH394] 7.1.10): socket interrupt enables, one bit per socket.
+    pub const SINTE: u16 = 0x0018;
     pub const RTR: u16 = 0x0019;
     pub const RCR: u16 = 0x001B;
     pub const PHYCFGR: u16 = 0x002E;
@@ -55,6 +59,10 @@ pub mod sock {
     pub const DIPR: u16 = 0x000C;
     pub const DPORT: u16 = 0x0010;
     pub const RXBUF_SIZE: u16 = 0x001E;
+    /// Sn_INTE ([CH394] 7.2.20): which Sn_INT events raise INT#.
+    pub const INTE: u16 = 0x002C;
+    /// Sn_INT bit 2 INT_RECV ([CH394] 7.2.3).
+    pub const IR_RECV: u8 = 0x04;
     pub const TXBUF_SIZE: u16 = 0x001F;
     pub const TX_FSR: u16 = 0x0020;
     pub const TX_WR: u16 = 0x0024;
@@ -230,6 +238,13 @@ impl<S: SpiDevice> Ch394<S> {
         self.write(bsb::COMMON, common::SIPR, &ip)
     }
 
+    /// INT# on received datagrams of the sockets in `mask` ([CH394] 7.1.8-10); the global sources
+    /// (IP conflict, unreachable) stay polled through [`Self::take_irq`].
+    pub fn enable_recv_interrupts(&mut self, mask: u8) -> Result<(), Error<S::Error>> {
+        self.write(bsb::COMMON, common::GINTE, &[0])?;
+        self.write(bsb::COMMON, common::SINTE, &[mask])
+    }
+
     /// Read and clear the common interrupt flags; returns them.
     pub fn take_irq(&mut self) -> Result<u8, Error<S::Error>> {
         let v = self.read_u8(bsb::COMMON, common::IR)?;
@@ -279,7 +294,9 @@ impl<S: SpiDevice> Ch394<S> {
         if sr != sock::SR_UDP {
             return Err(Error::SocketState(sr));
         }
-        Ok(())
+        // Only a received datagram raises INT# for this socket: SEND_OK and TIMEOUT, cleared
+        // lazily by the next send, must not hold INT# low.
+        self.write(bsb::sock_reg(n), sock::INTE, &[sock::IR_RECV])
     }
 
     pub fn udp_close(&mut self, n: u8) -> Result<(), Error<S::Error>> {
@@ -294,6 +311,9 @@ impl<S: SpiDevice> Ch394<S> {
         if avail < UDP_HDR {
             return Ok(None);
         }
+        // Clear INT_RECV before reading: a datagram that arrives while this one is read sets it
+        // again, so INT# is never left high with an unread arrival behind it.
+        self.write(bsb::sock_reg(n), sock::IR, &[sock::IR_RECV])?;
         let rd = self.read_u16(bsb::sock_reg(n), sock::RX_RD)?;
         let mut h = [0u8; UDP_HDR];
         self.read(bsb::sock_rx(n), rd, &mut h)?;

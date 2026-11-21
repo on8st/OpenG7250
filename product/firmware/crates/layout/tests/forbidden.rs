@@ -185,7 +185,8 @@ fn rf_ports_and_rf_peripherals_are_named_only_by_the_safe_state() {
     // (USART1, PB6, PB7).
     const PORTS: &[&str] = &["GPIOA", "GPIOC", "GPIOD", "GPIOF", "GPIOG", "GPIOH", "Port::A", "Port::C", "Port::D", "Port::F", "Port::G", "Port::H"];
     const PERIPHERALS: &[&str] = &["SPI1", "SPI2", "DAC1", "pac::DAC", "p.DAC"];
-    const PINS_ALLOWED: &[&str] = &["PG12", "PG13", "PG14", "PG15", "PB5", "PB6", "PB7"];
+    // PC13: CH394 INT# ([HIS] HIS 40, VERIFIED), an input.
+    const PINS_ALLOWED: &[&str] = &["PG12", "PG13", "PG14", "PG15", "PB5", "PB6", "PB7", "PC13"];
     for (f, code) in code_lines() {
         let path = f.to_string_lossy();
         let allowed_ports = path.ends_with("board/common/src/safe.rs") || path.ends_with("crates/safety/src/safe_state.rs");

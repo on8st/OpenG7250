@@ -241,3 +241,22 @@ fn a_send_behind_an_unfinished_one_is_dropped_and_counted_not_waited_for() {
     let sent: Vec<u8> = d.sent.iter().filter(|s| s.0 == 1).map(|s| s.3[0]).collect();
     assert_eq!(sent, vec![1, 3]);
 }
+
+#[test]
+fn received_datagrams_raise_int_and_only_they() {
+    // 0054 / T-B5-20: INT# wakes the net loop on a received datagram. Sn_INTE is RECV only (not
+    // SEND_OK, cleared lazily), SINTE has every socket, and a read clears INT_RECV first.
+    let mut c = chip();
+    c.enable_recv_interrupts(0xFF).unwrap();
+    c.udp_open(3, 1027).unwrap();
+    let mut d = c.release().0;
+    assert_eq!((d.common[0x16], d.common[0x18]), (0, 0xFF));
+    assert_eq!(d.sreg[3][0x2C], 0x04);
+    d.sreg[3][0x02] = 0x04 | 0x10; // RECV and SEND_OK pending
+    d.deliver(3, [10, 0, 0, 1], 5000, &[1, 2, 3]);
+    let mut c = Ch394::new(Dev(d));
+    let mut b = [0u8; 8];
+    assert!(c.udp_recv(3, &mut b).unwrap().is_some());
+    let d = c.release().0;
+    assert_eq!(d.sreg[3][0x02] & 0x04, 0, "INT_RECV cleared by the read");
+}
