@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "cc4483f",
-  "sha256_of_inputs": "f664fcc67bbfdf1658ffb0fa0f1e8cca635e643b770c5d72df4116b231967b95"
+  "commit": "6f51cde",
+  "sha256_of_inputs": "ba514289a7b98bb24c63bc6069c83c2818b20b632687ae498154275b3e44eff0"
  },
  "his": {
   "commit": "72591aa"
@@ -1402,17 +1402,19 @@
     "A1.11"
    ],
    "scope": "v1.0",
-   "target": "host",
+   "target": "emulator",
    "also": [
-    "emulator"
+    "host"
    ],
    "needs": [
-    "dhcp.server"
+    "dhcp.server",
+    "power.cycle"
    ],
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "from link up: the trace link event where offered, else counted from the power cycle (stricter)"
    ]
   },
   {
@@ -1494,6 +1496,30 @@
    "pending": [],
    "tx_part": false,
    "notes": []
+  },
+  {
+   "id": "T-A1-74",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "At power-on before any address, DHCPDISCOVER has IP source 0.0.0.0; while link-local, DHCPDISCOVER and DHCPREQUEST have the link-local address as IP source, `ciaddr` 0.0.0.0 and the BROADCAST flag set, and a server's broadcast OFFER and ACK give the radio its lease (emulator or reference model; A1.11; 0052).",
+   "reqs": [
+    "A1",
+    "A1.11"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "dhcp.server",
+    "power.cycle"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
   },
   {
    "id": "T-A2-01",

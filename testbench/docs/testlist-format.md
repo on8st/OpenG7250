@@ -443,6 +443,19 @@ A test with target `emulator` is also run against the reference model. A test wi
    `fixed_ports`, the DHCP fixtures, `net.endpoint`, the `boot` event and the replay, the
    `t_us` of `hw.trace start`, and `"emulator not ready"` during a power cycle (v1.4); the
    shape of `key.log` (v1.5); `net.log`, `eth.log`, `arp.peer`, `ip.conflict` (v1.6).
-2. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
+2. Proposed (v1.6): an `hw.trace` event `{"seq", "t_us", "kind": "link", "up": 0|1, "speed"}` when
+   the CH394 reports the link (B5.8), so that T-A1-69 counts the start-up bound of A1.11 from
+   link up (0048). Without it the bench counts from the power cycle, which includes the boot and
+   the link negotiation and is therefore stricter than the spec; it says so in the result.
+3. Proposed by the emulator side, to be built when a calibrated image keys (T-B10-47, 0047):
+   `atu.sim {action: "set", match: {PD13?, PG2?, PG5?} | "never", fwd_raw, ref_raw_matched,
+   ref_raw_unmatched, when: "keyed"} | {action: "off"}`. While keyed the ADC1 model returns
+   `fwd_raw` on PF11 and, on PA6, `ref_raw_matched` when the ATU latch values equal `match`,
+   else `ref_raw_unmatched`; `"never"` forces a failed cycle. The bench picks the raw codes
+   from the image's own calibration set, so no detector law is interpreted; tuned or failed is
+   read from the image's registers, with the latch writes as evidence. The reference model's
+   `atu.sim {result, after_ms, tune_time_ms}` (section 4) is a different, model-level shape:
+   the bench tells them apart by the presence of `action`.
+4. A test of the FPGA bus (T-B6-L01) asks `hw.trace start {pins: [PE0 … PE10]}`. Once DDC0
    runs, the 0x04 reads are six strobes per sample; such a trace is meant for a short test
    only, and the runner may drop events (which fails the test) if it cannot keep up.

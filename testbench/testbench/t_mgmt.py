@@ -399,3 +399,123 @@ def t_a1_66(ctx):
         run = 0 if a else run + 1
         longest = max(longest, run)
     ctx.check("no gap longer than 2 s (4 unanswered tries) during the borrow", longest <= 4, f"longest run unanswered: {longest} x 500 ms")
+
+
+# ---------------- start-up bound and DHCP while link-local (0048, 0052) ----------------
+START_LEASE_S, START_LINKLOCAL_S = 5.0, 15.0  # A1.11 "Bound on start-up" (0048)
+
+
+def link_up_t_us(ctx) -> int | None:
+    """The radio's link-up time from a trace "link" event where the runner gives one (proposed
+    for v1.6), else None."""
+    if not ctx.trace_file:
+        return None
+    from .trace import load
+    ups = [e for e in load(ctx.trace_file) if e.get("kind") == "link" and e.get("up", 1)]
+    return ups[-1]["t_us"] if ups else None
+
+
+def reachable_both(ctx, limit_s: float) -> float | None:
+    """Seconds until both IDENTIFY and P2 discovery are answered (polled every 0.25 s), or None."""
+    from .p2 import Host, reread_endpoint
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < limit_s + 5:
+        if "net.endpoint" in ctx.endpoint.get("fixtures", []):
+            reread_endpoint(ctx)
+        try:
+            with Host(ctx.net) as h, Mgmt(ctx.net) as c:
+                if h.discover(0.25) and c.req("IDENTIFY", timeout=0.25):
+                    return time.monotonic() - t0
+        except Skip:
+            time.sleep(0.25)
+    return None
+
+
+def startup(ctx, label: str, limit_s: float):
+    ctx.fixture("power.cycle")
+    t_cycle = time.monotonic()
+    emu0 = None
+    took = reachable_both(ctx, limit_s)
+    if took is None:
+        ctx.check(f"{label}: IDENTIFY and discovery answered", False, f"nothing within {limit_s + 5:.0f} s of the power cycle")
+        return
+    up = link_up_t_us(ctx)
+    if up is not None and "hw.observe" in ctx.endpoint.get("fixtures", []):
+        emu0 = (ctx.fixture("hw.observe") or {}).get("t_us")
+    if up is not None and emu0 is not None:
+        # the answer came by emu0 (emulated); from link up that is at most:
+        since = (emu0 - up) / 1e6
+        ctx.check(f"{label}: answered within {limit_s:.0f} s of link up (trace link event, emulated clock)",
+                  since <= limit_s, f"answered by {since:.1f} s after link up (upper bound)")
+    else:
+        ctx.check(f"{label}: answered within {limit_s:.0f} s, counted from the power cycle (includes boot and "
+                  "link negotiation, so stricter than the spec; no link-up event offered)", took <= limit_s, f"{took:.1f} s")
+
+
+@test("T-A1-69")
+def t_a1_69(ctx):
+    ctx.need("dhcp.server")
+    ctx.need("power.cycle")
+    ctx.fixture("dhcp.start")
+    try:
+        startup(ctx, "DHCP server answering at once", START_LEASE_S)
+    finally:
+        ctx.fixture("dhcp.stop")
+    startup(ctx, "no DHCP server (link-local)", START_LINKLOCAL_S)
+    ip = ctx.endpoint["radio"]["ip"]
+    ctx.check("with no DHCP server the answers come from the link-local address", ip.startswith("169.254."), ip)
+
+
+def bflag(m: dict):
+    """The BOOTP broadcast flag of a dhcp.log message: "broadcast" (bool) or "flags" bit 15."""
+    if "broadcast" in m:
+        return bool(m["broadcast"])
+    if "flags" in m:
+        return bool(int(m["flags"]) & 0x8000)
+    return None
+
+
+def mtype(m: dict) -> str:
+    return str(m.get("type", "")).upper().replace("DHCP", "")
+
+
+@test("T-A1-74")
+def t_a1_74(ctx):
+    """A1.11, 0052: DHCP source address at power-on and while link-local."""
+    ctx.need("dhcp.server")
+    ctx.need("power.cycle")
+    from .p2 import wait_reachable
+    ctx.fixture("dhcp.stop")
+    ctx.fixture("power.cycle")
+    wait_reachable(ctx, "power-on with no DHCP server", START_LINKLOCAL_S + 5)
+    ll = ctx.endpoint["radio"]["ip"]
+    if not ctx.check("link-local address after the power-on exchange", ll.startswith("169.254."), ll):
+        return
+    first = [m for m in (ctx.fixture("dhcp.log") or []) if mtype(m) == "DISCOVER"]
+    ctx.check("power-on DHCPDISCOVER (before any address): IP source 0.0.0.0", bool(first) and str(first[0].get("src", "")).split(":")[0] == "0.0.0.0",
+              str(first[0]) if first else "no DISCOVER in dhcp.log")
+    # wait for a retry while link-local (from 4 s, doubling), then let a server answer
+    deadline, retry = time.monotonic() + 20, None
+    while time.monotonic() < deadline and retry is None:
+        time.sleep(0.5)
+        retry = next((m for m in (ctx.fixture("dhcp.log") or []) if mtype(m) == "DISCOVER"
+                      and str(m.get("src", "")).split(":")[0] == ll), None)
+    if not ctx.check("a DHCPDISCOVER retry while link-local", retry is not None, "none within 20 s"):
+        return
+    ctx.eq("while link-local: DISCOVER source is the link-local address, ciaddr 0.0.0.0, BROADCAST flag set",
+           (str(retry.get("src", "")).split(":")[0], retry.get("ciaddr"), bflag(retry)), (ll, "0.0.0.0", True))
+    ctx.fixture("dhcp.start")
+    try:
+        deadline, req = time.monotonic() + 40, None
+        while time.monotonic() < deadline and req is None:
+            time.sleep(0.5)
+            req = next((m for m in (ctx.fixture("dhcp.log") or []) if mtype(m) == "REQUEST"), None)
+        if ctx.check("a DHCPREQUEST after the server's OFFER", req is not None, "none within 40 s"):
+            ctx.eq("while link-local: REQUEST source is the link-local address, ciaddr 0.0.0.0, BROADCAST flag set",
+                   (str(req.get("src", "")).split(":")[0], req.get("ciaddr"), bflag(req)), (ll, "0.0.0.0", True))
+            took = wait_reachable(ctx, "the lease", 10)
+            ip = ctx.endpoint["radio"]["ip"]
+            ctx.check("the broadcast OFFER and ACK give the radio its lease (reachable at the leased address)",
+                      not ip.startswith("169.254."), f"{ip} after {took:.1f} s")
+    finally:
+        ctx.fixture("dhcp.stop")

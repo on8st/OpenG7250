@@ -238,6 +238,9 @@ OVERRIDES: dict[str, dict] = {
     **{t: {"target": "emulator", "also": ["host"], "needs": ["key.log"], "pending": CAL_SET,
            "notes": ["needs TX unlocked: blocked until the calibration set is complete (tx bit 4)"]}
        for t in ["T-B10-33", "T-B10-43", "T-B10-44", "T-B10-45", "T-B10-46"]},
+    "T-A1-69": {"target": "emulator", "also": ["host"], "needs": ["dhcp.server", "power.cycle"],
+                "notes": ["from link up: the trace link event where offered, else counted from the power cycle (stricter)"]},
+    "T-A1-74": {"target": "emulator", "also": ["host"], "needs": ["dhcp.server", "power.cycle"]},
     "T-B10-47": {"target": "emulator", "also": ["host"], "pending": CAL_SET,
                  "notes": ["needs TX unlocked: blocked until the calibration set is complete (tx bit 4)",
                            "tuned, failed and tune-time parts need the model-only fixture atu.sim; the stop "
