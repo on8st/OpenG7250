@@ -387,6 +387,21 @@ mod tests {
     }
 
     #[test]
+    fn another_port_of_the_owner_ip_is_another_host() {
+        // B3.4 and T-B8-06/11: the host is IP and port; the owner's IP from another port is
+        // another host while the session runs.
+        let mut s = Session::new();
+        s.on_cnc(A, CnC::HighPriority, &hp(true), 0, true);
+        assert!(!s.discovery_in_use(A));
+        assert!(s.discovery_in_use((A.0, A.1 + 1)));
+        // Still running 999 ms after the last C&C with the timer on; ended at 1000 ms.
+        assert!(s.tick(999, true, true).is_none());
+        assert!(s.discovery_in_use((A.0, A.1 + 1)));
+        assert!(s.tick(1000, true, true).is_some());
+        assert!(!s.discovery_in_use((A.0, A.1 + 1)));
+    }
+
+    #[test]
     fn restart_by_the_same_host_carries_rx_settings_not_the_timer() {
         let mut s = Session::new();
         s.on_cnc(A, CnC::General, &general(true, 7000), 0, true);
