@@ -78,6 +78,19 @@ pub trait FlashIo {
     fn erase_sector(&mut self, addr: u32) -> Result<(), Self::Error>;
 }
 
+impl<T: FlashIo + ?Sized> FlashIo for &mut T {
+    type Error = T::Error;
+    fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
+        (**self).read(addr, buf)
+    }
+    fn program(&mut self, addr: u32, data: &[u8]) -> Result<(), Self::Error> {
+        (**self).program(addr, data)
+    }
+    fn erase_sector(&mut self, addr: u32) -> Result<(), Self::Error> {
+        (**self).erase_sector(addr)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error<E> {
     Io(E),

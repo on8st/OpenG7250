@@ -123,6 +123,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "g7250-update"
+version = "0.1.0"
+dependencies = [
+ "g7250-layout",
+ "g7250-store",
+ "sha2",
+]
+
+[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

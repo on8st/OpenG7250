@@ -1,0 +1,13 @@
+[package]
+name = "g7250-update"
+description = "Firmware update of the G7250 main firmware (A1.8): boot record, staging in the other slot, trial boot and rollback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+g7250-layout = { path = "../layout" }
+g7250-store = { path = "../store" }
+sha2 = { version = "0.11.1", default-features = false }

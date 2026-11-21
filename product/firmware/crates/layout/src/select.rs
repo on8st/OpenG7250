@@ -13,11 +13,13 @@
 //! | 6 | trial attempts left |
 //! | 7 | confirmed (1 = the trial image confirmed itself) |
 //! | 8-11 | sequence number |
-//! | 12-27 | reserved, 0xFF |
+//! | 12 | flags: bit 0 the last trial was rolled back (the application logs it, U-6) |
+//! | 13-27 | reserved, 0xFF |
 //! | 28-31 | CRC-32 of bytes 0-27 |
 //!
-//! Milestone F1: the boot stage only reads. Writing the record (trial start, attempt count,
-//! confirmation) comes with the update path (A1.8); until then a missing record means slot A.
+//! Since the update path (A1.8) the record is a record of the store (`g7250-store`, kind
+//! `BootRecord`): the boot stage writes it for a trial attempt and a rollback, the application
+//! for an activation, a confirmation and a `ROLLBACK`. A missing record means slot A.
 
 use crate::Slot;
 use crate::crc32::crc32;
@@ -32,6 +34,8 @@ pub struct BootRecord {
     pub attempts_left: u8,
     pub confirmed: bool,
     pub seq: u32,
+    /// The last trial did not confirm itself and was rolled back (U-6).
+    pub rolled_back: bool,
 }
 
 fn slot_from(b: u8) -> Option<Slot> {
@@ -68,6 +72,7 @@ impl BootRecord {
             attempts_left: b[6],
             confirmed: b[7] == 1,
             seq: u32::from_le_bytes([b[8], b[9], b[10], b[11]]),
+            rolled_back: b[12] != 0xFF && b[12] & 1 != 0,
         })
     }
 
@@ -79,6 +84,7 @@ impl BootRecord {
         b[6] = self.attempts_left;
         b[7] = self.confirmed as u8;
         b[8..12].copy_from_slice(&self.seq.to_le_bytes());
+        b[12] = self.rolled_back as u8;
         let c = crc32(&b[..28]);
         b[28..32].copy_from_slice(&c.to_le_bytes());
         b
@@ -100,6 +106,17 @@ pub fn last_record(area: &[u8]) -> Option<BootRecord> {
         }
     }
     best
+}
+
+/// The boot stage's record update for a choice: a trial uses up one attempt before it starts; a
+/// trial that is out of attempts and unconfirmed is rolled back (U-6). `None`: nothing to write.
+pub fn record_for(record: Option<BootRecord>, choice: Choice) -> Option<BootRecord> {
+    let r = record?;
+    match (r.trial, choice) {
+        (Some(t), Choice::Trial(s)) if t == s => Some(BootRecord { attempts_left: r.attempts_left.saturating_sub(1), seq: r.seq + 1, ..r }),
+        (Some(_), _) if !r.confirmed => Some(BootRecord { trial: None, attempts_left: 0, rolled_back: true, seq: r.seq + 1, ..r }),
+        _ => None,
+    }
 }
 
 /// What the boot stage does.
@@ -147,7 +164,7 @@ mod tests {
 
     #[test]
     fn trial_then_rollback() {
-        let mut r = BootRecord { active: Slot::A, trial: Some(Slot::B), attempts_left: 1, confirmed: false, seq: 3 };
+        let mut r = BootRecord { active: Slot::A, trial: Some(Slot::B), attempts_left: 1, confirmed: false, seq: 3, rolled_back: false };
         assert_eq!(choose(Some(r), |_| true), Choice::Trial(Slot::B));
         r.attempts_left = 0;
         assert_eq!(choose(Some(r), |_| true), Choice::Boot(Slot::A));
@@ -157,9 +174,28 @@ mod tests {
     }
 
     #[test]
+    fn trial_attempt_then_rollback_records() {
+        let r = BootRecord { active: Slot::A, trial: Some(Slot::B), attempts_left: 1, confirmed: false, seq: 3, rolled_back: false };
+        // First start: one attempt used up, then the trial runs.
+        let c = choose(Some(r), |_| true);
+        assert_eq!(c, Choice::Trial(Slot::B));
+        let r2 = record_for(Some(r), c).unwrap();
+        assert_eq!((r2.attempts_left, r2.trial, r2.seq), (0, Some(Slot::B), 4));
+        // Next start without confirmation: rollback to A, flagged.
+        let c = choose(Some(r2), |_| true);
+        assert_eq!(c, Choice::Boot(Slot::A));
+        let r3 = record_for(Some(r2), c).unwrap();
+        assert_eq!((r3.trial, r3.active, r3.rolled_back), (None, Slot::A, true));
+        // A confirmed record needs no write.
+        let ok = BootRecord { active: Slot::B, trial: None, attempts_left: 0, confirmed: true, seq: 9, rolled_back: false };
+        assert_eq!(record_for(Some(ok), choose(Some(ok), |_| true)), None);
+        assert_eq!(record_for(None, Choice::Boot(Slot::A)), None);
+    }
+
+    #[test]
     fn record_roundtrip_and_last_wins() {
-        let r1 = BootRecord { active: Slot::A, trial: None, attempts_left: 0, confirmed: true, seq: 1 };
-        let r2 = BootRecord { active: Slot::B, trial: None, attempts_left: 0, confirmed: true, seq: 2 };
+        let r1 = BootRecord { active: Slot::A, trial: None, attempts_left: 0, confirmed: true, seq: 1, rolled_back: false };
+        let r2 = BootRecord { active: Slot::B, trial: None, attempts_left: 0, confirmed: true, seq: 2, rolled_back: true };
         let mut area = [0xFFu8; 128];
         area[..32].copy_from_slice(&r1.encode());
         area[32..64].copy_from_slice(&r2.encode());
