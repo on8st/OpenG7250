@@ -2,6 +2,7 @@
 
 - Status: proposed (to the repository owner, ON8ST); answers testbench finding SF-24
 - Date: 2026-11-21
+- Amended by 0057 (start-up bound 17 s; MACRAW failure).
 - Builds on: 0035 (DHCP with link-local fallback), 0041 (DHCP socket borrow); [RFC3927].
 
 ## Decision (proposed)

@@ -664,11 +664,12 @@ as in [RFC3927] and keep trying DHCP, with retries spaced from 4 s doubling up t
 64 s (RFC 2131 section 4.1 retransmission back-off); a lease, when it comes, is an address
 change under A1.11a (0035).
 
-- **Bound on start-up** (0048). Counted from link up (the CH394 reports the link,
+- **Bound on start-up** (0048, 0057). Counted from link up (the CH394 reports the link,
   B5.8), the management socket and the P2 sockets MUST be open within 5 s when a DHCP server
-  answers the first DISCOVER, and within 15 s when none answers: at most 6 s of DHCP attempts at
-  power-on, then the RFC 3927 probe and announce on the link-local address ([RFC3927] section
-  9: about 7 s at most), then the sockets. The time from power-on to link up (boot and
+  answers the first DISCOVER, and within 17 s when none answers: at most 6 s of DHCP attempts at
+  power-on, then the RFC 3927 probe and both announcements on the link-local address, at most
+  9 s by the constants of [RFC3927] section 9 (PROBE_WAIT 1 s, two probe intervals of at most
+  2 s, ANNOUNCE_WAIT 2 s, ANNOUNCE_INTERVAL 2 s), then the sockets, with 2 s margin. The time from power-on to link up (boot and
   auto-negotiation) is not part of this bound.
 - **Link-local address** (0049). The G7250 chooses, probes and announces its link-local
   address as [RFC3927] section 2. Only socket 0 can work in MACRAW ([CH394]), and no socket is
@@ -679,6 +680,14 @@ change under A1.11a (0035).
     ends the session). During such a probe, at most 10 s, discovery (port 1024, socket 0) and
     the other sockets are closed;
   - the DHCP attempts and the probe run one after the other, as the start-up bound assumes;
+  - **if socket 0 cannot be opened in MACRAW** (a chip or driver fault) after three tries 10 ms
+    apart, the G7250 uses the chosen link-local address without a complete probe, so that the
+    management channel stays reachable, and keeps watching IP_CONFLI as above (0057). It logs
+    it with a log entry containing `link-local <address> used without a complete RFC 3927
+    probe`, counts it in `GET_STATS` as `ll_unprobed`, reports it in `IDENTIFY` (Annex M,
+    Table M-2 tag 24) and once on the debug console (USART1 as A3.5a) with the line
+    `G7250 FAULT LINKLOCAL <address in dotted decimal> UNPROBED` followed by CR LF. It
+    is not a fault of A3.5: it does not touch transmit;
   - defence is [RFC3927] section 2.5 option (a): on a conflict ([CH394] GINT IP_CONFLI) the
     G7250 gives the address up at once, without a defending ARP, chooses a new one and probes
     it; after 10 conflicts it waits 60 s before the next probe ([RFC3927] section 9,
@@ -3424,6 +3433,7 @@ Table M-2 — `IDENTIFY` TLVs (A1.5 items I-1 to I-6)
 | 21 | 36 | calibration set id (32 bytes, zeros if none) and date (u32) (I-7; A1.12) |
 | 22 | 1 | sectors written by the streaming installer (I-3; A1.8a item 3) |
 | 23 | 1 | running slot: 1 slot A, 2 slot B (I-2; A1.8; 0043) |
+| 24 | 1 | link-local address in use without a complete RFC 3927 probe (u8: 0 no, 1 yes) (A1.11; 0057) |
 
 Table M-3 — Configuration items (A1.6)
 
@@ -3695,13 +3705,14 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-66 | With no DHCP server, the radio uses a link-local address, retries DHCP from 4 s doubling up to every 64 s, and lends the management socket for at most 2 s per retry; a management request repeated every 500 ms for 2.5 s around a retry gets an answer (reference model; A1.2, A1.11; 0041). |
 | T-A1-67 | Running in slot A (`IDENTIFY` tag 23 = 1): `UPDATE_BEGIN` with a package for slot A gets 63 and nothing is written, one for slot B is accepted; during an unconfirmed trial boot `UPDATE_BEGIN` gets 58; a simulated write failure in the staging slot discards the transfer with status 55, logs it and leaves the running image and boot record unchanged (reference model; A1.8; 0043). |
 | T-A1-68 | A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044). |
-| T-A1-69 | From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 15 s, from the link-local address (reference model or emulator; A1.11 "Bound on start-up"; 0048). |
+| T-A1-69 | From link up: with a DHCP server that answers at once, `IDENTIFY` and P2 discovery are answered within 5 s; with no DHCP server, within 17 s, from the link-local address, after both announcements (reference model or emulator; A1.11 "Bound on start-up"; 0048, 0057). |
 | T-A1-70 | At start-up with no DHCP server: the radio sends the RFC 3927 probes for its chosen link-local address with the section 9 timing before it answers discovery; an ARP reply claiming that address during the probe makes it choose another and probe again (reference model or emulator; A1.11; 0049). |
 | T-A1-71 | After a successful probe the radio sends the RFC 3927 announcements, and only then answers discovery and `IDENTIFY` on the link-local address, within the start-up bound (A1.11; 0048, 0049). |
 | T-A1-72 | While running on a link-local address, a conflict (IP_CONFLI) makes the radio give the address up at once without a defending ARP, end the session as an address change (A1.11a), probe a new address with discovery and management closed for at most 10 s, and log the conflict; after 10 conflicts it waits 60 s before the next probe (A1.11; 0049). |
 | T-A1-73 | A conflict on a DHCP-leased address sends DHCPDECLINE, moves to link-local and restarts DHCP; a conflict on a static address falls back to the previous configuration (C-4), or to link-local if there is none; each is logged (A1.6 C-4, A1.11; 0049). |
 | T-A1-74 | At power-on before any address, DHCPDISCOVER has IP source 0.0.0.0; while link-local, DHCPDISCOVER and DHCPREQUEST have the link-local address as IP source, `ciaddr` 0.0.0.0 and the BROADCAST flag set, and a server's broadcast OFFER and ACK give the radio its lease (emulator or reference model; A1.11; 0052). |
 | T-A1-75 | While armed and during a P2 session: `SET_FIRST_SECRET` with a 31-byte payload and `SET_CALIBRATION` with a TLV that runs past the end get 17, not 50 or 57; `SET_CALIBRATION` with a well-formed payload and an unknown parameter id gets 57 during the session and, outside it while armed, 50; unarmed and outside a session, 48 (A1.4 "Malformed payload", Table A1-3; 0056). |
+| T-A1-76 | With socket 0 failing to open in MACRAW (simulated): after three tries 10 ms apart the radio uses the chosen link-local address unprobed, answers `IDENTIFY` with tag 24 = 1, logs an entry containing `link-local <address> used without a complete RFC 3927 probe`, raises `GET_STATS` `ll_unprobed`, prints a `G7250 FAULT LINKLOCAL` console line, and still gives the address up on IP_CONFLI; no A3.5 fault is set (emulator; A1.11; 0057). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
