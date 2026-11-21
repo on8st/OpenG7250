@@ -2,7 +2,8 @@
 
 - Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
 - Status: version 1.0 (tag `spec-v1.0`). Applies decisions 0001–0066, all accepted by ON8ST
-  (`product-handover.md`). Complete for milestones M1–M5 except for the values that need the
+  (`product-handover.md`); after 1.0 also 0067 (proposed), listed under "After 1.0" in
+  `spec/CHANGELOG.md`. Complete for milestones M1–M5 except for the values that need the
   radio, which are named in Annex P with a safe placeholder each; level 2 (part C) waits for
   gate G6 (0011).
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`).
@@ -172,7 +173,7 @@ Table A1-3 — Management status codes (0020 §27)
 | 18 | unsupported protocol version | 52 | older image without downgrade flag |
 | 19 | too large | 53 | bad block CRC |
 | 32 | authentication required | 54 | block out of order |
-| 33 | authentication failed | 55 | verification failed; also a flash write that failed (B2.3; 0065) and a `ROLLBACK` without a good other image (A1.8; 0064) |
+| 33 | authentication failed | 55 | verification failed (hash, image check or record–header agreement, A1.8; 0067); also a flash write that failed (B2.3; 0065) and a `ROLLBACK` without a good other image (A1.8; 0064) |
 | 34 | rate-limited | 56 | not supported in this firmware |
 | 35 | busy (another writer) | 57 | refused while a P2 session runs |
 | 36 | first-secret window closed or secret already set | 58 | refused while a firmware update is in progress (0022 §51) |
@@ -206,9 +207,9 @@ A1.5 **Identification** (read; no authentication) (0008, Functions):
   flags, so that a later version can set them (I-2a; A1.8a; 0024, 0028);
 - whether TX is calibrated (record `tx` bit 4) and the id and date of the calibration set
   (I-7; A1.12; 0039);
-- integrity result of both images and update state: normal, trial boot, rolled back, or
-  installer (a streaming installation of A1.8a item 3 in progress, with the number of sectors
-  written) (I-3; 0028);
+- integrity result of both images (none, good or bad, by the image check of A1.8; 0067) and
+  update state: normal, trial boot, rolled back, or installer (a streaming installation of
+  A1.8a item 3 in progress, with the number of sectors written) (I-3; 0028);
 - whether a secret is set, and whether the first-secret window is open and for how long
   (I-3a);
 - active level, owner of the RF chain (host IP address and UDP port, or none) and TX arm
@@ -401,6 +402,48 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   bootloader region or the option bytes ([HIS] HIS 15 rules 1, 2).
 - The staged image MUST be hashed and compared with the header before activation. No
   signature is checked in this version (U-4; 0008, Resolved 5).
+- **Image check** (0067). An image of this firmware passes the image check for a slot when:
+  every flash word of it can be read (no double ECC error, 0065); it carries an image record
+  of this firmware, in a place and layout the firmware defines and documents, naming the
+  G7250 and the kind "application"; the length it records fits the slot; it is linked for
+  that slot; its own integrity check over the whole image holds (the firmware's choice, for
+  example a CRC-32); and its initial stack pointer lies in RAM and its entry point in that
+  slot. The boot stage is not such an image (U-7). A foreign image (A1.8a item 3) gets no
+  image check; only its SHA-256 is checked.
+- **`UPDATE_VERIFY`** (0067). For an image of this firmware, `UPDATE_VERIFY` checks in this
+  order, with status 55 at the first check that fails and that check named in the log:
+  (1) the SHA-256 of the received image equals Table M-4 bytes 18–49; (2) the image check
+  holds for the staging slot; (3) the image record agrees with the package header in length
+  (bytes 14–17), version (bytes 10–13) and, when byte 52 is not 0, slot. After a failed
+  verify the transfer stays in progress: the host may send blocks again and verify again, and
+  `UPDATE_ACTIVATE` gets 55 until a verify succeeds. `UPDATE_ACTIVATE` adds no check of its
+  own; an accepted `UPDATE_BLOCK` after a good verify cancels that verify.
+- **Boot-stage refusals** (0067). The boot stage applies the image check to a slot every time
+  before it starts it. A trial slot that fails it is not started: the boot stage starts the
+  previous image, logs `boot: slot <n> refused: <check>` and the rollback, and the update
+  state becomes "rolled back" (Table M-2 tag 10 = 2). A confirmed active slot that fails it:
+  the boot stage starts the other slot if that slot counts as good (tag 9 = 1, below), as the
+  active image and without a trial, records this in the boot record and logs it; the update
+  state becomes "rolled back". If neither slot passes, the boot stage holds the A3.6 safe
+  state, services the watchdog and does not start the network; recovery is the vendor path
+  (A1.8a item 9).
+- **Integrity in `IDENTIFY`** (0067; Table M-2 tag 9), per slot: 1 good, the slot passed the
+  image check when last judged and its staging, if any, ended with a good `UPDATE_VERIFY`;
+  0 none, the slot is erased, has no image record, or its staging has not ended with a good
+  verify (from the first erase of `UPDATE_BEGIN`, and after `UPDATE_ABORT`, a failed verify, a
+  write failure or a timeout, until a later good verify of that slot; the firmware keeps this
+  mark across a reset); 2 bad, the slot has an image record and no unfinished staging but
+  fails the image check. **Judged:** the running image by the boot stage at this start (1 while
+  it runs); the other slot once at each start before the management socket opens, at a good
+  `UPDATE_VERIFY`, and at each `ROLLBACK` before it is accepted. `IDENTIFY` reports the last
+  judgement and does not read the slot. A trial image that failed to confirm itself keeps 1;
+  tag 10 reports the rollback.
+- **Packages that are not a runnable image** (0067), the outcome a test can expect: SHA-256
+  differs from the header, 55 at `UPDATE_VERIFY`; SHA-256 matches but the image check or the
+  record–header agreement fails, 55 at `UPDATE_VERIFY` and at `UPDATE_ACTIVATE`, the running
+  image and the boot record unchanged, tag 9 = 0 for the staging slot; passes every check but
+  does not run or confirm itself, started as a trial and rolled back (U-6); refused by the boot
+  stage only if the slot changed after a good verify.
 - Activation MUST be atomic; power loss before the switch leaves the old image running (U-5).
 - The first boot of a new image is a trial; without self-confirmation within 60 s of start,
   the boot stage MUST return to the previous image and log the rollback (U-6; 0020 §24; 0028).
@@ -3549,7 +3592,7 @@ Table M-2 — `IDENTIFY` TLVs (A1.5 items I-1 to I-6)
 | 6 | 4 | boot stage version (I-2) |
 | 7 | 4 | hardware revision, 0 = not identified (I-2; HIS-18) |
 | 8 | 1 | bit 0 stock image retained, bit 1 vendor recovery supported; both 0 in this version (I-2a) |
-| 9 | 2 | integrity of the running image and of the other slot: 0 none, 1 good, 2 bad (I-3) |
+| 9 | 2 | integrity of the running image and of the other slot: 0 none, 1 good, 2 bad, by the image check and as judged in A1.8 "Integrity in `IDENTIFY`" (I-3; 0067) |
 | 10 | 1 | update state: 0 normal, 1 trial boot, 2 rolled back, 3 installer (I-3) |
 | 11 | 1 | secret set (I-3a) |
 | 12 | 3 | first-secret window open (u8), seconds left (u16) (I-3a) |
@@ -3868,6 +3911,9 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-85 | With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported (emulator; B2.3 "Flash work"; 0065). |
 | T-A1-86 | A power loss after each word of a store write, and at points during the erase of the other store sector in a compaction: after the restart each item holds its old or its new value, never a mix or an older value, a write answered 0 is kept, and the generation does not go back (emulator, flash.log; A1.6 "Store writes"; 0065). |
 | T-A1-87 | A double ECC error in a record of the live store sector, and one in the newest commit word: the store opens without a fault or reset, uses the older record or the previous generation, logs it, and later writes skip the word; an item with no readable record takes its Table A1-4 value (emulator, if it models flash ECC; A1.6 "Store writes"; 0065). |
+| T-A1-88 | Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending the right blocks again and verifying again succeeds (reference model or emulator; A1.8 "Image check", "`UPDATE_VERIFY`"; 0067). |
+| T-A1-89 | `IDENTIFY` tag 9 for the other slot: 1 after a good verify; 0 from the first erase of `UPDATE_BEGIN`, after `UPDATE_ABORT` and after a failed verify, also after a restart; 2 when one byte of a confirmed other image is changed and the radio restarts; `ROLLBACK` with the other slot at 0 or 2 gets 55 and changes nothing (reference model or emulator; A1.8 "Integrity in `IDENTIFY`"; 0067). |
+| T-A1-90 | One byte of the staged image changed after a good verify and `UPDATE_ACTIVATE`: the boot stage does not start the trial slot, starts the previous image, logs the refusal and the rollback, and tag 10 reports 2; one byte of the confirmed active image changed with a good other slot: the other slot starts without a trial and the change is logged; both slots changed: the boot stage holds the safe state and the radio does not answer (emulator; A1.8 "Boot-stage refusals"; 0067). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |

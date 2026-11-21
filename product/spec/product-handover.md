@@ -96,6 +96,7 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0064 | Torn boot-record writes; `ROLLBACK` needs a confirmed image and a good other slot (else 55), starts it as a trial | accepted (2026-11-21) |
 | 0065 | Flash work: no watchdog or pin change up to `t_erase_max`; failure is 55 and `INTERNAL_ERROR`; store survives power loss; ECC errors are torn records | accepted (2026-11-21) |
 | 0066 | TX path check (`TX_PATH_NOT_BLOCKED`): MCU configuration and the level at the pin, every 5 ms, fault after 10 ms of mismatch | accepted (2026-11-21) |
+| 0067 | Image check: `UPDATE_VERIFY` checks hash, image check and record against header (55); boot-stage refusals; `IDENTIFY` tag 9 none, good, bad and when judged | proposed (2026-11-21) |
 
 All numbers 0001–0059 are now in use.
 

@@ -4,6 +4,16 @@
 
 All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 
+## After 1.0 (2026-11-21)
+
+- 0067 (proposed; testbench finding SF-31): what an image of this firmware must be. A1.8
+  "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
+  every word readable; layout the firmware's), "`UPDATE_VERIFY`" (hash, then image check,
+  then record–header agreement, each 55), "Boot-stage refusals", "Integrity in `IDENTIFY`"
+  (tag 9: none, good, bad, and when each is judged) and "Packages that are not a runnable
+  image". A1.5 integrity bullet, Table A1-3 status 55, Table M-2 tag 9. Tests T-A1-88,
+  T-A1-89, T-A1-90.
+
 ## 1.0 — version 1.0, 2026-11-21 (tag `spec-v1.0`)
 
 - Accepted by ON8ST on 2026-11-21. Contains every change listed under "After rc7" below;
