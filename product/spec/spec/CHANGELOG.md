@@ -57,6 +57,9 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
   touch sectors 6 and 7 only as store writes; T-A1-77, T-A1-78.
 - 0062 (proposed, SF-27): `IDENTIFY` tag 25 reports the flash layout, which the two SF-26
   tests now use; new test T-A1-79.
+- Firmware questions of 2026-11-21: 0060 carries the two other tuning words from the capture
+  and fixes the flag order (swap, then negate Q); `UPDATE_BEGIN` code order 51, 56, 63, 61, 52
+  (0061 addendum).
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 

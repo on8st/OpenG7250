@@ -29,7 +29,10 @@ bootloader uses sector 6 as a staging area; the drill F1 settles it (P-SYS-5).
 ## Addendum: updates keep clear of the store (testbench SF-26, 2026-11-21; proposed)
 
 4. An image of this firmware longer than the slot it is linked to gets status 61 before
-   anything is written (after 51 and 63); the slots end where the store begins.
+   anything is written; the slots end where the store begins. Order of the command-specific
+   codes of `UPDATE_BEGIN` (firmware question, 2026-11-21): 51, 56, 63, 61, 52 (A1.8, Table
+   A1-3 paragraph); so a too-large older image gets 61, and a foreign image before the F1 gate
+   gets 56 whatever its size (as T-A1-61).
 5. An update to an image of this firmware erases or writes sectors 6 and 7 only as a store
    write or compaction. Tests T-A1-77 (flash.log on the emulator) and T-A1-78. T-A1-55 (a
    foreign image may fill sectors 1–7, the one-way installation) is unchanged: a return to
