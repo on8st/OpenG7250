@@ -14,10 +14,12 @@ when, and `ROLLBACK` depends on it since 0064. A test therefore cannot say what 
 package whose SHA-256 matches its header but which is not a runnable image: refused at
 `UPDATE_VERIFY` or `UPDATE_ACTIVATE`, refused by the boot stage, or started and rolled back.
 
-The firmware design already checks more than the hash: its boot stage starts a slot only if the
-image's own header, length, CRC, load address and vectors check out
-(`product/firmware/docs/memory-layout.md`, "Boot"). The spec states the host-visible contract;
-the layout of the image stays the firmware's.
+This decision states the host-visible contract only: what the radio accepts, refuses and
+reports, and when. How an image is laid out inside, and how the firmware carries out each
+check, stay the firmware's design; the test bench and the reference model work from this
+contract alone. Folded in before acceptance (testbench points on 0067, 2026-11-21): the
+Context reworded to the contract alone (a), blocks sent again (b), slot names in log lines
+(c), and `ROLLBACK` to a slot whose trial failed (d).
 
 ## Decision
 
@@ -46,9 +48,19 @@ the layout of the image stays the firmware's.
    again and verify again, as for a hash mismatch today); `UPDATE_ACTIVATE` gets 55 until an
    `UPDATE_VERIFY` succeeds. `UPDATE_ACTIVATE` adds no check of its own; an accepted
    `UPDATE_BLOCK` after a good `UPDATE_VERIFY` cancels that verify.
+   - **Blocks sent again** (point b). During a transfer, an `UPDATE_BLOCK` for a block number
+     already received, sent as a new request (a new request id, so not a repeat of A1.4), with
+     a good CRC, MUST be accepted and written: its data replaces what was received for that
+     block, and the image hashed and checked at the next verify is the last data received for
+     each block. If replacing a block needs an erase, the radio MAY count the other blocks of
+     the same erase sector as not received again; "blocks received" (`UPDATE_BLOCK` reply,
+     `UPDATE_STATUS`) then drops by that number, and a verify with any block not received
+     gets 55. A host that sends again after a failed verify SHOULD therefore send every block
+     again, in order. A repeat with the same request id is still answered from the stored
+     reply and not written (A1.4).
 3. **The boot stage** applies the image check to a slot every time before it starts it.
    1. A trial slot that fails it is not started: the boot stage starts the previous image,
-      logs `boot: slot <n> refused: <check>` and the rollback, and the update state becomes
+      logs `boot: slot <s> refused: <check>` and the rollback, and the update state becomes
       "rolled back" (tag 10 = 2).
    2. A confirmed active slot that fails it: the boot stage starts the other slot if that slot
       counts as good (tag 9 = 1 by item 4: it passes the image check and its staging, if any,
@@ -58,6 +70,13 @@ the layout of the image stays the firmware's.
    3. Neither slot passes: the boot stage holds the A3.6 safe state, services the watchdog and
       does not start the network; the radio does not answer. Recovery is the vendor path
       (A1.8a item 9).
+   4. **Slot names in log lines** (point c). In every update and boot log line, this one and
+      0064's `rollback commanded: slot <from> <version> to slot <to> <version>` included, a
+      slot is named by its letter, `A` or `B` (Table M-2 tag 23 reports them as 1 and 2), and
+      `<check>` is one of `unreadable`, `no-record`, `hardware`, `kind`, `length`, `slot`,
+      `integrity`, `vectors` (the items of point 1, in order); a failed `UPDATE_VERIFY` names
+      the same words, or `hash` or `header` for its checks 1 and 3. The version is written
+      `major.minor.build`.
 4. **`IDENTIFY` tag 9** (SF-31 (ii)), one value per slot:
    - 1 good: the slot passed the image check when last judged, and its staging (if any) ended
      with a good `UPDATE_VERIFY`;
@@ -75,6 +94,13 @@ the layout of the image stays the firmware's.
    at each `ROLLBACK` before the command is accepted. `IDENTIFY` reports the last judgement; it
    does not read the slot. A trial image that failed to confirm itself keeps 1: tag 9 reports
    integrity, and tag 10 reports the rollback.
+   - **`ROLLBACK` to a slot whose trial failed** (point d). Intended: such a slot counts as
+     good, and `ROLLBACK` to it is accepted. This is how 0064 item 3.1 reads from now on:
+     "checks good" means tag 9 = 1, and a failed trial does not exclude it. Reason: the image
+     is intact, the failure may have had a cause that is gone (a network down during the trial,
+     for example), and the start is a trial again (0064 item 3.4), so a second failure returns
+     to the image that sent `ROLLBACK`. The host learns of the earlier failure from tag 10 and
+     the log, not from tag 9.
 5. **What a test can expect** for a package that is not a runnable image of this firmware:
    - SHA-256 differs from the header: 55 at `UPDATE_VERIFY` (T-A1-59);
    - SHA-256 matches, but no image record, wrong hardware or kind, linked for the other slot,
@@ -85,7 +111,8 @@ the layout of the image stays the firmware's.
      rolled back (U-6, 0044; T-A1-68);
    - refused by the boot stage: only if the slot changed after a good `UPDATE_VERIFY` (a flash
      fault); the previous image starts and the rollback is logged (T-A1-90).
-   `ROLLBACK` to a slot with tag 9 = 0 or 2 gets 55 (0064; T-A1-89).
+   `ROLLBACK` to a slot with tag 9 = 0 or 2 gets 55 (0064; T-A1-89); to a slot whose trial
+   failed it is accepted and starts a trial (T-A1-89).
 
 ## Alternatives considered
 
@@ -100,10 +127,12 @@ the layout of the image stays the firmware's.
 
 ## Consequences
 
-- Spec A1.5 (integrity bullet), A1.8 ("Image check", "`UPDATE_VERIFY`", boot stage refusals),
+- Spec A1.5 (integrity bullet), A1.8 ("Image check", "`UPDATE_VERIFY`", "Blocks sent again",
+  "Boot-stage refusals", "Integrity in `IDENTIFY`", slot names in the `ROLLBACK` log line),
   Table A1-3 status 55, Table M-2 tag 9; tests T-A1-88, T-A1-89 and T-A1-90 (new).
+- 0064 item 3.1 is read as point d states; 0064 is not reopened.
 
 ## Sources
 
-- Decisions 0008, 0028, 0043, 0044, 0061, 0064, 0065; testbench finding SF-31 (relayed by the
-  openg7250 session, 2026-11-21).
+- Decisions 0008, 0028, 0043, 0044, 0061, 0064, 0065; testbench finding SF-31 and the
+  testbench points a–d on 0067 (relayed by the openg7250 session, 2026-11-21).
