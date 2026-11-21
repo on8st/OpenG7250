@@ -30,6 +30,8 @@ pub struct Image {
     pub sha: [u8; 32],
     /// confirmed (A1.8 self-confirmation) or the factory image
     pub good: bool,
+    /// a trial of it failed: it does not check good (IDENTIFY tag 9 = 2; 0064)
+    pub bad: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -418,7 +420,7 @@ impl Radio {
         };
         r.new_token();
         // the factory image in slot A, confirmed
-        r.fw.slots[0] = Some(Image { version: r.cfg.fw, len: 0, sha: [0; 32], good: true });
+        r.fw.slots[0] = Some(Image { version: r.cfg.fw, len: 0, sha: [0; 32], good: true, bad: false });
         r.logf("power-on reset");
         r
     }
@@ -439,7 +441,9 @@ impl Radio {
         self.fw.trial_net_down = false;
         if self.fw.trial.is_some() {
             self.fw.trial = None;
-            self.fw.slots[(self.fw.running - 1) as usize] = None;
+            if let Some(img) = self.fw.slots[(self.fw.running - 1) as usize].as_mut() {
+                img.bad = true; // stays in its slot, marked bad (IDENTIFY tag 9 = 2)
+            }
             self.fw.running = self.fw.other();
             self.fw.rolled_back = true;
             self.logf(&format!("trial image not confirmed before reset ({cause}): rolled back to slot {}", self.fw.running));

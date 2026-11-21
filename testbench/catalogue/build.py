@@ -242,7 +242,7 @@ OVERRIDES: dict[str, dict] = {
                 "notes": ["the armed part needs TX unlocked; 'outside a session while armed' is not reachable over P2"]},
     **{t: {"target": "emulator", "also": ["host"], "needs": ["time.advance"],
            "notes": ["minutes of radio time: time.advance (reference model now; emulator when it offers it)"]}
-       for t in ["T-A1-34", "T-A1-46", "T-A1-82"]},
+       for t in ["T-A1-34", "T-A1-46", "T-A1-82", "T-A1-84"]},
     "T-A1-68": {"target": "emulator", "also": ["host"], "needs": ["time.advance", "power.cycle"],
                 "notes": ["the network-down case needs trial.sim (reference model) or a runner that keeps the CH394 silent"]},
     "T-A1-77": {"target": "emulator", "also": [], "needs": ["flash.log"],

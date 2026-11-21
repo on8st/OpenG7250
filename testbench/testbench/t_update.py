@@ -225,6 +225,16 @@ def t_a1_23(ctx: Ctx):
         ctx.check("at most once per 100 ms", all(g >= 0.09 for g in gaps), f"gaps {[round(g * 1000) for g in gaps]} ms")
         ws = write_status(h.write([(TX_MODE_CLASS, 1)]))
         ctx.check("register writes get BUSY", any(r_ == "BUSY" for _, _, r_ in ws), str(ws))
+        pr = h.cap_request(retry=True)
+        ctx.check("CAP_REQUEST is still answered (A1.8; 0022 section 10)", bool(pr) and any(a == 0 for a, _ in pr[1:]),
+                  f"{len(pr or [])} pairs")
+        from .p2 import ARM_MAGIC, TX_ARM, TX_ARM_STATE
+        ans = h.write([(TX_ARM, 0x12345678 ^ ARM_MAGIC)])
+        st = value(ans, TX_ARM_STATE)
+        ws = write_status(ans)
+        ctx.check("an arm after UPDATE_BEGIN is not accepted: BUSY as every register write (B8.4), the arm state "
+                  "not armed (MAINTENANCE cannot show over P2 behind BUSY; finding SF-28)",
+                  any(r_ == "BUSY" for _, _, r_ in ws) and (st is None or st & 0xF == 0), f"{ws}, TX_ARM_STATE {st}")
         r = u.req("UPDATE_ABORT")
         ctx.eq("UPDATE_ABORT: 0, restart needed", (r["status"], r["payload"][:1]) if r else None, (0, b"\x01"))
         ws = write_status(h.write([(TX_MODE_CLASS, 1)]))
@@ -365,7 +375,7 @@ def t_a1_81(ctx: Ctx):
 # ---------------- phase 2: the 10-minute rule and the trial rollback ----------------
 def advance(ctx, s: float):
     """time.advance (the reference model's clock; the emulator's later): s seconds pass."""
-    ctx.fixture("time.advance", s=s)
+    ctx.fixture("time.advance", us=int(s * 1e6))  # the bench sends nothing meanwhile
     time.sleep(0.05)  # a tick of the model at the new time
 
 
@@ -559,6 +569,21 @@ def t_a1_68(ctx: Ctx):
             ctx.eq("after 60 s: rolled back (tag 10 = 2), the previous slot and version run",
                    (t.get(10), t.get(23, b"")[:1], version_of(t)), (b"\x02", bytes([a[0]]), a[2]))
             ctx.check("the rollback is logged", bool(logs_since(u, n0)), "no new log entry")
+    # a class 2 fault (a safe-state pin forced, TX_PATH_NOT_BLOCKED): not confirmed, rolls back
+    if "trial.sim" in ctx.endpoint.get("fixtures", []):
+        ctx.fixture("trial.sim", class2_fault=True)
+        a = activate_new(ctx, s, 684)
+        if ctx.check("update activated (class 2 case)", a is not None, "the update did not complete"):
+            with updating(ctx, s, restart_at_end=False) as u:
+                advance(ctx, 30)
+                ctx.eq("30 s after start with a class 2 fault: still not confirmed", u.identify().get(10), b"\x01")
+                advance(ctx, 35)
+                wait_reachable(ctx, "trial rollback (class 2)")
+                t = u.identify()
+                ctx.eq("after 60 s: rolled back to the previous slot and version", (t.get(10), t.get(23, b"")[:1], version_of(t)),
+                       (b"\x02", bytes([a[0]]), a[2]))
+    else:
+        ctx.notes.append("class 2 case not run: no trial.sim; on the emulator a forced safe-state pin (TX_PATH_NOT_BLOCKED) is its stimulus")
     # resets before confirming: the previous image at the next start
     a = activate_new(ctx, s, 683)
     if ctx.check("update activated (reset case)", a is not None, "the update did not complete"):
@@ -571,3 +596,56 @@ def t_a1_68(ctx: Ctx):
             ctx.eq("a power loss before confirmation: the previous slot and version at the next start (tag 10 = 2)",
                    (t.get(10), t.get(23, b"")[:1], version_of(t)), (b"\x02", bytes([a[0]]), a[2]))
             ctx.check("the rollback is logged", bool(logs_since(u, n0)), "no new log entry")
+
+
+
+@test("T-A1-84")
+def t_a1_84(ctx: Ctx):
+    """A1.8 "ROLLBACK" (0064)."""
+    need_clock(ctx)
+    s = secret(ctx)
+    a = activate_new(ctx, s, 841)  # so that the other slot holds a good image
+    if not ctx.check("an update installed (the other slot holds a good image)", a is not None, "the update did not complete"):
+        return
+    with updating(ctx, s, restart_at_end=False) as u:
+        r = u.req("ROLLBACK")
+        ctx.eq("during the trial boot: 58", r["status"] if r else None, 58)
+        advance(ctx, 11)
+        ctx.eq("confirmed", u.identify().get(10), b"\x00")
+        ctx.eq("tag 9: the other slot checks good", u.identify().get(9, b"..")[1:2], b"\x01")
+        n0 = last_log_seq(u)
+        r = u.req("ROLLBACK")
+        ctx.eq("ROLLBACK replies 0", r["status"] if r else None, 0)
+    time.sleep(0.3)
+    wait_reachable(ctx, "ROLLBACK")
+    with updating(ctx, s, restart_at_end=False) as u:
+        t = u.identify()
+        ctx.eq("it starts the other image as a trial (tag 23, tag 10 = 1, its version)",
+               (t.get(23, b"")[:1], t.get(10), version_of(t)), (bytes([a[0]]), b"\x01", a[2]))
+        texts = logs_since(u, n0)
+        frm, to = "AB"[a[1] - 1], "AB"[a[0] - 1]
+        ctx.check(f"logged: 'rollback commanded: slot {frm} <version> to slot {to} <version>' (version format not fixed)",
+                  any(f"rollback commanded: slot {frm}" in x and f"to slot {to}" in x for x in texts), f"{texts[-3:]}")
+        advance(ctx, 11)
+        ctx.eq("the started image confirms itself", u.identify().get(10), b"\x00")
+    if "trial.sim" not in ctx.endpoint.get("fixtures", []):
+        ctx.notes.append("failed-trial part not run: no trial.sim")
+        return
+    # the started image fails to confirm: back to the image that sent ROLLBACK
+    with updating(ctx, s, restart_at_end=False) as u:
+        run, other, ver, lay = facts(ctx, u)
+        ctx.fixture("trial.sim", network_down=True)
+        r = u.req("ROLLBACK")
+        ctx.eq("a second ROLLBACK replies 0", r["status"] if r else None, 0)
+    time.sleep(0.3)
+    wait_reachable(ctx, "ROLLBACK")
+    with updating(ctx, s, restart_at_end=False) as u:
+        advance(ctx, 65)
+        wait_reachable(ctx, "trial rollback after ROLLBACK")
+        t = u.identify()
+        ctx.eq("the started image did not confirm: back to the image that sent ROLLBACK (tag 23)", t.get(23, b"")[:1], bytes([run]))
+        ctx.eq("the failed image's slot checks bad now (tag 9 = 2)", t.get(9, b"..")[1:2], b"\x02")
+        r = u.req("ROLLBACK")
+        ctx.eq("with the other slot bad: 55 and nothing changes", (r["status"] if r else None, u.identify().get(23, b"")[:1]),
+               (55, bytes([run])))
+    ctx.notes.append("the other slot empty: only on a fresh radio; armed (50): T-A1-05")

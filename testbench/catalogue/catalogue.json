@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "50c05f9",
-  "sha256_of_inputs": "7f79db7c8fd0599faa940dc5f0f7f55c80a5bef6fb7592b62a5666d67cf24402"
+  "commit": "ad52c8d",
+  "sha256_of_inputs": "8d63157dc298f4d989506ec058738dfa373b0c6049a73e3b5c620c29fe1fca5d"
  },
  "his": {
   "commit": "72591aa"
@@ -413,17 +413,18 @@
    "id": "T-A1-23",
    "origin": "spec",
    "part": "A-B",
-   "title": "After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 \"After `UPDATE_ABORT`\"; 0063).",
+   "title": "After `UPDATE_BEGIN` the session ends and RX stops; a run request gets `STREAM_STATUS` reason 10 at most every 100 ms; register writes get `BUSY`; after `UPDATE_ABORT` the state lasts until `RESTART` or the restart of the 10-minute rule (A1.8 \"After `UPDATE_ABORT`\"; 0063). `CAP_REQUEST` is still answered, and an arm after `UPDATE_BEGIN` is rejected with `MAINTENANCE` (A1.8; 0022 §10).",
    "reqs": [
     "A1",
-    "A1.8"
+    "A1.8",
+    "0022 §10"
    ],
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
    "needs": [],
    "pending": [],
-   "tx_part": false,
+   "tx_part": true,
    "notes": [],
    "covers": [
     "UP-03 (run request: reason 10; register write: BUSY)"
@@ -1412,7 +1413,7 @@
    "id": "T-A1-68",
    "origin": "spec",
    "part": "A-B",
-   "title": "A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044).",
+   "title": "A trial image that meets the self-confirmation criterion confirms itself after 10 s without a host; one that keeps its network down, and one with a class 2 fault (a safe-state pin forced, `TX_PATH_NOT_BLOCKED`), is not confirmed and rolls back after 60 s through a commanded reset; one that resets before confirming (simulated crash or power loss) starts the previous image at the next start; each rollback is logged (reference model or emulator; A1.8; 0044).",
    "reqs": [
     "A1",
     "A1.8"
@@ -1747,6 +1748,103 @@
     "spec marks it reference model; emulator only with the fixtures",
     "minutes of radio time: time.advance (reference model now; emulator when it offers it)"
    ]
+  },
+  {
+   "id": "T-A1-83",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "A power loss during the boot stage's trial-attempt write starts the trial image as a trial at the next start (or the previous image), and one during the self-confirmation write starts the previous image, logged; in each case one bootable image starts and the store is readable (emulator; A1.8 \"Torn boot-record writes\"; 0064).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "power.cycle"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
+   "id": "T-A1-84",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Running a confirmed image with a good other slot, `ROLLBACK` replies 0, logs the rollback line, resets and starts the other image as a trial, which confirms itself; with the other slot empty or bad it gets 55; during a trial boot 58; while armed 50; the started image that fails to confirm returns to the image that sent `ROLLBACK` (reference model or emulator; A1.8 \"`ROLLBACK`\"; 0064).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "time.advance"
+   ],
+   "pending": [],
+   "tx_part": true,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "minutes of radio time: time.advance (reference model now; emulator when it offers it)"
+   ]
+  },
+  {
+   "id": "T-A1-85",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported (emulator; B2.3 \"Flash work\"; 0065).",
+   "reqs": [
+    "A1",
+    "B2.3"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
+   "id": "T-A1-86",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "A power loss after each word of a store write, and at points during the erase of the other store sector in a compaction: after the restart each item holds its old or its new value, never a mix or an older value, a write answered 0 is kept, and the generation does not go back (emulator, flash.log; A1.6 \"Store writes\"; 0065).",
+   "reqs": [
+    "A1",
+    "A1.6"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "power.cycle"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
+   "id": "T-A1-87",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "A double ECC error in a record of the live store sector, and one in the newest commit word: the store opens without a fault or reset, uses the older record or the previous generation, logs it, and later writes skip the word; an item with no readable record takes its Table A1-4 value (emulator, if it models flash ECC; A1.6 \"Store writes\"; 0065).",
+   "reqs": [
+    "A1",
+    "A1.6",
+    "Table A1-4"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
   },
   {
    "id": "T-A2-01",
@@ -4725,6 +4823,24 @@
    "notes": [
     "needs an arm: blocked until the calibration set is complete (tx bit 4)"
    ]
+  },
+  {
+   "id": "T-B5-22",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, STB and CMD stay low with no bus cycle open across an erase, and after it RX, discovery and the management channel go on (B2.3 \"Flash work\"; 0065).",
+   "reqs": [
+    "B5",
+    "A3.6",
+    "B2.3"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
   },
   {
    "id": "T-B6-01",

@@ -202,8 +202,10 @@ fn main() {
                 inject.sort_by_key(|x| x.0);
                 let _ = c.reply.send(okv(J::obj(vec![("t_us", J::Arr(times))])));
             } else if op == "time.advance" {
-                let s_ = args.get("s").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                offset.set(offset.get() + (s_ * 1e6) as u64);
+                // {us} as the emulator has it; {s} accepted too
+                let us = args.get("us").and_then(|v| v.as_f64())
+                    .or_else(|| args.get("s").and_then(|v| v.as_f64()).map(|x| x * 1e6)).unwrap_or(0.0);
+                offset.set(offset.get() + us as u64);
                 let _ = c.reply.send(okv(J::obj(vec![("t_us", J::Num(now() as f64))])));
             } else if op == "time.wait" {
                 let us = args.get("us").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64;
@@ -363,7 +365,10 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
         }
         "trial.sim" => {
             // model only: the next trial image keeps its network down (no self-confirmation)
-            r.fw.sim_net_down = args.get("network_down").map_or(false, |v| *v == J::Bool(true));
+            // the next trial image keeps its network down, or carries a class 2 fault: neither
+            // confirms itself (0044)
+            r.fw.sim_net_down = args.get("network_down").map_or(false, |v| *v == J::Bool(true))
+                || args.get("class2_fault").map_or(false, |v| *v == J::Bool(true));
             ok(J::Null)
         }
         "atu.sim" => {

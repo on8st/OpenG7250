@@ -495,7 +495,12 @@ impl Mgmt {
                 (st::OK, vec![1], None)
             }
             ROLLBACK => {
-                if r.fw.other_image().map_or(false, |i| i.good) {
+                // 0064: a confirmed running image (a trial or an update got 58 above) and an image
+                // in the other slot that checks good; else 55 and nothing changes
+                if r.fw.other_image().map_or(false, |i| !i.bad) {
+                    let ver = |i: Option<&Image>| i.map_or("0.0.0".to_string(), |i| format!("{}.{}.{}", i.version.0, i.version.1, i.version.2));
+                    r.logf(&format!("rollback commanded: slot {} {} to slot {} {}", slot_name(r.fw.running),
+                                    ver(r.fw.running_image()), slot_name(r.fw.other()), ver(r.fw.other_image())));
                     (st::OK, vec![], Some("ROLLBACK"))
                 } else {
                     (st::VERIFY_FAILED, vec![], None)
@@ -525,7 +530,7 @@ impl Mgmt {
             Some("ACTIVATE") => {
                 // atomic switch, then the trial boot of the new image (A1.8 U-5, U-6)
                 if let Some(u) = self.upd.take() {
-                    r.fw.slots[(u.slot - 1) as usize] = Some(Image { version: u.version, len: u.len, sha: u.sha, good: false });
+                    r.fw.slots[(u.slot - 1) as usize] = Some(Image { version: u.version, len: u.len, sha: u.sha, good: false, bad: false });
                     r.logf(&format!("update activated: slot {} on trial", u.slot));
                     let net_down = r.fw.sim_net_down;
                     r.fw.sim_net_down = false;
@@ -538,9 +543,18 @@ impl Mgmt {
                 }
             }
             Some("ROLLBACK") => {
-                r.logf("ROLLBACK: to the other slot");
+                // the boot record names the other slot; it starts as a trial (U-6), so a failure
+                // returns to the image that carried out the ROLLBACK
+                let net_down = r.fw.sim_net_down;
+                r.fw.sim_net_down = false;
                 r.reset("ROLLBACK");
+                r.fw.trial_net_down = net_down;
                 r.fw.running = r.fw.other();
+                r.fw.rolled_back = false;
+                r.fw.trial = Some(r.now);
+                if let Some(img) = r.fw.slots[(r.fw.running - 1) as usize].as_mut() {
+                    img.good = false;
+                }
                 self.on_reset(r.now);
             }
             Some("FACTORY_RESET") => {
@@ -613,7 +627,7 @@ impl Mgmt {
         tlv(6, &[0, 1, 0, 1]); // boot stage version (model)
         tlv(7, &0u32.to_be_bytes());
         tlv(8, &[0]); // bit 0 stock image retained = 0; bit 1 vendor recovery supported = 0
-        let integ = |i: Option<&Image>| i.map_or(0, |_| 1);
+        let integ = |i: Option<&Image>| i.map_or(0, |i| if i.bad { 2 } else { 1 });
         tlv(9, &[integ(r.fw.running_image()), integ(r.fw.other_image())]);
         let state = if r.fw.trial.is_some() { 1 } else if r.fw.rolled_back { 2 } else { 0 };
         tlv(10, &[state]);
@@ -884,6 +898,10 @@ fn cal_payload(r: &Radio) -> Vec<u8> {
 /// SET_CALIBRATION payload (Annex M Table M-1, M-5); None = status 48.
 /// A payload that cannot be read by the structure of Annex M (0056): wrong fixed length, a
 /// TLV that runs past the end, a missing fixed field. Values are not judged here.
+fn slot_name(s: u8) -> &'static str {
+    if s == 1 { "A" } else { "B" }
+}
+
 fn payload_malformed(cmd: u16, p: &[u8]) -> bool {
     match cmd {
         SET_FIRST_SECRET | CHANGE_SECRET => p.len() != 32,
