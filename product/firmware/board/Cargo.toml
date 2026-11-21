@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Board workspace: target thumbv7em-none-eabihf (STM32H72x/H73x Main, [HIS] HIS 00, HIS 10).
+[workspace]
+resolver = "3"
+members = ["common", "boot", "app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+authors = ["ON8ST"]
+publish = false
+
+[workspace.dependencies]
+g7250-layout = { path = "../crates/layout" }
+g7250-safety = { path = "../crates/safety" }
+g7250-board = { path = "common" }
+cortex-m = { version = "0.7.10", features = ["critical-section-single-core", "inline-asm"] }
+cortex-m-rt = { version = "0.7.7", features = ["set-vtor", "set-sp"] }
+# The exact part is MEDIUM in the HIS (STM32H725xG or H735xG, [HIS] HIS 10, HIS 15). The
+# feature below is the H725 in a package with port H pins up to PH12 (HIS 85 uses PH3-PH12);
+# the register set used here is the same on the H735. HIS question F1-Q1.
+stm32-metapac = { version = "21.0.0", features = ["stm32h725ig"] }
+# Do NOT enable the embassy-stm32 feature "gpio-init-analog": it would reset every pin to analog
+# at init and undo the safe state (power hold PH9 included).
+embassy-stm32 = { version = "0.6.0", features = ["stm32h725ig", "time-driver-any", "unstable-pac", "exti"] }
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread"] }
+embassy-time = { version = "0.5.1", features = ["tick-hz-1_000_000"] }
+embassy-sync = "0.8.0"
+embassy-futures = "0.1.2"
+heapless = "0.9.4"
+
+[profile.release]
+opt-level = "s"
+debug = 2
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+overflow-checks = true
+
+[profile.dev]
+opt-level = "s"
+panic = "abort"
+
+# embassy-stm32 with one local change: no backup-domain access at init ([HIS] HIS 15 rule 4).
+# See vendor/README.md.
+[patch.crates-io]
+embassy-stm32 = { path = "vendor/embassy-stm32-0.6.0" }

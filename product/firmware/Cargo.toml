@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Host workspace: protocol, state and guard crates, tested with `cargo test`.
+# The board crates (target thumbv7em-none-eabihf) are a separate workspace in board/.
+[workspace]
+resolver = "3"
+members = ["crates/layout", "crates/safety", "tools/imgtool"]
+exclude = ["board"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+authors = ["ON8ST"]
+publish = false
+
+[workspace.dependencies]
+g7250-layout = { path = "crates/layout" }
+embedded-hal = "1.0.0"

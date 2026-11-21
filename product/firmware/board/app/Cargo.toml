@@ -1,0 +1,31 @@
+[package]
+name = "g7250-app"
+description = "Application of the G7250 main firmware (G7250-P2, level 1)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "g7250-app"
+test = false
+bench = false
+
+[features]
+default = []
+# Link for slot B instead of slot A (an image is linked for one slot; g7250-layout SLOT_A/SLOT_B).
+slot-b = []
+
+[dependencies]
+g7250-board = { workspace = true }
+g7250-layout = { workspace = true }
+g7250-safety = { workspace = true }
+cortex-m = { workspace = true }
+cortex-m-rt = { workspace = true }
+embassy-stm32 = { workspace = true }
+embassy-executor = { workspace = true }
+embassy-time = { workspace = true }
+embassy-sync = { workspace = true }
+embassy-futures = { workspace = true }
+heapless = { workspace = true }
