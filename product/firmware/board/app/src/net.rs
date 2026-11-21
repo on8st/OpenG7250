@@ -304,12 +304,8 @@ async fn claim_link_local(chip: &mut Chip, claim: &mut ipv4ll::Claim) -> NetConf
         let c = claim.candidate();
         let _ = chip.udp_close(0);
         let _ = chip.set_ip(c.ip, c.mask, c.gateway);
-        UNPROBED_CLAIMS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        println!(
-            "net: FAULT link-local {} used WITHOUT probe or announcement: socket 0 cannot open in MACRAW ({:?}) (RFC 3927 not met)",
-            ip_str(c.ip).as_str(),
-            e
-        );
+        unprobed(c.ip);
+        println!("net: link-local {} used without probe or announcement: socket 0 cannot open in MACRAW ({:?})", ip_str(c.ip).as_str(), e);
         return c;
     }
     println!("net: probing link-local {} (RFC 3927)", ip_str(claim.candidate().ip).as_str());
@@ -340,14 +336,11 @@ async fn claim_link_local(chip: &mut Chip, claim: &mut ipv4ll::Claim) -> NetConf
                 let _ = chip.udp_close(0);
                 let _ = chip.set_ip(c.ip, c.mask, c.gateway);
                 if send_failed == 0 {
+                    LL_UNPROBED_NOW.store(false, core::sync::atomic::Ordering::Relaxed);
                     println!("net: link-local {} probed and announced", ip_str(c.ip).as_str());
                 } else {
-                    UNPROBED_CLAIMS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                    println!(
-                        "net: FAULT link-local {} used, but {} of its probes and announcements were not sent (RFC 3927 not met)",
-                        ip_str(c.ip).as_str(),
-                        send_failed
-                    );
+                    unprobed(c.ip);
+                    println!("net: link-local {} used, but {} of its probes and announcements were not sent", ip_str(c.ip).as_str(), send_failed);
                 }
                 return c;
             }
@@ -358,8 +351,19 @@ async fn claim_link_local(chip: &mut Chip, claim: &mut ipv4ll::Claim) -> NetConf
 }
 
 /// Link-local addresses taken without a complete probe and announcement (socket 0 not in MACRAW,
-/// or a frame not sent): logged by the net loop once the management log exists.
+/// or a frame not sent): `GET_STATS` `ll_unprobed`, and logged by the net loop once the
+/// management log exists (A1.11; 0057).
 static UNPROBED_CLAIMS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// The link-local address in use is unprobed (`IDENTIFY` tag 24).
+static LL_UNPROBED_NOW: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// An unprobed link-local claim (0057): counted, flagged for IDENTIFY, and the console line of
+/// A1.11 once per claim (not an A3.5 fault; IP_CONFLI still guards the address).
+fn unprobed(ip: Ip) {
+    UNPROBED_CLAIMS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    LL_UNPROBED_NOW.store(true, core::sync::atomic::Ordering::Relaxed);
+    println!("G7250 FAULT LINKLOCAL {} UNPROBED", ip_str(ip).as_str());
+}
 
 /// Every socket closed: before a probe on socket 0 and a new configuration (0049: discovery and
 /// the other sockets are closed during the probe).
@@ -734,10 +738,13 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 // Counters of the key path for GET_STATS (Table B10-1, B10.5a item 1).
                 server.stats.net_busy_pass_max_us = busy_pass_max_us;
                 let unprobed = UNPROBED_CLAIMS.load(core::sync::atomic::Ordering::Relaxed);
+                server.stats.ll_unprobed = unprobed as u64;
                 if unprobed != unprobed_logged {
                     unprobed_logged = unprobed;
                     server.log.push(Instant::now().as_millis(), format_args!("link-local {} used without a complete RFC 3927 probe ({} times)", ip_str(cfg.ip).as_str(), unprobed));
                 }
+                // IDENTIFY tag 24: only while the address in use is that unprobed link-local one.
+                mgmt.identify.ll_unprobed = cfg.ip[..2] == [169, 254] && LL_UNPROBED_NOW.load(core::sync::atomic::Ordering::Relaxed);
                 server.stats.net_send_dropped = chip.dropped_busy.iter().map(|&n| n as u64).sum();
                 server.stats.cw_hang_clamped = p2.key.cw_hang_clamped;
                 server.stats.cw_speed_clamped = p2.key.cw_speed_clamped;

@@ -74,6 +74,9 @@ pub struct Identify<'a> {
     pub sectors_written: u8,
     /// Running slot: 1 slot A, 2 slot B (tag 23; 0043).
     pub running_slot: u8,
+    /// The link-local address in use was taken without a complete RFC 3927 probe (tag 24, u8,
+    /// 1 = unprobed; A1.11, 0057).
+    pub ll_unprobed: bool,
 }
 
 impl<'a> Identify<'a> {
@@ -101,7 +104,7 @@ impl<'a> Identify<'a> {
         let mut c = [0u8; 36];
         c[..32].copy_from_slice(&self.calibration_id);
         c[32..].copy_from_slice(&self.calibration_date.to_be_bytes());
-        w.put(21, &c).u8(22, self.sectors_written).u8(23, self.running_slot);
+        w.put(21, &c).u8(22, self.sectors_written).u8(23, self.running_slot).u8(24, self.ll_unprobed as u8);
         w.finish()
     }
 
@@ -144,6 +147,7 @@ impl<'a> Identify<'a> {
                 }
                 22 => r.sectors_written = arr::<1>(v)?[0],
                 23 => r.running_slot = arr::<1>(v)?[0],
+                24 => r.ll_unprobed = arr::<1>(v)?[0] != 0,
                 _ => {}
             }
         }
@@ -598,6 +602,18 @@ mod tests {
         v.extend_from_slice(&[200, 2, 9, 9]);
         assert_eq!(Identify::decode(&v).unwrap(), id);
         assert_eq!(Identify::decode(&[2, 5, 0, 0, 0, 0, 0]), Err(Bad));
+    }
+
+    #[test]
+    fn t_a1_76_identify_tag_24_reports_an_unprobed_link_local_address() {
+        // 0057: tag 24, u8, 1 = the link-local address in use is unprobed.
+        let mut b = [0u8; 400];
+        for un in [false, true] {
+            let id = Identify { model: b"G7250", ll_unprobed: un, ..Default::default() };
+            let n = id.encode(&mut b).unwrap();
+            assert!(b[..n].windows(3).any(|w| w == [24, 1, un as u8]));
+            assert_eq!(Identify::decode(&b[..n]).unwrap().ll_unprobed, un);
+        }
     }
 
     #[test]

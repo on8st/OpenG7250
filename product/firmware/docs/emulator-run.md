@@ -118,8 +118,11 @@ every socket closed (the session ends, A1.11a). An IP_CONFLI (GINT bit 7) while 
 logged (`net: address conflict on <ip>`, and in the log): on a lease, DHCPDECLINE, link-local,
 DHCP again after 10 s; on a link-local address, the next candidate; on a static address, the
 previous configuration (C-4), or link-local if there is none. After 10 conflicts each new probe
-waits 60 s, with no address and the sockets closed. The emulator needs MACRAW on socket 0 and
-IP_CONFLI in its CH394 model; the MACRAW length header is read as the frame length alone
+waits 60 s, with no address and the sockets closed. If socket 0 cannot open in MACRAW (three tries,
+10 ms apart), the address is used unprobed (0057): console `G7250 FAULT LINKLOCAL <ip> UNPROBED`
+once, log `link-local <ip> used without a complete RFC 3927 probe`, `GET_STATS` `ll_unprobed`,
+`IDENTIFY` tag 24 = 1; not an A3.5 fault. Start-up bound without DHCP: 17 s from link up (0057).
+The emulator needs MACRAW on socket 0 and IP_CONFLI in its CH394 model; the MACRAW length header is read as the frame length alone
 (`MACRAW_LEN_INCLUDES_HEADER`, to confirm).
 
 ## DHCP retry and renewal (A1.11, A1.11a)

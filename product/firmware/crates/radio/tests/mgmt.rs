@@ -551,3 +551,14 @@ fn t_a1_75_malformed_payload_is_17_before_every_state_check_values_after() {
     assert_eq!(authed(&mut w, &mut s, HOST, 70, Command::SwitchLevel, &[1, 1], 700).0, Status::Malformed);
     assert_eq!(authed(&mut w, &mut s, HOST, 80, Command::UpdateActivate, &[], 800).0, Status::Malformed);
 }
+
+#[test]
+fn t_a1_76_get_stats_has_ll_unprobed() {
+    // 0057: the counter of link-local addresses used without a complete probe.
+    let mut s = Server::new();
+    let mut w = World::new();
+    s.stats.ll_unprobed = 2;
+    let r = w.call(&mut s, HOST, &req(1, Command::GetStats, &[]), 0).unwrap();
+    let got: Vec<(String, u64)> = mgmt::payload::stats(&r.2).map(|e| e.unwrap()).map(|(n, v)| (String::from_utf8(n.to_vec()).unwrap(), v)).collect();
+    assert!(got.contains(&("ll_unprobed".to_string(), 2)), "{got:?}");
+}

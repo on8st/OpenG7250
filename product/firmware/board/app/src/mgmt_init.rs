@@ -126,6 +126,7 @@ impl MgmtInit {
             calibration_date: cal_date,
             sectors_written: 0,
             running_slot: 0, // set below
+            ll_unprobed: false, // set by the net loop (0057)
         };
         let update = crate::update::BoardUpdate::new(store.as_mut(), slot);
         let mut identify = identify;

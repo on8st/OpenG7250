@@ -58,11 +58,13 @@ pub struct Stats {
     /// Datagrams not sent because the previous send on their socket was still in its ARP
     /// (dropped, not queued; 0054).
     pub net_send_dropped: u64,
+    /// Link-local addresses used without a complete RFC 3927 probe (A1.11; 0057).
+    pub ll_unprobed: u64,
 }
 
 impl Stats {
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 16] = [
+        let items: [(&[u8], u64); 17] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
             (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
@@ -79,6 +81,7 @@ impl Stats {
             (b"takeovers", self.takeovers),
             (b"net_busy_pass_max_us", self.net_busy_pass_max_us),
             (b"net_send_dropped", self.net_send_dropped),
+            (b"ll_unprobed", self.ll_unprobed),
         ];
         let mut at = 0;
         for (n, v) in items {
@@ -198,6 +201,7 @@ impl Server {
                 takeovers: 0,
                 net_busy_pass_max_us: 0,
                 net_send_dropped: 0,
+                ll_unprobed: 0,
             },
             writer: None,
             reset_pending: false,
