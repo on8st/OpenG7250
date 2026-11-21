@@ -1275,7 +1275,7 @@ and one that does not match the board wiring can harm the part ([HIS] HIS 10, `6
    firmware believes wrong is not safe, and a network bring-up on it is not either (0040).
 
 A3.6 **State after power-on, any reset, and every session end** (0007, Decision 5): PA and
-its bias off (bias channels at 0; the transmit bias per unit is P-PWR-5), TX path disabled, SEND and TUNER trigger released (HIS-09, HIS-10, HIS-13; [HIS] HIS 85); the firmware sets this state first in its start-up, because pin states before its GPIO init are pending hardware (P-SYS-1); DUC
+its bias off (bias channels at 0; the transmit bias per unit is P-PWR-5), TX path disabled, SEND and TUNER trigger released (HIS-09, HIS-10, HIS-13; [HIS] HIS 85); the firmware sets this state first in its start-up, because pin states before its GPIO init are pending hardware (P-SYS-1). **From when** (0045): the RF control pins of [HIS] HIS 85 MUST be at their safe-state levels no later than 20 µs after the boot stage's first instruction at 0x08020000, and before any other initialisation (clocks beyond the reset clock, other peripherals, network); from then on the safe state holds as this section says. Before that point the pin levels are set by the hardware (board pulls) and by the vendor bootloader in sector 0, which runs first, and are outside this specification; whether the board pulls hold safe levels in that window is pending hardware (P-SYS-1); DUC
 FIFO emptied (0022 §32); not armed, new token, session limits back to the persistent values (A3.4; after a reset the
 persistent values are read from the stored configuration), `TX_MODE_CLASS` = 0,
 `KEYED_TIMEOUT` = 500 ms, watchdog counted as enabled, the TX settings of A3.6a at their
@@ -3356,7 +3356,7 @@ Table P-1 — Pending hardware parameters
 | P-NET-1 | Highest SPI clock to the CH394 that works on the radio (datasheet maximum 62 MHz in SPI mode 0 or 3 [CH394], manual V1.2, features list, VERIFIED in [HIS] HIS 40, `6e2208a`; about 17 MHz seen in use on the board, MEDIUM, the safe bound until the board link is measured) | B6, 0004 | HIS-14 | DDC0 rates 48, 96 and 192 ksps; 384 ksps offered only once ≥ 50 MHz is shown |
 | P-NET-2 | Whether the CH394 MAC address is unique per unit ([HIS] HIS 40) | A1.5, B3 | HIS-15 | the CH394 value is used as it is |
 | P-NET-3 | Whether the CH394 reports the destination address (unicast, directed or limited broadcast) of a received UDP datagram ([HIS] HIS 40, HIS 90) | B3.9 (Set IP) | HIS-14 | treat every Set IP as unicast or directed broadcast: own subnet only, any source while link-local (B3.9) |
-| P-SYS-1 | Pin states between reset and the firmware's GPIO init (board pull-ups) | A3.6, A3.5 | HIS-13 | firmware sets the safe state first in its start-up ([HIS] HIS 85) |
+| P-SYS-1 | Pin states between reset and the boot stage's GPIO init (board pull resistors on the RF control pins of [HIS] HIS 85, and what the vendor bootloader leaves); whether they hold the safe levels in that window | A3.6, A3.5 | HIS-13 | outside this spec before the boot stage runs; the boot stage sets the safe state within 20 µs of its first instruction (A3.6; 0045) |
 | P-SYS-2 | Reset cause and RAM retained across a warm reset (fault counters, log) | A1.7, A3.5, Table B8-3 `WDT_RESET_AT_START` | HIS-13, HIS-18 | counters and log are lost at every reset |
 | P-SYS-3 | Power-up path without the controller (HIS 20 H1/H2) | part A scope (0029) | HIS-17 | none; observation T0-P2 |
 | P-SYS-4 | Behaviour of the stock controller's panel with a silent main unit | part A scope (0023) | HIS-17 | CTRL idle ([HIS] HIS 70) |
@@ -3556,7 +3556,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-03 | A `LIMIT_<name>` write looser than the persistent value (C-3) is rejected with `LOOSER_LIMIT`, a stricter one accepted; writing 0 and the session end return to the persistent value; the answer carries the limit in force. |
 | T-A3-04 | A class 1 fault clears only with the current code and only when the condition is gone; a clear does not re-arm. |
 | T-A3-05 | A class 2 fault clears only by reset and is detected again at start-up if the cause persists. |
-| T-A3-06 | After power-on and after every session end the state of A3.6 holds. |
+| T-A3-06 | After power-on and after every session end the state of A3.6 holds. After power-on the check starts 20 µs after the boot stage's first instruction at 0x08020000; from then on every RF control pin of HIS 85 is at its safe-state level and stays there (emulator or reference model; A3.6, "From when"; 0045). |
 | T-A3-07 | Not in v1.0 (0030). Controller PTT and KEY inputs are reported and never key the radio without arm, with and without a P2 session while level 1 is active. |
 | T-A3-08 | While keyed, a DUC0 retune inside the same transmit range and RF-path state is followed without unkey. |
 | T-A3-09 | While keyed, a DUC0 change to another `tx_band` entry, or out of all ranges, unkeys before the frequency applies (`TX_STATE` reason 6, or 4 with `LIMIT_TX_FREQ`), keeps the arm, and switches relays only after the unkey; keying again needs a new 0→1 edge. |

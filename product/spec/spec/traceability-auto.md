@@ -46,4 +46,5 @@
 | 0042 | 0042 — DDC0 is not offered until the FPGA configuration frame is understood | 2 | 6 | network-interface: Annex P — Pending hardware parameters; network-interface: B4 Capability block; network-interface: B6 Streams from the radio: RX IQ, wideband, microphone; network-interface: B8 G7250 register map; network-interface: Field table and register map (B7, B8); network-interface: Streams (B6) |  |
 | 0043 | 0043 — Update packages are linked for one slot; no update during a trial boot | 1 | 3 | network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0044 | 0044 — Self-confirmation of a trial boot | 0 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0045 | 0045 — The safe state holds from 20 µs after the boot stage starts | 0 | 3 | network-interface: A3 Safety behaviour visible on the network; network-interface: Annex P — Pending hardware parameters; network-interface: Management channel, ownership, safety (A1–A3) |  |
 
