@@ -27,7 +27,8 @@ network, so a host cannot be told through identification.
 
 Option (a), spec A3.5a: safe state of A3.6, CH394 held in reset, no flash write; one ASCII line
 per second on USART1 TX (PB6) at 115200 8N1:
-`G7250 FAULT SUPPLY <PWR_CR3 as 8 hex digits> <MISMATCH|TIMEOUT>` CR LF; until power is removed.
+`G7250 FAULT SUPPLY <PWR_CR3 as 8 hex digits> <MISMATCH|TIMEOUT>` CR LF, hex in upper case
+(for example `G7250 FAULT SUPPLY 0100002E MISMATCH`); until power is removed.
 The way out is the vendor path (A1.8a item 9). Test T-A3-59.
 
 ## Consequences

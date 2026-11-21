@@ -189,3 +189,9 @@ with the streaming installer and no rollback. Recommendation: A/B, which keeps U
 - HIS 40 confirms the datasheet SPI maximum, 62 MHz in mode 0 or 3 (VERIFIED), which the spec
   already cited as [CH394]; 17 MHz seen in use stays the safe bound (P-NET-1). P-NET-1 now cites
   both. No other spec change.
+
+## 11. Addendum: `5292ba8` (gate review 8)
+
+- HIS 80: DDC0 cannot run until byte 0 and bytes 9–18 of the 0x01 frame are understood; DDC0
+  tuning word, I/Q order and bus timing unknown. New P-RX-2; DDC0 not offered until it is set
+  (B6.1, record `streams` bit 0); P-RX-2 joins the TX gate (byte 0 may hold a TX enable); 0042.
