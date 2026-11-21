@@ -129,7 +129,10 @@ def t_b5_22(ctx: Ctx):
         run, other, ver, lay = facts(ctx, u)
         img = image(2148, seed=522)
         st, step = u.full(img, pkg(img, newer(ver), other))
-        ctx.eq("an update (its slot erases) completes", (st, step), (0, "verified"))
+        # a synthetic image fails the image check at VERIFY (0067): the transfer (and its
+        # erases) is what this part needs
+        ctx.check("an update (its slot erases) transferred", (st, step) in ((0, "verified"), (55, "UPDATE_VERIFY")),
+                  f"{step} answered {st}")
         u.req("UPDATE_ABORT")
         safe(ctx, "after the update's erases")
         entries = flog(ctx)
@@ -245,7 +248,7 @@ def t_a1_85(ctx: Ctx):
         ctx.fixture("flash.fault", op="erase", flag="PGSERR")
         img = image(2148, seed=851)
         st, step = u.full(img, pkg(img, newer(ver), other))
-        ctx.eq("an update whose erase ends with an error flag: a write failure, 55", st, 55)
+        ctx.eq("an update whose erase ends with an error flag: a write failure, 55 before UPDATE_VERIFY", (st, step != "UPDATE_VERIFY"), (55, True))
         ff = fault_flags(ctx)
         ctx.check("INTERNAL_ERROR raised", ff is not None and ff >> INTERNAL_ERROR & 1, f"FAULT_FLAGS {ff}")
         ctx.eq("the running image unchanged", u.identify().get(23, b"")[:1], bytes([run]))

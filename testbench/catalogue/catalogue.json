@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "f00162e",
-  "sha256_of_inputs": "d4230149801992772d52411950d01000356f2a39744136ca2cc042d07bd4a6b9"
+  "commit": "078350d",
+  "sha256_of_inputs": "77afe023102ff5404062cc8b5e1971baa1fe747b56490ae07802e033157c1bd1"
  },
  "his": {
   "commit": "069ea0b"
@@ -1867,6 +1867,79 @@
    "tx_part": false,
    "notes": [],
    "timeout_s": 300
+  },
+  {
+   "id": "T-A1-88",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending the right blocks again and verifying again succeeds (reference model or emulator; A1.8 \"Image check\", \"`UPDATE_VERIFY`\"; 0067).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "off the reference model the cases are built from params.package_slot_a and _b; other hardware, the boot-stage kind and an entry point outside the slot need packages built so on the firmware side"
+   ],
+   "timeout_s": 300
+  },
+  {
+   "id": "T-A1-89",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "`IDENTIFY` tag 9 for the other slot: 1 after a good verify; 0 from the first erase of `UPDATE_BEGIN`, after `UPDATE_ABORT` and after a failed verify, also after a restart; 2 when one byte of a confirmed other image is changed and the radio restarts; `ROLLBACK` with the other slot at 0 or 2 gets 55 and changes nothing (reference model or emulator; A1.8 \"Integrity in `IDENTIFY`\"; 0067).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "time.advance"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures",
+    "the tag 9 = 2 part needs slot.corrupt; the good-verify parts need a real package"
+   ],
+   "timeout_s": 300
+  },
+  {
+   "id": "T-A1-90",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "One byte of the staged image changed after a good verify and `UPDATE_ACTIVATE`: the boot stage does not start the trial slot, starts the previous image, logs the refusal and the rollback, and tag 10 reports 2; one byte of the confirmed active image changed with a good other slot: the other slot starts without a trial and the change is logged; both slots changed: the boot stage holds the safe state and the radio does not answer (emulator; A1.8 \"Boot-stage refusals\"; 0067).",
+   "reqs": [
+    "A1",
+    "A1.8"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "time.advance",
+    "slot.corrupt"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "slot.corrupt (proposed for the emulator); the both-slots case only on an emulator"
+   ],
+   "timeout_s": 400
   },
   {
    "id": "T-A2-01",

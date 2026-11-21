@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import struct
 import zlib
+import zlib
 
 from .mgmt import Mgmt, tlv
 
@@ -27,6 +28,28 @@ def image(n: int, seed: int = 1) -> bytes:
         x = (x * 1103515245 + 12345) & 0xFFFFFFFF
         out += x.to_bytes(4, "big")
     return bytes(out[:n])
+
+
+# The reference model's image record (model only: 0067 leaves the record's place and layout to
+# the firmware, so a synthetic image passes the image check only on the reference model, whose
+# record is its own; documented in product/refmodel/src/radio.rs, image_check).
+MODEL_LAYOUT = {1: (2, 2), 2: (4, 2)}
+
+
+def model_image(n: int, slot: int, version, seed: int = 1, hw: int = HW_ID, kind: int = 1, rslot: int | None = None,
+                rlen: int | None = None, sp: int = 0x2001FF00, entry: int | None = None, rversion=None) -> bytes:
+    """A synthetic image of n bytes with the reference model's image record at offset 0: "G7RM",
+    hardware, kind (1 application, 2 boot stage), slot, version, recorded length, stack pointer,
+    entry point, CRC-32 over the recorded length with the CRC field taken as 0."""
+    first, count = MODEL_LAYOUT[slot]
+    base = 0x08000000 + first * SECTOR
+    rlen = n if rlen is None else rlen
+    rv = version if rversion is None else rversion
+    rec = (b"G7RM" + struct.pack(">HBB", hw, kind, slot if rslot is None else rslot) + bytes([rv[0], rv[1]])
+           + struct.pack(">HIII", rv[2], rlen, sp, base + 0x201 if entry is None else entry) + b"\0\0\0\0")
+    d = bytearray(rec + image(n - len(rec), seed=seed))
+    d[24:28] = struct.pack(">I", zlib.crc32(bytes(d[:rlen])))
+    return bytes(d)
 
 
 def header(img_len: int, sha: bytes, version=(1, 0, 1), slot: int = 0, hw: int = HW_ID, hw_rev: int = 0,

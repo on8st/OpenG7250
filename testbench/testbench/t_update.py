@@ -21,8 +21,9 @@ from .p2 import (PORT_REG, STREAM_STATUS, TX_MODE_CLASS, Host, parse_regs, value
 from .update import HW_ID, SECTOR, Updater, header, image, layout, version_of
 
 SMALL = 2048 + 100  # five blocks, the last one short
-# Keep it a multiple of neither 512 (a short last block) nor 32 (a partial last flash word): the
-# partial word found a firmware bug on fw-6ca08d1 (the last 4 bytes never programmed, VERIFY 55).
+# Kept a multiple of neither 512 (a short last block) nor 32 (a partial last flash word). A
+# synthetic SMALL image has no image record of this firmware: it gets 55 at UPDATE_VERIFY (0067)
+# and tag 9 = 0; only good_package() verifies.
 assert SMALL % 512 and SMALL % 32, "SMALL must leave a short last block and a partial last flash word"
 
 
@@ -77,24 +78,33 @@ def pkg(img: bytes, version, slot: int, **kw) -> bytes:
     return header(len(img), hashlib.sha256(img).digest(), version=version, slot=slot, **kw)
 
 
-def trial_package(ctx, slot: int, ver, seed: int):
-    """(image, header, version) for an update whose trial must run. A real package of this
-    firmware for that slot where the runner passes one (params.package_slot_a, package_slot_b:
-    paths to Table M-4 packages built on the firmware side, read as opaque bytes); else the
-    synthetic SMALL image on the reference model, whose trial is a model; else Skip, since a
-    synthetic image cannot run on an emulator or a radio."""
+def real_package(ctx, slot: int):
+    """(header, image, fields) of the runner's package for that slot (params.package_slot_a,
+    package_slot_b: Table M-4 packages built on the firmware side, read as opaque bytes), or None."""
     from pathlib import Path
     from .update import parse_package
     path = ctx.params.get(f"package_slot_{'ab'[slot - 1]}")
-    if path:
-        h, img, f = parse_package(Path(path).read_bytes())
+    return parse_package(Path(path).read_bytes()) if path else None
+
+
+def good_package(ctx, slot: int, ver, seed: int):
+    """(image, header, version) of a package that passes UPDATE_VERIFY and whose trial can run
+    (0067): the runner's real package for that slot; on the reference model a synthetic image
+    with the model's image record; else PartSkip (a synthetic image fails the image check)."""
+    from .update import model_image
+    real = real_package(ctx, slot)
+    if real:
+        h, img, f = real
         if f["slot"] not in (0, slot):
             raise PartSkip(f"params.package_slot_{'ab'[slot - 1]} is linked for slot {f['slot']}")
         return img, h, f["version"]
     if "model" in ctx.endpoint:
-        img = image(SMALL, seed=seed)
+        img = model_image(SMALL, slot, newer(ver), seed=seed)
         return img, pkg(img, newer(ver), slot), newer(ver)
-    raise PartSkip(f"needs a real package (params.package_slot_{'ab'[slot - 1]}) for a running trial")
+    raise PartSkip(f"needs a real package (params.package_slot_{'ab'[slot - 1]}) to pass UPDATE_VERIFY")
+
+
+trial_package = good_package
 
 
 @test("T-A1-79")
@@ -479,7 +489,8 @@ def t_a1_46(ctx: Ctx):
                 r = u.begin(pkg(img, newer(ver), other))
                 ok = r is not None and r["status"] == 0 and u.req("UPDATE_ABORT")["status"] == 0
             else:
-                ok = u.full(img, pkg(img, newer(ver), other)) == (0, "verified")
+                gimg, ghdr, _ = good_package(ctx, other, ver, 46)
+                ok = u.full(gimg, ghdr) == (0, "verified")
             if not ctx.check(f"{case}: set up", ok, "the update could not be started"):
                 continue
             n0 = last_log_seq(u)
@@ -697,9 +708,19 @@ def t_a1_84(ctx: Ctx):
         wait_reachable(ctx, "trial rollback after ROLLBACK")
         t = u.identify()
         ctx.eq("the started image did not confirm: back to the image that sent ROLLBACK (tag 23)", t.get(23, b"")[:1], bytes([run]))
-        ctx.eq("the failed image's slot checks bad now (tag 9 = 2)", t.get(9, b"..")[1:2], b"\x02")
+        ctx.eq("the failed trial: tag 10 = 2 (rolled back), and its slot keeps tag 9 = 1 (integrity; 0067)",
+               (t.get(10), t.get(9, b"..")[1:2]), (b"\x02", b"\x01"))
+    # the other slot at 0 (an aborted staging erased it): ROLLBACK 55 and nothing changes
+    with updating(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        r = u.begin(pkg(image(SMALL, seed=842), newer(ver), other))
+        if r and r["status"] == 0:
+            u.req("UPDATE_ABORT")
+    with updating(ctx, s, restart_at_end=False) as u:
+        t = u.identify()
+        ctx.eq("after an aborted staging the other slot reports tag 9 = 0", t.get(9, b"..")[1:2], b"\x00")
         r = u.req("ROLLBACK")
-        ctx.eq("with the other slot bad: 55 and nothing changes", (r["status"] if r else None, u.identify().get(23, b"")[:1]),
+        ctx.eq("with the other slot at 0: 55 and nothing changes", (r["status"] if r else None, u.identify().get(23, b"")[:1]),
                (55, bytes([run])))
     ctx.notes.append("the other slot empty: only on a fresh radio; armed (50): T-A1-05")
 
@@ -729,3 +750,228 @@ def t_emu_idle(ctx: Ctx):
     ctx.check("information (not judged): emulated t_us before and after, wall time of the advance", True,
               f"t_us {t0} -> {t1} ({(t1 - t0) / 1e6:.3f} s emulated), wall {w1 - w0:.3f} s"
               if t0 is not None and t1 is not None else f"no hw.observe t_us; wall {w1 - w0:.3f} s")
+
+
+# ---------------- 0067: the image check, VERIFY, tag 9 and the boot-stage refusals ----------------
+def reheader(h: bytes, img: bytes, version=None, slot=None) -> bytes:
+    """A real package header with its length and SHA-256 set for img, and optionally another
+    version (bytes 10-13) or slot (byte 52); every other byte kept as the firmware side built it."""
+    b = bytearray(h)
+    b[14:18] = struct.pack(">I", len(img))
+    b[18:50] = hashlib.sha256(img).digest()
+    if version is not None:
+        b[10:14] = bytes([version[0], version[1]]) + struct.pack(">H", version[2])
+    if slot is not None:
+        b[52] = slot
+    return bytes(b)
+
+
+def flip(img: bytes, at: int | None = None) -> bytes:
+    """One byte of the image changed (the middle one by default)."""
+    b = bytearray(img)
+    b[len(b) // 2 if at is None else at] ^= 0x5A
+    return bytes(b)
+
+
+def tag9(t: dict, which: int = 1) -> bytes:
+    """IDENTIFY tag 9: byte 0 the running image, byte 1 the other slot."""
+    return t.get(9, b"..")[which:which + 1]
+
+
+def stage(u: Updater, img: bytes, hdr: bytes):
+    """BEGIN and every block; the status of the first refusal, else 0."""
+    r = u.begin(hdr)
+    if not r or r["status"] != 0:
+        return r["status"] if r else None
+    st, _ = u.blocks(img, struct.unpack(">H", r["payload"][:2])[0])
+    return st
+
+
+@test("T-A1-88")
+def t_a1_88(ctx: Ctx):
+    """A1.8 "Image check", "UPDATE_VERIFY" (0067): packages whose SHA-256 matches the header but
+    whose image is not runnable get 55 at VERIFY and at ACTIVATE; nothing changes; tag 9 = 0;
+    sending the right blocks again and verifying again succeeds."""
+    from .update import model_image
+    s = secret(ctx)
+    with updating(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+    nv = newer(ver)
+    cases = [("no image record", image(SMALL, seed=881), None)]
+    if "model" in ctx.endpoint:
+        # the model's own record (0067 leaves the layout to the firmware)
+        mi = lambda **kw: model_image(SMALL, other, nv, seed=882, **kw)
+        base_run = 0x08000000 + {1: 2, 2: 4}[run] * 128 * 1024
+        cases += [("a record for other hardware", mi(hw=HW_ID + 1), None),
+                  ("a record of the boot stage", mi(kind=2), None),
+                  ("linked for the running slot", mi(rslot=run), pkg(mi(rslot=run), nv, 0)),
+                  ("a failing integrity check", flip(mi()), None),
+                  ("an entry point outside the slot", mi(entry=base_run + 0x201), None),
+                  ("the record's version differs from the header", mi(), pkg(mi(), newer(nv), other)),
+                  ("the record's length differs from the header", mi(rlen=SMALL - 4), None)]
+    else:
+        real, run_real = real_package(ctx, other), real_package(ctx, run)
+        if real:
+            h, img, f = real
+            cases += [("a failing integrity check", flip(img), reheader(h, flip(img), slot=other)),
+                      ("the record's version differs from the header", img, reheader(h, img, version=newer(f["version"]), slot=other)),
+                      ("the record's length differs from the header", img + b"\xff" * 32, reheader(h, img + b"\xff" * 32, slot=other))]
+        if run_real:
+            h, img, f = run_real
+            cases.append(("linked for the running slot", img, reheader(h, img, slot=0)))
+        ctx.notes.append("not run off the reference model: a record for other hardware or for the boot stage, an entry point "
+                         "outside the slot (the record's layout is the firmware's; needs packages built so on the firmware side)"
+                         + ("" if real and run_real else "; the cases built from real packages need params.package_slot_a and _b"))
+    for name, img, hdr in cases:
+        with updating(ctx, s) as u:
+            t0 = u.identify()
+            st = stage(u, img, hdr or pkg(img, nv, other))
+            if not ctx.eq(f"{name}: UPDATE_BEGIN and every block accepted", st, 0):
+                continue
+            n0 = last_log_seq(u)
+            r = u.req("UPDATE_VERIFY")
+            ctx.eq(f"{name}: UPDATE_VERIFY 55", r["status"] if r else None, 55)
+            ctx.check(f"{name}: the failed check logged (text not fixed)", bool(logs_since(u, n0)), "no new log entry")
+            r = u.req("UPDATE_ACTIVATE", b"\x00")
+            ctx.eq(f"{name}: UPDATE_ACTIVATE 55", r["status"] if r else None, 55)
+            t = u.identify()
+            ctx.eq(f"{name}: running image and boot record unchanged (tags 23, 10)", (t.get(23), t.get(10)), (t0.get(23), t0.get(10)))
+            ctx.eq(f"{name}: tag 9 for the staging slot 0", tag9(t), b"\x00")
+    # the transfer stays open after a failed verify: the right blocks again, then a good verify
+    with updating(ctx, s) as u:
+        gimg, ghdr, _ = good_package(ctx, other, ver, 889)
+        st = stage(u, flip(gimg), ghdr)
+        if ctx.eq("wrong blocks for a good header: accepted", st, 0):
+            r = u.req("UPDATE_VERIFY")
+            ctx.eq("UPDATE_VERIFY 55 (the hash)", r["status"] if r else None, 55)
+            r = u.req("UPDATE_ACTIVATE", b"\x00")
+            ctx.eq("UPDATE_ACTIVATE 55 until a verify succeeds", r["status"] if r else None, 55)
+            bs = 512
+            st, _ = u.blocks(gimg, bs)
+            ctx.eq("the right blocks sent again: accepted", st, 0)
+            r = u.req("UPDATE_VERIFY")
+            ctx.eq("UPDATE_VERIFY again: 0", r["status"] if r else None, 0)
+            ctx.eq("tag 9 for the staging slot 1 after the good verify", tag9(u.identify()), b"\x01")
+            st, _ = u.blocks(gimg[:bs], bs)
+            r = u.req("UPDATE_ACTIVATE", b"\x00")
+            ctx.eq("a block after the good verify cancels it: UPDATE_ACTIVATE 55", r["status"] if r else None, 55)
+
+
+def corrupt(ctx, slot: int, release: bool = False):
+    """slot.corrupt (proposed for the emulator; the reference model has it): one byte of the image
+    in that slot changed, at its middle; release restores it."""
+    if "slot.corrupt" not in ctx.endpoint.get("fixtures", []):
+        raise PartSkip("needs slot.corrupt (one byte of a slot changed)")
+    ctx.fixture("slot.corrupt", slot=slot, **({"restore": True} if release else {}))
+
+
+@test("T-A1-89")
+def t_a1_89(ctx: Ctx):
+    """A1.8 "Integrity in IDENTIFY" (0067): tag 9 for the other slot."""
+    need_clock(ctx)
+    s = secret(ctx)
+    with updating(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        r = u.begin(pkg(image(SMALL, seed=891), newer(ver), other))
+        if ctx.eq("UPDATE_BEGIN accepted", r["status"] if r else None, 0):
+            ctx.eq("from the first erase of UPDATE_BEGIN: 0", tag9(u.identify()), b"\x00")
+            u.req("UPDATE_ABORT")
+            ctx.eq("after UPDATE_ABORT: 0", tag9(u.identify()), b"\x00")
+    with updating(ctx, s) as u:
+        ctx.eq("after a restart: still 0", tag9(u.identify()), b"\x00")
+        r = u.req("ROLLBACK")
+        ctx.eq("ROLLBACK with the other slot at 0: 55, nothing changes", (r["status"] if r else None, u.identify().get(23, b"")[:1]),
+               (55, bytes([run])))
+        img = image(SMALL, seed=892)
+        if stage(u, img, pkg(img, newer(ver), other)) == 0:
+            r = u.req("UPDATE_VERIFY")
+            ctx.eq("a synthetic image: VERIFY 55", r["status"] if r else None, 55)
+            ctx.eq("after a failed verify: 0", tag9(u.identify()), b"\x00")
+    with updating(ctx, s) as u:
+        ctx.eq("after a failed verify and a restart: 0", tag9(u.identify()), b"\x00")
+        gimg, ghdr, _ = good_package(ctx, other, ver, 893)
+        ctx.eq("a good package verifies", u.full(gimg, ghdr), (0, "verified"))
+        ctx.eq("after a good verify: 1", tag9(u.identify()), b"\x01")
+    # 2: a confirmed other image with one byte changed, judged at the next start
+    a = activate_new(ctx, s, 894)
+    if not ctx.check("an update installed", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
+        return
+    with updating(ctx, s, restart_at_end=False) as u:
+        advance(ctx, 11)
+        ctx.eq("confirmed; the other slot (the previous image) 1", (u.identify().get(10), tag9(u.identify())), (b"\x00", b"\x01"))
+    corrupt(ctx, a[0])
+    try:
+        with updating(ctx, s) as u:
+            pass
+        with updating(ctx, s) as u:
+            t = u.identify()
+            ctx.eq("one byte of the confirmed other image changed, after a restart: 2", tag9(t), b"\x02")
+            r = u.req("ROLLBACK")
+            ctx.eq("ROLLBACK with the other slot at 2: 55, nothing changes", (r["status"] if r else None, u.identify().get(23, b"")[:1]),
+                   (55, bytes([a[1]])))
+    finally:
+        corrupt(ctx, a[0], release=True)
+
+
+@test("T-A1-90")
+def t_a1_90(ctx: Ctx):
+    """A1.8 "Boot-stage refusals" (0067)."""
+    need_clock(ctx)
+    s = secret(ctx)
+    # 1: the staged image changed after a good verify and UPDATE_ACTIVATE
+    with updating(ctx, s, restart_at_end=False) as u:
+        run, other, ver, lay = facts(ctx, u)
+        gimg, ghdr, _ = good_package(ctx, other, ver, 901)
+        if not ctx.eq("a good package verifies", u.full(gimg, ghdr), (0, "verified")):
+            return
+        n0 = last_log_seq(u)
+        corrupt(ctx, other)
+        r = u.req("UPDATE_ACTIVATE", b"\x00")
+        ctx.eq("UPDATE_ACTIVATE 0 (it adds no check)", r["status"] if r else None, 0)
+    try:
+        time.sleep(0.3)
+        wait_reachable(ctx, "UPDATE_ACTIVATE")
+        with updating(ctx, s) as u:
+            t = u.identify()
+            ctx.eq("the trial slot refused: the previous image starts, tag 10 = 2", (t.get(23, b"")[:1], t.get(10)), (bytes([run]), b"\x02"))
+            texts = logs_since(u, n0)
+            ctx.check("the refusal and the rollback logged ('boot: slot <n> refused: <check>')",
+                      any("refused" in x for x in texts), f"{texts[-3:]}")
+    finally:
+        corrupt(ctx, other, release=True)
+    # 2: the confirmed active image changed, the other slot good: the other starts without a trial
+    a = activate_new(ctx, s, 902)
+    if not ctx.check("an update installed", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
+        return
+    with updating(ctx, s, restart_at_end=False) as u:
+        advance(ctx, 11)
+        ctx.eq("confirmed", u.identify().get(10), b"\x00")
+        n0 = last_log_seq(u)
+    corrupt(ctx, a[1])
+    try:
+        with updating(ctx, s) as u:
+            pass
+        with updating(ctx, s, restart_at_end=False) as u:
+            t = u.identify()
+            ctx.eq("the active slot refused: the other slot starts without a trial (tag 23, tag 10 = 2)",
+                   (t.get(23, b"")[:1], t.get(10)), (bytes([a[0]]), b"\x02"))
+            ctx.check("the change logged", bool(logs_since(u, n0)), "no new log entry")
+    finally:
+        corrupt(ctx, a[1], release=True)
+    # 3: both slots changed: safe state, no answer (an emulator; the model does not model it)
+    if "model" in ctx.endpoint:
+        ctx.notes.append("both slots changed: not run on the reference model (the safe state without network is not modelled)")
+        return
+    ctx.need("power.cycle")
+    corrupt(ctx, 1)
+    corrupt(ctx, 2)
+    try:
+        ctx.fixture("power.cycle")
+        time.sleep(3)
+        with Host(ctx.net) as h:
+            ctx.check("both slots changed: the radio does not answer (discovery, 5 s)", not h.discover(5.0), "a discovery answer")
+    finally:
+        corrupt(ctx, 1, release=True)
+        corrupt(ctx, 2, release=True)
+        ctx.fixture("power.cycle")
+        wait_reachable(ctx, "after both slots were restored")

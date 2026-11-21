@@ -249,6 +249,13 @@ OVERRIDES: dict[str, dict] = {
                 "notes": ["the pins of Table A3-6; the DAC part needs a fixture; the armed part needs TX unlocked"]},
     "T-B5-22": {"target": "emulator", "also": [], "needs": ["flash.log", "flash.timing"]},
     "T-A1-83": {"target": "emulator", "also": [], "needs": ["power.cut", "time.advance"]},
+    "T-A1-88": {"target": "emulator", "also": ["host"], "needs": [],
+                "notes": ["off the reference model the cases are built from params.package_slot_a and _b; other hardware, "
+                          "the boot-stage kind and an entry point outside the slot need packages built so on the firmware side"]},
+    "T-A1-89": {"target": "emulator", "also": ["host"], "needs": ["time.advance"],
+                "notes": ["the tag 9 = 2 part needs slot.corrupt; the good-verify parts need a real package"]},
+    "T-A1-90": {"target": "emulator", "also": ["host"], "needs": ["time.advance", "slot.corrupt"],
+                "notes": ["slot.corrupt (proposed for the emulator); the both-slots case only on an emulator"]},
     "T-A1-85": {"target": "emulator", "also": [], "needs": ["flash.fault"]},
     "T-A1-86": {"target": "emulator", "also": [], "needs": ["flash.log", "power.cut"]},
     "T-A1-87": {"target": "emulator", "also": [], "needs": ["flash.log", "flash.ecc", "power.cycle"]},
@@ -396,7 +403,7 @@ UNCOVERED = [
 # Tests that need more than the 30 s default (radio time; the emulator runner enforces it in
 # emulated time with a wall cap of 30 x timeout_s + 120 s).
 TIMEOUTS: dict[str, int] = {
-    "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 300, "T-A1-84": 300, "T-A1-83": 300,
+    "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 300, "T-A1-84": 300, "T-A1-83": 300, "T-A1-88": 300, "T-A1-89": 300, "T-A1-90": 400,
     "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-76": 120,
     "T-B5-22": 900, "T-A1-85": 300, "T-A1-86": 1800, "T-A1-87": 300, "T-EMU-IDLE": 120,
 }

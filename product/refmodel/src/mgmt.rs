@@ -10,7 +10,7 @@ use std::net::Ipv4Addr;
 
 use crate::codes::mgmt::{st, *};
 use crate::crypto::{crc32, ct_eq, hmac_sha256, sha256};
-use crate::radio::{Calibration, Firmware, Image, Radio, Rx, Tx, ALL_PARAMS, LAYOUT, MS, S};
+use crate::radio::{image_check, Calibration, Firmware, Image, Radio, Rx, Tx, ALL_PARAMS, LAYOUT, MS, S};
 use crate::util::*;
 
 pub const CHALLENGE_LEN: usize = 16; // Annex M
@@ -53,6 +53,8 @@ pub struct Upd {
     pub sha: [u8; 32],
     /// the staging slot: the one not running
     pub slot: u8,
+    /// header byte 52: the slot the package is linked for, 0 either
+    pub target: u8,
     pub count: u32,
     pub data: Vec<u8>,
     pub received: u32,
@@ -471,16 +473,46 @@ impl Mgmt {
             }
             RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY => (st::NOT_SUPPORTED, vec![], None),
             UPDATE_BEGIN => self.update_begin(r, payload, out),
-            UPDATE_BLOCK => self.update_block(payload),
+            UPDATE_BLOCK => {
+                let res = self.update_block(payload);
+                if res.0 == st::OK {
+                    // an accepted block after a good verify cancels it: the slot holds no image
+                    // to start until the next good verify (0067 items 2, 4)
+                    if let Some(u) = self.upd.as_ref() {
+                        r.fw.slots[(u.slot - 1) as usize] = None;
+                    }
+                }
+                res
+            }
             UPDATE_VERIFY => match self.upd.as_mut() {
                 Some(u) if u.received == u.count => {
+                    // 0067 item 2: the SHA-256, the image check of the staging slot, the record
+                    // against the header; 55 at the first that fails, named in the log
                     let h = sha256(&u.data);
-                    if h == u.sha {
-                        u.verified = true;
-                        (st::OK, h.to_vec(), None)
+                    let res = if h != u.sha {
+                        Err("SHA-256 of the staged image differs from the header")
                     } else {
-                        r.logf("update: SHA-256 of the staged image differs from the header");
-                        (st::VERIFY_FAILED, vec![], None)
+                        match image_check(&u.data, u.slot) {
+                            Err(e) => Err(e),
+                            Ok(rec) if rec.len != u.len => Err("image record length differs from the header"),
+                            Ok(rec) if rec.version != u.version => Err("image record version differs from the header"),
+                            Ok(rec) if u.target != 0 && rec.slot != u.target => Err("image record slot differs from the header"),
+                            Ok(_) => Ok(()),
+                        }
+                    };
+                    match res {
+                        Ok(()) => {
+                            u.verified = true;
+                            r.fw.slots[(u.slot - 1) as usize] =
+                                Some(Image { version: u.version, len: u.len, sha: u.sha, good: false, integ: 1, corrupt: false });
+                            (st::OK, h.to_vec(), None)
+                        }
+                        Err(e) => {
+                            u.verified = false;
+                            r.fw.slots[(u.slot - 1) as usize] = None;
+                            r.logf(&format!("update: verify failed: {e}"));
+                            (st::VERIFY_FAILED, vec![], None)
+                        }
                     }
                 }
                 _ => (st::VERIFY_FAILED, vec![], None),
@@ -497,7 +529,14 @@ impl Mgmt {
             ROLLBACK => {
                 // 0064: a confirmed running image (a trial or an update got 58 above) and an image
                 // in the other slot that checks good; else 55 and nothing changes
-                if r.fw.other_image().map_or(false, |i| !i.bad) {
+                // the other slot judged again before the command is accepted (0067 item 4)
+                let o = r.fw.other();
+                if let Some(i) = r.fw.slots[(o - 1) as usize].as_mut() {
+                    if i.corrupt {
+                        i.integ = 2;
+                    }
+                }
+                if r.fw.other_image().map_or(false, |i| i.integ == 1) {
                     let ver = |i: Option<&Image>| i.map_or("0.0.0".to_string(), |i| format!("{}.{}.{}", i.version.0, i.version.1, i.version.2));
                     r.logf(&format!("rollback commanded: slot {} {} to slot {} {}", slot_name(r.fw.running),
                                     ver(r.fw.running_image()), slot_name(r.fw.other()), ver(r.fw.other_image())));
@@ -530,7 +569,6 @@ impl Mgmt {
             Some("ACTIVATE") => {
                 // atomic switch, then the trial boot of the new image (A1.8 U-5, U-6)
                 if let Some(u) = self.upd.take() {
-                    r.fw.slots[(u.slot - 1) as usize] = Some(Image { version: u.version, len: u.len, sha: u.sha, good: false, bad: false });
                     r.logf(&format!("update activated: slot {} on trial", u.slot));
                     let net_down = r.fw.sim_net_down;
                     r.fw.sim_net_down = false;
@@ -539,6 +577,7 @@ impl Mgmt {
                     r.fw.running = u.slot;
                     r.fw.rolled_back = false;
                     r.fw.trial = Some(r.now);
+                    r.refuse_trial(); // the boot stage's image check before the start (0067)
                     self.on_reset(r.now);
                 }
             }
@@ -555,6 +594,7 @@ impl Mgmt {
                 if let Some(img) = r.fw.slots[(r.fw.running - 1) as usize].as_mut() {
                     img.good = false;
                 }
+                r.refuse_trial();
                 self.on_reset(r.now);
             }
             Some("FACTORY_RESET") => {
@@ -627,7 +667,7 @@ impl Mgmt {
         tlv(6, &[0, 1, 0, 1]); // boot stage version (model)
         tlv(7, &0u32.to_be_bytes());
         tlv(8, &[0]); // bit 0 stock image retained = 0; bit 1 vendor recovery supported = 0
-        let integ = |i: Option<&Image>| i.map_or(0, |i| if i.bad { 2 } else { 1 });
+        let integ = |i: Option<&Image>| i.map_or(0, |i| i.integ);
         tlv(9, &[integ(r.fw.running_image()), integ(r.fw.other_image())]);
         let state = if r.fw.trial.is_some() { 1 } else if r.fw.rolled_back { 2 } else { 0 };
         tlv(10, &[state]);
@@ -702,7 +742,9 @@ impl Mgmt {
             r.logf("update: downgrade requested");
         }
         let count = (len as usize).div_ceil(BLOCK) as u32;
-        self.upd = Some(Upd { version, len, sha, slot, count, data: Vec::new(), received: 0, verified: false });
+        self.upd = Some(Upd { version, len, sha, slot, target, count, data: Vec::new(), received: 0, verified: false });
+        // the first erase of the staging slot: it holds no image to start (tag 9 = 0; 0067)
+        r.fw.slots[(slot - 1) as usize] = None;
         r.begin_update(out);
         let mut v = (BLOCK as u16).to_be_bytes().to_vec();
         v.extend_from_slice(&count.to_be_bytes());
@@ -730,8 +772,13 @@ impl Mgmt {
         if n == u.received {
             u.data.extend_from_slice(data);
             u.received += 1;
-            u.verified = false;
+        } else {
+            // a repeat writes the block again (A1.8: after a failed verify the host may send the
+            // blocks again and verify again)
+            let o = n as usize * BLOCK;
+            u.data[o..o + data.len()].copy_from_slice(data);
         }
+        u.verified = false; // any accepted block cancels a good verify (0067 item 2)
         let mut v = n.to_be_bytes().to_vec();
         v.extend_from_slice(&u.received.to_be_bytes());
         (st::OK, v, None)

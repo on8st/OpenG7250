@@ -30,8 +30,60 @@ pub struct Image {
     pub sha: [u8; 32],
     /// confirmed (A1.8 self-confirmation) or the factory image
     pub good: bool,
-    /// a trial of it failed: it does not check good (IDENTIFY tag 9 = 2; 0064)
-    pub bad: bool,
+    /// IDENTIFY tag 9 (0067): 1 good, 2 bad (the image check failed when last judged); an
+    /// erased slot or one whose staging has not ended with a good verify is None (0)
+    pub integ: u8,
+    /// a word of the slot changed after it was judged (model fixture slot.corrupt): the next
+    /// judgement fails
+    pub corrupt: bool,
+}
+
+/// The reference model's image record (model only; 0067 leaves the layout to the firmware), at
+/// offset 0 of an image, 28 bytes, big-endian: "G7RM", hardware u16, kind u8 (1 application,
+/// 2 boot stage), slot u8, version (u8, u8, u16), recorded length u32, initial stack pointer u32,
+/// entry point u32, CRC-32 u32 over the recorded length with these 4 bytes taken as 0. Model
+/// addresses: slot n at 0x0800_0000 + first sector x 128 KiB (Table LAYOUT), RAM at
+/// 0x2000_0000-0x2001_FFFF and 0x2400_0000-0x2407_FFFF.
+pub struct Record {
+    pub version: (u8, u8, u16),
+    pub len: u32,
+    pub slot: u8,
+}
+
+/// The image check of 0067 item 1 on the model's record; Err names the check that failed.
+pub fn image_check(d: &[u8], slot: u8) -> Result<Record, &'static str> {
+    let be32 = |o: usize| u32::from_be_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]);
+    if d.len() < 28 || &d[0..4] != b"G7RM" {
+        return Err("no image record");
+    }
+    if u16::from_be_bytes([d[4], d[5]]) != 0x00C8 {
+        return Err("image record for other hardware");
+    }
+    if d[6] != 1 {
+        return Err("image record not of kind application");
+    }
+    let len = be32(12);
+    if len > Firmware::slot_size(slot) || len as usize > d.len() || len < 28 {
+        return Err("recorded length does not fit the slot");
+    }
+    if d[7] != slot {
+        return Err("image linked for the other slot");
+    }
+    let mut c = d[..len as usize].to_vec();
+    c[24..28].copy_from_slice(&[0; 4]);
+    if crate::crypto::crc32(&c) != be32(24) {
+        return Err("integrity check fails");
+    }
+    let sp = be32(16);
+    if !((0x2000_0000..=0x2002_0000).contains(&sp) || (0x2400_0000..=0x2408_0000).contains(&sp)) {
+        return Err("stack pointer outside RAM");
+    }
+    let base = 0x0800_0000 + LAYOUT[(slot - 1) as usize].0 as u32 * SECTOR_BYTES;
+    let e = be32(20) & !1;
+    if !(base..base + Firmware::slot_size(slot)).contains(&e) {
+        return Err("entry point outside the slot");
+    }
+    Ok(Record { version: (d[8], d[9], u16::from_be_bytes([d[10], d[11]])), len, slot: d[7] })
 }
 
 #[derive(Debug, Clone)]
@@ -420,7 +472,7 @@ impl Radio {
         };
         r.new_token();
         // the factory image in slot A, confirmed
-        r.fw.slots[0] = Some(Image { version: r.cfg.fw, len: 0, sha: [0; 32], good: true, bad: false });
+        r.fw.slots[0] = Some(Image { version: r.cfg.fw, len: 0, sha: [0; 32], good: true, integ: 1, corrupt: false });
         r.logf("power-on reset");
         r
     }
@@ -436,18 +488,58 @@ impl Radio {
     }
 
     /// The boot stage after a reset: a trial image that has not confirmed itself is rolled back
-    /// (A1.8 U-6; 0044).
+    /// (A1.8 U-6; 0044); it keeps tag 9 = 1 (0067: tag 9 is integrity, tag 10 the rollback).
+    /// Then the image check before the start (0067 item 3): a trial slot that fails it gives the
+    /// previous image; a confirmed active slot that fails it gives the other slot if that one
+    /// counts as good, without a trial; the other slot is judged at each start (item 4).
     fn boot_choice(&mut self, cause: &str) {
         self.fw.trial_net_down = false;
         if self.fw.trial.is_some() {
             self.fw.trial = None;
-            if let Some(img) = self.fw.slots[(self.fw.running - 1) as usize].as_mut() {
-                img.bad = true; // stays in its slot, marked bad (IDENTIFY tag 9 = 2)
-            }
             self.fw.running = self.fw.other();
             self.fw.rolled_back = true;
             self.logf(&format!("trial image not confirmed before reset ({cause}): rolled back to slot {}", self.fw.running));
         }
+        let name = |s: u8| if s == 1 { "A" } else { "B" };
+        let run = self.fw.running;
+        let bad_run = self.fw.running_image().map_or(false, |i| i.corrupt);
+        if bad_run {
+            if let Some(i) = self.fw.slots[(run - 1) as usize].as_mut() {
+                i.integ = 2;
+            }
+            let other_good = self.fw.other_image().map_or(false, |i| i.integ == 1 && !i.corrupt);
+            if other_good {
+                self.fw.running = self.fw.other();
+                self.fw.rolled_back = true;
+                self.logf(&format!("boot: slot {} refused: integrity check fails; slot {} started without a trial (rolled back)",
+                                   name(run), name(self.fw.running)));
+            } else {
+                // neither slot passes: the safe state, no network (not modelled further; T-A1-90
+                // runs on an emulator)
+                self.logf("boot: no slot passes the image check: safe state, network not started");
+            }
+        }
+        // each slot judged at this start: a changed one 2, an unchanged one with a record 1
+        for i in self.fw.slots.iter_mut().flatten() {
+            i.integ = if i.corrupt { 2 } else { 1 };
+        }
+    }
+
+    /// The boot stage's refusal of a trial slot that fails the image check (0067 item 3.1).
+    pub fn refuse_trial(&mut self) -> bool {
+        let name = |s: u8| if s == 1 { "A" } else { "B" };
+        let s = self.fw.running;
+        if self.fw.trial.is_some() && self.fw.running_image().map_or(false, |i| i.corrupt) {
+            if let Some(i) = self.fw.slots[(s - 1) as usize].as_mut() {
+                i.integ = 2;
+            }
+            self.fw.trial = None;
+            self.fw.running = self.fw.other();
+            self.fw.rolled_back = true;
+            self.logf(&format!("boot: slot {} refused: integrity check fails; rolled back to slot {}", name(s), name(self.fw.running)));
+            return true;
+        }
+        false
     }
 
     /// Self-confirmation of a trial image (0044): 10 s running with the network up (always up in

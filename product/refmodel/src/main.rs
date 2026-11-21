@@ -110,7 +110,7 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim"];
+    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt"];
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -362,6 +362,19 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 r.keylog = None;
             }
             ok(v)
+        }
+        "slot.corrupt" => {
+            // model only: one byte of the image in slot (1 A, 2 B) changed; the next judgement
+            // of that slot fails (0067 item 4: at a start, a ROLLBACK, or the boot stage)
+            let s = args.get("slot").and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
+            match r.fw.slots.get_mut(s.wrapping_sub(1)).and_then(|i| i.as_mut()) {
+                Some(i) => {
+                    // restore: the byte back as it was (the next judgement passes again)
+                    i.corrupt = !args.get("restore").map_or(false, |v| *v == J::Bool(true));
+                    ok(J::Null)
+                }
+                None => err("slot.corrupt: no image in that slot"),
+            }
         }
         "trial.sim" => {
             // model only: the next trial image keeps its network down (no self-confirmation)
