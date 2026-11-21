@@ -289,11 +289,33 @@ async fn wait_reply(chip: &mut Chip, rx: &mut [u8], xid: u32, mac: [u8; 6], want
 /// The caller has closed the other sockets. Ends with the address set and socket 0 closed.
 async fn claim_link_local(chip: &mut Chip, claim: &mut ipv4ll::Claim) -> NetConfig {
     let _ = chip.set_ip([0; 4], [0; 4], [0; 4]);
-    if let Err(e) = chip.macraw_open() {
-        println!("net: FAULT cannot open socket 0 in MACRAW for the link-local probe ({:?})", e);
+    // Socket 0 in MACRAW, tried three times. If it cannot open, no probe can be sent: the
+    // candidate is used unprobed, so that the radio stays reachable, and this is said as such on
+    // the console and in the log (UNPROBED_CLAIMS); IP_CONFLI still guards the address in use.
+    let mut open = Err(g7250_ch394::Error::Stuck);
+    for _ in 0..3 {
+        open = chip.macraw_open();
+        if open.is_ok() {
+            break;
+        }
+        Timer::after_millis(10).await;
+    }
+    if let Err(e) = open {
+        let c = claim.candidate();
+        let _ = chip.udp_close(0);
+        let _ = chip.set_ip(c.ip, c.mask, c.gateway);
+        UNPROBED_CLAIMS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        println!(
+            "net: FAULT link-local {} used WITHOUT probe or announcement: socket 0 cannot open in MACRAW ({:?}) (RFC 3927 not met)",
+            ip_str(c.ip).as_str(),
+            e
+        );
+        return c;
     }
     println!("net: probing link-local {} (RFC 3927)", ip_str(claim.candidate().ip).as_str());
     let mut f = [0u8; 1514];
+    // Every probe and announcement must have left the chip for "probed and announced".
+    let mut send_failed = 0u32;
     loop {
         let now = Instant::now().as_millis();
         while let Ok(Some(n)) = chip.macraw_recv(&mut f) {
@@ -309,12 +331,24 @@ async fn claim_link_local(chip: &mut Chip, claim: &mut ipv4ll::Claim) -> NetConf
         }
         match claim.poll(now) {
             ipv4ll::Action::Send(frame) => {
-                let _ = chip.macraw_send(&frame);
+                if let Err(e) = chip.macraw_send(&frame) {
+                    send_failed += 1;
+                    println!("net: FAULT link-local probe or announcement not sent ({:?})", e);
+                }
             }
             ipv4ll::Action::Claimed(c) => {
                 let _ = chip.udp_close(0);
                 let _ = chip.set_ip(c.ip, c.mask, c.gateway);
-                println!("net: link-local {} probed and announced", ip_str(c.ip).as_str());
+                if send_failed == 0 {
+                    println!("net: link-local {} probed and announced", ip_str(c.ip).as_str());
+                } else {
+                    UNPROBED_CLAIMS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    println!(
+                        "net: FAULT link-local {} used, but {} of its probes and announcements were not sent (RFC 3927 not met)",
+                        ip_str(c.ip).as_str(),
+                        send_failed
+                    );
+                }
                 return c;
             }
             ipv4ll::Action::None => {}
@@ -322,6 +356,10 @@ async fn claim_link_local(chip: &mut Chip, claim: &mut ipv4ll::Claim) -> NetConf
         Timer::after_millis(2).await;
     }
 }
+
+/// Link-local addresses taken without a complete probe and announcement (socket 0 not in MACRAW,
+/// or a frame not sent): logged by the net loop once the management log exists.
+static UNPROBED_CLAIMS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Every socket closed: before a probe on socket 0 and a new configuration (0049: discovery and
 /// the other sockets are closed during the probe).
@@ -547,6 +585,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     // margin of 0054 (High Priority packets 1 ms apart, two held by the CH394) needs every busy
     // pass well under 2 ms.
     let mut busy_pass_max_us: u64 = 0;
+    // Unprobed link-local claims already written to the log.
+    let mut unprobed_logged: u32 = 0;
     loop {
         let pass_start = Instant::now();
         // Session watchdog and status first, on every pass, so that no branch below can delay
@@ -693,6 +733,11 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 }
                 // Counters of the key path for GET_STATS (Table B10-1, B10.5a item 1).
                 server.stats.net_busy_pass_max_us = busy_pass_max_us;
+                let unprobed = UNPROBED_CLAIMS.load(core::sync::atomic::Ordering::Relaxed);
+                if unprobed != unprobed_logged {
+                    unprobed_logged = unprobed;
+                    server.log.push(Instant::now().as_millis(), format_args!("link-local {} used without a complete RFC 3927 probe ({} times)", ip_str(cfg.ip).as_str(), unprobed));
+                }
                 server.stats.net_send_dropped = chip.dropped_busy.iter().map(|&n| n as u64).sum();
                 server.stats.cw_hang_clamped = p2.key.cw_hang_clamped;
                 server.stats.cw_speed_clamped = p2.key.cw_speed_clamped;
