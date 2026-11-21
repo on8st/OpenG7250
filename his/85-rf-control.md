@@ -46,6 +46,11 @@ them is of the 74HC595 kind (HYPOTHESIS).
   meanings MEDIUM to HYPOTHESIS).
 - **ATU latches** (8 bit each, the CS line is the latch): PD13 (network style,
   bypass/enable), PG2 and PG5 (the two reactance banks) (HIGH).
+- **ATU strobe idle level (F1-Q5):** the strobes idle high (HIGH: the factory
+  image drives PD13, PG2 and PG5 push-pull high from its GPIO set-up). Whether
+  the board has pull resistors on them is **not known**; between reset and the
+  firmware's GPIO set-up the MCU pins are high-impedance, so a floating strobe
+  cannot be excluded (`90-needs-hardware.md`).
 
 ## Antennas
 

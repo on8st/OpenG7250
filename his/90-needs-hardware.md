@@ -11,6 +11,13 @@ statements in the other sections stay as tagged there.
 | HIS-17: power-up without the Control | Two hypotheses H1/H2 (`20-power.md`, Open). | Observation T0-P2: Main with the CTRL cable disconnected, DC on; does the Ethernet link come up? |
 | HIS-19: does the vendor bootloader start an image it did not write; is there a bootloader entry without the Control | Unknown; the bootloaders are not analysed (`15-stock-recovery.md`). | The F1 drill, after the steps below. |
 | IWDG start mode | Unknown: set by the IWDG1_SW option byte (`10-reset-clock.md`). | Read in step 2 below. |
+| F1-Q1: Main part and package | STM32H725xG or H735xG (MEDIUM); package unknown (`10-reset-clock.md`). | DBGMCU_IDCODE in step 2; the part marking from a board photo. |
+| F1-Q3, F1-Q4: state at application start | PWR_CR3 as the factory image sets it is known (HIGH); what the vendor bootloader leaves (clocks, VTOR, PRIMASK, caches, peripherals, IWDG, PWR_CR3) is unknown (`10-reset-clock.md`). | After F1: the test image records PWR_CR3, RCC_CR/CFGR, VTOR, PRIMASK, CCR (caches), NVIC_ISER and the IWDG state at its first instruction and reports them on USART1. |
+| F1-Q5: ATU strobe pull resistors | Idle level high (HIGH); board pulls unknown (`85-rf-control.md`). | Continuity or resistance check on PD13, PG2, PG5 to VDD/GND with power off, from board photos first. |
+| F1-Q6: AXI SRAM size | 320 KiB (HIGH, `10-reset-clock.md`). | Option bytes (TCM/AXI sharing) in step 2. |
+| F2-Q2, F2-Q3: CH394 version value, MAC uniqueness | CHIPV at 0x0039; MAC read from the chip (`40-ethernet.md`). | Read CHIPV and the MAC on two units. |
+| F2-Q4: INT# board pull-up | Unknown; internal pull-up known to work (`40-ethernet.md`). | Resistance check on PC13 with power off. |
+| F2-Q5: destination address of received UDP | The W5500-style header has the source only (`40-ethernet.md`). | The full CH394 manual, or a test: send to unicast, directed and limited broadcast and compare what the chip reports. |
 
 ## Safe order of the hardware steps for HIS-19 / F1
 
