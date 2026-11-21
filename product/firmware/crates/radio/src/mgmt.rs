@@ -62,11 +62,34 @@ pub struct Stats {
     pub ll_unprobed: u64,
     /// Console bytes dropped because the console's ring was full (the console never blocks).
     pub console_dropped: u64,
+    /// High Priority packets read from port 1027, from any source, before the owner check
+    /// (B2.3; 0058).
+    pub hp_rx: u64,
+    /// The longest time of each step of a net-loop pass since start, us ([`STEP_NAMES`]).
+    pub steps: [u64; STEPS],
 }
+
+/// Steps of the net loop timed for `GET_STATS` (`step_<name>_us`): the loop's tick, the DHCP
+/// client, one datagram (read and handled) of each P2 socket, discovery, management, and inside
+/// the P2 handler the session events and the slowest single register-packet send.
+pub const STEPS: usize = 11;
+pub const STEP_NAMES: [&[u8]; STEPS] = [
+    b"step_tick_us",
+    b"step_dhcp_us",
+    b"step_hp_us",
+    b"step_ddc_us",
+    b"step_duc_us",
+    b"step_duc_iq_us",
+    b"step_reg_us",
+    b"step_discovery_us",
+    b"step_mgmt_us",
+    b"step_events_us",
+    b"step_send_us",
+];
 
 impl Stats {
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 18] = [
+        let items: [(&[u8], u64); 19] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
             (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
@@ -85,9 +108,13 @@ impl Stats {
             (b"net_send_dropped", self.net_send_dropped),
             (b"ll_unprobed", self.ll_unprobed),
             (b"console_dropped", self.console_dropped),
+            (b"hp_rx", self.hp_rx),
         ];
         let mut at = 0;
         for (n, v) in items {
+            at = mgmt::payload::stat(out, at, n, v).unwrap_or(at);
+        }
+        for (n, v) in STEP_NAMES.iter().zip(self.steps) {
             at = mgmt::payload::stat(out, at, n, v).unwrap_or(at);
         }
         at
@@ -206,6 +233,8 @@ impl Server {
                 net_send_dropped: 0,
                 ll_unprobed: 0,
                 console_dropped: 0,
+                hp_rx: 0,
+                steps: [0; STEPS],
             },
             writer: None,
             reset_pending: false,

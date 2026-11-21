@@ -81,6 +81,10 @@ pub struct P2 {
     /// The key path was keyed after the last call (to empty and arm the FIFO on a change).
     was_keyed: bool,
     notice: Option<Notice>,
+    /// The longest session-event handling and the longest single register-packet send, us
+    /// (GET_STATS step_events_us, step_send_us).
+    pub max_events_us: u64,
+    pub max_send_us: u64,
     /// Takeovers since start (`GET_STATS`; A2.4), and the log limit: one entry per second per
     /// pair of hosts, with the count of the takeovers not logged (A2.4).
     pub takeovers: u64,
@@ -162,6 +166,8 @@ impl P2 {
             duc_iq_ignored: 0,
             was_keyed: false,
             notice: None,
+            max_events_us: 0,
+            max_send_us: 0,
             takeovers: 0,
             takeover_log: None,
             dropped_record: 0,
@@ -221,12 +227,16 @@ impl P2 {
     }
 
     fn send_regs(&mut self, chip: &mut Chip, to: Addr, pairs: &[Pair]) {
+        let t = embassy_time::Instant::now();
         Self::send_counted(chip, &mut self.seq7250.owner, to, pairs);
+        self.max_send_us = self.max_send_us.max(t.elapsed().as_micros());
     }
 
     /// Register packets to a host that is not the owner, on the non-owner counter (B2.7; 0051).
     fn send_regs_other(&mut self, chip: &mut Chip, to: Addr, pairs: &[Pair]) {
+        let t = embassy_time::Instant::now();
         Self::send_counted(chip, &mut self.seq7250.other, to, pairs);
+        self.max_send_us = self.max_send_us.max(t.elapsed().as_micros());
     }
 
     fn send_counted(chip: &mut Chip, seq: &mut u32, to: Addr, pairs: &[Pair]) {
@@ -317,6 +327,12 @@ impl P2 {
 
     /// Apply session events: drops (A3.2), session values (A3.6), pushes and counters (B2.7).
     fn events(&mut self, chip: &mut Chip, ev: &[Event], now: u64) {
+        let t = embassy_time::Instant::now();
+        self.events_inner(chip, ev, now);
+        self.max_events_us = self.max_events_us.max(t.elapsed().as_micros());
+    }
+
+    fn events_inner(&mut self, chip: &mut Chip, ev: &[Event], now: u64) {
         for e in ev {
             match *e {
                 Event::Ended { owner, reason } => {
