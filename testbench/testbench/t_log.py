@@ -149,6 +149,11 @@ def t_a1_91(ctx: Ctx):
         ctx.part("watchdog part not run: no reset.wdt")
     # one entry of the kept ring corrupted: it and those after it are dropped
     if "log.corrupt" in fx:
+        # a short log: in a full ring the oldest entries go by themselves as new ones come
+        with updating(ctx, s) as u:
+            ctx.eq("CLEAR_LOG before the corrupted entry: 0", (u.req("CLEAR_LOG") or {}).get("status"), 0)
+        with updating(ctx, s):
+            pass
         log = entries(ctx)
         bad = log[-2][0]
         ctx.fixture("log.corrupt", seq=bad)

@@ -557,6 +557,8 @@ A test with target `emulator` is also run against the reference model. A test wi
      three and `reset.flags`. The reference model has `log.corrupt`, and
      `flash.delay {us, count}`: the flash work of the next `count` requests takes `us` (T-B5-22,
      T-A1-15, T-A1-60),
+     `stop.sim {log?: true}`: the model's firmware stops by itself (A3.6: the commanded-reset word
+     cleared, its line `restart: stop 1` logged unless `log` is false, a software reset; T-A3-62),
      `store.full {}`: the next `UPDATE_BLOCK` or `UPDATE_VERIFY` finds no room in the store
      (T-A1-88), and `reset.flags {flags: [...]}`: the reset flags of the next start, e.g. `[]` or
      `["software", "power-on"]` (T-A1-91). On the emulator `reset.flags` acts on the next MCU reset,
@@ -567,8 +569,10 @@ A test with target `emulator` is also run against the reference model. A test wi
      T-A1-60, T-A1-62). `vendor.install {}` (always) puts the model back as after the
      vendor path: no secret, a new first-secret window (T-A1-16, T-A1-60).
      Pending, not built: a fixture that raises a processor fault (an undefined instruction in the
-     running image at a chosen emulated time, in thread mode and in an interrupt handler; T-A3-62,
-     0075). Its name and shape are not agreed; the bench does not call it.
+     running image at a chosen emulated time, in thread mode, in an interrupt handler and in the
+     boot stage before and right after its clear of the commanded-reset word; T-A3-62, 0075, 0078),
+     and one that cuts a write to kept RAM after each of its bytes (0078). Their names and shapes
+     are not agreed; the bench does not call them.
    - `slot.corrupt {slot: 1|2, offset: n, xor?: 0x01}` → `{slot, address, old, new, t_us}`: the
      byte at `offset` from the slot start (0x08040000, 0x08080000) XORed (default one bit) with
      its ECC kept consistent (it reads as changed data, no ECC error); `{slot, restore: true}`

@@ -1,7 +1,7 @@
-"""The management details of 0073 to 0075: the write session (T-A1-15), limits that fall due during
+"""The management details of 0073 to 0078: the write session (T-A1-15), limits that fall due during
 flash work (T-A1-94), GET_STATS (T-A1-95), the calibration set's absence (T-A1-96), READ_LOG's flag
-(T-A1-97), an address change (T-A1-98), and what of the unexpected stop can be shown without a fault
-fixture (T-A3-62).
+(T-A1-97), an address change (T-A1-98), what of the unexpected stop can be shown without a fault
+fixture (T-A3-62), and the gaps of ports 1027 and 1029 (T-B11-04).
 
 GPL-3.0-or-later, (c) 2026 ON8ST.
 """
@@ -12,9 +12,10 @@ import struct
 import time
 
 from .core import Ctx, NotShown, PartSkip, RadioClock, Skip, test
-from .mgmt import (SavedCalibration, Mgmt, build, CMD, config_tlv, parse_log, parse_stats, read_log, req_retransmit,
-                   signed, stats, tlv)
-from .p2 import Host, reread_endpoint, wait_reachable
+from .mgmt import (FLASH_WINDOW_S, SavedCalibration, Mgmt, build, CMD, config_tlv, parse_log, parse_stats, read_log, req_retransmit,
+                   send_retransmit, signed, stats, tlv)
+from .p2 import (PORT_DDC, PORT_DISC, PORT_DUC, PORT_DUCIQ, PORT_HP, Host, ddc_specific, duc_specific, general, high_priority,
+                 reread_endpoint, wait_reachable)
 from .t_mgmt import burst, dhcp_messages, m, mtype, secret_of, simulated_set
 from .t_store import get_config, has
 
@@ -78,7 +79,7 @@ def judge_counters(ctx, payload: bytes):
 
 
 # ---------------- T-A1-15 ----------------
-@test("T-A1-15", whole=True)
+@test("T-A1-15", whole=("flash.timing", "flash.log"))
 def t_a1_15(ctx: Ctx):
     """A1.10 "One writer at a time" (0022 §75, 0074, 0077). A wait is judged only where the radio
     time that passed shows the case: "still held" under 60 s from before the holder's last request,
@@ -150,29 +151,54 @@ def t_a1_15(ctx: Ctx):
         if dt < 60:
             ctx.eq("and the holder's session stays: A's write 35", got, 35)
         ctx.eq("the holder's END_WRITE_SESSION: 0", end(b), 0)
-        idle_pause(ctx, ck, a, b, s, wr, end, held, tx)
+        idle_pause(ctx, ck, a, b, s, end, tx)
 
 
-NO_EVIDENCE_60 = ("no evidence for the pause of the 60 s idle time (0077): with the request 50 s after the last one the 60 s cannot "
-                  "fall inside its flash work; a pass shows nothing there (the text is with the spec session)")
+def over_60(ctx, ck, a, b, s: bytes, value: bytes, label: str, wait_s: float, want: int, prepare, hit) -> bool:
+    """0077, 0078: the holder's SET_CONFIG `wait_s` after its last request, its flash work over the 60 s:
+    it is answered `want`, and host B's write straight after the reply gets 35. `prepare` runs before
+    it; False when `hit(status)` says that it did not do the flash work meant."""
+    t0 = ck.now()
+    got = (a.authed("SET_CONFIG", s, config_tlv((1, b"\x02"))) or {}).get("status")
+    t1 = ck.now()
+    if not ctx.eq(f"{label}: host A's request before it, refused, holds the session: 48", got, 48):
+        return True
+    ck.wait(wait_s - (ck.now() - t0))
+    prepare()
+    data = signed(a, "SET_CONFIG", s, config_tlv((7, value)))
+    if data is None:
+        ctx.part(f"{label}: not sent: {a.why}")
+        return True
+    t2 = ck.now()
+    r = send_retransmit(a, data, FLASH_WINDOW_S, "SET_CONFIG")
+    t3 = ck.now()
+    other = (b.authed("SET_CONFIG", s, config_tlv((7, value))) or {}).get("status")
+    st = r["status"] if r else None
+    if not hit(st):
+        return False
+    ctx.eq(f"{label}: host A's SET_CONFIG", st, want)
+    if t2 - t0 < 60 < t3 - t1:
+        ctx.check(f"{label}: host B's write straight after the reply gets 35", other == 35,
+                  f"got {other}; sent {t2 - t0:.1f} s after the last request, answered {t3 - t1:.1f} s after its reply")
+    else:
+        ctx.part(f"{label}: the 60 s not inside the flash work: sent {t2 - t0:.1f} s after the last request, answered "
+                 f"{t3 - t1:.1f} s after its reply")
+    return True
 
 
-def idle_pause(ctx, ck, a, b, s, wr, end, held, tx):
-    """0077: a request with long flash work from the holder 50 s after its last request."""
-    ctx.notes.append(NO_EVIDENCE_60)
+def idle_pause(ctx, ck, a, b, s, end, tx):
+    """The pause of the 60 s idle time during the holder's own request (A1.10; 0077, 0078)."""
     if has(ctx, "flash.delay"):  # the reference model: the flash work of one request takes 8 s
-        ctx.eq("A's write: 0", wr(a), 0)
-        ck.wait(50)
-        ctx.fixture("flash.delay", us=8_000_000, count=1)
-        t = ck.now()
-        ctx.eq("A's SET_CONFIG with 8 s of flash work, 50 s after its last request: 0", wr(a), 0)
-        held("straight after its reply", t)
+        over_60(ctx, ck, a, b, s, tx, "8 s of flash work from 57 s", 57, 0,
+                lambda: ctx.fixture("flash.delay", us=8_000_000, count=1), lambda st: True)
         ctx.eq("A's END_WRITE_SESSION: 0", end(a), 0)
+        ctx.part("the stretched compaction and the erase that hangs (emulator) not run on the model: flash.delay stands for it")
         return
     if not (has(ctx, "flash.timing") and has(ctx, "flash.log")):
         ctx.part("the stretched compaction (0077) not run: no flash.timing or flash.log")
         return
     from .t_flash import PROGRAM_MAX_US, in_range, is_erase, flog, flog_start, near_compaction, set_tx_time, store_range, stretch
+    from .t_update import restart
     from .update import Updater
     ft = ctx.endpoint.get("flash_timing") or {}
     if not ft.get("t_erase_max_us"):
@@ -180,30 +206,53 @@ def idle_pause(ctx, ck, a, b, s, wr, end, held, tx):
         return
     u = Updater(a, s)
     lo, hi = store_range(u)
-    v = near_compaction(ctx, u, lo, hi, 200_000)
-    if v is None:
-        ctx.part(f"the stretched compaction (0077) not shown: {ctx.__dict__.get('_near', '')}")
-        return
-    back = stretch(ctx, ft["t_erase_max_us"], ft.get("t_program_max_us") or PROGRAM_MAX_US)
+
+    def case(label: str, v: int, wait_s: float, want: int, prepare, hit):
+        """Up to 5 tries, each with a new value, until the store's erase was in the request."""
+        back = stretch(ctx, ft["t_erase_max_us"], ft.get("t_program_max_us") or PROGRAM_MAX_US)
+        try:
+            for _ in range(5):
+                v += 1
+                if over_60(ctx, ck, a, b, s, struct.pack(">I", v), label, wait_s, want, prepare, hit):
+                    return v, True
+                prepare = flog_start_only
+        finally:
+            back()
+        ctx.part(f"{label}: not shown, no store erase in 5 writes")
+        return v, False
+
+    def flog_start_only():
+        flog_start(ctx)
+
+    def hang():
+        flog_start(ctx)
+        ctx.fixture("flash.fault", op="erase", never_end=True)
+
+    def near(label: str, v: int):
+        v = near_compaction(ctx, u, lo, hi, v)
+        if v is None:
+            ctx.part(f"{label}: not shown: {ctx.__dict__.get('_near', '')}")
+        return v
+
+    failed = False
     try:
-        for _ in range(5):
-            ck.wait(50)
-            flog_start(ctx)
-            t, v = ck.now(), v + 1
-            r = set_tx_time(u, v)
-            got = wr(b)
-            dt = ck.now() - t
-            ctx.eq("A's SET_CONFIG 50 s after its last request: 0", r["status"] if r else None, 0)
-            if any(is_erase(e) and in_range(e, lo, hi) for e in flog(ctx)):
-                if dt < 60:
-                    ctx.eq("with a stretched compaction: B's write straight after the reply gets 35", got, 35)
-                else:
-                    ctx.part(f"with a stretched compaction: not judged, {dt:.1f} s passed since A's request")
-                break
-        else:
-            ctx.part("the stretched compaction (0077) not shown: no store erase in 5 writes 50 s apart")
+        label = "a compaction at the maximum from 57 s"
+        v = near(label, 200_000)
+        if v is None:
+            return
+        v, _ = case(label, v, 57, 0, flog_start_only, lambda st: any(is_erase(e) and in_range(e, lo, hi) for e in flog(ctx)))
+        label = "an erase that hangs, from 55 s"
+        if not has(ctx, "flash.fault"):
+            ctx.part(f"{label}: not run: no flash.fault")
+            return
+        v = near(label, v + 10)
+        if v is None:
+            return
+        failed = True  # the fault is armed, and the flash stays busy until a reset
+        case(label, v, 55, 55, hang, lambda st: st != 0)
     finally:
-        back()
+        if failed:
+            restart(ctx, u)
         set_tx_time(u, int.from_bytes(tx, "big"))
         end(a)
 
@@ -289,8 +338,7 @@ def due_trial(ctx, s: bytes, t_max: int):
             v = near_compaction(ctx, u, lo, hi, v + 1)
             n0 = newest(ctx)
             now = (ctx.fixture("hw.observe") or {}).get("t_us", 0)
-            # half of the erase before the limit, so that the limit falls inside it
-            at = start + 60_000_000 - t_max // 2
+            at = start + 60_000_000 - 2_000_000  # so that the limit falls due during its flash work (0078)
             if v is None or now > at - 8_000_000:
                 ctx.part(f"trial: the compaction could not be placed at the limit: {ctx.__dict__.get('_near', '')}")
             else:
@@ -399,7 +447,30 @@ def t_a1_95(ctx: Ctx):
             if after is not None and after != before:
                 break
         ctx.eq(f"after one High Priority packet: hp_rx {'= 1' if cycled else '+1'}", after, 1 if cycled else before + 1)
+        foreign_iq(ctx, c)
     burst(ctx, 25)
+
+
+def counted(c, done, limit_s: float = 3):
+    """GET_STATS until done(counters) or limit_s of radio time: the last one read."""
+    got, w0, t0 = {}, time.monotonic(), c.clock.now()
+    while time.monotonic() - w0 < 60 and c.clock.now() - t0 < limit_s:
+        got = stats(c) or got
+        if done(got):
+            break
+    return got
+
+
+def foreign_iq(ctx, c):
+    """One DUC I&Q packet from a source that does not own the session: counted twice (B11.1; 0078)."""
+    with Host(ctx.net) as h, Host(ctx.net) as other:
+        h.start()
+        before = ctx.got(stats(c), "GET_STATS")
+        other.send(PORT_DUCIQ, bytes(1444))
+        after = counted(c, lambda g: g.get("duc_foreign", 0) > before.get("duc_foreign", 0))
+        h.stop()
+    for n in ("duc_foreign", "drop_1029"):
+        ctx.eq(f"one DUC I&Q packet from another source: {n} rises by 1", after.get(n, 0) - before.get(n, 0), 1)
 
 
 # ---------------- T-A1-96 ----------------
@@ -657,65 +728,231 @@ def renewal(ctx, s: bytes):
 STOP_LINE = "start: unexpected stop"
 
 
+REASON = "restart: restart"
+
+
+def until_dropped(ctx, u, n_max: int | None = None):
+    """CLEAR_LOG, then entries (UPDATE_ABORT with no update state, 0074) until the oldest one of the ring
+    has been dropped, or `n_max` of them: (entries made, oldest dropped), None with the reason in ctx._fill."""
+    ctx.__dict__["_fill"] = ""
+    r = u.req("CLEAR_LOG")
+    if not r or r["status"] != 0:
+        ctx.__dict__["_fill"] = f"CLEAR_LOG answered {r['status'] if r else None}"
+        return None
+    with m(ctx) as c:  # another source port, with a limit of its own
+        c.pace = u.c.pace = 18
+
+        def oldest():
+            r = req_retransmit(c, "READ_LOG", b"\0\0\0\0")
+            e = parse_log(r["payload"]) if r and r["status"] == 0 else []
+            return e[0][0] if e else None
+
+        u.req("UPDATE_ABORT")
+        first, made, w0 = oldest(), 1, time.monotonic()
+        if first is None:
+            ctx.__dict__["_fill"] = "no entry in READ_LOG after CLEAR_LOG and an UPDATE_ABORT"
+            return None
+        while n_max is None or made < n_max:
+            if made >= 900 or time.monotonic() - w0 > 600:
+                ctx.__dict__["_fill"] = f"the ring was not full after {made} entries"
+                return None
+            r = u.req("UPDATE_ABORT")
+            if not r or r["status"] != 0:
+                ctx.__dict__["_fill"] = f"UPDATE_ABORT answered {r['status'] if r else None} after {made} entries"
+                return None
+            made += 1
+            if n_max is None or made == n_max:
+                now = oldest()
+                if now is None:
+                    ctx.__dict__["_fill"] = "READ_LOG not answered"
+                    return None
+                if now != first:
+                    return made, True
+        return made, False
+
+
 @test("T-A3-62")
 def t_a3_62(ctx: Ctx):
-    """A3.6 "Evidence at the next start" (0075), the parts that need no processor fault: after a
-    commanded reset no unexpected stop, after a software reset whose reason line was lost one. The
-    fault itself waits for an emulator fixture that raises it, the keyed part for TX: never a pass."""
+    """A3.6 "Evidence at the next start" (0075, 0078), the parts that need no processor fault: after a
+    commanded reset no unexpected stop; after a software reset whose reason line or start entry was
+    lost one. The fault itself, and the cut writes of the commanded-reset word, wait for an emulator
+    fixture, the keyed part for TX: never a pass."""
     from .t_flash import WDT_RESET_AT_START, fault_flags
     from .t_log import entries, last_start, ram_kept
-    from .t_update import activate_new, trial_rolls_back, updating
+    from .t_update import activate_new, rx_works, trial_rolls_back, updating
     ctx.no_pass = True
     s = secret_of(ctx)
     model = "model" in ctx.endpoint  # the model has the log line; it models no faults
 
-    def run_lines():
+    def judge(label: str, want: bool, reason: str | None = None):
         log = entries(ctx)
         k = last_start(log)
-        return [e[2] for e in log[k:]] if k is not None else []
-
-    def judge(label: str, want: bool):
-        lines = run_lines()
+        lines = [e[2] for e in log[k:]] if k is not None else []
         ctx.check(f"{label}: {'' if want else 'no '}'{STOP_LINE}' after the start entry", bool(lines) and (STOP_LINE in lines) == want,
                   f"{lines[:5]}")
+        if reason:
+            before = log[k - 1][2] if k else None
+            ctx.check(f"{label}: READ_LOG still holds '{reason}', right before the start entry", before is not None and
+                      before.startswith(reason), f"{before!r}")
         if not model:
             ff = fault_flags(ctx)
             ctx.check(f"{label}: WDT_RESET_AT_START {'set' if want else 'not set'} in FAULT_FLAGS",
                       ff is not None and bool(ff >> WDT_RESET_AT_START & 1) == want, f"FAULT_FLAGS {ff}")
 
+    def commanded(label: str):
+        with updating(ctx, s):
+            pass
+        judge(label, False, REASON)
+
+    def start_entry_lost() -> bool:
+        """The start entry of this run is made invalid: the last entry kept is then the RESTART line before it."""
+        log = entries(ctx)
+        k = last_start(log)
+        if not k or log[k - 1][2] != REASON:
+            return False
+        ctx.fixture("log.corrupt", seq=log[k][0])
+        return True
+
     if not ram_kept(ctx):
         raise Skip("the log may be lost over a reset until P-SYS-9 is set: a RESTART then counts as an unexpected stop")
-    with updating(ctx, s):
-        pass
-    judge("after a RESTART", False)
-    bad = None
+    commanded("after a RESTART")
+    commanded("after a second RESTART in a row")
     if has(ctx, "log.corrupt"):
+        # 0078: the next RESTART's word is valid but names an entry that is no longer kept; the last one
+        # kept is a reason line, so that the log alone would read as a commanded reset (0075)
+        label = "after a RESTART, the run's start entry made invalid, and another RESTART (its word names another entry)"
+        if start_entry_lost():
+            with updating(ctx, s):
+                pass
+            judge(label, True, REASON)
+            ctx.check("RX and the management channel work after it", rx_works(ctx) and bool(entries(ctx)), "no status packet or no log")
+            commanded("after the next RESTART")
+        else:
+            ctx.part(f"{label}: not run, the run before did not end with '{REASON}'")
+        # the last kept entry no reason line: an entry of this run after its start entry made invalid
+        label = "after a RESTART whose reason line is lost with the kept log"
         with updating(ctx, s, restart_at_end=False) as u:
             u.req("UPDATE_ABORT")  # with no update state: logged, changes nothing (0074)
         log = entries(ctx)
-        # an entry of this run after its start entry: the last one kept is then no reason line. (The start
-        # entry itself would leave the reason line of the run before as the last one kept.)
         if log and log[-1] != log[last_start(log) or 0]:
-            bad = log[-1][0]
+            ctx.fixture("log.corrupt", seq=log[-1][0])  # it and all after it are dropped, the reason line too
+            with updating(ctx, s):
+                pass
+            judge(label, True)
+            commanded("after the next RESTART, again")
         else:
-            ctx.part("a software reset with the last kept entry made invalid not run: no entry after the start entry")
-    if bad is not None:
-        ctx.fixture("log.corrupt", seq=bad)  # it and all after it are dropped, the reason line too
-        with updating(ctx, s):
-            pass
-        judge("after a RESTART whose reason line is lost with the kept log", True)
-        from .t_update import rx_works
-        ctx.check("RX and the management channel work after it", rx_works(ctx) and bool(run_lines()), "no status packet or no log")
-        with updating(ctx, s):
-            pass
-        judge("after the next RESTART", False)
-    elif not has(ctx, "log.corrupt"):
-        ctx.part("a software reset with the last kept entry made invalid not run: no log.corrupt")
+            ctx.part(f"{label}: not run, no entry after the start entry")
+    else:
+        ctx.part("a software reset with a kept entry made invalid, and a word that names another entry, not run: no log.corrupt")
+    if has(ctx, "stop.sim"):  # the reference model: its stop path (A3.6), with the word cleared
+        def stop(label: str, log: bool, reason: str):
+            ctx.fixture("stop.sim", log=log)
+            time.sleep(0.3)
+            wait_reachable(ctx, label)
+            judge(label, True, reason)
+            commanded(f"a RESTART {label}")
+        stop("after a stop", True, "restart: stop ")
+        for log in (True, False):
+            label = f"after a RESTART, the start entry made invalid, and a stop that {'logs its line' if log else 'leaves no line'}"
+            if start_entry_lost():
+                stop(label, log, REASON)
+            else:
+                ctx.part(f"{label}: not run, the run before did not end with '{REASON}'")
+    with updating(ctx, s) as u:  # its RESTART follows the last entry made
+        made = until_dropped(ctx, u)
+    if made is None:
+        ctx.part(f"a RESTART with the log ring just wrapped, and full: not run: {ctx.__dict__['_fill']}")
+    else:
+        judge(f"after a RESTART with the ring just wrapped ({made[0]} entries after CLEAR_LOG)", False, REASON)
+        with updating(ctx, s) as u:
+            full = until_dropped(ctx, u, made[0] - 1)
+        if full and not full[1]:
+            judge(f"after a RESTART with the ring full ({full[0]} entries after CLEAR_LOG, one fewer)", False, REASON)
+        else:
+            ctx.part(f"a RESTART with the log ring full: not shown: {ctx.__dict__['_fill'] or 'it had wrapped already'}")
+    with updating(ctx, s) as u:  # a short log again for the tests after this one
+        u.req("CLEAR_LOG")
     if has(ctx, "trial.sim") or has(ctx, "ch394.silent"):
         a = activate_new(ctx, s, 362, net_down=True)
         if ctx.check("an update activated (the trial's 60 s limit)", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
             trial_rolls_back(ctx)
-            judge("after the trial's restart: trial-unconfirmed", False)
+            judge("after the trial's restart: trial-unconfirmed", False, "restart: trial-unconfirmed")
     else:
         ctx.part("the trial's restart not run: needs trial.sim or ch394.silent")
-    raise PartSkip("the unexpected stop itself is pending: the emulator's fault fixture (unarmed part) and TX (keyed part)")
+    raise PartSkip("pending: the unexpected stop itself, also in the boot stage before and after its clear of the word (the emulator's "
+                   "fault fixture), the cut writes of the word (the emulator cannot cut a write to kept RAM), and the keyed part (TX)")
+
+
+# ---------------- T-B11-04 ----------------
+def gaps(port: int, seqs: list[int]) -> int:
+    """B11.6 (0078): the gaps in the numbers received on one port of one session."""
+    top, n = None, 0
+    for s in seqs:
+        if port == PORT_HP and s == 0:
+            continue
+        if top is None:
+            top = s
+            continue
+        d = 1 if port == PORT_HP and (top, s) == (0xFFFFFFFF, 1) else (s - top) & 0xFFFFFFFF
+        if 1 <= d < 1 << 31:
+            top, n = s, n + (d > 1)
+    return n
+
+
+# no three numbers of port 1027 in a row engage numbered mode (B11.6a), in which old ones are discarded
+GAP_CASES = ((PORT_DUCIQ, (10, 11, 14, 13, 15), 1), (PORT_DUCIQ, (0xFFFFFFFF, 0), 0), (PORT_DUCIQ, (5, 5, 5), 0),
+             (PORT_HP, (0xFFFFFFFF, 1), 0), (PORT_HP, (0, 0, 0), 0), (PORT_HP, (20, 22), 1), (PORT_HP, (7, 0, 8), 0))
+
+
+def numbered(data: bytes, n: int) -> bytes:
+    return n.to_bytes(4, "big") + data[4:]
+
+
+def status_after(c, h, s: float, port: int, data: bytes, seqs) -> int:
+    """Status packets in the second half of s seconds of radio time, with a packet sent every 100 ms."""
+    t0, w0, n, i = c.clock.now(), time.monotonic(), 0, 0
+    while (dt := c.clock.now() - t0) < s and time.monotonic() - w0 < 60:
+        h.send(port, numbered(data, seqs[i % len(seqs)]))
+        i += 1
+        got = sum(p == PORT_DDC for p, _, _ in h.recv(0.1))
+        if dt > s / 2:
+            n += got
+    return n
+
+
+@test("T-B11-04")
+def t_b11_04(ctx: Ctx):
+    """B2.7, B11.6 (0078)."""
+    with m(ctx) as c:
+        for stop in (900, 3):  # any numbers on every C&C port, then only repeated and older ones
+            with Host(ctx.net) as h:
+                for port, data, n in ((PORT_DISC, general(), 77), (PORT_DDC, ddc_specific(), 5), (PORT_DUC, duc_specific(), 0xFFFFFFFF),
+                                      (PORT_HP, high_priority(), 900)):
+                    h.send(port, numbered(data, n))
+                n = status_after(c, h, 3, PORT_HP, high_priority(), (900, 900, 3, 900, 2, 2))
+                ctx.check("a session goes on with repeated and older numbers only", n > 0, f"{n} status packets")
+                # a session that ended and began again looks the same, so run is cleared with such a number: the
+                # DUC-specific packets would keep a session that goes on from the watchdog
+                h.send(PORT_HP, numbered(high_priority(run=False), stop))
+                n = status_after(c, h, 2, PORT_DUC, duc_specific(), (5, 5, 4))
+                ctx.check(f"run cleared by a packet with the number {stop} after 900 ends it", n == 0, f"{n} status packets")
+                h.stop()
+        with Host(ctx.net) as h:
+            for port, seqs, want in GAP_CASES:
+                name, arrived = (("gap_1027", "hp_rx") if port == PORT_HP else ("gap_1029", "drop_1029"))
+                label = f"port {port}, numbers {', '.join(f'0x{s:X}' if s > 999 else str(s) for s in seqs)}: {want} gaps"
+                for _ in range(3):  # a datagram lost on the way would itself be a gap
+                    h.start()
+                    h.recv(0.1)
+                    before = ctx.got(stats(c), "GET_STATS")
+                    for s in seqs:
+                        h.send(port, numbered(high_priority() if port == PORT_HP else bytes(1444), s))
+                        h.recv(0.02)
+                    need = before.get(arrived, 0) + len(seqs)
+                    after = counted(c, lambda g: g.get(arrived, 0) >= need, 2)
+                    h.stop()
+                    if after.get(arrived) == need:
+                        ctx.eq(f"{label}: {name} of the session", after.get(name), want)
+                        break
+                else:
+                    ctx.part(f"{label}: not judged, {arrived} never rose by the {len(seqs)} packets sent")

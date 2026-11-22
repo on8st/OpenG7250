@@ -136,24 +136,21 @@ CAL_SET = ([f"P-RF-{i}" for i in range(1, 6)] + [f"P-PWR-{i}" for i in range(1, 
                                                     "P-ATU-1", "P-ANT-1", "P-SYS-9"])  # P-SYS-9: 0050
 ECC_LIMIT = ("it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip "
              "gives on the read")
-NO_EVIDENCE_60 = ("no evidence for the pause of the 60 s idle time (0077): 50 s after the last request the 60 s cannot fall inside "
-                  "the flash work; a pass shows nothing there")
 OVERRIDES: dict[str, dict] = {
     **{t: {"target": "emulator", "also": ["host"], "needs": ["power.cycle", "time.advance"],
            "notes": ["ends without a secret and without a window: never on a radio, and not in a per-list boot"]}
        for t in ("T-A1-04", "T-A1-16")},
     "T-A1-15": {"target": "emulator", "also": ["host"], "needs": ["time.advance"], "pending": [],
-                "notes": ["the stretched compaction needs flash.timing and flash.log (the reference model: flash.delay)", NO_EVIDENCE_60]},
+                "notes": ["the stretched compaction needs flash.timing and flash.log, the erase that hangs flash.fault too (the reference "
+                          "model: flash.delay for the compaction only)"]},
     "T-A1-60": {"target": "host", "also": [], "needs": ["installer.state", "vendor.install", "time.advance"],
                 "notes": ["only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open; the stretched erase is "
-                          "flash.delay there", NO_EVIDENCE_60]},
+                          "flash.delay there"]},
     "T-A1-62": {"target": "host", "also": [], "needs": ["installer.state", "vendor.install", "time.advance"],
                 "notes": ["only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open"]},
     "T-A1-80": {"target": "emulator", "also": ["host"], "needs": ["time.advance"]},
     "T-A1-94": {"target": "emulator", "also": [], "tx_part": False,
-                "needs": ["flash.timing", "flash.log", "flash.fault", "time.advance", "net.log", "gpio.force", "hw.observe", "hw.trace"],
-                "notes": ["the compaction is sent half an erase before the 60 s limit, not at 55 s: one stretched erase of 4 s from "
-                          "55 s would end before it"]},
+                "needs": ["flash.timing", "flash.log", "flash.fault", "time.advance", "net.log", "gpio.force", "hw.observe", "hw.trace"]},
     "T-A1-95": {"target": "emulator", "also": ["host"], "needs": ["power.cycle"], "tx_part": False},
     "T-A1-96": {"target": "emulator", "also": ["host"], "needs": [], "tx_part": False, "pending": []},
     "T-A1-97": {"target": "emulator", "also": ["host"], "needs": [], "tx_part": False},
@@ -161,8 +158,11 @@ OVERRIDES: dict[str, dict] = {
                 "notes": ["the DHCP renewal needs dhcp.server and power.cycle; on the reference model the sockets stay and the "
                           "management channel sees the new address"]},
     "T-A3-62": {"target": "emulator", "also": ["host"], "needs": ["time.advance"], "pending": [], "tx_part": True,
-                "notes": ["the unexpected stop itself is pending: the emulator's fault fixture; the keyed part pending TX; built: the "
-                          "commanded resets, the lost reason line, the trial's reset; never a pass until then"]},
+                "notes": ["the unexpected stop itself (also in the boot stage) is pending: the emulator's fault fixture; the cut writes of "
+                          "the commanded-reset word pending a fixture that cuts a write to kept RAM; the keyed part pending TX; "
+                          "built: the commanded resets (two in a row, ring full, just wrapped), the lost reason line and start "
+                          "entry, a word that names another entry, the trial's reset; on the model a stop (stop.sim); never a "
+                          "pass until then"]},
     "T-A1-28": {"also": ["host"],
                 "notes": ["S2 and T3 (tags 9, 10) only with a calibration set that holds P-PWR-2; the FACTORY_RESET part only "
                           "from address mode DHCP (tag 1 = 0)"]},
@@ -333,6 +333,9 @@ OVERRIDES: dict[str, dict] = {
     # B11
     "T-B11-02": TXR, "T-B11-10": TXR, "T-B11-11": TXR, "T-B11-14": TXR, "T-B11-15": TXR,
     "T-B11-16": TXR,
+    "T-B11-04": {"target": "emulator", "also": ["host"],
+                 "notes": ["every packet sent must be counted as arrived (hp_rx, drop_1029), else the case is not judged; "
+                           "drop_1029 counts the owner's DUC I&Q only while TX is not calibrated"]},
     "T-B11-13": {"target": "host", "also": ["needs-radio"]},
     "T-B11-05": {"target": "host", "also": ["emulator", "needs-radio"],
                  "notes": ["needs a forced overrun"]},
@@ -457,8 +460,8 @@ TIMEOUTS: dict[str, int] = {
     # requests that may do flash work: each may take 15 s (0069), a factory reset 17 s more
     "T-A1-03": 90, "T-A1-04": 1800, "T-A1-16": 1800, "T-A1-20": 90, "T-A1-22": 90, "T-A1-63": 240, "T-A1-64": 90, "T-A1-65": 120,
     "T-A1-75": 120, "T-B5-21": 180,
-    "T-A1-15": 1200, "T-A1-60": 2000, "T-A1-62": 900, "T-A1-94": 1800, "T-A1-95": 60, "T-A1-96": 120, "T-A1-97": 180,
-    "T-A1-98": 300, "T-A3-62": 600,
+    "T-A1-15": 2400, "T-A1-60": 2000, "T-A1-62": 900, "T-A1-94": 1800, "T-A1-95": 60, "T-A1-96": 120, "T-A1-97": 180,
+    "T-A1-98": 300, "T-A3-62": 2400, "T-B11-04": 300,
     "T-B5-22": 1800, "T-A1-85": 1200, "T-A1-86": 1800, "T-A1-87": 300, "T-EMU-IDLE": 120,
 }
 

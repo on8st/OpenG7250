@@ -12,7 +12,6 @@ import time
 from .core import Ctx, RadioClock, Skip, test
 from .mgmt import Mgmt, build, CMD, req_retransmit, send_retransmit, signed, tlv
 from .p2 import Host, wait_reachable
-from .t_details import NO_EVIDENCE_60
 from .t_store import get_config, has
 from .t_update import advance, last_log_seq, logs_since, secret, updating
 from .update import FLAG_FOREIGN, SECTOR, Updater, begin_payload, block_payload, header, image
@@ -136,16 +135,17 @@ def t_a1_60(ctx: Ctx):
                 ctx.eq("its last block with a bad CRC: 53", st_of(r), 53)
                 has_state(ctx, "after the bad CRC", "before-erase")
                 ctx.eq("host B's UPDATE_BLOCK: 35", block(b, BLOCKS - 1), 35)
-                # the sector's block 50 s after the previous reply, its flash work 8 s, the next block 50 s after that reply
+                # the sector's block 57 s after the previous reply, its flash work 8 s, the next block 57 s after that reply
                 ctx.eq("host A's block again: 0", block(u, 0), 0)
-                advance(ctx, 50)
+                advance(ctx, 57)
                 ctx.fixture("flash.delay", us=8_000_000, count=1)
-                ctx.eq("the block that completes the sector, 50 s later, with 8 s of flash work: 0", block(u, BLOCKS - 1), 0)
+                ctx.eq("the block that completes the sector, 57 s later, with 8 s of flash work: 0", block(u, BLOCKS - 1), 0)
                 ctx.eq("host B straight after its reply: 35", block(b, BLOCKS), 35)
                 has_state(ctx, "the first sector complete", "writing")
-                advance(ctx, 49)
-                ctx.eq("host B 49 s after that reply: 35", block(b, BLOCKS), 35)
-                ctx.eq("the next block, 50 s after that reply, with the old secret: 0", block(u, BLOCKS), 0)
+                advance(ctx, 56.5)
+                ctx.eq("host B 56.5 s after that reply, 64.5 s after the block: 35", block(b, BLOCKS), 35)
+                ctx.eq("the next block, 57 s after that reply, with the old secret: 0", block(u, BLOCKS), 0)
+                ctx.eq("host B straight after it: 35", block(b, BLOCKS), 35)
                 installer_answers(ctx, u, True)
                 ctx.eq("UPDATE_ABORT after the first erase: 60", st_of(u.req("UPDATE_ABORT")), 60)
                 ctx.eq("host B's END_WRITE_SESSION: 35", st_of(b.req("END_WRITE_SESSION")), 35)
@@ -173,7 +173,6 @@ def t_a1_60(ctx: Ctx):
         finally:
             a.c.close()
             b.c.close()
-        ctx.notes.append(NO_EVIDENCE_60)
         ctx.notes.append("not judged: 'sector 0 and the option bytes are never written' (the model has neither), TCI; the stretched erase "
                          "is flash.delay of the model")
     finally:

@@ -1,9 +1,9 @@
 """The judging parts of t_details and the uptime rule of T-B5-22 (0073, 0074). No network. GPL-3.0-or-later, (c) 2026 ON8ST."""
 import unittest
 
-from testbench import t_flash
+from testbench import t_details, t_flash
 from testbench.core import Ctx, Skip
-from testbench.t_details import COUNTERS, due_during, judge_counters, judge_pages, other_address, renewals
+from testbench.t_details import COUNTERS, GAP_CASES, due_during, gaps, judge_counters, judge_pages, other_address, renewals
 
 
 def stats(names, own=()):
@@ -52,6 +52,72 @@ class Due(unittest.TestCase):
         self.assertFalse(due_during(1_000, 5_000, 90_000, 6_000)[0])  # due after the reply
         self.assertFalse(due_during(4_000, 5_000, 90_000, 3_000)[0])  # due before the request
         self.assertFalse(due_during(1_000, None, 90_000, 3_000)[0])
+
+
+class Over60(unittest.TestCase):
+    """over_60 (T-A1-15) on a simulated session: the idle time pauses, or runs on, during A's own request."""
+
+    def run_it(self, wait=57, work=6.4, paused=True, status=0, slow=0.0):
+        sim = dict(t=0.0, idle=None)  # idle: the time from which the session's idle time counts
+
+        class Ck:
+            now = lambda self: sim["t"]
+
+            def wait(self, s):
+                sim["t"] += s
+
+        class C:
+            why = ""
+
+            def __init__(self, name):
+                self.name = name
+
+            def authed(self, cmd, s, p):
+                sim["t"] += 0.1
+                if self.name == "b":
+                    return dict(status=35 if sim["t"] - sim["idle"] < 60 else 0)
+                sim["idle"] = sim["t"]
+                return dict(status=48)
+
+        def send(c, data, window=None, what=""):
+            t = sim["t"] = sim["t"] + 0.1
+            sim["t"] += work
+            if paused:
+                sim["idle"] = sim["t"]
+            return dict(status=status)
+
+        def signed(c, *a):
+            sim["t"] += slow
+            return b"x"
+        saved = t_details.signed, t_details.send_retransmit
+        t_details.signed, t_details.send_retransmit = signed, send
+        ctx = Ctx({})
+        try:
+            t_details.over_60(ctx, Ck(), C("a"), C("b"), b"", b"", "x", wait, status, lambda: None, lambda st: True)
+        finally:
+            t_details.signed, t_details.send_retransmit = saved
+        return [c["name"] for c in ctx.checks if not c["ok"]], len(ctx.parts)
+
+    def test_pause(self):
+        self.assertEqual(self.run_it(), ([], 0))
+        self.assertEqual(len(self.run_it(paused=False)[0]), 1)  # B's write taken
+        self.assertEqual(self.run_it(55, 8, status=55), ([], 0))
+
+    def test_not_shown(self):
+        self.assertEqual(self.run_it(50), ([], 1))  # the form that shows nothing
+        self.assertEqual(self.run_it(slow=4.0), ([], 1))  # sent after the 60 s
+
+
+class Gaps(unittest.TestCase):
+    def test_cases(self):
+        for port, seqs, want in GAP_CASES:
+            self.assertEqual(gaps(port, list(seqs)), want, seqs)
+
+    def test_rule(self):
+        self.assertEqual(gaps(1029, [5, 5 + 2**31, 6]), 0)  # not newer: the newest stays 5
+        self.assertEqual(gaps(1029, [5, 4 + 2**31]), 1)
+        self.assertEqual(gaps(1027, [0xFFFFFFFF, 2]), 1)
+        self.assertEqual(gaps(1029, [0xFFFFFFFF, 1]), 1)
 
 
 class Uptime(unittest.TestCase):

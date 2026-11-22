@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "61cf223",
-  "sha256_of_inputs": "a96d20db49f651f43404fa12b59e9ad40d39f071bbfae4caff4f1abebdf44dd8"
+  "commit": "e0c724c",
+  "sha256_of_inputs": "fcd04d0c18942967afa933eb42452f424e57101a587b74c31e5be4c823f31bb2"
  },
  "his": {
   "commit": "069ea0b"
@@ -283,7 +283,7 @@
    "id": "T-A1-15",
    "origin": "spec",
    "part": "A-B",
-   "title": "A second host gets status 35 for writes while a write session is held; the session ends after 60 s idle; `GET_STATS`, `IDENTIFY`, `GET_CHALLENGE`, other unauthenticated requests and a request with a wrong HMAC from the holder every 30 s do not keep it open, an authenticated, verified request from the holder does (A1.10). Host A's authenticated `SET_CONFIG` with an invalid configuration gets 48; a write from host B within 60 s gets 35; after A's `END_WRITE_SESSION`, B's write is accepted. `END_WRITE_SESSION` with no session held gets 0 and a write from another host straight after it is accepted; from a non-holder it gets 35 and the holder's session stays (0074). With a `SET_CONFIG` whose compaction is stretched to `t_flash_reply`, sent by the holder 50 s after its last request, the session does not lapse before the reply, and a write from host B straight after the reply gets 35 (emulator; 0077).",
+   "title": "A second host gets status 35 for writes while a write session is held; the session ends after 60 s idle; `GET_STATS`, `IDENTIFY`, `GET_CHALLENGE`, other unauthenticated requests and a request with a wrong HMAC from the holder every 30 s do not keep it open, an authenticated, verified request from the holder does (A1.10). Host A's authenticated `SET_CONFIG` with an invalid configuration gets 48; a write from host B within 60 s gets 35; after A's `END_WRITE_SESSION`, B's write is accepted. `END_WRITE_SESSION` with no session held gets 0 and a write from another host straight after it is accepted; from a non-holder it gets 35 and the holder's session stays (0074). With a `SET_CONFIG` whose compaction has its erase at `t_erase_max` and its programs at their maximum, sent by the holder 57 s after its last request, the session does not lapse before the reply, and a write from host B straight after the reply gets 35; the same with an erase that hangs until it fails (55), sent 55 s after the last request (emulator; 0077, 0078).",
    "reqs": [
     "A1",
     "A1.10"
@@ -299,10 +299,9 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "the stretched compaction needs flash.timing and flash.log (the reference model: flash.delay)",
-    "no evidence for the pause of the 60 s idle time (0077): 50 s after the last request the 60 s cannot fall inside the flash work; a pass shows nothing there"
+    "the stretched compaction needs flash.timing and flash.log, the erase that hangs flash.fault too (the reference model: flash.delay for the compaction only)"
    ],
-   "timeout_s": 1200
+   "timeout_s": 2400
   },
   {
    "id": "T-A1-16",
@@ -1261,7 +1260,7 @@
    "id": "T-A1-60",
    "origin": "spec",
    "part": "A-B",
-   "title": "During a streaming installation (A1.8a item 3): `UPDATE_STATUS` reports the sectors written; `IDENTIFY` reports the installer state; any other management command than those listed gets 58, and discovery, P2 and TCI get no answer; the TX-side state of A3.6 is unchanged and toggling the local PTT and KEY inputs keys nothing; `UPDATE_ABORT` before the first erase restarts into this firmware with its secret and configuration unchanged, after it gets status 60; a transfer that stops for more than 10 min does not restart the main unit and resumes when blocks arrive again; sector 0 and the option bytes are never written, and no sector is written before all its blocks arrived with a good CRC (reference model; 0028). After the first erase: `IDENTIFY` tag 11 = 0 and tag 12 not open; `SET_FIRST_SECRET` gets 36, also before the first erase; a command outside item 3's list with no earlier code gets 58 (for example `GET_CONFIG`); the next `UPDATE_BLOCK` is still accepted with the old secret. Host A holds the session; host B's `UPDATE_BLOCK` gets 35; after A's `END_WRITE_SESSION` (0), and in a second run after 60 s with no request from A, B's blocks are accepted and B completes the transfer. With every sector erase stretched to `t_erase_max`, A sends the block that completes a sector 50 s after the previous reply, and the next block 50 s after that block's late reply; the session holds across both, and B gets 35 throughout (emulator; A1.8a item 3, A1.10; 0077).",
+   "title": "During a streaming installation (A1.8a item 3): `UPDATE_STATUS` reports the sectors written; `IDENTIFY` reports the installer state; any other management command than those listed gets 58, and discovery, P2 and TCI get no answer; the TX-side state of A3.6 is unchanged and toggling the local PTT and KEY inputs keys nothing; `UPDATE_ABORT` before the first erase restarts into this firmware with its secret and configuration unchanged, after it gets status 60; a transfer that stops for more than 10 min does not restart the main unit and resumes when blocks arrive again; sector 0 and the option bytes are never written, and no sector is written before all its blocks arrived with a good CRC (reference model; 0028). After the first erase: `IDENTIFY` tag 11 = 0 and tag 12 not open; `SET_FIRST_SECRET` gets 36, also before the first erase; a command outside item 3's list with no earlier code gets 58 (for example `GET_CONFIG`); the next `UPDATE_BLOCK` is still accepted with the old secret. Host A holds the session; host B's `UPDATE_BLOCK` gets 35; after A's `END_WRITE_SESSION` (0), and in a second run after 60 s with no request from A, B's blocks are accepted and B completes the transfer. With every sector erase stretched to `t_erase_max`, A sends the block that completes a sector 57 s after the previous reply, and the next block 57 s after that block's late reply; the session holds across both, and B gets 35 throughout (emulator; A1.8a item 3, A1.10; 0077, 0078).",
    "reqs": [
     "A1",
     "A1.8a",
@@ -1281,8 +1280,7 @@
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
-    "only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open; the stretched erase is flash.delay there",
-    "no evidence for the pause of the 60 s idle time (0077): 50 s after the last request the 60 s cannot fall inside the flash work; a pass shows nothing there"
+    "only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open; the stretched erase is flash.delay there"
    ],
    "timeout_s": 2000
   },
@@ -2006,7 +2004,7 @@
    "id": "T-A1-94",
    "origin": "spec",
    "part": "A-B",
-   "title": "With every erase stretched to `t_erase_max` (emulator): in a trial kept unconfirmed by a class 2 fault injected at start, a `SET_CONFIG` with a stretched compaction received at 55 s is answered, the trial's commanded reset follows within 100 ms after the reply, and the next start rolls back. During a transfer, an `UPDATE_BLOCK` whose erase hangs, received 9 min 55 s after the last update command, gets 55, and the abandonment restart follows within 100 ms after the reply (B2.3 \"time over flash work\"; A1.8; 0073).",
+   "title": "With every erase stretched to `t_erase_max` (emulator): in a trial kept unconfirmed by a class 2 fault injected at start, a `SET_CONFIG` with a stretched compaction (erase at `t_erase_max`, programs at their maximum) received 2 s before the 60 s, so that the limit falls due during its flash work, is answered, the trial's commanded reset follows within 100 ms after the reply, and the next start rolls back. During a transfer, an `UPDATE_BLOCK` whose erase hangs, received 9 min 55 s after the last update command, gets 55, and the abandonment restart follows within 100 ms after the reply (B2.3 \"time over flash work\"; A1.8; 0073, 0078).",
    "reqs": [
     "A1",
     "B2.3",
@@ -2027,16 +2025,14 @@
    ],
    "pending": [],
    "tx_part": false,
-   "notes": [
-    "the compaction is sent half an erase before the 60 s limit, not at 55 s: one stretched erase of 4 s from 55 s would end before it"
-   ],
+   "notes": [],
    "timeout_s": 1800
   },
   {
    "id": "T-A1-95",
    "origin": "spec",
    "part": "A-B",
-   "title": "`GET_STATS` right after a start lists every name of Table M-6, each at 0 where nothing has been counted, in one reply of at most 1400 bytes; the names of Table M-6 come first, in table order, and any further names follow them; after one High Priority packet `hp_rx` = 1; after 25 management requests in one second from one source `mg_rate_drop` rises by the excess (reference model or emulator; Table M-1, Table M-6; 0074).",
+   "title": "`GET_STATS` right after a power cycle lists every name of Table M-6, each at 0 where nothing has been counted, in one reply of at most 1400 bytes; the names of Table M-6 come first, in table order, and any further names follow them; after one High Priority packet `hp_rx` = 1; after 25 management requests in one second from one source `mg_rate_drop` rises by the excess; one DUC I&Q packet from another source raises `duc_foreign` and `drop_1029` by 1 each (reference model or emulator; Table M-1, Table M-6; 0074, 0078).",
    "reqs": [
     "A1"
    ],
@@ -3860,7 +3856,7 @@
    "id": "T-A3-62",
    "origin": "spec",
    "part": "A-B",
-   "title": "Unexpected stop (emulator, pending the fault fixture that raises an undefined instruction in the running, unchanged image at a chosen emulated time; the fixture's entry latency is not cycle true, and its stacked PC is a stub). Unarmed, with a P2 session and RX running, the fault is raised once in thread mode and once inside an interrupt handler, in separate runs. In each: (1) no pin of Table A3-6b leaves its safe level, and no write to the PA bias DAC is made, from the fault to the end of the next start (unarmed, every pin of Table A3-6b is already at its safe level while RX runs, so no pin has to move); (2) a reset follows within 10 ms of the handler's entry, and the reset cause (RCC_RSR) is a software reset, not the independent watchdog; (3) after the restart `READ_LOG` holds, before the start entry, a line beginning `restart: processor fault` with a kind of A3.6, judged on that prefix and the kind only, never on a fault address; (4) the next start logs `start: unexpected stop`, has `WDT_RESET_AT_START` and `TX_ARM_STATE` drop reason 5 `RESET`, and RX and the management channel work after it. Also: after a `RESTART`, no unexpected stop at the next start; after a software reset with the last kept entry made invalid (kept RAM changed between reset and start), `start: unexpected stop`; after the trial's `restart: trial-unconfirmed`, no unexpected stop. With a fault raised during a stretched erase, when the fixture can: (1) holds throughout and (2) counts from the end of the operation. Keyed part, pending with the other TX tests (needs a calibration set; `NOT_CALIBRATED` until then): the same, armed and keyed; the pins of Table A3-6b reach their safe levels within 20 µs of the handler's entry (emulated time to the last pin change), and the transmission ends. Coverage: the 20 µs are unproven until the keyed part. Not covered: bus faults, faults during exception stacking, MemManage unless the emulator shows it, lockup (not modelled; no result may rest on it), the first-20-µs residual; those stay with review, the firmware build check and drill F3, whose step (5) is one bus fault on the radio (A3.6 \"Unexpected stop of the firmware\"; A1.7; A3.5; 0075, 0076).",
+   "title": "Unexpected stop (emulator, pending the fault fixture that raises an undefined instruction in the running, unchanged image at a chosen emulated time; the fixture's entry latency is not cycle true, and its stacked PC is a stub). Unarmed, with a P2 session and RX running, the fault is raised once in thread mode and once inside an interrupt handler, in separate runs. In each: (1) no pin of Table A3-6b leaves its safe level, and no write to the PA bias DAC is made, from the fault to the end of the next start (unarmed, every pin of Table A3-6b is already at its safe level while RX runs, so no pin has to move); (2) a reset follows within 10 ms of the handler's entry, and the reset cause (RCC_RSR) is a software reset, not the independent watchdog; (3) after the restart `READ_LOG` holds, before the start entry, a line beginning `restart: processor fault` with a kind of A3.6, judged on that prefix and the kind only, never on a fault address; (4) the next start logs `start: unexpected stop`, has `WDT_RESET_AT_START` and `TX_ARM_STATE` drop reason 5 `RESET`, and RX and the management channel work after it. Also: after a `RESTART`, no unexpected stop at the next start; after a software reset with the last kept entry made invalid (kept RAM changed between reset and start), `start: unexpected stop`; after the trial's `restart: trial-unconfirmed`, no unexpected stop. No unexpected stop after two `RESTART`s in a row, after a `RESTART` with the log ring full, and after one with the ring just wrapped (0078). An unexpected stop in each of these cases (emulator; 0078): a `RESTART`, then the next run's start entry made invalid in kept RAM, then a software reset; a fault raised in the boot stage before its clear of the word, and one raised right after it; the boot stage's clear cut after each of its bytes reaches kept RAM, where the emulator can cut a write; a commanded reset whose word write is cut the same way; a valid word that names an entry other than the last kept one. After each `RESTART`, `READ_LOG` still holds the reason line. With a fault raised during a stretched erase, when the fixture can: (1) holds throughout and (2) counts from the end of the operation. Keyed part, pending with the other TX tests (needs a calibration set; `NOT_CALIBRATED` until then): the same, armed and keyed; the pins of Table A3-6b reach their safe levels within 20 µs of the handler's entry (emulated time to the last pin change), and the transmission ends. Coverage: the 20 µs are unproven until the keyed part. Not covered: bus faults, faults during exception stacking, MemManage unless the emulator shows it, lockup (not modelled; no result may rest on it), the first-20-µs residual; those stay with review, the firmware build check and drill F3, whose step (5) is one bus fault on the radio (A3.6 \"Unexpected stop of the firmware\"; A1.7; A3.5; 0075, 0076, 0078).",
    "reqs": [
     "A3",
     "A3.6",
@@ -3879,9 +3875,9 @@
    "pending": [],
    "tx_part": true,
    "notes": [
-    "the unexpected stop itself is pending: the emulator's fault fixture; the keyed part pending TX; built: the commanded resets, the lost reason line, the trial's reset; never a pass until then"
+    "the unexpected stop itself (also in the boot stage) is pending: the emulator's fault fixture; the cut writes of the commanded-reset word pending a fixture that cuts a write to kept RAM; the keyed part pending TX; built: the commanded resets (two in a row, ring full, just wrapped), the lost reason line and start entry, a word that names another entry, the trial's reset; on the model a stop (stop.sim); never a pass until then"
    ],
-   "timeout_s": 600
+   "timeout_s": 2400
   },
   {
    "id": "T-B3-01",
@@ -7555,17 +7551,23 @@
    "id": "T-B11-04",
    "origin": "spec",
    "part": "A-B",
-   "title": "Packets with arbitrary or repeated sequence numbers are accepted; gaps on ports 1027 and 1029 are counted in `GET_STATS`.",
+   "title": "Packets with arbitrary or repeated sequence numbers are accepted; gaps on ports 1027 and 1029 are counted in `GET_STATS`. On port 1029, numbers 10, 11, 14, 13, 15 give one gap; 0xFFFFFFFF then 0 gives none; on port 1027, numbering 0xFFFFFFFF then 1 gives none (B11.6; 0078).",
    "reqs": [
-    "B11"
+    "B11",
+    "B11.6"
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
+   "also": [
+    "host"
+   ],
    "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "every packet sent must be counted as arrived (hp_rx, drop_1029), else the case is not judged; drop_1029 counts the owner's DUC I&Q only while TX is not calibrated"
+   ],
+   "timeout_s": 300
   },
   {
    "id": "T-B11-05",
