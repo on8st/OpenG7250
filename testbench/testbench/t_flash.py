@@ -14,7 +14,7 @@ from __future__ import annotations
 import struct
 import time
 
-from .core import Ctx, PartSkip, RunnerFault, Skip, test
+from .core import Ctx, NotShown, PartSkip, RunnerFault, Skip, test
 from .mgmt import config_tlv, tlv
 from .p2 import Host, value, wait_reachable
 from .update import SECTOR, Updater, image, layout
@@ -614,8 +614,8 @@ def t_a1_83(ctx: Ctx):
     act = sum(words(e) for e in es if e.get("t_us", 0) < reset) - n0
     boot = [e for e in es if e.get("t_us", 0) >= reset]
     if not boot or act < 0:
-        raise PartSkip(f"the boot stage's trial-attempt write is not seen in flash.log ({act} words at the activation, "
-                       f"{len(boot)} programs since the start at {reset} us)")
+        raise NotShown(f"neither cut made: the boot stage's trial-attempt write is not seen in flash.log ({act} words at the "
+                       f"activation, {len(boot)} programs since the start at {reset} us)")
     ctx.notes.append(f"the activation programs {act} words before its reset; the boot stage's first is word {act + 1}")
     advance(ctx, 11)
     missing: list[str] = []

@@ -60,20 +60,49 @@ def first_secret(ctx, new: bytes):
     return r["status"] if r else None
 
 
+def start_of(c: Mgmt):
+    """(the radio's clock, when the running image started on it, its uptime) or (clock, None, None)."""
+    r = req_retransmit(c, "IDENTIFY")
+    now = c.clock.now()
+    up = tlv(r["payload"]).get(16, b"") if r and r["status"] == 0 else b""
+    if len(up) != 4:
+        return c.clock, None, None
+    up = struct.unpack(">I", up)[0] / 1000
+    return c.clock, now - up, up
+
+
+def reset_done(ctx, what: str, before) -> float | None:
+    """Wait for the reset after a FACTORY_RESET reply: it comes up to 17 s after the reply (0069),
+    and until then the radio may still answer, so an answer counts only from an image that started
+    since `before` (start_of() before the request). The start of that image on the radio's clock."""
+    clock, start0, up0 = before
+    t0 = clock.now()
+    wait_reachable(ctx, what, limit_s=20 + 17)  # a host allows 17 s more than after a RESTART
+    if start0 is None:
+        return None
+    while True:
+        with Mgmt(ctx.net) as c:
+            c.clock = clock
+            _, start, _ = start_of(c)
+        if start is not None and start - start0 > up0 / 2:
+            return start
+        if clock.now() - t0 > 20 + 17:
+            ctx.check(f"{what}: the radio restarted within 17 s of the reply and 20 s to be reachable", False,
+                      "IDENTIFY still answers from the image that ran before" if start is not None else "no IDENTIFY answer")
+            return None
+        time.sleep(0.2)
+        wait_reachable(ctx, what, limit_s=20 + 17)
+
+
 def factory_reset(ctx, u: Updater):
-    """FACTORY_RESET; its status and the radio seconds from the reply to the radio being reachable
-    again less its uptime then (the time of the reset), or None where not known."""
+    """FACTORY_RESET; its status and the radio seconds from the reply to the start of the image that
+    runs after the reset, or None where not known."""
+    before = start_of(u.c)
     r = u.req("FACTORY_RESET")
     st = r["status"] if r else None
-    clock = u.c.clock
-    t0 = clock.now()
-    wait_reachable(ctx, "FACTORY_RESET", limit_s=20 + 17)  # a host allows 17 s more than after a RESTART
-    with Mgmt(ctx.net) as c:
-        c.clock = clock
-        t = req_retransmit(c, "IDENTIFY")
-        up = tlv(t["payload"]).get(16, b"") if t and t["status"] == 0 else b""
-    took = clock.now() - t0 - struct.unpack(">I", up)[0] / 1000 if len(up) == 4 else None
-    return st, took
+    t0 = u.c.clock.now()
+    start = reset_done(ctx, "FACTORY_RESET", before)
+    return st, None if start is None else start - t0
 
 
 def sectors(u: Updater) -> list[int]:
@@ -162,10 +191,13 @@ def t_a1_39(ctx: Ctx):
 
 def stretched(ctx):
     """Every erase at t_erase_max where the emulator offers it; how to put it back."""
-    t_max = ctx.endpoint.get("flash_timing", {}).get("t_erase_max_us")
+    t_max = (ctx.endpoint.get("flash_timing") or {}).get("t_erase_max_us")
     if has(ctx, "flash.timing") and t_max:
         return stretch(ctx, t_max)
-    ctx.notes.append("erases not stretched: no flash.timing")
+    ctx.notes.append("erases not stretched: " + " and ".join(
+        ([] if has(ctx, "flash.timing") else ["the fixture flash.timing is not offered"]) +
+        ([] if t_max else ["the endpoint has no flash_timing.t_erase_max_us" if "flash_timing" in ctx.endpoint else
+                           "the endpoint has no flash_timing"])))
     return lambda: None
 
 

@@ -135,25 +135,36 @@ class Mgmt:
         self.rid = (self.rid + 1) & 0xFFFFFFFF
         return self.rid
 
-    def req(self, cmd: str, payload: bytes = b"", timeout: float = 0.5, rid: int | None = None):
-        r = self.raw(build(CMD[cmd], payload, rid if rid is not None else self.next_id()), timeout)
+    def once(self, cmd: str, data: bytes, timeout: float | None):
+        """One datagram and a wait of `timeout` (0.5 s); a request that may do flash work as 0069
+        tells a host: retransmitted every 500 ms for 16 s (a wait given by the caller stays)."""
+        if timeout is None and cmd in FLASH_CMDS:
+            return send_retransmit(self, data, FLASH_WINDOW_S, cmd)
+        r = self.raw(data, 0.5 if timeout is None else timeout)
         return r[0] if r else None
+
+    def req(self, cmd: str, payload: bytes = b"", timeout: float | None = None, rid: int | None = None):
+        return self.once(cmd, build(CMD[cmd], payload, rid if rid is not None else self.next_id()), timeout)
 
     def challenge(self) -> bytes | None:
         r = self.req("GET_CHALLENGE")
         return r["payload"] if r and r["status"] == 0 else None
 
     def authed(self, cmd: str, secret: bytes, payload: bytes = b"", challenge: bytes | None = None,
-               rid: int | None = None, timeout: float = 0.5, mangle: bool = False):
-        ch = challenge if challenge is not None else self.challenge()
+               rid: int | None = None, timeout: float | None = None, mangle: bool = False):
+        ch = challenge
+        if ch is None and cmd in FLASH_CMDS:
+            r = req_retransmit(self, "GET_CHALLENGE")
+            ch = r["payload"] if r and r["status"] == 0 else None
+        elif ch is None:
+            ch = self.challenge()
         if ch is None:
             return None
         msg = build(CMD[cmd], payload, rid if rid is not None else self.next_id(), flags=1)
         mac = hmac.new(secret, ch + msg, hashlib.sha256).digest()
         if mangle:
             mac = bytes([mac[0] ^ 1]) + mac[1:]
-        r = self.raw(msg + mac, timeout)
-        return r[0] if r else None
+        return self.once(cmd, msg + mac, timeout)
 
 
 RETRANSMIT_S, RETRANSMITS = 0.5, 5  # A1.4 host retransmission: every 500 ms, up to 5 times (0041)

@@ -35,6 +35,11 @@ class PartSkip(Skip):
     them and the part is noted; with none, it is a skip."""
 
 
+class NotShown(Skip):
+    """The test ran but could show nothing of its claim: a skip (a failed check still fails it),
+    whatever checks its preparation made."""
+
+
 class Blocked(Exception):
     pass
 
@@ -195,6 +200,30 @@ def run_one(tid: str, ctx: Ctx) -> dict:
         return res
     ctx.trace_pins = getattr(fn, "trace_pins", None)
     ctx.trace_since = getattr(fn, "trace_since", "start")
+    flash = False
+
+    def flash_rules():
+        if not flash:
+            return
+        from .flash import check_flash
+        entries: list = []
+        for _ in range(1000):
+            r = ctx.fixture("flash.log", action="read", **{"from": len(entries)}) or {}
+            entries += r.get("entries", [])
+            if len(entries) >= r.get("count", 0):
+                if r.get("dropped"):
+                    ctx.check("flash.log: no entries dropped", False, f"dropped {r.get('dropped')}")
+                break
+        for name, ok_, detail in check_flash(entries):
+            ctx.check(name, ok_, detail)
+
+    def judged(otherwise: str, reason: str):
+        """Failed checks fail the test; with none the result is `otherwise`."""
+        bad = [c for c in ctx.checks if not c["ok"]]
+        res.update(status="fail" if bad else otherwise, reason=reason if not bad else
+                   f"{bad[0]['name']}: {bad[0]['detail']}" + (f" (+{len(bad) - 1} more)" if len(bad) > 1 else ""))
+        if bad and reason:
+            ctx.notes.append(reason)
     try:
         if "hw.trace" in ctx.endpoint.get("fixtures", []):
             # safe-state checks count from the start of each test (format v1.1 section 4)
@@ -211,41 +240,26 @@ def run_one(tid: str, ctx: Ctx) -> dict:
             except Skip:
                 flash = False
         fn(ctx)
-        if flash:
-            from .flash import check_flash
-            entries: list = []
-            for _ in range(1000):
-                r = ctx.fixture("flash.log", action="read", **{"from": len(entries)}) or {}
-                entries += r.get("entries", [])
-                if len(entries) >= r.get("count", 0):
-                    if r.get("dropped"):
-                        ctx.check("flash.log: no entries dropped", False, f"dropped {r.get('dropped')}")
-                    break
-            for name, ok_, detail in check_flash(entries):
-                ctx.check(name, ok_, detail)
-        ok = all(c["ok"] for c in ctx.checks) and ctx.checks
-        res["status"] = "pass" if ok else "fail"
-        if not ctx.checks:
-            res["reason"] = "no checks recorded"
+        own = len(ctx.checks)  # the run-wide flash rules alone are no verdict on the test's claim
+        flash_rules()
+        if own:
+            judged("pass", "")
         else:
-            bad = [c for c in ctx.checks if not c["ok"]]
-            if bad:  # the first failed check with what was observed
-                res["reason"] = f"{bad[0]['name']}: {bad[0]['detail']}" + (f" (+{len(bad) - 1} more)" if len(bad) > 1 else "")
+            judged("fail", "no checks recorded")
     except RunnerFault as e:
         res.update(status="error", reason=str(e))
     except Missing as e:
         ctx.checks.append({"name": str(e).split(":")[0], "ok": False, "detail": str(e)})
         res.update(status="fail", reason=str(e))
     except PartSkip as e:  # the rest of the test cannot run: the checks so far still judge it
-        if ctx.checks:
-            bad = [c for c in ctx.checks if not c["ok"]]
-            res.update(status="fail" if bad else "pass",
-                       reason=f"{bad[0]['name']}: {bad[0]['detail']}" if bad else f"part not run: {e}")
-            ctx.notes.append(f"part not run: {e}")
-        else:
-            res.update(status="skip", reason=str(e))
+        own = len(ctx.checks)
+        try:
+            flash_rules()
+        except (Skip, RunnerFault) as e2:
+            ctx.notes.append(f"run-wide flash rules not judged: {e2}")
+        judged("pass" if own else "skip", f"part not run: {e}" if own else str(e))
     except Skip as e:
-        res.update(status="skip", reason=str(e))
+        judged("skip", str(e))
     except Blocked as e:
         res.update(status="blocked", reason=str(e))
     except Exception as e:  # noqa: BLE001 - a broken test is an error result

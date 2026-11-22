@@ -70,7 +70,8 @@
     "P-NET-2"
    ],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 90
   },
   {
    "id": "T-A1-04",
@@ -86,7 +87,8 @@
    "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 90
   },
   {
    "id": "T-A1-05",
@@ -377,7 +379,8 @@
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 90
   },
   {
    "id": "T-A1-21",
@@ -409,7 +412,8 @@
    "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 90
   },
   {
    "id": "T-A1-23",
@@ -1326,7 +1330,8 @@
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
-   ]
+   ],
+   "timeout_s": 240
   },
   {
    "id": "T-A1-64",
@@ -1350,7 +1355,8 @@
     "P-PWR-2"
    ],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 90
   },
   {
    "id": "T-A1-65",
@@ -1374,7 +1380,8 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-66",
@@ -1610,7 +1617,8 @@
    "tx_part": true,
    "notes": [
     "the armed part needs TX unlocked; 'outside a session while armed' is not reachable over P2"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-76",
@@ -5032,7 +5040,8 @@
    "tx_part": true,
    "notes": [
     "needs an arm: blocked until the calibration set is complete (tx bit 4)"
-   ]
+   ],
+   "timeout_s": 180
   },
   {
    "id": "T-B5-22",

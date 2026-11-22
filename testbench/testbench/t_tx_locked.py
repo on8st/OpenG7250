@@ -455,8 +455,7 @@ def t_b4_18(ctx):
         tx = record(ctx, h)[0x20]
         ctx.eq("record tx bits 0-3", tx & 0xF, 0xF)
         if (tx >> 4) & 1:
-            ctx.notes.append("TX calibrated here (tx bit 4 = 1): the arm part needs a radio without a complete set")
-            return
+            raise Skip("TX calibrated here (tx bit 4 = 1): the claim is about a radio without a complete set")
         ctx.eq("record tx bit 4 (no complete calibration set)", (tx >> 4) & 1, 0)
         pairs = session(h)
         tok = token_of(ctx, h, pairs)

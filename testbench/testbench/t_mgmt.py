@@ -5,12 +5,14 @@ import os
 import struct
 import time
 
-from .core import Ctx, Skip, test
+from .core import Ctx, RadioClock, Skip, test
 from .mgmt import CMD, Mgmt, build, identify, req_retransmit, tlv
 
 
 def m(ctx: Ctx) -> Mgmt:
-    return Mgmt(ctx.net)
+    c = Mgmt(ctx.net)
+    c.clock = RadioClock(ctx)  # the waits of 0069 in radio time
+    return c
 
 
 @test("T-A1-13", "T-A1-19")
@@ -192,7 +194,6 @@ def secret_of(ctx) -> bytes:
         win = tlv(r["payload"]).get(12, b"") if r and r.get("status") == 0 else b""
         if win[:1] == b"\x01":
             new = os.urandom(32)
-            from .core import RadioClock
             c.clock = RadioClock(ctx)
             r = req_retransmit(c, "SET_FIRST_SECRET", new)  # flash work: 16 s (0069)
             if r and r.get("status") == 0:
@@ -257,9 +258,11 @@ def _t_a1_63(ctx, c, h, s, saved):
         st = arm_once(ctx, h)
         ctx.eq("with bit 4 = 1 the arm is accepted (T-B10-41)", None if st is None else st & 0xF, 1)
         h.stop()
+        from .t_store import reset_done, start_of
+        before = start_of(c)
         r = c.authed("FACTORY_RESET", s)
         ctx.eq("FACTORY_RESET: 0", r["status"] if r else None, 0)
-        time.sleep(0.2)
+        reset_done(ctx, "FACTORY_RESET", before)
         new = os.urandom(32)
         r = c.req("SET_FIRST_SECRET", new)
         if ctx.eq("factory reset opened the first-secret window", r["status"] if r else None, 0):
@@ -692,6 +695,8 @@ def t_b5_21(ctx):
         h.keepalive()
         pushes: list = []
         t = threading.Thread(target=lambda: pushes.extend(h.recv(1.0, PORT_REG)))
+        from .t_store import reset_done, start_of
+        before = start_of(c)
         t.start()
         r = c.authed("FACTORY_RESET", s)
         t_reply = time.monotonic()
@@ -702,7 +707,7 @@ def t_b5_21(ctx):
                   bool(disarm) and disarm[0] <= t_reply,
                   f"disarm push {format(disarm[0] - t_reply, '+.3f') + ' s' if disarm else 'not seen'} relative to the reply")
     # after the factory reset: the network back to its default, the secret cleared, the window open
-    wait_reachable(ctx, "FACTORY_RESET")
+    reset_done(ctx, "FACTORY_RESET", before)
     with m(ctx) as c, Host(ctx.net) as h:
         st = arm_once(ctx, h)
         if ctx.eq("armed again after the factory reset", None if st is None else st & 0xF, 1):

@@ -286,11 +286,17 @@ REACH_S = 20.0
 def reread_endpoint(ctx):
     """net.endpoint (v1.4): the endpoint as it is now (hosts[] follow the radio to a new subnet)."""
     ep = ctx.fixture("net.endpoint")
-    learned = ctx.endpoint.get("_learned")
+    old = dict(ctx.endpoint)
     ctx.endpoint.clear()
     ctx.endpoint.update(ep)
-    if learned:
-        ctx.endpoint["_learned"] = learned
+    # the answer is a full endpoint: a key it lost is kept as it was and named, not dropped silently
+    lost = sorted(k for k in old if k not in ep)
+    ctx.endpoint.update({k: old[k] for k in lost})
+    named = ctx.__dict__.setdefault("_lost_keys", set())
+    new = [k for k in lost if not k.startswith("_") and k not in named]  # "_": the bench's own
+    if new:
+        named.update(new)
+        ctx.notes.append(f"runner: net.endpoint answers without {', '.join(new)}: the values of the endpoint before kept")
     ctx.__dict__.pop("_net", None)
 
 

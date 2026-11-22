@@ -1128,6 +1128,7 @@ def t_a1_89(ctx: Ctx):
 def t_a1_90(ctx: Ctx):
     """A1.8 "Boot-stage refusals" (0067)."""
     need_clock(ctx)
+    ctx.need("slot.corrupt")  # every case changes a slot: without it nothing of the claim is shown
     s = secret(ctx)
     # 1: the staged image changed after a good verify and UPDATE_ACTIVATE
     with updating(ctx, s, restart_at_end=False) as u:
