@@ -331,6 +331,13 @@ pub struct Radio {
     pub stats: HashMap<String, u64>,
     pub log: Vec<(u32, u64, String)>,
     pub log_seq: u32,
+    /// model fixture log.corrupt: this entry of the kept ring fails its check at the next start
+    pub log_corrupt: Option<u32>,
+    /// IDENTIFY tag 17, the reset cause the boot stage named (0068)
+    pub reset_cause: u8,
+    /// model fixture flash.delay: the flash work of the next requests takes this long (ns or us as
+    /// `now`), for this many requests (0069)
+    pub flash_delay: (u64, u32),
     pub hw: Hw,
     pub scheduled: Vec<(u64, Tx)>,
     pub old_owner_notice: Option<(Host, u16, u64, u64, Vec<u8>)>, // host, dest port, until, last, packet
@@ -450,6 +457,9 @@ impl Radio {
             stats: HashMap::new(),
             log: Vec::new(),
             log_seq: 0,
+            log_corrupt: None,
+            reset_cause: 1,
+            flash_delay: (0, 0),
             hw: Hw::default(),
             scheduled: Vec::new(),
             old_owner_notice: None,
@@ -473,7 +483,7 @@ impl Radio {
         r.new_token();
         // the factory image in slot A, confirmed
         r.fw.slots[0] = Some(Image { version: r.cfg.fw, len: 0, sha: [0; 32], good: true, integ: 1, corrupt: false });
-        r.logf("power-on reset");
+        r.logf("start after power-on: log lost");
         r
     }
 
@@ -491,14 +501,16 @@ impl Radio {
     /// (A1.8 U-6; 0044); it keeps tag 9 = 1 (0067: tag 9 is integrity, tag 10 the rollback).
     /// Then the image check before the start (0067 item 3): a trial slot that fails it gives the
     /// previous image; a confirmed active slot that fails it gives the other slot if that one
-    /// counts as good, without a trial; the other slot is judged at each start (item 4).
-    fn boot_choice(&mut self, cause: &str) {
+    /// counts as good, without a trial; the other slot is judged at each start (item 4). Returns
+    /// the lines the boot stage writes after the start entry (0068).
+    fn boot_choice(&mut self) -> Vec<String> {
+        let mut lines = Vec::new();
         self.fw.trial_net_down = false;
         if self.fw.trial.is_some() {
             self.fw.trial = None;
             self.fw.running = self.fw.other();
             self.fw.rolled_back = true;
-            self.logf(&format!("trial image not confirmed before reset ({cause}): rolled back to slot {}", if self.fw.running == 1 { "A" } else { "B" }));
+            lines.push(format!("boot: rollback to slot {} (trial not confirmed)", if self.fw.running == 1 { "A" } else { "B" }));
         }
         let name = |s: u8| if s == 1 { "A" } else { "B" };
         let run = self.fw.running;
@@ -511,22 +523,30 @@ impl Radio {
             if other_good {
                 self.fw.running = self.fw.other();
                 self.fw.rolled_back = true;
-                self.logf(&format!("boot: slot {} refused: integrity", name(run)));
-                self.logf(&format!("boot: slot {} started without a trial (rolled back)", name(self.fw.running)));
+                lines.push(format!("boot: slot {} refused: integrity", name(run)));
+                lines.push(format!("boot: slot {} started without a trial (rolled back)", name(self.fw.running)));
             } else {
                 // neither slot passes: the safe state, no network (not modelled further; T-A1-90
                 // runs on an emulator)
-                self.logf("boot: no slot passes the image check: safe state, network not started");
+                lines.push(format!("boot: slot {} refused: integrity", name(run)));
             }
         }
         // each slot judged at this start: a changed one 2, an unchanged one with a record 1
         for i in self.fw.slots.iter_mut().flatten() {
             i.integ = if i.corrupt { 2 } else { 1 };
         }
+        lines
+    }
+
+    /// The boot stage starts the running slot as a trial, or refuses it (0067, 0068).
+    pub fn start_trial(&mut self) {
+        if !self.refuse_trial() {
+            self.logf(&format!("boot: trial of slot {} started", if self.fw.running == 1 { "A" } else { "B" }));
+        }
     }
 
     /// The boot stage's refusal of a trial slot that fails the image check (0067 item 3.1).
-    pub fn refuse_trial(&mut self) -> bool {
+    fn refuse_trial(&mut self) -> bool {
         let name = |s: u8| if s == 1 { "A" } else { "B" };
         let s = self.fw.running;
         if self.fw.trial.is_some() && self.fw.running_image().map_or(false, |i| i.corrupt) {
@@ -537,7 +557,7 @@ impl Radio {
             self.fw.running = self.fw.other();
             self.fw.rolled_back = true;
             self.logf(&format!("boot: slot {} refused: integrity", name(s)));
-            self.logf(&format!("boot: rolled back to slot {}", name(self.fw.running)));
+            self.logf(&format!("boot: rollback to slot {} (slot {} refused)", name(self.fw.running), name(s)));
             return true;
         }
         false
@@ -575,9 +595,9 @@ impl Radio {
         *self.stats.entry(what.to_string()).or_insert(0) += 1;
     }
     pub fn logf(&mut self, msg: &str) {
-        self.log_seq += 1;
         let up = (self.now - self.booted_at) / MS;
         self.log.push((self.log_seq, up, msg.to_string()));
+        self.log_seq += 1; // the first entry after a power loss is 0 (0068)
         if self.log.len() > 512 {
             self.log.remove(0);
         }
@@ -1735,10 +1755,32 @@ impl Radio {
     }
 
     /// Simulated reset (RESTART, FACTORY_RESET, power cycle, processor watchdog reset).
-    pub fn reset(&mut self, cause: &str) {
+    /// A reset: `reason` is the last entry before a commanded reset (0068; None: not commanded, or
+    /// logged by the caller), `cause` what the reset flags say (power-on, software, watchdog).
+    pub fn reset(&mut self, cause: &str, reason: Option<&str>) {
         let mut out = Vec::new();
         self.drop_arm(drop::MAINTENANCE, &mut out);
-        self.boot_choice(cause);
+        if let Some(l) = reason {
+            self.logf(l);
+        }
+        let boot_lines = self.boot_choice();
+        // the ring (A1.7 "Kept over a reset"; 0068): lost with the power; an entry that fails its
+        // check and all after it are dropped, and the numbers continue from the last one kept
+        if cause == "power-on" {
+            self.log.clear();
+            self.log_corrupt = None;
+            self.log_seq = 0;
+        } else if let Some(n) = self.log_corrupt.take() {
+            self.log.retain(|e| e.0 < n);
+            self.log_seq = self.log.last().map_or(0, |e| e.0 + 1);
+        }
+        let kept = cause != "power-on" && !self.log.is_empty();
+        self.reset_cause = match cause {
+            "power-on" => 1,
+            "software" => 2,
+            "watchdog" => 3,
+            _ => 0,
+        };
         self.keyer.reset();
         self.atu.cycle = None;
         self.session = None;
@@ -1762,7 +1804,10 @@ impl Radio {
         self.booted_at = self.now;
         self.resets += 1;
         self.mgmt.on_reset(self.now);
-        self.logf(&format!("reset: {cause}"));
+        self.logf(&format!("start after {cause}: log {}", if kept { "kept" } else { "lost" }));
+        for l in boot_lines {
+            self.logf(&l);
+        }
     }
 }
 

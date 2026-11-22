@@ -9,7 +9,7 @@ import unittest
 from contextlib import contextmanager
 
 from testbench import t_flash
-from testbench.core import Ctx
+from testbench.core import Ctx, RunnerFault
 
 WORDS = 4  # flash words per store write; the last one is the commit word
 STORE = 0x080C0000
@@ -33,7 +33,9 @@ class FakeRadio:
             n = a.get("from", 0)
             return dict(count=len(self.log), dropped=0, entries=self.log[n:])
         if op == "power.cut":
-            self.cut = a
+            self.cut, self.left = a, a.get("after_flash_words")
+            if self.broken == "stale" and "during_erase" in a:
+                self.cut = None  # the erase cut is lost
             return None
         if op == "flash.fault":
             self.fault = a
@@ -77,7 +79,9 @@ class FakeRadio:
                 addr = self.next_addr
                 self.next_addr += 32
             words.append(addr)
-            if self.cut and self.cut.get("after_flash_words") == i + 1:
+            if self.cut and "after_flash_words" in self.cut and self.broken != "nocut":
+                self.left -= 1
+            if self.cut and "after_flash_words" in self.cut and self.left == 0 and self.broken != "nocut":
                 # the cut lands during the n-th word: n - 1 complete, the n-th torn (v1.8); a
                 # torn commit word leaves the old record in force
                 self.log.append(dict(op="program", address=addr, len=32, result="cut", words_written=i))
@@ -86,8 +90,6 @@ class FakeRadio:
                     self.value = v // 2  # a mix of old and new
                 return None
             self.log.append(dict(op="program", address=addr, len=32, result="ok"))
-        if self.cut and "after_flash_words" in self.cut:
-            self.cut = None  # the write ended before the cut point
         self.prev, self.value, self.newest = self.value, v, words
         return 0
 
@@ -147,6 +149,12 @@ class FlashTestsTest(unittest.TestCase):
     def test_a1_86_passes_on_a_correct_store(self):
         self.assertEqual(run(t_flash.t_a1_86, FakeRadio()), [])
 
+    def test_a1_86_never_passes_without_its_cuts(self):
+        """A planned cut that does not fire, or is lost, is an error, not a pass (fw-e518331)."""
+        for broken in ("nocut", "stale"):
+            with self.assertRaises(RunnerFault):
+                run(t_flash.t_a1_86, FakeRadio(broken=broken))
+
     def test_a1_86_fails_on_a_mixed_value(self):
         self.assertTrue(run(t_flash.t_a1_86, FakeRadio(broken="mix")))
 
@@ -190,7 +198,8 @@ class CompactionTest(unittest.TestCase):
             def post(self, cmd, payload):
                 self.sent.append(cmd)
                 if len(self.sent) == erase_at:
-                    r.log.append(dict(op="erase", sector=4, address=0x08080000, t_us=10))  # running: no end yet
+                    r.log.append(dict(op="erase", sector=4, address=0x08080000, t_us=10, t_end_us=1_100_010,
+                                      result="running"))  # t_end_us: the predicted end
                 return b"req%d" % len(self.sent)
 
             def listen(self, data, timeout):

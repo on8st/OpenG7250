@@ -301,7 +301,8 @@ def t_a2_13(ctx):
             first = min(w) if w else 0  # the three takeover copies came before A's first write
             sent = lambda port: [e["t_us"] for e in log if e.get("dir") == "from_radio" and e.get("radio_port") == PORT_REG
                                  and mine(e, port) and e["t_us"] >= first]
-            ans, nts = sent(a.port), sent(dest.port)
+            notice = {e["t_us"] for e in log if e.get("head", "")[8:12] == f"{TX_ARM_STATE:04x}"}
+            ans, nts = sent(a.port), [t for t in sent(dest.port) if t in notice]
             ctx.check("register writes from A: NOT_OWNER answers at A's source port, one per 100 ms of radio time (B8.5; net.log)",
                       len(ans) >= want, f"{len(ans)} answers over {span:.3f} s of writes, want >= {want}")
             ctx.check("and notices at the register destination, one per 100 ms of radio time (net.log)", len(nts) >= want,

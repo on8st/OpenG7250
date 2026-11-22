@@ -14,7 +14,7 @@ from __future__ import annotations
 import struct
 import time
 
-from .core import Ctx, PartSkip, Skip, test
+from .core import Ctx, PartSkip, RunnerFault, Skip, test
 from .mgmt import config_tlv, tlv
 from .p2 import Host, value, wait_reachable
 from .update import SECTOR, Updater, image, layout
@@ -118,6 +118,7 @@ def compaction_writes(ctx, u: Updater, start_ms: int, lo: int, hi: int, limit: i
         progs += len([e for e in new if e.get("op") == "program" and in_range(e, lo, hi)])
         er = [e for e in new if e.get("op") == "erase" and in_range(e, lo, hi)]
         most = max(most, len(er))
+        ctx.__dict__["_last_ok"] = v if st == 0 else v - 1
         ctx.__dict__["_reply"] = (worst, most)
         ctx.__dict__["_compaction"] = (f"{n + 1} writes, {progs} store programs and {len(er)} store erases in flash.log; the last write "
                                        f"({v}) answered {st}" + (f": {u.c.why}" if st is None and getattr(u.c, "why", "") else ""))
@@ -132,10 +133,18 @@ def is_erase(e: dict) -> bool:
     return e.get("op") == "erase"
 
 
+def running(e: dict) -> bool:
+    """An erase that has not ended: flash.log lists it with result "running" and a predicted end."""
+    return is_erase(e) and e.get("result") == "running"
+
+
 @test("T-B5-22")
 def t_b5_22(ctx: Ctx):
     """B2.3 "during flash work" (0065, 0069): every erase stretched to t_erase_max and every word
     program at its maximum."""
+    if "flash.delay" in ctx.endpoint.get("fixtures", []):  # the reference model: the host rule of 0069
+        from .t_store import host_rule_on_model
+        return host_rule_on_model(ctx)
     need(ctx, "flash.log", "flash.timing")
     s = secret(ctx)
     ft = dict(ctx.endpoint.get("flash_timing", {}))
@@ -143,18 +152,33 @@ def t_b5_22(ctx: Ctx):
     if not t_max:
         raise Skip("the endpoint gives no flash_timing.t_erase_max_us")
     p_max = ft.get("t_program_max_us") or PROGRAM_MAX_US
-    r = ctx.fixture("flash.timing", erase_us=t_max, program_us=p_max) or {}
-    ctx.notes.append(f"erase stretched to {r.get('erase_us', t_max)} us, word program to {r.get('program_us', p_max)} us "
-                     f"({r.get('source', ft.get('source', 'source not named'))})")
+    back = stretch(ctx, t_max, p_max)
     try:
         flash_work(ctx, s, t_max)
     finally:
-        # the timing as it was (the values in use at the start), for the tests that follow
-        back = {k: ft[k] for k in ("erase_us", "program_us") if ft.get(k)}
-        if len(back) == 2:
-            ctx.fixture("flash.timing", **back)
-        else:
-            ctx.notes.append("flash.timing left stretched: the endpoint's flash_timing gives no erase_us and program_us in use")
+        back()
+
+
+def stretch(ctx, erase_us: int, program_us: int | None = None):
+    """flash.timing at these values; the function that puts it back (null: the datasheet model, or
+    the values the endpoint gave)."""
+    ft = dict(ctx.endpoint.get("flash_timing", {}))
+    r = ctx.fixture("flash.timing", erase_us=erase_us) or {}
+    note = f"erase stretched to {r.get('erase_us', erase_us)} us ({r.get('source', ft.get('source', 'source not named'))})"
+    programs = False
+    if program_us is not None:
+        try:
+            ctx.fixture("flash.timing", program_us=program_us)
+            programs, note = True, note + f", word program to {program_us} us"
+        except Skip as e:
+            note += f"; word program not stretched: {e}"
+    ctx.notes.append(note)
+
+    def back():
+        ctx.fixture("flash.timing", erase_us=ft.get("erase_us"))
+        if programs:
+            ctx.fixture("flash.timing", program_us=ft.get("program_us"))
+    return back
 
 
 def flash_work(ctx, s: bytes, t_max: int):
@@ -250,7 +274,7 @@ def post_until_erase(ctx, u: Updater, hdr: bytes, img: bytes):
             return None, None
         w0, reply = time.monotonic(), None
         while reply is None and time.monotonic() - w0 < 60:
-            er = [e for e in flog(ctx) if is_erase(e)]
+            er = [e for e in flog(ctx) if running(e)]
             if er:
                 return er[0], data
             got = u.c.listen(data, 0.05)
@@ -384,10 +408,37 @@ def t_a1_85(ctx: Ctx):
     ctx.notes.append("'each is logged': the log text is not specified; judged in the log by a new entry only where the radio was not reset")
 
 
+def words(e: dict) -> int:
+    return int(e.get("len", 32) or 32) // 32
+
+
+def cut_entry(entries: list[dict], op: str) -> dict | None:
+    """The entry of a planned power cut: the one operation of this reading that it ended."""
+    cuts = [e for e in entries if e.get("result") == "cut"]
+    return cuts[0] if len(cuts) == 1 and cuts[0].get("op") == op else None
+
+
+def cut_at_word(entries: list[dict], k: int) -> bool:
+    """A program was cut in the k-th word since the reading began: k - 1 words complete (k when the
+    torn word is counted), in earlier entries and in the cut one."""
+    e = cut_entry(entries, "program")
+    if e is None:
+        return False
+    before = sum(words(x) for x in entries[:entries.index(e)] if x.get("op") == "program" and x.get("result") == "ok")
+    w = e.get("words_written")
+    return w is not None and (before + w in (k - 1, k) or w in (k - 1, k))
+
+
+def planned_cuts_seen(missing: list[str]):
+    """A planned cut without its own flash.log entry is an error of the run, never a pass."""
+    if missing:
+        raise RunnerFault("power.cut: no flash.log entry of the planned cut: " + "; ".join(missing))
+
+
 @test("T-A1-86")
 def t_a1_86(ctx: Ctx):
     """A1.6 "Store writes" (0065): a power loss after each word of a store write, and during the
-    erase of the other store sector in a compaction."""
+    erase of the other store sector in a compaction. Each cut is judged by its own flash.log entry."""
     need(ctx, "flash.log", "power.cut")
     s = secret(ctx)
     with mg(ctx, s) as u:
@@ -398,7 +449,7 @@ def t_a1_86(ctx: Ctx):
         r = set_tx_time(u, v)
         if not ctx.eq("a first write answered 0", r["status"] if r else None, 0):
             return
-    rows = []
+    rows, missing, armed, whole = [], [], False, False
     for k in range(1, 65):
         v += 1
         with mg(ctx, s) as u:
@@ -409,34 +460,67 @@ def t_a1_86(ctx: Ctx):
         wait_reachable(ctx, f"power cut after word {k}")
         with mg(ctx, s) as u:
             got = tx_time(u)
-            cut = any(e.get("result") == "cut" for e in flog(ctx))
+            entries = flog(ctx)
+        cut = any(e.get("result") == "cut" for e in entries)
         rows.append((k, answered0, cut, got))
         ok = got in (accepted, v) and (not answered0 or got == v)
         if not ok:
             ctx.check(f"after a cut at word {k}: old ({accepted}) or new ({v}) value, a write answered 0 kept", False,
                       f"read {got}, answered 0: {answered0}, cut seen: {cut}")
-        if got == v:
-            accepted = v
+        if got in (accepted, v):
+            accepted = got
         if not cut:
-            break  # the write ended before word k: every word of a store write has been cut once
-    ctx.check("every word of a store write cut once: each item old or new, never a mix or older, a write answered 0 kept, "
-              "the value never goes back", all(g in (None,) or g >= 210_000 for _, _, _, g in rows), str(rows[-5:]))
+            # the write ended before word k: every word of it has been cut once, if k > 1
+            n = sum(words(e) for e in entries if e.get("op") == "program")
+            whole = k > 1 and n < k and answered0
+            if not whole:
+                missing.append(f"word {k} ({n} words programmed, answered 0: {answered0})")
+            armed = True
+            break
+        if not cut_at_word(entries, k):
+            missing.append(f"word {k} (cut entry {[e for e in entries if e.get('result') == 'cut']})")
+    ctx.check("every word of a store write cut once, each by its own flash.log entry", whole and not missing,
+              f"{len(rows) - 1} words; missing {missing}")
+    ctx.check("each item old or new, never a mix or older, a write answered 0 kept, the value never goes back",
+              all(g is not None and g >= 210_000 for _, _, _, g in rows), str(rows[-5:]))
+    for n in range(8):  # the cut that did not fire is still armed: let it fire in a write of its own
+        if not armed:
+            break
+        v += 1
+        with mg(ctx, s) as u:
+            flog_start(ctx)
+            set_tx_time(u, v, window=3.0)
+        wait_reachable(ctx, "the cut left armed")
+        with mg(ctx, s) as u:
+            armed = not any(e.get("result") == "cut" for e in flog(ctx))
+            got = tx_time(u)
+            ctx.check("after the cut left armed: old or new value", got in (accepted, v), f"read {got}, {accepted} or {v}")
+            accepted = got if got in (accepted, v) else accepted
+    if armed:
+        ctx.notes.append("the last word cut did not fire in 8 more writes: taken as no longer armed")
     for frac in (0.1, 0.5, 0.9):
         with mg(ctx, s) as u:
             lo, hi = store_range(u)
             flog_start(ctx)
             ctx.fixture("power.cut", during_erase=frac)
             res = compaction_writes(ctx, u, accepted, lo, hi)
+            last = ctx.__dict__.get("_last_ok", accepted)
         wait_reachable(ctx, f"power cut during a compaction erase at {frac}")
         with mg(ctx, s) as u:
             got = tx_time(u)
-            ctx.check(f"a cut during the erase of the other store sector at {frac}: the value is not older than the last "
-                      "write answered 0", got is not None and got >= accepted - 1, f"read {got}, last answered {accepted}")
+            e = cut_entry(flog(ctx), "erase")
+            done = (e or {}).get("fraction_done")
+            if e is None or done is None or abs(done - frac) > 0.02 or not in_range(e, lo, hi):
+                missing.append(f"erase at {frac} (entry {e}; {ctx.__dict__.get('_compaction', '')})")
+                continue
+            ctx.check(f"a cut during the erase of the other store sector at {frac}: the last write answered 0, or the one cut, is read",
+                      got in (last, last + 1), f"read {got}, last answered {last}")
             if got:
                 accepted = got
     with mg(ctx, s) as u:
         if old is not None:
             set_tx_time(u, old)
+    planned_cuts_seen(missing)
 
 
 @test("T-A1-87")
@@ -494,50 +578,93 @@ def t_a1_87(ctx: Ctx):
 
 @test("T-A1-83")
 def t_a1_83(ctx: Ctx):
-    """A1.8 "Torn boot-record writes" (0064)."""
-    need(ctx, "power.cut", "time.advance")
+    """A1.8 "Torn boot-record writes" (0064). Each cut is judged by its own flash.log entry."""
+    need(ctx, "power.cut", "time.advance", "flash.log")
     s = secret(ctx)
+    from .t_a3 import boot_t_us
     from .t_update import advance, facts, trial_package
-    # a power loss during the trial-attempt write (at the activation)
+    if not ctx.trace_file:
+        raise Skip("needs hw.trace (the boot event tells UPDATE_ACTIVATE's words from the boot stage's)")
+    # a whole activation first: how many words it programs before its reset; the boot stage's
+    # trial-attempt write starts with the next one
+    flog_start(ctx)
+    n0 = 0
+
+    def programs() -> list[dict]:
+        return [e for e in flog(ctx) if e.get("op") == "program"]
     with mg(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        img, hdr, _ = trial_package(ctx, other, ver, 830)
+        st, step = u.full(img, hdr)
+        if not ctx.check("a first update transferred", (st, step) == (0, "verified"), u.said(step, st)):
+            return
+        n0 = sum(words(e) for e in programs())
+        r = u.req("UPDATE_ACTIVATE", b"\x00")
+        if not ctx.eq("the first update activated", r["status"] if r else None, 0):
+            return
+    time.sleep(0.3)
+    wait_reachable(ctx, "UPDATE_ACTIVATE")
+    reset, es = boot_t_us(ctx), programs()
+    act = sum(words(e) for e in es if e.get("t_us", 0) < reset) - n0
+    boot = [e for e in es if e.get("t_us", 0) >= reset]
+    if not boot or act < 0:
+        raise PartSkip(f"the boot stage's trial-attempt write is not seen in flash.log ({act} words at the activation, "
+                       f"{len(boot)} programs since the start at {reset} us)")
+    ctx.notes.append(f"the activation programs {act} words before its reset; the boot stage's first is word {act + 1}")
+    advance(ctx, 11)
+    missing: list[str] = []
+    # a power loss during the trial-attempt write
+    with mg(ctx, s) as u:
+        if not ctx.eq("the first update confirmed", u.identify().get(10), b"\x00"):
+            return
         run, other, ver, lay = facts(ctx, u)
         img, hdr, _ = trial_package(ctx, other, ver, 831)
         st, step = u.full(img, hdr)
-        if (st, step) != (0, "verified"):
-            ctx.check("update transferred", False, u.said(step, st))
+        if not ctx.check("the second update transferred", (st, step) == (0, "verified"), u.said(step, st)):
             return
-        ctx.fixture("power.cut", after_flash_words=1)
+        flog_start(ctx)
+        ctx.fixture("power.cut", after_flash_words=act + 1)
         u.req("UPDATE_ACTIVATE", b"\x00", window=3.0)
     wait_reachable(ctx, "power loss in the trial-attempt write")
-    with mg(ctx, s) as u:
-        t = u.identify()
-        slot = t.get(23, b"")[:1]
-        ctx.check("one bootable image starts: the trial image as a trial, or the previous image",
-                  (slot == bytes([other]) and t.get(10) == b"\x01") or slot == bytes([run]), f"slot {slot!r}, tag 10 {t.get(10)!r}")
-        ctx.check("the store is readable", tx_time(u) is not None, "GET_CONFIG unanswered")
-        advance(ctx, 11)
+    if not cut_at_word(flog(ctx), act + 1):
+        missing.append(f"trial-attempt write, word {act + 1}")
+    else:
+        with mg(ctx, s) as u:
+            t = u.identify()
+            slot = t.get(23, b"")[:1]
+            ctx.check("one bootable image starts: the trial image as a trial, or the previous image",
+                      (slot == bytes([other]) and t.get(10) == b"\x01") or slot == bytes([run]), f"slot {slot!r}, tag 10 {t.get(10)!r}")
+            ctx.check("the store is readable", tx_time(u) is not None, "GET_CONFIG unanswered")
+    advance(ctx, 11)
     # a power loss during the self-confirmation write
     with mg(ctx, s) as u:
         run, other, ver, lay = facts(ctx, u)
         img, hdr, _ = trial_package(ctx, other, ver, 832)
         st, step = u.full(img, hdr)
-        if not ctx.check("the second update transferred", (st, step) == (0, "verified"), u.said(step, st)):
+        if not ctx.check("the third update transferred", (st, step) == (0, "verified"), u.said(step, st)):
             return
         r = u.req("UPDATE_ACTIVATE", b"\x00")
-        if not ctx.eq("the second update activated", r["status"] if r else None, 0):
+        if not ctx.eq("the third update activated", r["status"] if r else None, 0):
             return
     time.sleep(0.3)
     wait_reachable(ctx, "UPDATE_ACTIVATE")
     with mg(ctx, s) as u:
         t = u.identify()
         if t.get(10) != b"\x01":
+            planned_cuts_seen(missing)
             raise PartSkip(f"the torn confirmation: the trial was no longer unconfirmed when reached (tag 10 {t.get(10)!r})")
+        flog_start(ctx)
         ctx.fixture("power.cut", after_flash_words=1)
         advance(ctx, 11)  # the confirmation write comes after 10 s
     wait_reachable(ctx, "power loss in the confirmation write")
-    with mg(ctx, s) as u:
-        t = u.identify()
-        ctx.eq("a torn confirmation: the previous image starts (rolled back, tag 10 = 2)", (t.get(23, b"")[:1], t.get(10)),
-               (bytes([run]), b"\x02"))
-        ctx.check("the store is readable", tx_time(u) is not None, "GET_CONFIG unanswered")
-    ctx.notes.append("'logged': the log text is not specified; not judged")
+    if not cut_at_word(flog(ctx), 1):
+        missing.append("confirmation write, word 1")
+    else:
+        with mg(ctx, s) as u:
+            t = u.identify()
+            ctx.eq("a torn confirmation: the previous image starts (rolled back, tag 10 = 2)", (t.get(23, b"")[:1], t.get(10)),
+                   (bytes([run]), b"\x02"))
+            ctx.check("the store is readable", tx_time(u) is not None, "GET_CONFIG unanswered")
+            from .t_update import rollback_logged
+            rollback_logged(ctx, u, run)
+    planned_cuts_seen(missing)

@@ -185,20 +185,24 @@ impl Mgmt {
         // UPDATE_ABORT does, log it, restart into the running image (a commanded reset; RF is
         // never present in the model)
         if r.update_in_progress && self.last_update.map_or(false, |t| now >= t + 600 * S) {
-            r.logf("update abandoned: 10 min without an update command; restart into the running image");
+            // at the deadline itself: time.advance jumps past it
+            let due = self.last_update.map_or(now, |t| t + 600 * S);
             self.upd = None;
             self.last_update = None;
-            r.reset("abandoned update");
-            self.on_reset(now);
+            r.now = due;
+            r.reset("software", Some("restart: update-abandoned"));
+            self.on_reset(due);
+            r.now = now;
             return;
         }
         // 0044: a trial image not confirmed 60 s after its start makes a commanded reset, after
         // which the boot stage starts the previous image
         if let Some(t) = r.fw.trial {
             if now >= t + 60 * S {
-                r.logf("trial image not confirmed within 60 s: commanded reset");
-                r.reset("trial not confirmed");
-                self.on_reset(now);
+                r.now = t + 60 * S;
+                r.reset("software", Some("restart: trial-unconfirmed"));
+                self.on_reset(r.now);
+                r.now = now;
             }
         }
     }
@@ -563,21 +567,21 @@ impl Mgmt {
         self.send(r, rx, status, &reply_payload, true, cmd, out);
         match after {
             Some("RESTART") => {
-                r.reset("RESTART");
+                r.reset("software", Some("restart: restart"));
                 self.on_reset(r.now);
             }
             Some("ACTIVATE") => {
                 // atomic switch, then the trial boot of the new image (A1.8 U-5, U-6)
                 if let Some(u) = self.upd.take() {
-                    r.logf(&format!("update activated: slot {} on trial", slot_name(u.slot)));
+                    let why = format!("restart: update-activated slot {} {}.{}.{}", slot_name(u.slot), u.version.0, u.version.1, u.version.2);
                     let net_down = r.fw.sim_net_down;
                     r.fw.sim_net_down = false;
-                    r.reset("UPDATE_ACTIVATE");
+                    r.reset("software", Some(&why));
                     r.fw.trial_net_down = net_down;
                     r.fw.running = u.slot;
                     r.fw.rolled_back = false;
                     r.fw.trial = Some(r.now);
-                    r.refuse_trial(); // the boot stage's image check before the start (0067)
+                    r.start_trial(); // the boot stage's image check before the start (0067)
                     self.on_reset(r.now);
                 }
             }
@@ -586,7 +590,7 @@ impl Mgmt {
                 // returns to the image that carried out the ROLLBACK
                 let net_down = r.fw.sim_net_down;
                 r.fw.sim_net_down = false;
-                r.reset("ROLLBACK");
+                r.reset("software", None); // 0064's line is the last entry
                 r.fw.trial_net_down = net_down;
                 r.fw.running = r.fw.other();
                 r.fw.rolled_back = false;
@@ -594,15 +598,18 @@ impl Mgmt {
                 if let Some(img) = r.fw.slots[(r.fw.running - 1) as usize].as_mut() {
                     img.good = false;
                 }
-                r.refuse_trial();
+                r.start_trial();
                 self.on_reset(r.now);
             }
             Some("FACTORY_RESET") => {
                 self.secret = None;
                 self.window_used = false;
                 self.window_start = Some(r.now);
-                // C-3 persistent limits are kept (Table A1-4): nothing to do here.
-                r.reset("FACTORY_RESET");
+                // Table A1-4: the network, default level, region and allow-list return to their
+                // factory values; the C-3 limits (persistent_limits, band_limits) are kept
+                self.conf = Conf { band_limits: self.conf.band_limits, ..Conf::factory() };
+                self.upd = None;
+                r.reset("software", Some("restart: factory-reset"));
                 self.on_reset(r.now);
             }
             _ => {}
@@ -634,6 +641,13 @@ impl Mgmt {
     fn send(&mut self, r: &mut Radio, rx: &Rx, status: u16, payload: &[u8], store: bool, cmd: u16,
             out: &mut Vec<Tx>) {
         let inside = r.own_subnet(*rx.src.ip());
+        // model fixture flash.delay: the processor stalls in the flash work of this request, so the
+        // reply comes after it and what arrives meanwhile waits in the socket (0069)
+        if r.flash_delay.1 > 0 && status == st::OK && flash_work(cmd) {
+            r.flash_delay.1 -= 1;
+            std::thread::sleep(std::time::Duration::from_micros(r.flash_delay.0));
+            r.now += r.flash_delay.0 * (MS / 1000);
+        }
         let reply = header(rx.data, status, payload);
         if store && rx.data.len() >= 18 {
             let n = be16(rx.data, 16) as usize;
@@ -683,7 +697,7 @@ impl Mgmt {
         tlv(14, &owner);
         tlv(15, &r.arm.word().to_be_bytes());
         tlv(16, &(((r.now - r.booted_at) / MS) as u32).to_be_bytes());
-        tlv(17, &[0]);
+        tlv(17, &[r.reset_cause]);
         tlv(18, &[VERSION.0, VERSION.1, crate::codes::P2_VERSION, 1, 1]);
         tlv(19, &[0]); // controller state unknown (HIS-17)
         tlv(20, &[r.tx_calibrated() as u8]); // I-7: record tx bit 4
@@ -945,6 +959,12 @@ fn cal_payload(r: &Radio) -> Vec<u8> {
 /// SET_CALIBRATION payload (Annex M Table M-1, M-5); None = status 48.
 /// A payload that cannot be read by the structure of Annex M (0056): wrong fixed length, a
 /// TLV that runs past the end, a missing fixed field. Values are not judged here.
+/// The requests that may do flash work (0069 item 3).
+fn flash_work(cmd: u16) -> bool {
+    matches!(cmd, SET_CONFIG | SET_FIRST_SECRET | CHANGE_SECRET | FACTORY_RESET | SET_CALIBRATION | CLEAR_CALIBRATION
+                  | UPDATE_BEGIN | UPDATE_BLOCK | UPDATE_ACTIVATE | ROLLBACK)
+}
+
 fn slot_name(s: u8) -> &'static str {
     if s == 1 { "A" } else { "B" }
 }

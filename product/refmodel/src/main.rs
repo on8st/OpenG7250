@@ -110,7 +110,7 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt"];
+    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay"];
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -315,11 +315,11 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
             ok(J::Null)
         }
         "power.cycle" => {
-            r.reset("power-on");
+            r.reset("power-on", None);
             ok(J::Null)
         }
         "reset.wdt" => {
-            r.reset("processor watchdog");
+            r.reset("watchdog", None);
             ok(J::Null)
         }
         "link.set" => {
@@ -362,6 +362,21 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 r.keylog = None;
             }
             ok(v)
+        }
+        "log.corrupt" => {
+            // model only: the entry with this sequence number fails its check at the next start
+            let n = args.get("seq").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+            if !r.log.iter().any(|e| e.0 as f64 == n) {
+                return err("log.corrupt: no such entry");
+            }
+            r.log_corrupt = Some(n as u32);
+            ok(J::Null)
+        }
+        "flash.delay" => {
+            // model only: the flash work of the next `count` requests takes `us` (0069)
+            let us = args.get("us").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64;
+            r.flash_delay = (us, args.get("count").and_then(|v| v.as_f64()).unwrap_or(1.0) as u32);
+            ok(J::Null)
         }
         "slot.corrupt" => {
             // model only: one byte of the image in slot (1 A, 2 B) changed; the next judgement

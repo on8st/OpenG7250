@@ -85,12 +85,13 @@ def pkg(img: bytes, version, slot: int, **kw) -> bytes:
     return header(len(img), hashlib.sha256(img).digest(), version=version, slot=slot, **kw)
 
 
-def real_package(ctx, slot: int):
+def real_package(ctx, slot: int, name: str = "package_slot"):
     """(header, image, fields) of the runner's package for that slot (params.package_slot_a,
-    package_slot_b: Table M-4 packages built on the firmware side, read as opaque bytes), or None."""
+    package_slot_b: package files of Annex M built on the firmware side, read as opaque bytes), or
+    None."""
     from pathlib import Path
     from .update import parse_package
-    path = ctx.params.get(f"package_slot_{'ab'[slot - 1]}")
+    path = ctx.params.get(f"{name}_{'ab'[slot - 1]}")
     return parse_package(Path(path).read_bytes()) if path else None
 
 
@@ -478,26 +479,6 @@ def need_clock(ctx):
     ctx.need("time.advance")
 
 
-@test("T-A1-34")
-def t_a1_34(ctx: Ctx):
-    """A1.8: after UPDATE_BEGIN, 10 min without an update command: aborted, logged, restart into
-    the running image; RX works afterwards."""
-    need_clock(ctx)
-    s = secret(ctx)
-    with updating(ctx, s, restart_at_end=False) as u:
-        run, other, ver, lay = facts(ctx, u)
-        n0 = last_log_seq(u)
-        up0 = uptime_s(u) or 0
-        r = u.begin(pkg(image(SMALL, seed=34), newer(ver), other))
-        if not ctx.eq("UPDATE_BEGIN accepted", r["status"] if r else None, 0):
-            return
-        expect_restart_at(ctx, u, "after UPDATE_BEGIN only", 600, 0)
-        ctx.eq("after the restart: the running image unchanged", (u.identify().get(23, b"")[:1]), bytes([run]))
-        texts = logs_since(u, n0)
-        ctx.check("the abandonment is logged (a new log entry; the text is not specified)", bool(texts), f"{texts[-3:]}")
-    ctx.check("RX works afterwards (a session gets status packets)", rx_works(ctx), "no status packet")
-
-
 @test("T-A1-46")
 def t_a1_46(ctx: Ctx):
     """A1.8: after UPDATE_ABORT, and after UPDATE_VERIFY without UPDATE_ACTIVATE, with only
@@ -601,9 +582,14 @@ def activate_new(ctx, s, seed: int, net_down: bool = False):
         if (st, step) != (0, "verified"):
             ctx.__dict__["_upd_fail"] = u.said(step, st)
             return None
+        r = None
         if silent:
             ctx.fixture("ch394.silent", boots=1)  # the next start only: the trial's
-        r = u.req("UPDATE_ACTIVATE", b"\x00")
+        try:
+            r = u.req("UPDATE_ACTIVATE", b"\x00")
+        finally:
+            if silent and not (r and r["status"] == 0):  # no trial started: not left for the next reset
+                ctx.fixture("ch394.silent", boots=0)
         if not r or r["status"] != 0:
             ctx.__dict__["_upd_fail"] = u.said("UPDATE_ACTIVATE", r["status"] if r else None)
             return None
@@ -633,6 +619,15 @@ def trial_rolls_back(ctx, what: str = "trial rollback"):
             # uptime counts from the image's own start, about 0.2 s after the reset
             ctx.check(f"{what}: not before 60 s after the trial's start (radio time)", t - up >= 59.0,
                       f"the previous image started {t - up:.1f} s after the activation reply")
+
+
+def rollback_logged(ctx, u: Updater, slot: int):
+    """The boot stage's rollback line in the running run's log (0068), after its start entry."""
+    from .mgmt import read_log
+    texts = [e[2] for e in read_log(u.c)]
+    k = [i for i, x in enumerate(texts) if x.startswith("start after ")]
+    want = f"boot: rollback to slot {'AB'[slot - 1]} (trial not confirmed)"
+    ctx.check(f"the rollback is logged: '{want}' after the start entry", bool(k) and want in texts[k[-1]:], f"{texts[-5:]}")
 
 
 @test("T-A1-68", "T-A1-09")
@@ -679,13 +674,7 @@ def t_a1_68(ctx: Ctx):
             t = u.identify()
             ctx.eq("after 60 s: rolled back (tag 10 = 2), the previous slot and version run",
                    (t.get(10), t.get(23, b"")[:1], version_of(t)), (b"\x02", bytes([a[0]]), a[2]))
-            if n0 is not None:
-                ctx.check("the rollback is logged", bool(logs_since(u, n0)), "no new log entry")
-            else:
-                from .mgmt import read_log
-                texts = [e[2] for e in read_log(u.c)]
-                ctx.check("the rollback is logged (an entry naming it)", any("rollback" in x.lower() or "rolled back" in x.lower() or "confirmed" in x.lower() for x in texts),
-                          f"{texts[-4:]}")
+            rollback_logged(ctx, u, a[0])
     # a class 2 fault (a safe-state pin forced, TX_PATH_NOT_BLOCKED): not confirmed, rolls back
     if "trial.sim" in ctx.endpoint.get("fixtures", []):
         ctx.fixture("trial.sim", class2_fault=True)
@@ -730,8 +719,7 @@ def t_a1_68(ctx: Ctx):
             t = u.identify()
             ctx.eq("a power loss before confirmation: the previous slot and version at the next start (tag 10 = 2)",
                    (t.get(10), t.get(23, b"")[:1], version_of(t)), (b"\x02", bytes([a[0]]), a[2]))
-            ctx.check("the rollback is logged", bool(logs_since(u, n0)), "no new log entry")
-
+            rollback_logged(ctx, u, a[0])
 
 
 @test("T-A1-84")
@@ -895,9 +883,17 @@ def t_a1_88(ctx: Ctx):
         if run_real:
             h, img, f = run_real
             cases.append(("linked for the running slot", img, reheader(h, img, slot=0), {"slot"}))
-        ctx.notes.append("not run off the reference model: a record for other hardware or for the boot stage, an entry point "
-                         "outside the slot (the record's layout is the firmware's; needs packages built so on the firmware side)"
-                         + ("" if real and run_real else "; the cases built from real packages need params.package_slot_a and _b"))
+        # the record's layout is the firmware's, so these are built on the firmware side (opaque
+        # bytes, one per slot; hash and header right, so only the image check refuses them)
+        for key, name, word in (("hw", "a record for other hardware", "hardware"), ("kind", "a record of the boot stage", "kind"),
+                                ("entry", "an entry point outside the slot", "vectors")):
+            bad = real_package(ctx, other, f"package_bad_{key}")
+            if bad:
+                cases.append((name, bad[1], bad[0], {word}))
+            else:
+                ctx.notes.append(f"{name}: not run, needs params.package_bad_{key}_{'ab'[other - 1]}")
+        if not (real and run_real):
+            ctx.notes.append("the cases built from real packages need params.package_slot_a and _b")
     import re
     for name, img, hdr, words in cases:
         with updating(ctx, s) as u:

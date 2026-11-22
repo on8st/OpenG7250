@@ -247,11 +247,20 @@ OVERRIDES: dict[str, dict] = {
                 "notes": ["the network-down case needs trial.sim (reference model) or a runner that keeps the CH394 silent"]},
     "T-A3-61": {"target": "emulator", "also": [], "needs": ["gpio.force"], "tx_part": False,
                 "notes": ["the pins of Table A3-6; the DAC part needs a fixture; the armed part needs TX unlocked"]},
-    "T-B5-22": {"target": "emulator", "also": [], "needs": ["flash.log", "flash.timing"]},
-    "T-A1-83": {"target": "emulator", "also": [], "needs": ["power.cut", "time.advance"]},
+    "T-B5-22": {"target": "emulator", "also": ["host"], "needs": [],
+                "notes": ["on the reference model the host rule of 0069 (flash.delay); the rest needs flash.log and flash.timing"]},
+    "T-A1-91": {"target": "emulator", "also": ["host"], "needs": ["time.advance"],
+                "notes": ["the corrupted entry needs log.corrupt (reference model); the update parts need a real package"]},
+    "T-A1-39": {"target": "emulator", "also": ["host"], "needs": [],
+                "notes": ["the flash part (0069) needs flash.log, flash.timing, flash.fault and flash.dump"]},
+    "T-A1-92": {"target": "emulator", "also": [], "needs": ["flash.log"],
+                "notes": ["what the sectors hold needs flash.dump (proposed)"]},
+    "T-A1-93": {"target": "host", "also": [], "needs": [],
+                "notes": ["g7250ctl's own test against the reference model (0070); not run by this bench"]},
+    "T-A1-83": {"target": "emulator", "also": [], "needs": ["power.cut", "time.advance", "flash.log", "hw.trace"]},
     "T-A1-88": {"target": "emulator", "also": ["host"], "needs": [],
-                "notes": ["off the reference model the cases are built from params.package_slot_a and _b; other hardware, "
-                          "the boot-stage kind and an entry point outside the slot need packages built so on the firmware side"]},
+                "notes": ["off the reference model the cases are built from params.package_slot_a and _b, and three from the "
+                          "firmware-built params.package_bad_hw_a/_b, package_bad_kind_a/_b, package_bad_entry_a/_b"]},
     "T-A1-89": {"target": "emulator", "also": ["host"], "needs": ["time.advance"],
                 "notes": ["the tag 9 = 2 part needs slot.corrupt; the good-verify parts need a real package"]},
     "T-A1-90": {"target": "emulator", "also": ["host"], "needs": ["time.advance", "slot.corrupt"],
@@ -404,10 +413,10 @@ UNCOVERED = [
 # emulated time with a wall cap of 30 x timeout_s + 120 s).
 TIMEOUTS: dict[str, int] = {
     # a real package is about 275 blocks, two datagrams each at 18 per second: 30 s per update
-    "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 900, "T-A1-09": 900, "T-A1-84": 600, "T-A1-83": 600,
+    "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 900, "T-A1-09": 900, "T-A1-84": 600, "T-A1-83": 900,
     "T-A1-88": 900, "T-A1-89": 900, "T-A1-90": 900, "T-A1-67": 300, "T-A1-80": 300,
     "T-A1-05": 120, "T-A1-33": 120, "T-A1-23": 120, "T-A1-59": 120, "T-A1-78": 120, "T-A1-79": 120, "T-A1-81": 120,
-    "T-B8-10": 120,
+    "T-B8-10": 120, "T-A1-91": 1500, "T-A1-39": 300, "T-A1-92": 1800,
     "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-76": 120,
     "T-B5-22": 1800, "T-A1-85": 300, "T-A1-86": 1800, "T-A1-87": 300, "T-EMU-IDLE": 120,
 }

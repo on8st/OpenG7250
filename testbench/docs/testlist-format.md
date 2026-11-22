@@ -95,7 +95,7 @@ hand-written subset.
 | `scope` | yes | `v1.0`; `not-v1.0` (for example 0030); `after-G6` (level 2); `from-M2` (wideband). The runner runs only `v1.0` unless told otherwise |
 | `needs` | no | fixtures the test uses (section 4). If the runner lacks one, the result is `skip` with reason `fixture:<name>` |
 | `timeout_s` | no | **(v1.1)** limit in **emulated** seconds; the result reports wall time separately |
-| `params` | no | test parameters; opaque to the runner. **(v1.1)** `params.pending` lists the Annex P parameters the test needs measured (on the radio the result is `blocked` until the calibration set holds them). `params.package_slot_a` and `params.package_slot_b`: paths to Table M-4 packages of the firmware under test for slot A and slot B (built on the firmware side, `g7250-update-a.pkg` and `-b.pkg`), given by the runner; the bench reads them as opaque bytes (the 53-byte header, then the image of its length), parses only the header and sends both unchanged. The update tests use them where a trial must run; without them those parts are not run ("needs a real package", noted) and the test is judged on the rest |
+| `params` | no | test parameters; opaque to the runner. **(v1.1)** `params.pending` lists the Annex P parameters the test needs measured (on the radio the result is `blocked` until the calibration set holds them). `params.package_slot_a` and `params.package_slot_b`: paths to Table M-4 packages of the firmware under test for slot A and slot B (built on the firmware side, `g7250-update-a.pkg` and `-b.pkg`), given by the runner; the bench reads them as opaque bytes (the 53-byte header, then the image of its length), parses only the header and sends both unchanged (the file exactly 53 bytes + image, signature length 0, hash right: Annex M "Package file"). `params.package_bad_hw_a`/`_b`, `package_bad_kind_a`/`_b`, `package_bad_entry_a`/`_b`: package files of the same form whose hash and header are right and whose image record names other hardware, the boot stage, or an entry point outside the slot (T-A1-88); the bench takes the one for the slot not running. The update tests use them where a trial must run; without them those parts are not run ("needs a real package", noted) and the test is judged on the rest |
 | `boot` (list level) | no | **(v1.1)** `per-test` (default) or `per-list` |
 
 ## 3. Endpoint file (runner → test bench)
@@ -503,10 +503,13 @@ A test with target `emulator` is also run against the reference model. A test wi
      carries `flash_timing` with the values in use, `t_erase_max_us` and their `source` (a
      labelled stand-in until the datasheet value is known); T-B5-22 stretches every erase to
      `t_erase_max_us` and every word program to `t_program_max_us` (580 us where the endpoint
-     gives none; 0069), names the values in its result, and at its end puts back `erase_us` and
-     `program_us` as the endpoint gave them at its start.
+     gives none; 0069), names the values in its result, and at its end puts back the values of
+     the endpoint (`erase_us: null` is the datasheet model). A running erase is listed in
+     `flash.log` with `result: "running"` and its predicted `t_end_us`, and gets its real result
+     and end when it is over; one already running at `start` is not in the new reading.
    - `flash.fault {op: "erase"|"program", after?, flag, never_end?}`: the next matching operation
-     sets that RM0468 error flag; `never_end` keeps BSY set until a reset (T-A1-85).
+     sets that RM0468 error flag; `never_end` (op erase only; no flag needed) keeps BSY set until a
+     reset (T-A1-85).
    - `power.cut {after_flash_words: n} | {during_erase: 0..1} | {at_address: a}`; a cut entry in
      `flash.log` has `result: "cut"` with `words_written` or `fraction_done` (T-A1-83, T-A1-86).
    - `flash.ecc {address, type: "double"|"single"}`; each detection is a `flash.log` entry
@@ -528,6 +531,12 @@ A test with target `emulator` is also run against the reference model. A test wi
      image may overwrite it); `null` releases (the channel takes the word the image last wrote);
      the image's start-up safe state (PB14 low) and `power.cycle` clear it; traced
      `{"kind": "dac_force", channel, value, t_us}` (T-A3-61).
+   - Proposed: `flash.dump {address, len}` → `{hex}`: flash as it is now, at most 32768 bytes per
+     call (T-A1-39, T-A1-92: the bench looks for the 32 bytes of a secret it set itself); and
+     `log.corrupt {seq}`: the kept log entry with that sequence number changed in RAM so that its
+     check fails at the next start (T-A1-91; the layout is the firmware's, so an emulator needs its
+     address from the firmware side). The reference model has `log.corrupt`, and
+     `flash.delay {us, count}`: the flash work of the next `count` requests takes `us` (T-B5-22).
    - `slot.corrupt {slot: 1|2, offset: n, xor?: 0x01}` → `{slot, address, old, new, t_us}`: the
      byte at `offset` from the slot start (0x08040000, 0x08080000) XORed (default one bit) with
      its ECC kept consistent (it reads as changed data, no ECC error); `{slot, restore: true}`

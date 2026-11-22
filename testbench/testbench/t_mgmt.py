@@ -726,6 +726,7 @@ def t_b5_21(ctx):
         d = h.recv(0.05, PORT_DISC, until=lambda g: bool(g))
         ctx.check("right after the SET_CONFIG reply the radio answers discovery within 50 ms (its flash write "
                   "ended before the reply)", bool(d), f"{(d[0][2] - t0) * 1000:.1f} ms" if d else "no reply within 50 ms")
+        c.authed("END_WRITE_SESSION", s)  # leave the write session free for the next test
 
 
 # ---------------- malformed payload (A1.4; 0056) ----------------

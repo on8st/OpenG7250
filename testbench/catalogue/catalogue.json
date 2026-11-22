@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "1a8ee8b",
-  "sha256_of_inputs": "cf770e0e76eab722262c17cc0d04b1fe29a8e0741da5d42086433c3003dd934f"
+  "commit": "155bc1a",
+  "sha256_of_inputs": "f40285323e61b0fc03a67ba2bca05f9d15977cfaf84a6a41a9f9dd6afa52c578"
  },
  "his": {
   "commit": "069ea0b"
@@ -772,11 +772,16 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
+   "also": [
+    "host"
+   ],
    "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "the flash part (0069) needs flash.log, flash.timing, flash.fault and flash.dump"
+   ],
+   "timeout_s": 300
   },
   {
    "id": "T-A1-40",
@@ -1787,12 +1792,14 @@
    "also": [],
    "needs": [
     "power.cut",
-    "time.advance"
+    "time.advance",
+    "flash.log",
+    "hw.trace"
    ],
    "pending": [],
    "tx_part": false,
    "notes": [],
-   "timeout_s": 600
+   "timeout_s": 900
   },
   {
    "id": "T-A1-84",
@@ -1893,19 +1900,20 @@
     "A1.7"
    ],
    "scope": "v1.0",
-   "target": "host",
+   "target": "emulator",
    "also": [
-    "emulator"
+    "host"
    ],
    "needs": [
-    "power.cycle",
-    "time.scale"
+    "time.advance"
    ],
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
-   ]
+    "spec marks it reference model; emulator only with the fixtures",
+    "the corrupted entry needs log.corrupt (reference model); the update parts need a real package"
+   ],
+   "timeout_s": 1500
   },
   {
    "id": "T-A1-92",
@@ -1921,11 +1929,14 @@
    "target": "emulator",
    "also": [],
    "needs": [
-    "power.cycle"
+    "flash.log"
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "what the sectors hold needs flash.dump (proposed)"
+   ],
+   "timeout_s": 1800
   },
   {
    "id": "T-A1-93",
@@ -1939,21 +1950,20 @@
    ],
    "scope": "v1.0",
    "target": "host",
-   "also": [
-    "emulator"
-   ],
+   "also": [],
    "needs": [],
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "g7250ctl's own test against the reference model (0070); not run by this bench"
    ]
   },
   {
    "id": "T-A1-88",
    "origin": "spec",
    "part": "A-B",
-   "title": "Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header, one of them an intact image with 32 bytes appended (header length and hash adjusted), which the log names `header`, not `integrity`. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending every block again with new request ids, in order, replaces the received data and the next verify succeeds; a block sent again alone is accepted and written, and `UPDATE_STATUS` shows any blocks the radio counts as not received again (reference model or emulator; A1.8 \"Image check\", \"`UPDATE_VERIFY`\"; 0067).",
+   "title": "Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header, one of them an intact image with 32 bytes appended (header length and hash adjusted), which the log names `header`, not `integrity`. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending every block again with new request ids, in order, replaces the received data and the next verify succeeds; an `UPDATE_VERIFY` with the last block not sent (a block left out in the middle would make the next one 54, out of order) gets 55 with `missing-blocks` in the log, not `hash`, and sending that last block then lets the verify succeed (0067 addendum); a block sent again alone is accepted and written, and `UPDATE_STATUS` shows any blocks the radio counts as not received again (reference model or emulator; A1.8 \"Image check\", \"`UPDATE_VERIFY`\"; 0067).",
    "reqs": [
     "A1",
     "A1.8"
@@ -1968,7 +1978,7 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
-    "off the reference model the cases are built from params.package_slot_a and _b; other hardware, the boot-stage kind and an entry point outside the slot need packages built so on the firmware side"
+    "off the reference model the cases are built from params.package_slot_a and _b, and three from the firmware-built params.package_bad_hw_a/_b, package_bad_kind_a/_b, package_bad_entry_a/_b"
    ],
    "timeout_s": 900
   },
@@ -5039,15 +5049,15 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
-   "needs": [
-    "flash.log",
-    "flash.timing"
+   "also": [
+    "host"
    ],
+   "needs": [],
    "pending": [],
    "tx_part": true,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "on the reference model the host rule of 0069 (flash.delay); the rest needs flash.log and flash.timing"
    ],
    "timeout_s": 1800
   },
