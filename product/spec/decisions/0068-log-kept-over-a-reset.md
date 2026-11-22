@@ -3,7 +3,7 @@
 - Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
   proposed 2026-11-22; answers a testbench question on T-A1-34, with the firmware's
   input and two firmware questions on the start entry folded in (relayed by the openg7250
-  session, 2026-11-22)
+  session, 2026-11-22); addendum on readings for the firmware build proposed 2026-11-22
 - Date: 2026-11-22
 - Builds on: 0008 (L-1 to L-3), 0022 §27 (counters), §40 (commanded reset), 0035 (P-SYS-2),
   0050 (P-SYS-9), 0055 (flash work), 0063 (abandonment), 0064 (`ROLLBACK`), 0067 (log names,
@@ -87,6 +87,31 @@ wear.
    Test T-A1-91 (new) covers the other reasons, the boot-stage lines, a watchdog reset with
    the entries before it kept, a power cycle (`start after power-on: log lost`, sequence at 0)
    and a kept ring with one entry corrupted.
+
+## Addendum: readings for the firmware build (proposed, 2026-11-22)
+
+Firmware questions on its 0068 build, relayed by the openg7250 session, 2026-11-22.
+
+1. **What counts as a power loss**, for the log and for the counters of A3.5 alike: a start
+   whose reset flags include power-on or brown-out, whatever cause the start entry names, or a
+   start with no reset flag at all. So `start after software: log lost` can occur, and a start
+   with no flag gives `start after unknown: log lost` and counters from 0. Reason: with no flag
+   the firmware cannot tell that RAM was kept, and RAM not written since power-up must not be
+   believed. This is safe only if every reset without power loss sets at least one flag, so the
+   P-SYS-2 radio check MUST also show that for each kind of reset, and P-SYS-9 is not set
+   before P-SYS-2 has shown it (until then TX stays locked anyway).
+2. **Oldest entry failing its check**: by point 2 nothing is kept, and that is "fails as a
+   whole": `log lost`, sequence numbers from 0.
+3. **When the `ROLLBACK` line is logged**: as the last entry before the reset, after the unkey
+   and RF gone, like every other reason of point 3; not at the moment the command is accepted.
+   0064 item 3.3 is read so.
+4. **Fallback from a refused active slot** (0067 point 3.2): the boot stage logs
+   `boot: slot <s> refused: <check>` for the refused slot, then
+   `boot: fallback to slot <s> (active slot refused, no trial)` for the slot it starts.
+   "rollback" stays reserved for a return from a trial.
+
+Tests: T-A1-91 (no flag; power-on flag with software named; oldest entry corrupted; the
+`ROLLBACK` line as the last entry before the reset), T-A1-90 (the fallback lines).
 
 ## Alternatives considered
 
