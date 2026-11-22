@@ -28,6 +28,8 @@ const PER_SECTOR: u32 = SECTOR_SIZE / BLOCK;
 const SECTORS: usize = (SLOT_A.len() / SECTOR_SIZE) as usize;
 const BLOCKS: usize = (SLOT_A.len() / BLOCK) as usize;
 const _: () = assert!(SLOT_A.len() == SLOT_B.len() && SLOT_A.len() % SECTOR_SIZE == 0);
+/// Flash bytes of one staging mark record in the store.
+const MARK: u32 = FLASH_WORD;
 /// An update with no update command other than `UPDATE_STATUS` for this long is abandoned (A1.8).
 pub const ABANDON_MS: u64 = 10 * 60 * 1000;
 /// Target hardware id of the G7250 (Table M-4 bytes 6-7).
@@ -229,7 +231,9 @@ impl Stager {
 
     /// `UPDATE_BLOCK` with the staging mark: set in the store before the first block of a
     /// transfer (so before the first erase), and again before a block that cancels a good verify
-    /// (0067). A mark that cannot be written is a write failure (0043).
+    /// (0067). A mark that cannot be written is a write failure (0043). UPDATE_BEGIN makes room
+    /// for many marks; should it run out, the block makes room again (its one erase, 0069), takes
+    /// nothing and gets 55: the transfer goes on, and the block sent again is taken.
     pub fn block_marked<S: FlashIo, F: FlashIo>(
         &mut self,
         store: Option<&mut Store<S>>,
@@ -241,23 +245,34 @@ impl Stager {
         now: u64,
     ) -> Result<u32, Refusal> {
         self.accepts(n, crc_ok, data.len() as u32)?;
-        if !self.marked {
-            match store.map(|s| crate::boot::set_staging(s, Some(run.slot.other()))) {
-                Some(Ok(())) => self.marked = true,
-                _ => {
-                    self.phase = Phase::Discarded;
-                    return Err(Refusal::VerifyFailed);
-                }
+        let set = store.map(|s| {
+            // Room for the mark to set, if it is not, and for the verify to clear it.
+            if s.free() < MARK + if self.marked { 0 } else { MARK } {
+                return s.compact().map(|()| false);
+            }
+            if !self.marked {
+                crate::boot::set_staging(s, Some(run.slot.other()))?;
+            }
+            Ok(true)
+        });
+        match set {
+            Some(Ok(true)) => self.marked = true,
+            Some(Ok(false)) => return Err(Refusal::VerifyFailed),
+            _ => {
+                self.phase = Phase::Discarded;
+                return Err(Refusal::VerifyFailed);
             }
         }
         self.block(io, run, n, crc_ok, data, now)
     }
 
-    /// `UPDATE_VERIFY` with the staging mark: a good verify clears it before it counts (0067).
+    /// `UPDATE_VERIFY` with the staging mark: a good verify clears it before it counts (0067). A
+    /// verify never erases (0069): the block that set the mark left room to clear it, and without
+    /// room it gets 55.
     pub fn verify_marked<S: FlashIo, F: FlashIo>(&mut self, store: Option<&mut Store<S>>, io: &mut F, run: &Running, now: u64) -> Result<[u8; 32], Refusal> {
         let hash = self.verify(io, run, now)?;
         if self.marked {
-            match store.map(|s| crate::boot::set_staging(s, None)) {
+            match store.filter(|s| s.free() >= MARK).map(|s| crate::boot::set_staging(s, None)) {
                 Some(Ok(())) => self.marked = false,
                 _ => {
                     self.phase = Phase::Receiving;

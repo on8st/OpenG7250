@@ -958,3 +958,35 @@ fn one_erase_per_update_request_0069() {
     g.verify_marked(Some(&mut st), &mut io, &run, 2).unwrap();
     assert_eq!(erases(&s), e, "VERIFY");
 }
+
+#[test]
+fn a_block_without_room_for_its_mark_makes_room_and_is_refused_0069() {
+    let (s, _) = installed(true); // the store full but for less than 64 bytes
+    let img = image(Slot::B, V2, 2000, 7);
+    let run = running(Slot::A, V1);
+    let s = core::cell::RefCell::new(s);
+    let mut io = Shared(&s);
+    let mut st = Store::open(Shared(&s), Writer::Application { running: Slot::A }).unwrap();
+    while st.free() >= 64 {
+        st.put(Kind::Config, 1, &[7u8; 8]).unwrap();
+    }
+    let mut g = Stager::new();
+    let n = g.begin(&offer(&img, V2), &run, 0).unwrap(); // no reserve here
+    let e = s.borrow().erases;
+    assert_eq!(g.block_marked(Some(&mut st), &mut io, &run, 0, true, block_of(&img, 0), 1), Err(Refusal::VerifyFailed));
+    assert_eq!((s.borrow().erases - e, g.status()), (1, (1, 0, 4)), "one erase, nothing taken, the transfer goes on");
+    for k in 0..n {
+        g.block_marked(Some(&mut st), &mut io, &run, k, true, block_of(&img, k), 1).unwrap();
+    }
+    // No room for the verify's mark: 55, no erase; a block makes room; then it succeeds.
+    while st.free() >= 32 {
+        st.put(Kind::Config, 1, &[7u8; 8]).unwrap();
+    }
+    let e = s.borrow().erases;
+    assert_eq!(g.verify_marked(Some(&mut st), &mut io, &run, 2), Err(Refusal::VerifyFailed));
+    assert_eq!((g.verify_failure(), s.borrow().erases - e, g.status().0), (Some("store"), 0, 1));
+    let e = s.borrow().erases;
+    assert_eq!(g.block_marked(Some(&mut st), &mut io, &run, 1, true, block_of(&img, 1), 3), Err(Refusal::VerifyFailed));
+    assert_eq!((s.borrow().erases - e, g.status()), (1, (1, 4, 4)), "a block makes the room, nothing lost");
+    assert!(g.verify_marked(Some(&mut st), &mut io, &run, 3).is_ok());
+}
