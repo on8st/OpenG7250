@@ -10,6 +10,10 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - The 0067 addenda (log words; full store, status 64) and the 0068 addendum (build readings)
   accepted by ON8ST on 2026-11-22.
 - The 0069 addendum (start check) accepted by ON8ST on 2026-11-22, as it stands at `78aa233`.
+- 0072 (C-3 limits that may be lost) accepted in principle by ON8ST on 2026-11-22 and held
+  for the point with Table M-3 (ending the lost state before the calibration set holds S2 and
+  T3); the number is reserved, and none of its text is in the spec yet.
+- 0073 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
   "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
@@ -72,6 +76,13 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   only the start check is limited (other start writes compact as A1.6 says); the erase of the
   lost sector after the owner's first `SET_CONFIG` is an accepted consequence; a first generation
   is recognised by having no commit word (a double fault accepted).
+- 0073 (accepted 2026-11-22; firmware question): time over flash work. Uptime and every limit
+  counted on it include flash work (within 1 ms per request); the trial's 60 s, the
+  first-secret window, the 10-minute abandonment, the write-session idle time and the
+  stored-reply time act within 100 ms after they fall due, or after the flash work they fall
+  due in, before queued management requests; a confirmation write started before 60 s counts;
+  the P2 watchdog is not on the list. B2.3 "time over flash work", A1.8, A1.10; T-B5-22,
+  T-A1-16 extended, T-A1-94 new.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 
