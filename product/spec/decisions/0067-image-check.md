@@ -1,6 +1,7 @@
 # 0067 — What an image of this firmware must be: the image check, VERIFY and IDENTIFY tag 9
 
-- Status: proposed (2026-11-21); answers testbench finding SF-31
+- Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
+  proposed 2026-11-21; answers testbench finding SF-31
 - Date: 2026-11-21
 - Builds on: 0008 (U-4, U-5, U-6), 0028 (boot stage), 0043 (slot-linked images), 0044
   (self-confirmation), 0061 (slot size), 0064 (`ROLLBACK`), 0065 (ECC errors).

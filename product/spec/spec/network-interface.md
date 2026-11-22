@@ -2,8 +2,8 @@
 
 - Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
 - Status: version 1.0 (tag `spec-v1.0`). Applies decisions 0001–0066, all accepted by ON8ST
-  (`product-handover.md`); after 1.0 also 0067 (proposed), listed under "After 1.0" in
-  `spec/CHANGELOG.md`. Complete for milestones M1–M5 except for the values that need the
+  (`product-handover.md`); after 1.0 also 0067–0071, accepted by ON8ST on 2026-11-22,
+  listed under "After 1.0" in `spec/CHANGELOG.md` (not yet a version). Complete for milestones M1–M5 except for the values that need the
   radio, which are named in Annex P with a safe placeholder each; level 2 (part C) waits for
   gate G6 (0011).
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`).

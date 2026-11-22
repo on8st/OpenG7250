@@ -1,6 +1,7 @@
 # 0070 — What g7250ctl must pass against the reference model
 
-- Status: proposed (2026-11-22); answers question Q5 of the g7250ctl session (relayed by the
+- Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
+  proposed 2026-11-22; answers question Q5 of the g7250ctl session (relayed by the
   openg7250 session, 2026-11-22)
 - Date: 2026-11-22
 - Builds on: 0019 (reference model), 0026 (g7250ctl as reference implementation), 0037 (Rust,
