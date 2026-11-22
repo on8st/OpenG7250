@@ -23,6 +23,8 @@ import socket
 import sys
 import time
 
+from .erasewait import erases, line, wait_erase
+
 
 def addr(s):
     h, p = s.rsplit(":", 1)
@@ -63,6 +65,7 @@ def check(name, ok, detail=""):
 
 
 EP_PATH = ""
+NOTES = []      # lines for the result's reason, also of a test that passes
 
 
 def run_test(tid, ep):
@@ -540,6 +543,21 @@ def run_test(tid, ep):
 
         def log():
             return (ctl.op("flash.log", action="read").get("value") or {}).get("entries", [])
+
+        def restart(out):
+            # a new emulator: the next test starts with an image in step and no fault armed (there is no other way to drop one)
+            ctl.op("flash.timing", erase_us=None)
+            ctl.op("power.cycle")
+            cmd(b"FR", again=True, wait=90.0)
+            return out
+
+        def answer(head, s):
+            sk.settimeout(s)
+            try:
+                d = sk.recv(2048)
+            except socket.timeout:
+                return None
+            return d if head and d[:2] == head else None
         DBECC, out = 1 << 26, []
         ctl.op("flash.timing", erase_us=200000)
         cmd(b"FR", again=True, wait=60.0)
@@ -602,15 +620,34 @@ def run_test(tid, ep):
             ctl.op("flash.timing", erase_us=us)
             if "PGSERR" in kind:
                 ctl.op("flash.fault", op="erase", flag="PGSERR")
-            w = words(cmd(b"FC", wait=120.0))
+            while answer(b"FC", 0.01) is not None:      # nothing old on the socket
+                pass
+            er = wait_erase(lambda: sk.sendto(b"FC", addr(c)), lambda s: answer(b"FC", s), log)
+            if line(kind, er):
+                NOTES.append(line(kind, er))
+            out.append(check("masked erase %s: it ended in flash.log, the image answered" % kind, er["ok"],
+                             "%s; host %.1f s, load %.1f to %.1f" % (er["why"], er["host_s"], er["load_start"], er["load_max"])))
+            if not er["ok"]:
+                # out of step with the image: nothing after this would be what it says it is
+                return restart(out)
+            w = words(er["answer"])
             ok = len(w) == 6
             cyc, t5, t12, worst = (w[1] / 64.0, w[2], w[3], w[4]) if ok else (0, 0, 0, 0)
             out.append(check("masked erase %s: cycles/64, TIM5 and TIM12 within 20 us of each other, of the length and between any two reads" % kind,
                              ok and abs(cyc - t5) <= 20 and abs(t12 - t5) <= 20 and abs(t5 - us) <= 20 and worst <= 20 and bool(w[0] & (1 << 18)) == ("PGSERR" in kind),
                              "cycles/64 %.1f, TIM5 %d, TIM12 %d, worst between reads %d us, polls %d" % (cyc, t5, t12, worst, w[5] if ok else 0)))
         # a failing erase that never ends, ended by the watchdog: the figures up to the last poll
-        ctl.op("flash.fault", op="erase", never_end=True)
-        cmd(b"FW")
+        # only with no erase running: an armed fault takes whatever erase comes next
+        open_ = [x for x in erases(log()) if x.get("result") == "running"]
+        wdt = None
+        if not open_:
+            # the fault before the watchdog: its 0.5 s would run out on a loaded host otherwise
+            ctl.op("flash.fault", op="erase", never_end=True)
+            wdt = cmd(b"FW")
+        out.append(check("no erase runs before never_end is armed; the watchdog command is answered", not open_ and wdt is not None,
+                         "running %s, FW %s" % (open_, wdt)))
+        if open_ or wdt is None:
+            return restart(out)
         sk.sendto(b"FC", addr(c))
         cmd(b"FR", again=True, wait=90.0)
         w = words(cmd(b"FV"))
@@ -879,6 +916,7 @@ def main():
     ep = json.load(open(a.endpoint))
     for tid in a.test:
         t0 = time.time()
+        del NOTES[:]
         try:
             checks = run_test(tid, ep)
             if checks is None:
@@ -887,6 +925,8 @@ def main():
                 e = {"id": tid, "status": "pass" if all(c["ok"] for c in checks) else "fail", "checks": checks}
         except Exception as ex:  # noqa: BLE001
             e = {"id": tid, "status": "error", "reason": "%s: %s" % (type(ex).__name__, ex)}
+        if NOTES:
+            e["reason"] = "; ".join(NOTES + ([e["reason"]] if e.get("reason") else []))
         e["duration_s"] = round(time.time() - t0, 3)
         print(json.dumps(e))
         sys.stdout.flush()
