@@ -161,6 +161,8 @@ async fn main(spawner: Spawner) {
     // all but the TX path pins (A3.6b: not written before the first check).
     safe::reassert_except_tx_path();
     console::init();
+    // Time over flash operations, before the first one (timekeep.rs).
+    g7250_board::flash::around_operation(keep_time);
     // SAFETY: early_init cleared every enable and pending bit left by the previous stage.
     unsafe { cortex_m::interrupt::enable() };
     // The TX path check (A3.6b) on its own interrupt executor, above the thread-mode tasks: its
@@ -379,7 +381,7 @@ async fn tx_path() {
         // 10 ms is the fault now; one open at the end counts from its first sample.
         let mut held = None;
         if let Some((h, o)) = g7250_board::flash::take_samples() {
-            let open_ms = o.map(|(cyc, _)| (cyc / (console::HSI_HZ / 1000)) as u64);
+            let open_ms = o.map(|(cyc, _)| (cyc / (console::CORE_HZ / 1000)) as u64);
             if c.after_flash(now, h.is_some(), open_ms) {
                 held = h;
             }
@@ -398,9 +400,46 @@ async fn tx_path() {
             }
         }
         wakes::note(wakes::Task::TxPath, t0.elapsed().as_micros());
-        let _ = embassy_futures::select::select(t.next(), FLASH_ENDED.wait()).await;
+        // After flash work the period starts again: the ticks missed while it ran are over (time
+        // goes on over it), and one check each would only hold up the other tasks.
+        if let embassy_futures::select::Either::First(()) = embassy_futures::select::select(FLASH_ENDED.wait(), t.next()).await {
+            t.reset();
+        }
     }
 }
+
+/// The time driver's registers for `g7250_safety::timekeep`.
+struct DriverClock;
+
+impl g7250_safety::timekeep::Clock for DriverClock {
+    fn cnt(&mut self) -> u16 {
+        embassy_stm32::g7250::cnt()
+    }
+    fn flags(&mut self) -> (bool, bool) {
+        embassy_stm32::g7250::flags()
+    }
+    fn clear_flags(&mut self) {
+        embassy_stm32::g7250::clear_flags()
+    }
+    fn period(&mut self) -> u32 {
+        embassy_stm32::g7250::period()
+    }
+    fn set_period(&mut self, p: u32) {
+        embassy_stm32::g7250::set_period(p)
+    }
+    fn cycles(&mut self) -> u32 {
+        g7250_board::flash::cycles_now()
+    }
+}
+
+/// Around every erase and program, with interrupts masked: the time goes on over it.
+fn keep_time(op: &mut dyn FnMut()) {
+    let m = g7250_safety::timekeep::begin(&mut DriverClock);
+    op();
+    g7250_safety::timekeep::end(&mut DriverClock, &m);
+}
+
+const _: () = assert!(console::CORE_HZ == g7250_safety::timekeep::CYCLES_PER_US * 1_000_000);
 
 /// Signalled by the flash driver after every erase or program.
 static FLASH_ENDED: embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, ()> = embassy_sync::signal::Signal::new();

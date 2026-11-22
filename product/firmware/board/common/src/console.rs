@@ -49,6 +49,10 @@ use crate::pac::rcc::vals::{Hpre, Hsidiv, Ppre, Sw, Usart16910sel};
 
 pub const BAUD: u32 = 115_200;
 pub const HSI_HZ: u32 = 64_000_000;
+/// The core clock, which the DWT cycle counter counts: SYSCLK is the HSI, undivided, no PLL, in
+/// both stages (the application's `clock_config`; forbidden.rs checks it). Whoever changes the
+/// clocks changes this too.
+pub const CORE_HZ: u32 = HSI_HZ;
 
 /// Put the system clock on HSI 64 MHz with all bus prescalers at /1, whatever the previous
 /// stage left. No external clock is assumed: the HSE frequency of the Main is not in the HIS

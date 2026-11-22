@@ -15,5 +15,6 @@ pub mod keypath;
 pub mod logring;
 pub mod safe_state;
 pub mod supply;
+pub mod timekeep;
 pub mod tx;
 pub mod txpath;

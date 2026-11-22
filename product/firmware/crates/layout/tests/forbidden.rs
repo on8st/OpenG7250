@@ -237,3 +237,42 @@ fn every_task_is_spawned_once() {
     }
     assert!(seen.len() >= 4, "{seen:?}");
 }
+
+#[test]
+fn vendored_embassy_keeps_time_patch() {
+    let root = firmware_root().join("board");
+    let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap();
+    for p in ["vendor/embassy-stm32-0.6.0/src/time_driver/gp16.rs", "vendor/embassy-stm32-0.6.0/src/lib.rs"] {
+        assert!(read(p).contains("G7250 PATCH (time-over-flash)"), "{p}");
+    }
+    // The application keeps its time over every operation; every operation goes through it.
+    let main = read("app/src/main.rs");
+    assert!(main.contains("flash::around_operation(keep_time)"));
+    let flash = read("common/src/flash.rs");
+    for call in ["flash_erase_from_ram(", "flash_program_from_ram("] {
+        let calls: Vec<_> = flash.lines().filter(|l| l.contains(call) && !l.contains("fn ")).collect();
+        assert!(calls.len() == 1 && calls[0].contains("masked(|s|"), "{calls:?}");
+    }
+}
+
+/// The DWT cycle counter counts the core clock (`console::CORE_HZ`): the application's clock set-up
+/// keeps the core on the HSI, undivided. A change here needs CORE_HZ and timekeep.rs changed too.
+#[test]
+fn core_clock_is_the_undivided_hsi() {
+    let root = firmware_root().join("board");
+    let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap();
+    let main = read("app/src/main.rs");
+    let at = main.find("fn clock_config()").unwrap();
+    let body = &main[at..at + main[at..].find("\n}").unwrap()];
+    for line in ["c.rcc.hsi = Some(HSIPrescaler::DIV1);", "c.rcc.pll1 = None;", "c.rcc.sys = Sysclk::HSI;", "c.rcc.d1c_pre = AHBPrescaler::DIV1;"] {
+        assert_eq!(body.matches(line).count(), 1, "{line}");
+    }
+    for field in ["c.rcc.hsi =", "c.rcc.pll1 =", "c.rcc.sys =", "c.rcc.d1c_pre ="] {
+        assert_eq!(main.matches(field).count(), 1, "set once, in clock_config: {field}");
+    }
+    assert!(read("common/src/console.rs").contains("pub const CORE_HZ: u32 = HSI_HZ;"));
+    // Cycles are never converted with another clock.
+    for f in ["common/src/flash.rs", "common/src/safe.rs", "app/src/main.rs"] {
+        assert!(!read(f).contains("HSI_HZ"), "{f}");
+    }
+}

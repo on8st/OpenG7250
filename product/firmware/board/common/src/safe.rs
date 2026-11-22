@@ -188,7 +188,7 @@ pub fn boot_check_start() {
 pub fn boot_poll() {
     let due = cortex_m::interrupt::free(|cs| {
         let b = BOOT.borrow(cs).borrow();
-        b.on && cyc().wrapping_sub(b.last_cyc) >= (g7250_safety::txpath::PERIOD_MS as u32 - 1) * (crate::console::HSI_HZ / 1000)
+        b.on && cyc().wrapping_sub(b.last_cyc) >= (g7250_safety::txpath::PERIOD_MS as u32 - 1) * (crate::console::CORE_HZ / 1000)
     });
     if due {
         boot_check_now();
@@ -209,7 +209,7 @@ fn boot_check_now() {
 
 fn boot_check_inner() {
     let now_cyc = cyc();
-    let now_ms = (now_cyc / (crate::console::HSI_HZ / 1000)) as u64;
+    let now_ms = (now_cyc / (crate::console::CORE_HZ / 1000)) as u64;
     let seen = tx_path_mismatch();
     let hit = cortex_m::interrupt::free(|cs| {
         let mut b = BOOT.borrow(cs).borrow_mut();
@@ -218,7 +218,7 @@ fn boot_check_inner() {
         }
         b.last_cyc = now_cyc;
         if b.first_us.is_none() {
-            b.first_us = Some(now_cyc / (crate::console::HSI_HZ / 1_000_000));
+            b.first_us = Some(now_cyc / (crate::console::CORE_HZ / 1_000_000));
         }
         b.seen = seen.as_ref().map(pin_index);
         let r = b.check.observe(now_ms, false, seen);
@@ -278,7 +278,7 @@ pub fn start_cycle_count() {
 /// Microseconds since [`start_cycle_count`] (wraps after 67 s).
 pub fn us_since_boot_stage() -> u32 {
     // SAFETY: a read of DWT CYCCNT.
-    unsafe { core::ptr::read_volatile(0xE000_1004 as *const u32) / (crate::console::HSI_HZ / 1_000_000) }
+    unsafe { core::ptr::read_volatile(0xE000_1004 as *const u32) / (crate::console::CORE_HZ / 1_000_000) }
 }
 
 /// Re-apply the safe state proper (RF and power pins) without touching the parts that drivers

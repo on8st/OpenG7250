@@ -374,3 +374,48 @@ pub(crate) const fn get_driver() -> &'static RtcDriver {
 pub(crate) fn init(cs: CriticalSection) {
     DRIVER.init(cs)
 }
+
+// G7250 PATCH (time-over-flash): what `g7250_safety::timekeep` needs to count the half periods of
+// a flash operation, which runs with interrupts masked for longer than this driver's interrupt may
+// be late. Register access only; the rules are there, host-tested. Call all of it with interrupts
+// masked.
+/// Access to the time driver for the G7250 flash driver.
+pub mod g7250 {
+    use super::*;
+
+    /// The 16-bit counter.
+    pub fn cnt() -> u16 {
+        regs_gp16().cnt().read().cnt()
+    }
+
+    /// The overflow and the halfway flag.
+    pub fn flags() -> (bool, bool) {
+        let sr = regs_gp16().sr().read();
+        (sr.uif(), sr.ccif(0))
+    }
+
+    /// Clear those two flags; write 0 clears, 1 leaves the others (the alarm's too).
+    pub fn clear_flags() {
+        let mut sr = regs::SrGp16(0);
+        sr.set_uif(true);
+        sr.set_ccif(0, true);
+        regs_gp16().sr().write_value(regs::SrGp16(!sr.0));
+    }
+
+    /// Half periods counted.
+    pub fn period() -> u32 {
+        DRIVER.period.load(Ordering::Relaxed)
+    }
+
+    /// Set the half periods counted, then the alarm again as `set_time` does: one that is due
+    /// wakes its tasks now.
+    pub fn set_period(p: u32) {
+        critical_section::with(|cs| {
+            DRIVER.period.store(p, Ordering::SeqCst);
+            let at = DRIVER.alarm.borrow(cs).timestamp.get();
+            if !DRIVER.set_alarm(cs, at) {
+                DRIVER.trigger_alarm(cs);
+            }
+        })
+    }
+}

@@ -51,3 +51,13 @@ marker is missing.
   G7250 panic handler puts the safe state back and lets the watchdog reset the MCU.
 - `crates/layout/tests/forbidden.rs` (`vendored_embassy_keeps_supply_patch`) fails if the marker
   or the bound is missing.
+
+### Third change: `G7250 PATCH (time-over-flash)` in `src/time_driver/gp16.rs` and `src/lib.rs`
+
+- A module `g7250` with access to the driver's counter, its two half period flags and its period,
+  so that the application counts the half periods of a flash operation. A sector erase runs with
+  interrupts masked for seconds, and the driver's interrupt can count at most two of them
+  (32.768 ms each) afterwards: time was lost, and it could step back. The rules are in
+  `g7250_safety::timekeep`, host-tested. The driver's own code is not changed.
+- `crates/layout/tests/forbidden.rs` (`vendored_embassy_keeps_time_patch`) fails if the marker or
+  the application's use of it is missing.

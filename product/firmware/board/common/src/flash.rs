@@ -64,10 +64,10 @@ pub const T_ERASE_MAX_MS: u32 = 4_000;
 pub const LIMIT_MS: u32 = 2 * T_ERASE_MAX_MS;
 /// The same limit in core cycles (SYSCLK is HSI 64 MHz, no PLL); measured with the DWT cycle
 /// counter, which wraps after 67 s, far above the limit.
-const LIMIT_CYCLES: u32 = LIMIT_MS * (crate::console::HSI_HZ / 1000);
-const _: () = assert!((LIMIT_MS as u64) * (crate::console::HSI_HZ as u64 / 1000) < u32::MAX as u64 / 2);
+const LIMIT_CYCLES: u32 = LIMIT_MS * (crate::console::CORE_HZ / 1000);
+const _: () = assert!((LIMIT_MS as u64) * (crate::console::CORE_HZ as u64 / 1000) < u32::MAX as u64 / 2);
 /// The TX path check's 10 ms in cycles (A3.6b).
-const HOLD_CYCLES: u32 = g7250_safety::txpath::HOLD_MS as u32 * (crate::console::HSI_HZ / 1000);
+const HOLD_CYCLES: u32 = g7250_safety::txpath::HOLD_MS as u32 * (crate::console::CORE_HZ / 1000);
 /// DWT cycle counter (ARMv7-M): DEMCR.TRCENA (bit 24), DWT_CTRL.CYCCNTENA (bit 0), CYCCNT, and
 /// the Cortex-M7 DWT lock access register.
 const DEMCR: u32 = 0xE000_EDFC;
@@ -119,6 +119,33 @@ static SAMPLES: cortex_m::interrupt::Mutex<core::cell::Cell<Option<(Option<u8>, 
 /// Called when a flash operation ends (the application wakes its TX path check); 0 = none.
 static ON_END: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
+/// Called around the masked part of every erase and program with the operation to run (the
+/// application keeps its time over it, timekeep.rs); 0 = none (the boot stage has no time driver).
+static AROUND: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Register the hook around the masked part; it must call its argument exactly once.
+pub fn around_operation(f: fn(&mut dyn FnMut())) {
+    AROUND.store(f as usize, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Run one operation with interrupts masked; the hook runs masked too, from flash, before the
+/// operation starts and after it has ended or failed.
+fn masked(op: impl Fn(&mut g7250_safety::txpath::Sampler) -> u32, smp: &mut g7250_safety::txpath::Sampler) -> u32 {
+    let mut sr = TIMEOUT;
+    cortex_m::interrupt::free(|_| {
+        let mut run = || sr = op(smp);
+        match AROUND.load(core::sync::atomic::Ordering::Relaxed) {
+            0 => run(),
+            f => {
+                // SAFETY: only `around_operation` stores here, always this type.
+                let f: fn(&mut dyn FnMut()) = unsafe { core::mem::transmute::<usize, fn(&mut dyn FnMut())>(f) };
+                f(&mut run)
+            }
+        }
+    });
+    sr
+}
+
 /// Register the hook called after every erase or program.
 pub fn on_operation_end(f: fn()) {
     ON_END.store(f as usize, core::sync::atomic::Ordering::Relaxed);
@@ -149,7 +176,8 @@ fn operation_ended(s: &g7250_safety::txpath::Sampler) {
     }
 }
 
-fn cycles_now() -> u32 {
+/// The DWT cycle counter (running from the first flash operation on, [`cycle_counter_on`]).
+pub fn cycles_now() -> u32 {
     // SAFETY: a read of DWT CYCCNT.
     unsafe { core::ptr::read_volatile(DWT_CYCCNT as *const u32) }
 }
@@ -346,7 +374,7 @@ impl FlashIo for RawFlash {
             let mut smp = g7250_safety::txpath::Sampler::default();
             // SAFETY: the guard allowed [addr, addr+len) for this writer; the routine runs from
             // RAM and touches only FLASH bank 1, the target word and IWDG1 (and reads GPIO).
-            let sr = cortex_m::interrupt::free(|_| unsafe { flash_program_from_ram(a, &w, &pins, &mut smp) });
+            let sr = masked(|s| unsafe { flash_program_from_ram(a, &w, &pins, s) }, &mut smp);
             operation_ended(&smp);
             if sr & FAILED != 0 {
                 note_failure(sr);
@@ -374,7 +402,7 @@ impl FlashIo for RawFlash {
         let pins = ram_pins();
         let mut smp = g7250_safety::txpath::Sampler::default();
         // SAFETY: as above, for one whole sector the guard allowed.
-        let sr = cortex_m::interrupt::free(|_| unsafe { flash_erase_from_ram(snb, &pins, &mut smp) });
+        let sr = masked(|s| unsafe { flash_erase_from_ram(snb, &pins, s) }, &mut smp);
         operation_ended(&smp);
         if sr & FAILED != 0 {
             note_failure(sr);

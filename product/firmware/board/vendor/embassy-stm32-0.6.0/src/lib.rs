@@ -48,6 +48,12 @@ pub mod gpio;
 pub mod rcc;
 #[cfg(feature = "_time-driver")]
 mod time_driver;
+// G7250 PATCH (time-over-flash): see vendor/README.md.
+#[cfg(feature = "_time-driver")]
+pub mod g7250 {
+    //! Time driver access for the G7250 flash driver (interrupts masked).
+    pub use crate::time_driver::g7250::{clear_flags, cnt, flags, period, set_period};
+}
 pub mod timer;
 
 // Sometimes-present hardware
