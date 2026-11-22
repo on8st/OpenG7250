@@ -6,7 +6,7 @@
 use std::fmt::Write as _;
 
 use g7250_proto::discovery_host;
-use g7250_proto::mgmt::payload::{Identify, Version};
+use g7250_proto::mgmt::payload::{Config, Identify, Version};
 use g7250_proto::mgmt::Status;
 
 /// Meaning of a status code (Table A1-3).
@@ -359,9 +359,142 @@ pub fn p2_json(from: std::net::SocketAddr, r: &discovery_host::Reply) -> String 
         .end()
 }
 
+fn ip(a: [u8; 4]) -> String {
+    std::net::Ipv4Addr::from(a).to_string()
+}
+
+/// One log entry: sequence, uptime of the run that wrote it, text.
+pub fn log_human(e: &crate::reads::LogLine) -> String {
+    format!("{:>8}  {:>16}  {}", e.seq, uptime(e.uptime_ms), e.text)
+}
+
+pub fn log_json(e: &crate::reads::LogLine) -> String {
+    Json::obj().raw("seq", e.seq).raw("uptime_ms", e.uptime_ms).s("text", &e.text).end()
+}
+
+/// Tenths as `12.3`.
+fn tenths(v: u16) -> String {
+    format!("{}.{}", v / 10, v % 10)
+}
+
+/// `GET_CONFIG` for a person (Table M-3). Items the radio did not send are left out.
+pub fn config_human(c: &Config) -> String {
+    let mut s = String::new();
+    let mut line = |k: &str, v: String| {
+        let _ = writeln!(s, "{k:<19}{v}");
+    };
+    if let Some(m) = c.address_mode {
+        line(
+            "address mode",
+            match m {
+                0 => "DHCP (link-local fallback)".into(),
+                1 => "static".into(),
+                x => format!("{x} (unknown)"),
+            },
+        );
+    }
+    if let Some(a) = c.address {
+        line("address", ip(a));
+    }
+    if let Some(a) = c.netmask {
+        line("netmask", ip(a));
+    }
+    if let Some(a) = c.gateway {
+        line("gateway", ip(a));
+    }
+    if let Some(l) = c.default_level {
+        line("default level", l.to_string());
+    }
+    if let Some(r) = c.region {
+        line("region", r.to_string());
+    }
+    if let Some(t) = c.max_tx_time_ms {
+        line("max TX time", format!("{t} ms"));
+    }
+    for (i, l) in c.band_limit.iter().enumerate() {
+        if let Some(l) = l {
+            line(&format!("power tx_band[{i}]"), format!("{} W", tenths(*l)));
+        }
+    }
+    if let Some(v) = c.swr_s2_x100 {
+        line("SWR limit S2", format!("{}.{:02}", v / 100, v % 100));
+    }
+    if let Some(v) = c.pa_temp_t3 {
+        line("PA temp T3", format!("{} °C", tenths(v)));
+    }
+    if let Some(n) = c.allow_count {
+        let list: Vec<_> = c.allow[..n as usize].iter().map(|(a, p)| format!("{}/{p}", ip(*a))).collect();
+        line("TCI allow-list", if list.is_empty() { "empty (own subnet)".into() } else { list.join(", ") });
+    }
+    s
+}
+
+fn opt<T: std::fmt::Display>(v: Option<T>) -> String {
+    v.map(|x| x.to_string()).unwrap_or_else(|| "null".into())
+}
+
+pub fn config_json(c: &Config) -> String {
+    let bands = Json::array(
+        c.band_limit.iter().enumerate().filter_map(|(i, l)| l.map(|l| Json::obj().raw("tx_band", i).raw("limit_0_1w", l).end())),
+    );
+    let allow = c.allow_count.map(|n| {
+        Json::array(c.allow[..n as usize].iter().map(|(a, p)| Json::obj().s("address", &ip(*a)).raw("prefix", p).end()))
+    });
+    Json::obj()
+        .raw("address_mode", c.address_mode.map(|m| Json::str(if m == 0 { "dhcp" } else if m == 1 { "static" } else { "unknown" })).unwrap_or_else(|| "null".into()))
+        .raw("address", opt(c.address.map(|a| Json::str(&ip(a)))))
+        .raw("netmask", opt(c.netmask.map(|a| Json::str(&ip(a)))))
+        .raw("gateway", opt(c.gateway.map(|a| Json::str(&ip(a)))))
+        .raw("default_level", opt(c.default_level))
+        .raw("region", opt(c.region))
+        .raw("max_tx_time_ms", opt(c.max_tx_time_ms))
+        .raw("band_limits", bands)
+        .raw("swr_s2_x100", opt(c.swr_s2_x100))
+        .raw("pa_temp_t3_0_1c", opt(c.pa_temp_t3))
+        .raw("tci_allow_list", opt(allow))
+        .end()
+}
+
+/// `GET_CALIBRATION` for a person. Values are shown in hex: their encodings are fixed in
+/// Table P-1 only once each parameter is set from measurements (Annex P).
+pub fn calibration_human(c: &crate::reads::Calibration) -> String {
+    if c.is_none() {
+        return "no calibration set\n".into();
+    }
+    let mut s = format!("set id        {}\ndate          {}\nsource        {}\n", hex(&c.id), utc(c.date), c.source);
+    for (k, v) in &c.entries {
+        let _ = writeln!(s, "  {k:<10} {} bytes  {}", v.len(), hex(v));
+    }
+    s
+}
+
+pub fn calibration_json(c: &crate::reads::Calibration) -> String {
+    Json::obj()
+        .raw("present", !c.is_none())
+        .s("id", &hex(&c.id))
+        .raw("date", c.date)
+        .s("source", &c.source)
+        .raw("entries", Json::array(c.entries.iter().map(|(k, v)| Json::obj().s("id", k).s("value_hex", &hex(v)).end())))
+        .end()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_rendering() {
+        let mut c = Config { address_mode: Some(1), address: Some([192, 168, 1, 20]), region: Some(0), swr_s2_x100: Some(250), pa_temp_t3: Some(755), allow_count: Some(1), ..Default::default() };
+        c.band_limit[3] = Some(1000);
+        c.allow[0] = ([10, 0, 0, 0], 8);
+        let h = config_human(&c);
+        assert!(h.contains("static") && h.contains("192.168.1.20") && h.contains("power tx_band[3]   100.0 W"), "{h}");
+        assert!(h.contains("2.50") && h.contains("75.5 °C") && h.contains("10.0.0.0/8"), "{h}");
+        let j = config_json(&c);
+        assert!(j.contains(r#""band_limits":[{"tx_band":3,"limit_0_1w":1000}]"#), "{j}");
+        assert!(j.contains(r#""netmask":null"#), "{j}");
+        assert!(config_human(&Config { allow_count: Some(0), ..Default::default() }).contains("empty (own subnet)"));
+    }
 
     #[test]
     fn dates_and_uptime() {

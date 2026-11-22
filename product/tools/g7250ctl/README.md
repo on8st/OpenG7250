@@ -3,8 +3,9 @@
 Command-line tool for managing the firmware of a G7250 running the new firmware (G7250-P2),
 from the computer, without the controller and without AetherSDR.
 
-- Status: **milestone M1**: `discover` (management broadcast and P2), `info`, `stats`. Unit
-  tests against a local socket; the run against the reference model is next.
+- Status: **milestones M1 and M2**: `discover` (management broadcast and P2), `info`, `stats`;
+  `logs`, `config get`, `calibration get`. Unit tests against a local socket; the run against
+  the reference model is next.
 - Protocol: the management protocol of `product/spec/spec/network-interface.md` part A
   (A1.1a, A1.3–A1.10, A1.8, A1.8a), UDP 7251. This tool is its reference implementation; any gap
   found while building it is fixed in the spec first (decision 0026).
@@ -72,7 +73,9 @@ for Linux, macOS and Windows.
 | `abort <addr>` | abandon an update (not possible once a stock installation has started) | A1.8, A1.8a item 3 |
 | `rollback <addr>` | return to the image in the other slot | A1.8 |
 | `install-stock <addr> <image> --sha256 <hash>` | return to the stock firmware: one-way streaming installation of an owner-supplied stock image | A1.8a item 3 |
-| `logs <addr>` | read the log | A1.7 |
+| `logs <addr> [--from seq] [--follow] [--poll s]` | read the log in pages to its end; `--follow` keeps reading, across a restart of the radio (log kept: the sequence continues; log lost: from 0 again, 0068); a gap left by the ring is reported (done, M2) | A1.7 |
+| `config get <addr>` | every configuration item of Table M-3 (done, M2) | A1.6 |
+| `calibration get <addr>` | the calibration set: id, date, source, Table M-5 entries (values in hex until Table P-1 fixes their encodings) (done, M2) | A1.12 |
 
 `install-stock` asks for an explicit confirmation, because it cannot be undone once the first
 sector is erased: a broken transfer then needs the vendor's update path through the controller.

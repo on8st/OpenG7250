@@ -1,73 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ON8ST
 //! Host-side behaviour against a local socket (0070 point 1.1; part of T-A1-93 before the
-//! reference-model run). The fake radio below builds its replies by hand from Table A1-1, not
-//! with the protocol crate, so these tests do not share the crate's reading of the header.
+//! reference-model run). The fake radio is in `common`.
 
-use std::net::{SocketAddr, UdpSocket};
-use std::sync::mpsc;
+mod common;
+
+use std::net::UdpSocket;
 use std::thread;
 use std::time::Duration;
+
+use common::*;
 
 use g7250_proto::mgmt::payload::Identify;
 use g7250_proto::mgmt::Command;
 use g7250ctl::discover;
-use g7250ctl::transport::{Client, Error, Policy};
-
-/// Short timings so the tests run fast; same rules as the defaults.
-fn fast() -> Policy {
-    Policy { interval: Duration::from_millis(30), retransmits: 5, flash_window: Duration::from_millis(300) }
-}
-
-/// Table A1-1 header, by hand.
-fn reply(id: [u8; 4], cmd: [u8; 2], status: u16, payload: &[u8]) -> Vec<u8> {
-    let mut v = vec![0x47, 0x37, 0x4D, 0x47, 1, 0, 2, 0];
-    v.extend_from_slice(&id);
-    v.extend_from_slice(&cmd);
-    v.extend_from_slice(&status.to_be_bytes());
-    v.extend_from_slice(&(payload.len() as u16).to_be_bytes());
-    v.extend_from_slice(payload);
-    v
-}
-
-/// What the fake radio does with the n-th datagram it receives (0-based).
-type Behaviour = Box<dyn Fn(usize, &[u8]) -> Vec<Vec<u8>> + Send>;
-
-/// Start a fake radio on 127.0.0.1; every received datagram is reported on the channel.
-fn radio(behaviour: Behaviour) -> (SocketAddr, mpsc::Receiver<Vec<u8>>) {
-    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let addr = sock.local_addr().unwrap();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut buf = [0u8; 2048];
-        let mut n = 0;
-        sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        while let Ok((len, from)) = sock.recv_from(&mut buf) {
-            let d = buf[..len].to_vec();
-            for r in behaviour(n, &d) {
-                sock.send_to(&r, from).unwrap();
-            }
-            n += 1;
-            if tx.send(d).is_err() {
-                break;
-            }
-        }
-    });
-    (addr, rx)
-}
-
-fn id_of(d: &[u8]) -> [u8; 4] {
-    d[8..12].try_into().unwrap()
-}
-fn cmd_of(d: &[u8]) -> [u8; 2] {
-    d[12..14].try_into().unwrap()
-}
-
-fn client() -> Client {
-    let mut c = Client::with_socket(UdpSocket::bind("127.0.0.1:0").unwrap()).unwrap();
-    c.policy = fast();
-    c
-}
+use g7250ctl::transport::Error;
 
 #[test]
 fn request_layout_is_table_a1_1() {
@@ -207,33 +154,9 @@ fn status_and_version_are_reported() {
     assert_eq!(a.version, (2, 3));
 }
 
-/// Annex M Table M-2, built by hand: tag, length, value.
-fn identify_payload(mac_last: u8) -> Vec<u8> {
-    let mut p = Vec::new();
-    let mut tlv = |t: u8, v: &[u8]| {
-        p.push(t);
-        p.push(v.len() as u8);
-        p.extend_from_slice(v);
-    };
-    tlv(1, b"G7250");
-    tlv(2, &[0x02, 0, 0, 0, 0, mac_last]);
-    tlv(4, &[1, 2, 0x01, 0x2C]);
-    tlv(5, &[0, 0, 0, 0]);
-    tlv(9, &[1, 0]);
-    tlv(12, &[1, 0x01, 0x2C]);
-    tlv(13, &[1]);
-    tlv(14, &[192, 168, 1, 10, 0xC3, 0x50]);
-    tlv(16, &3_723_456u32.to_be_bytes());
-    tlv(18, &[1, 0, 44, 1, 1]);
-    tlv(23, &[2]);
-    tlv(25, &[1, 2, 3, 2, 6, 2]);
-    tlv(200, &[0xEE; 3]); // unknown tag: skipped (Annex M)
-    p
-}
-
 #[test]
 fn identify_reply_decodes() {
-    let (addr, _rx) = radio(Box::new(|_, d| vec![reply(id_of(d), cmd_of(d), 0, &identify_payload(0x55))]));
+    let (addr, _rx) = radio(Box::new(|_, d| vec![reply(id_of(d), cmd_of(d), 0, &identify_payload(0x55, 3_723_456))]));
     let mut c = client();
     let a = c.request(addr, Command::Identify, &[], None).unwrap();
     let i = Identify::decode(&a.payload).unwrap();
@@ -270,9 +193,9 @@ fn stats_reply_decodes() {
 
 #[test]
 fn discovery_collects_every_radio_once() {
-    let (a1, rx1) = radio(Box::new(|_, d| vec![reply(id_of(d), cmd_of(d), 0, &identify_payload(1))]));
+    let (a1, rx1) = radio(Box::new(|_, d| vec![reply(id_of(d), cmd_of(d), 0, &identify_payload(1, 0))]));
     // The second radio answers every copy; it must still be listed once.
-    let (a2, _rx2) = radio(Box::new(|_, d| vec![reply(id_of(d), cmd_of(d), 0, &identify_payload(2)); 2]));
+    let (a2, _rx2) = radio(Box::new(|_, d| vec![reply(id_of(d), cmd_of(d), 0, &identify_payload(2, 0)); 2]));
     let (_a3, _) = radio(Box::new(|_, _| vec![]));
     let mut c = client();
     let found = discover::identify_all(&mut c, &[a1, a2], Duration::from_millis(250)).unwrap();

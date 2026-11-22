@@ -6,6 +6,7 @@
 //! retransmission, discovery, and output.
 
 pub mod discover;
+pub mod reads;
 pub mod render;
 pub mod transport;
 

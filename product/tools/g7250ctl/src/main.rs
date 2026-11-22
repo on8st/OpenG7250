@@ -2,7 +2,7 @@
 // Copyright (C) 2026 ON8ST
 //! `g7250ctl` command line. See README.md.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -11,8 +11,9 @@ use g7250_proto::mgmt::payload::{self, Identify};
 use g7250_proto::mgmt::Command;
 use g7250_proto::{discovery, mgmt};
 
+use g7250ctl::reads::{self, Failure, LogEvent};
 use g7250ctl::render::{self, Json};
-use g7250ctl::transport::{Answer, Client, Policy};
+use g7250ctl::transport::{Client, Policy};
 use g7250ctl::{discover, exit, resolve};
 
 #[derive(Parser)]
@@ -60,6 +61,48 @@ enum Cmd {
         /// Radio address, `host` or `host:port` (port 7251 by default).
         addr: String,
     },
+    /// Read the log (READ_LOG, in pages; A1.7).
+    Logs {
+        /// Radio address, `host` or `host:port` (port 7251 by default).
+        addr: String,
+        /// First sequence number wanted; 0 = the oldest entry kept.
+        #[arg(long, default_value_t = 0, value_name = "SEQ")]
+        from: u32,
+        /// Keep reading new entries until interrupted; goes on across a restart of the radio.
+        #[arg(long, short)]
+        follow: bool,
+        /// Poll period of --follow, in seconds.
+        #[arg(long, default_value_t = 1.0, value_name = "S")]
+        poll: f64,
+    },
+    /// Read the configuration (GET_CONFIG; A1.6, Table M-3).
+    Config {
+        #[command(subcommand)]
+        op: ConfigOp,
+    },
+    /// Read the calibration set (GET_CALIBRATION; A1.12).
+    Calibration {
+        #[command(subcommand)]
+        op: CalibrationOp,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigOp {
+    /// Show every configuration item.
+    Get {
+        /// Radio address, `host` or `host:port` (port 7251 by default).
+        addr: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum CalibrationOp {
+    /// Show the calibration set: id, date, source and the Table M-5 entries.
+    Get {
+        /// Radio address, `host` or `host:port` (port 7251 by default).
+        addr: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -77,96 +120,29 @@ fn main() -> ExitCode {
 
 type Outcome = Result<u8, (u8, String)>;
 
+fn fail(f: Failure) -> (u8, String) {
+    (f.exit_code(), f.to_string())
+}
+
 fn client(policy: Policy) -> Result<Client, (u8, String)> {
     let mut c = Client::new().map_err(|e| (exit::ERROR, format!("cannot open a UDP socket: {e}")))?;
     c.policy = policy;
     Ok(c)
 }
 
-/// One request to one radio; a non-zero status is reported and ends the command.
-fn call(policy: Policy, addr: &str, cmd: Command, payload: &[u8]) -> Result<Answer, (u8, String)> {
+/// A client and the resolved radio address.
+fn open(policy: Policy, addr: &str) -> Result<(Client, SocketAddr), (u8, String)> {
     let to = resolve(addr, mgmt::PORT).map_err(|e| (exit::USAGE, e))?;
-    let mut c = client(policy)?;
-    let a = c.request(to, cmd, payload, None).map_err(|e| match e {
-        g7250ctl::transport::Error::NoReply { .. } => (exit::NO_REPLY, e.to_string()),
-        _ => (exit::ERROR, e.to_string()),
-    })?;
-    if !a.ok() {
-        let mut msg = format!("{} answered {cmd:?} with status {}: {}", a.from, a.status_code, render::status_text(a.status_code));
-        if a.status_code == 18 {
-            msg.push_str(&format!(" (radio speaks management {}.{}, this tool {}.{})", a.version.0, a.version.1, mgmt::VERSION_MAJOR, mgmt::VERSION_MINOR));
-        }
-        return Err((exit::STATUS, msg));
-    }
-    Ok(a)
-}
-
-fn decode_identify(a: &Answer) -> Result<Identify<'_>, (u8, String)> {
-    Identify::decode(&a.payload).map_err(|_| (exit::ERROR, format!("{}: IDENTIFY reply does not decode (Table M-2)", a.from)))
+    Ok((client(policy)?, to))
 }
 
 fn run(cli: &Cli, policy: Policy) -> Outcome {
     match &cli.cmd {
-        Cmd::Discover { wait, broadcast, port, p2 } => {
-            let wait = Duration::from_secs_f64(wait.max(0.0));
-            if *p2 {
-                let found = discover::p2_all(&discover::targets(broadcast, discovery::PORT), discovery::PORT, wait, policy.interval, policy.retransmits)
-                    .map_err(|e| (exit::ERROR, e.to_string()))?;
-                if cli.json {
-                    println!("{}", Json::array(found.iter().map(|f| render::p2_json(f.from, &f.reply))));
-                } else {
-                    for f in &found {
-                        println!("{}", render::p2_human(f.from, &f.reply));
-                    }
-                }
-                return if found.is_empty() { Err((exit::NO_REPLY, "no P2 radio answered".into())) } else { Ok(exit::OK) };
-            }
-            let mut c = client(policy)?;
-            let found = discover::identify_all(&mut c, &discover::targets(broadcast, *port), wait).map_err(|e| (exit::ERROR, e.to_string()))?;
-            let mut rows = Vec::new();
-            for a in &found {
-                let id = if a.ok() { Identify::decode(&a.payload).ok() } else { None };
-                rows.push((a, id));
-            }
-            if cli.json {
-                println!(
-                    "{}",
-                    Json::array(rows.iter().map(|(a, id)| {
-                        Json::obj()
-                            .s("address", &a.from.to_string())
-                            .raw("status", a.status_code)
-                            .raw("identify", id.as_ref().map(render::identify_json).unwrap_or_else(|| "null".into()))
-                            .end()
-                    }))
-                );
-            } else {
-                for (a, id) in &rows {
-                    match id {
-                        Some(i) => println!(
-                            "{:<21} {}  {}  fw {}.{}.{} slot {}  level {}  {}",
-                            a.from.to_string(),
-                            render::mac(&i.mac),
-                            String::from_utf8_lossy(i.model),
-                            i.running.major,
-                            i.running.minor,
-                            i.running.build,
-                            match i.running_slot {
-                                1 => "A",
-                                2 => "B",
-                                _ => "?",
-                            },
-                            i.active_level,
-                            if i.owner == ([0; 4], 0) { "free".to_string() } else { "in use".to_string() }
-                        ),
-                        None => println!("{:<21} status {}: {}", a.from.to_string(), a.status_code, render::status_text(a.status_code)),
-                    }
-                }
-            }
-            if found.is_empty() { Err((exit::NO_REPLY, "no G7250 answered".into())) } else { Ok(exit::OK) }
-        }
+        Cmd::Discover { wait, broadcast, port, p2 } => discover_cmd(cli.json, policy, *wait, broadcast, *port, *p2),
         Cmd::Info { addr } => {
-            let a = call(policy, addr, Command::Identify, &[])?;
-            let i = decode_identify(&a)?;
+            let (mut c, to) = open(policy, addr)?;
+            let a = reads::identify(&mut c, to).map_err(fail)?;
+            let i = Identify::decode(&a.payload).expect("checked by reads::identify");
             if cli.json {
                 println!("{}", render::identify_json(&i));
             } else {
@@ -175,7 +151,8 @@ fn run(cli: &Cli, policy: Policy) -> Outcome {
             Ok(exit::OK)
         }
         Cmd::Stats { addr } => {
-            let a = call(policy, addr, Command::GetStats, &[])?;
+            let (mut c, to) = open(policy, addr)?;
+            let a = reads::call(&mut c, to, Command::GetStats, &[]).map_err(fail)?;
             let mut entries = Vec::new();
             for e in payload::stats(&a.payload) {
                 let (name, v) = e.map_err(|_| (exit::ERROR, format!("{}: GET_STATS reply does not decode (Table M-1)", a.from)))?;
@@ -188,5 +165,112 @@ fn run(cli: &Cli, policy: Policy) -> Outcome {
             }
             Ok(exit::OK)
         }
+        Cmd::Logs { addr, from, follow, poll } => logs_cmd(cli.json, policy, addr, *from, *follow, *poll),
+        Cmd::Config { op: ConfigOp::Get { addr } } => {
+            let (mut c, to) = open(policy, addr)?;
+            let cfg = reads::get_config(&mut c, to).map_err(fail)?;
+            if cli.json {
+                println!("{}", render::config_json(&cfg));
+            } else {
+                print!("{}", render::config_human(&cfg));
+            }
+            Ok(exit::OK)
+        }
+        Cmd::Calibration { op: CalibrationOp::Get { addr } } => {
+            let (mut c, to) = open(policy, addr)?;
+            let cal = reads::get_calibration(&mut c, to).map_err(fail)?;
+            if cli.json {
+                println!("{}", render::calibration_json(&cal));
+            } else {
+                print!("{}", render::calibration_human(&cal));
+            }
+            Ok(exit::OK)
+        }
     }
+}
+
+fn logs_cmd(json: bool, policy: Policy, addr: &str, from: u32, follow: bool, poll: f64) -> Outcome {
+    let (mut c, to) = open(policy, addr)?;
+    // Without --follow, JSON is one array; with it, one object per line as entries come.
+    let mut collected = Vec::new();
+    let mut each = |ev: LogEvent| match ev {
+        LogEvent::Entry(e) => {
+            if json && !follow {
+                collected.push(render::log_json(&e));
+            } else if json {
+                println!("{}", render::log_json(&e));
+            } else {
+                println!("{}", render::log_human(&e));
+            }
+        }
+        LogEvent::Gap { wanted, got } => eprintln!("g7250ctl: entries {wanted}..{} are no longer in the log", got.wrapping_sub(1)),
+        LogEvent::Restarted => eprintln!("g7250ctl: the radio restarted and its log started empty; reading from 0"),
+    };
+    if !follow {
+        reads::read_log(&mut c, to, from, &mut each).map_err(fail)?;
+        drop(each);
+        if json {
+            println!("{}", Json::array(collected));
+        }
+        return Ok(exit::OK);
+    }
+    // Runs until interrupted (Ctrl-C ends the process).
+    let mut on_silence = |f: &Failure| eprintln!("g7250ctl: {f}; still following");
+    reads::follow_log(&mut c, to, from, Duration::from_secs_f64(poll.max(0.05)), &mut each, &mut on_silence, &|| false)
+        .map_err(fail)?;
+    Ok(exit::OK)
+}
+
+fn discover_cmd(json: bool, policy: Policy, wait: f64, broadcast: &[Ipv4Addr], port: u16, p2: bool) -> Outcome {
+    let wait = Duration::from_secs_f64(wait.max(0.0));
+    if p2 {
+        let found = discover::p2_all(&discover::targets(broadcast, discovery::PORT), discovery::PORT, wait, policy.interval, policy.retransmits)
+            .map_err(|e| (exit::ERROR, e.to_string()))?;
+        if json {
+            println!("{}", Json::array(found.iter().map(|f| render::p2_json(f.from, &f.reply))));
+        } else {
+            for f in &found {
+                println!("{}", render::p2_human(f.from, &f.reply));
+            }
+        }
+        return if found.is_empty() { Err((exit::NO_REPLY, "no P2 radio answered".into())) } else { Ok(exit::OK) };
+    }
+    let mut c = client(policy)?;
+    let found = discover::identify_all(&mut c, &discover::targets(broadcast, port), wait).map_err(|e| (exit::ERROR, e.to_string()))?;
+    let rows: Vec<_> = found.iter().map(|a| (a, if a.ok() { Identify::decode(&a.payload).ok() } else { None })).collect();
+    if json {
+        println!(
+            "{}",
+            Json::array(rows.iter().map(|(a, id)| {
+                Json::obj()
+                    .s("address", &a.from.to_string())
+                    .raw("status", a.status_code)
+                    .raw("identify", id.as_ref().map(render::identify_json).unwrap_or_else(|| "null".into()))
+                    .end()
+            }))
+        );
+    } else {
+        for (a, id) in &rows {
+            match id {
+                Some(i) => println!(
+                    "{:<21} {}  {}  fw {}.{}.{} slot {}  level {}  {}",
+                    a.from.to_string(),
+                    render::mac(&i.mac),
+                    String::from_utf8_lossy(i.model),
+                    i.running.major,
+                    i.running.minor,
+                    i.running.build,
+                    match i.running_slot {
+                        1 => "A",
+                        2 => "B",
+                        _ => "?",
+                    },
+                    i.active_level,
+                    if i.owner == ([0; 4], 0) { "free" } else { "in use" }
+                ),
+                None => println!("{:<21} status {}: {}", a.from.to_string(), a.status_code, render::status_text(a.status_code)),
+            }
+        }
+    }
+    if found.is_empty() { Err((exit::NO_REPLY, "no G7250 answered".into())) } else { Ok(exit::OK) }
 }
