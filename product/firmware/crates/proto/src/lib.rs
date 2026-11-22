@@ -8,6 +8,7 @@
 //! reference model (`product/refmodel/`) is independent and never used here.
 #![cfg_attr(not(test), no_std)]
 
+pub mod caprec_host;
 pub mod dhcp;
 pub mod discovery;
 pub mod discovery_host;
