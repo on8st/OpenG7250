@@ -51,6 +51,9 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   carry a version not used before; development builds are told apart by the image's SHA-256.
 - 0067 addendum (proposed; firmware question): a failed `UPDATE_VERIFY` names `missing-blocks`
   or `unreadable` before `hash`. A1.8 "Log names"; T-A1-88 has a `missing-blocks` case.
+- 0067 addendum (proposed; firmware question): a full store during a transfer. New status 64
+  (room made, nothing taken, send the block again with a new request id); the transfer goes on;
+  55 still discards it; a verify makes room and completes. Table A1-3, A1.8; T-A1-88.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 
