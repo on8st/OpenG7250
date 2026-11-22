@@ -1,6 +1,7 @@
 # 0068 — The log is kept over a reset without power loss
 
-- Status: proposed (2026-11-22); answers a testbench question on T-A1-34, with the firmware's
+- Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
+  proposed 2026-11-22; answers a testbench question on T-A1-34, with the firmware's
   input and two firmware questions on the start entry folded in (relayed by the openg7250
   session, 2026-11-22)
 - Date: 2026-11-22

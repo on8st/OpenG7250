@@ -1,6 +1,7 @@
 # 0069 — Reply time of requests that do flash work
 
-- Status: proposed (2026-11-22); answers a spec gap found by the emulator's flash model
+- Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
+  proposed 2026-11-22; answers a spec gap found by the emulator's flash model
   (relayed by the openg7250 session, 2026-11-22)
 - Date: 2026-11-22
 - Builds on: 0020 §24 (retransmission), §27 (stored reply), 0055 (flash work), 0063, 0065
