@@ -2058,7 +2058,7 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "slot.corrupt (proposed for the emulator); the both-slots case only on an emulator"
+    "needs slot.corrupt; the both-slots case only on an emulator"
    ],
    "timeout_s": 900
   },

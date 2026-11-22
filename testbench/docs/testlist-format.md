@@ -518,7 +518,7 @@ A test with target `emulator` is also run against the reference model. A test wi
      `flash.log` has `result: "cut"` with `words_written` or `fraction_done` (T-A1-83, T-A1-86).
      Armed with `during_erase` before a `RESTART`, it hits the first erase after it, whichever it
      is (T-A1-92 checks that it was the stale sector's).
-   - `flash.ecc {address, type: "double"|"single"}` → `{in_force}`: it answers when the mark is in
+   - `flash.ecc {address, type: "double"|"single"}` → `{address, type, in_force}`: it answers when the mark is in
      force, or after 3 s with `in_force: false`; a case with a false is not judged and the test does
      not pass. Each detection is a `flash.log` entry
      `{op: "ecc", type, address, boot}` (T-A1-87, T-A1-92). Limit: a double error shows only in the
@@ -543,7 +543,7 @@ A test with target `emulator` is also run against the reference model. A test wi
      `{"kind": "dac_force", channel, value, t_us}` (T-A3-61).
    - (v1.9) `flash.dump {address, len}` → `{hex}`: flash as it is now, at most 32768 bytes per
      call (T-A1-39, T-A1-92: the bench looks for the 32 bytes of a secret it set itself);
-     `flash.fill {address, len, data?}`: these bytes of flash become `data` (hex) repeated over
+     `flash.fill {address, len, data?}` → `{address, len}`: these bytes of flash become `data` (hex) repeated over
      `len`, which the length of `data` must divide, or erased without `data`; aligned to 32
      bytes, refused while the image does flash work, ECC consistent (an earlier
      `flash.ecc` there is gone), a 32-byte word of only FF is an erased one, no `flash.log` entry,

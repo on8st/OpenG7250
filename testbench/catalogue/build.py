@@ -276,7 +276,7 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-89": {"target": "emulator", "also": ["host"], "needs": ["time.advance"],
                 "notes": ["the tag 9 = 2 part needs slot.corrupt; the good-verify parts need a real package"]},
     "T-A1-90": {"target": "emulator", "also": ["host"], "needs": ["time.advance", "slot.corrupt"],
-                "notes": ["slot.corrupt (proposed for the emulator); the both-slots case only on an emulator"]},
+                "notes": ["needs slot.corrupt; the both-slots case only on an emulator"]},
     "T-A1-85": {"target": "emulator", "also": [], "needs": ["flash.fault"]},
     "T-A1-86": {"target": "emulator", "also": [], "needs": ["flash.log", "power.cut"]},
     "T-A1-87": {"target": "emulator", "also": [], "needs": ["flash.log", "flash.ecc", "power.cycle"],
