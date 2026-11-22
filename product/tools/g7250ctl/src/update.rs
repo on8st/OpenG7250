@@ -241,7 +241,7 @@ fn send_block(client: &mut Client, to: SocketAddr, secret: &Secret, file: &Packa
     }
 }
 
-fn send_blocks(client: &mut Client, to: SocketAddr, secret: &Secret, file: &PackageFile, from: u32, ev: &mut dyn FnMut(Event)) -> Result<(), Failure> {
+pub(crate) fn send_blocks(client: &mut Client, to: SocketAddr, secret: &Secret, file: &PackageFile, from: u32, ev: &mut dyn FnMut(Event)) -> Result<(), Failure> {
     for n in from..file.blocks() {
         send_block(client, to, secret, file, n, ev)?;
     }
@@ -249,7 +249,7 @@ fn send_blocks(client: &mut Client, to: SocketAddr, secret: &Secret, file: &Pack
 }
 
 /// Verify, with the "send every block again" rounds. Ok when the radio's hash is the header's.
-fn verify(client: &mut Client, to: SocketAddr, secret: &Secret, file: &PackageFile, retries: u32, ev: &mut dyn FnMut(Event)) -> Result<(), Failure> {
+pub(crate) fn verify(client: &mut Client, to: SocketAddr, secret: &Secret, file: &PackageFile, retries: u32, ev: &mut dyn FnMut(Event)) -> Result<(), Failure> {
     let mut round = 0;
     loop {
         let a = writes::authed_raw(client, to, secret, Command::UpdateVerify, &[])?;

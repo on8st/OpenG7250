@@ -2,6 +2,7 @@
 // Copyright (C) 2026 ON8ST
 //! `g7250ctl` command line. See README.md.
 
+mod cli_stock;
 mod cli_update;
 mod cli_write;
 
@@ -95,6 +96,8 @@ enum Cmd {
     Write(cli_write::WriteCmd),
     #[command(flatten)]
     Update(cli_update::UpdateCmd),
+    #[command(flatten)]
+    Stock(cli_stock::StockCmd),
 }
 
 #[derive(Subcommand)]
@@ -202,6 +205,7 @@ fn run(cli: &Cli, policy: Policy) -> Outcome {
         Cmd::Calibration { op: CalibrationOp::Clear { addr, secret } } => cli_write::calibration_clear(cli.json, policy, addr, secret),
         Cmd::Write(w) => cli_write::run(cli.json, policy, w),
         Cmd::Update(u) => cli_update::run(cli.json, policy, u),
+        Cmd::Stock(c) => cli_stock::run(cli.json, policy, c),
         Cmd::Calibration { op: CalibrationOp::Get { addr } } => {
             let (mut c, to) = open(policy, addr)?;
             let cal = reads::get_calibration(&mut c, to).map_err(fail)?;

@@ -3,11 +3,12 @@
 Command-line tool for managing the firmware of a G7250 running the new firmware (G7250-P2),
 from the computer, without the controller and without AetherSDR.
 
-- Status: **milestones M1 to M4**: `discover` (management broadcast and P2), `info`, `stats`;
+- Status: **milestones M1 to M5**: `discover` (management broadcast and P2), `info`, `stats`;
   `logs`, `config get`, `calibration get`; the authenticated commands (secrets, `config set`,
   `restart`, `factory-reset`, `switch-level`, `clear-log`, `calibration set`/`clear`); the
-  firmware update (`install`, `status`, `abort`, `rollback`, `package`). Unit
-  tests against a local socket; the run against the reference model is next.
+  firmware update (`install`, `status`, `abort`, `rollback`, `package`); the return to stock
+  (`return-to-stock`, `vendor-recovery`, `install-stock`). Unit tests against a local socket;
+  M1 to M4 were run against the reference model.
 - Protocol: the management protocol of `product/spec/spec/network-interface.md` part A
   (A1.1a, A1.3–A1.10, A1.8, A1.8a), UDP 7251. This tool is its reference implementation; any gap
   found while building it is fixed in the spec first (decision 0026).
@@ -163,14 +164,34 @@ for Linux, macOS and Windows.
 | `abort <addr> [--restart]` | abandon an update (not possible once a stock installation has started) (done, M4) | A1.8, A1.8a item 3 |
 | `rollback <addr> [--no-wait]` | return to the image in the other slot (done, M4) | A1.8 (0064) |
 | `package <file>` | check a package file and show its header; sends nothing (done, M4) | Annex M "Package file" |
-| `install-stock <addr> <image> --sha256 <hash>` | return to the stock firmware: one-way streaming installation of an owner-supplied stock image | A1.8a item 3 |
+| `install-stock <addr> <image> --sha256 <hash> [--yes] [--resume] [--save-package file]` | return to the stock firmware: one-way streaming installation of an owner-supplied stock image (done, M5) | A1.8a items 3, 5 |
+| `return-to-stock <addr>`, `vendor-recovery <addr>` | `RETURN_TO_STOCK`, `ENTER_VENDOR_RECOVERY`: reserved, always status 56 in this version; the tool says why and what to use instead (done, M5) | A1.8a items 2, 4 |
 | `logs <addr> [--from seq] [--follow] [--poll s]` | read the log in pages to its end; `--follow` keeps reading, across a restart of the radio (log kept: the sequence continues; log lost: from 0 again, 0068); a gap left by the ring is reported (done, M2) | A1.7 |
 | `config get <addr>` | every configuration item of Table M-3 (done, M2) | A1.6 |
 | `calibration get <addr>` | the calibration set: id, date, source, Table M-5 entries (values in hex until Table P-1 fixes their encodings) (done, M2) | A1.12 |
 
-`install-stock` asks for an explicit confirmation, because it cannot be undone once the first
-sector is erased: a broken transfer then needs the vendor's update path through the controller.
-The tool resumes a broken transfer as long as the installer still runs.
+## Return to stock (A1.8a)
+
+- `install-stock <addr> <image> --sha256 <hash>` takes the stock image as the vendor supplies it
+  and the SHA-256 the owner has for it. Before anything is sent it checks that the file has that
+  hash and fits the application area (sectors 1 to 7, 917504 bytes), and asks for confirmation
+  (`--yes` skips it). It builds the package header itself (Table M-4: component 1, hardware
+  0x00C8, version 0, slot 0) and sends `UPDATE_BEGIN` with the "foreign image" flag; the reply
+  must say one-way. `--save-package <file>` also writes header and image as a package file.
+- Status 56 to `UPDATE_BEGIN`: the gate is closed (until the drill F1 has shown the vendor path,
+  A1.8a item 3); nothing changed.
+- The blocks, the verify (55: every block again, `--verify-retries`) and `UPDATE_ACTIVATE`
+  with the flag repeated; the reply says "permanent" (item 5). Nothing is read back after it,
+  because the stock firmware does not speak this channel; a lost activation reply followed
+  by 10 s of silence is reported as "the stock firmware has most likely started".
+- A failure before the first erase (`UPDATE_STATUS` state 3): `UPDATE_ABORT`, and the radio
+  restarts into this firmware with its secret and configuration. After the first erase (state 4)
+  there is no way back: the tool never aborts (that would get 60), and the installer waits for
+  blocks with no time limit; `install-stock --resume` with the same image continues. Keep the
+  power on: after a power loss only the vendor's update path on the controller helps. `abort`
+  explains a 60 the same way.
+- The installer erases the management secret with the first sector; the radio returns to this
+  firmware only through the vendor's update path (item 9), with no secret set.
 
 ## Not covered
 

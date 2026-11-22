@@ -291,7 +291,7 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &WriteCmd) -> O
     }
 }
 
-fn confirm(prompt: &str) -> Result<(), (u8, String)> {
+pub(crate) fn confirm(prompt: &str) -> Result<(), (u8, String)> {
     if !std::io::stdin().is_terminal() {
         return Err((exit::USAGE, "not confirmed: give --yes when not run from a terminal".into()));
     }

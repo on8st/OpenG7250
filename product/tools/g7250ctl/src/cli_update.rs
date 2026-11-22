@@ -94,7 +94,7 @@ fn package_json(p: &PackageFile) -> String {
 }
 
 /// Progress on stderr (stdout holds the result).
-fn progress(json: bool) -> impl FnMut(Event) {
+pub(crate) fn progress(json: bool) -> impl FnMut(Event) {
     let mut last_pct = u32::MAX;
     move |e| {
         if json {
@@ -187,7 +187,15 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &UpdateCmd) -> 
         UpdateCmd::Abort { addr, secret, restart } => {
             let s = secret.load()?;
             let (mut c, to) = open(policy, addr)?;
-            let needed = update::abort(&mut c, to, &s).map_err(fail)?;
+            let needed = update::abort(&mut c, to, &s).map_err(|f| {
+                let is_60 = matches!(&f, g7250ctl::reads::Failure::Status(a, _) if a.status_code == 60);
+                let (code, text) = fail(f);
+                if is_60 {
+                    (code, format!("{text}: a stock installation has erased its first sector and cannot be abandoned (A1.8a item 3); complete it with `install-stock --resume`, or use the vendor's update path on the controller"))
+                } else {
+                    (code, text)
+                }
+            })?;
             if *restart {
                 writes::reset(&mut c, to, &s, g7250_proto::mgmt::Command::Restart).map_err(fail)?;
             }

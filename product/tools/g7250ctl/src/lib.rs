@@ -10,6 +10,7 @@ pub mod discover;
 pub mod reads;
 pub mod render;
 pub mod secret;
+pub mod stock;
 pub mod transport;
 pub mod update;
 pub mod writes;

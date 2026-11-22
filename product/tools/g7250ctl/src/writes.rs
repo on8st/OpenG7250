@@ -59,7 +59,7 @@ pub fn end_session(client: &mut Client, to: SocketAddr, secret: &Secret) -> Resu
 /// us: the HMAC was checked and the request not refused for authentication or another
 /// writer. A refused write of another kind is treated as possibly opening one (A1.10 does not
 /// say), so the session is ended either way.
-fn may_hold_session(code: u16) -> bool {
+pub(crate) fn may_hold_session(code: u16) -> bool {
     !matches!(code, 16..=19 | 32..=35)
 }
 
