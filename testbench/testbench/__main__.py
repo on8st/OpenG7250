@@ -47,6 +47,8 @@ def cmd_list(a) -> int:
             continue
         if a.implemented and t["id"] not in core.REGISTRY:
             continue
+        if a.boot == "per-list" and getattr(core.REGISTRY.get(t["id"]), "own_boot", False):
+            continue
         e = {k: t[k] for k in ("id", "reqs", "target", "scope")}
         e["title"] = t["title"]
         if t.get("needs"):

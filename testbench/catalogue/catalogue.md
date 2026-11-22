@@ -14,7 +14,7 @@ Spec `spec/draft` at `736f33d`, HIS `069ea0b`. Target: the minimum environment (
 | T-A1-01 | v1.0 | emulator |  |  | net.broadcast |  | A1 | The management port answers identification at both levels, also to a broadcast request. |
 | T-A1-02 | v1.0 | needs-radio | host | x | hw.observe |  | A1, A3.2 | No management request keys the radio, arms it, loosens a limit or switches an RF-path relay; `RESTART`, `FACTORY_RESET`, `SWITCH_LEVEL` and a C-3 change while armed and keyed unkey and disarm in the order of A3.2 before acting; every other request leaves `TX_STATE` and `TX_ARM_STATE` unchanged. |
 | T-A1-03 | v1.0 | emulator |  |  |  | P-NET-2 | A1 | A write without a valid HMAC response is refused and logged; a replayed exchange is refused. |
-| T-A1-04 | v1.0 | emulator |  |  |  |  | A1 | The first-secret window opens only in factory state, closes after its time and after a secret is set. |
+| T-A1-04 | v1.0 | emulator | host |  | power.cycle, time.advance |  | A1 | The first-secret window opens only in factory state, closes after its time and after a secret is set. |
 | T-A1-05 | v1.0 | needs-radio | host | x |  |  | A1 | An update is refused while armed or transmitting. |
 | T-A1-06 | v1.0 | emulator |  |  |  |  | A1 | An older image is refused without the downgrade flag and accepted, logged, with it. |
 | T-A1-07 | v1.0 | emulator |  |  |  |  | A1 | A block with a bad CRC-32 is rejected and requested again; an image for other hardware is refused before writing. |
@@ -26,7 +26,7 @@ Spec `spec/draft` at `736f33d`, HIS `069ea0b`. Target: the minimum environment (
 | T-A1-13 | v1.0 | emulator |  |  |  |  | A1 | Wrong magic is dropped; a short or length-mismatched request gets status 17; an unknown major version gets status 18; an unknown command gets status 16. |
 | T-A1-14 | v1.0 | emulator |  |  |  |  | A1, A1.4 | A repeated request (same request id, command and payload) gets the stored reply and is not executed twice; a request with the same id but another command or payload is executed and gets its own reply (A1.4). |
 | T-A1-15 | v1.0 | emulator |  |  | time.scale, net.hosts | P-NET-2 | A1, A1.10 | A second host gets status 35 for writes while a write session is held; the session ends after 60 s idle; `GET_STATS`, `IDENTIFY`, `GET_CHALLENGE`, other unauthenticated requests and a request with a wrong HMAC from the holder every 30 s do not keep it open, an authenticated, verified request from the holder does (A1.10). |
-| T-A1-16 | v1.0 | emulator |  |  | time.scale |  | A1 | The first-secret window closes 300 s after network up; a restart inside the window reopens it for 300 s. |
+| T-A1-16 | v1.0 | emulator | host |  | power.cycle, time.advance |  | A1 | The first-secret window closes 300 s after network up; a restart inside the window reopens it for 300 s. |
 | T-A1-17 | v1.0 | emulator |  |  |  |  | A1, A3, Table A3-0, 0039 | A region change (C-6) is refused with status 57 while a P2 session runs; the factory default is region 0, the ranges of Table A3-0 (0039). |
 | T-A1-18 | after-G6 | emulator |  |  |  |  | A1 | With a non-empty TCI allow-list, a TCI connection from an address outside it is refused and logged; the management port stays reachable. |
 | T-A1-19 | v1.0 | emulator |  |  |  |  | A1 | A request with the right magic and 12–17 bytes gets status 17; one below 12 bytes gets no reply. |

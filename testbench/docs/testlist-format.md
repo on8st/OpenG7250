@@ -556,8 +556,9 @@ A test with target `emulator` is also run against the reference model. A test wi
      (T-A1-88), and `reset.flags {flags: [...]}`: the reset flags of the next start, e.g. `[]` or
      `["software", "power-on"]` (T-A1-91). `reset.flags` is proposed for the emulator too. Started
      with `--f1 open` (off by default; endpoint `model.f1_gate`) the model also has
-     `installer.state {}` and `vendor.install {}` for the streaming installer of A1.8a item 3
-     (product/refmodel/README.md); no test of the bench uses them yet.
+     `installer.state {}` for the streaming installer of A1.8a item 3 (product/refmodel/README.md);
+     no test of the bench uses it yet. `vendor.install {}` (always) puts the model back as after the
+     vendor path: no secret, a new first-secret window (T-A1-16).
    - `slot.corrupt {slot: 1|2, offset: n, xor?: 0x01}` → `{slot, address, old, new, t_us}`: the
      byte at `offset` from the slot start (0x08040000, 0x08080000) XORed (default one bit) with
      its ECC kept consistent (it reads as changed data, no ECC error); `{slot, restore: true}`

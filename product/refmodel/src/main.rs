@@ -116,9 +116,9 @@ fn main() {
         }
     });
 
-    let mut fixtures = vec!["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay", "store.full", "reset.flags"];
+    let mut fixtures = vec!["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay", "store.full", "reset.flags", "vendor.install"];
     if cfg.f1_open {
-        fixtures.extend(["installer.state", "vendor.install"]);
+        fixtures.push("installer.state");
     }
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
@@ -353,8 +353,8 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 ("secret_stored", J::Bool(r.mgmt.secret.is_some())),
             ]))
         }
-        "vendor.install" if r.cfg.f1_open => {
-            // model only, --f1 open: the vendor path through the controller puts this firmware back
+        "vendor.install" => {
+            // model only: the vendor path through the controller puts this firmware back
             // (A1.8a item 9): a fresh radio without a secret, its first-secret window open
             let cfg = r.cfg.clone();
             *r = Radio::new(cfg, now);

@@ -73,7 +73,7 @@ def t_a1_53(ctx):
         c.authed("END_WRITE_SESSION", s)
 
 
-@test("T-A1-04", "T-A1-03", "T-A1-20", "T-A1-22")
+@test("T-A1-03", "T-A1-20", "T-A1-22")
 def t_a1_secret(ctx):
     """Claims the first-secret window, so it runs only where the window is open (fresh model)."""
     with m(ctx) as c, m(ctx) as c2:

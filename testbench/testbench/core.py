@@ -13,14 +13,16 @@ from typing import Callable
 REGISTRY: dict[str, Callable] = {}
 
 
-def test(*ids: str, trace_pins: list | None = None, trace_since: str = "start", whole=False):
+def test(*ids: str, trace_pins: list | None = None, trace_since: str = "start", whole=False, own_boot=False):
     """Register a test function for one or more catalogue ids. `trace_pins`: extra pins the
     hw.trace of this test watches; `trace_since`: "start" (judge pins from the trace start
     snapshot on) or "boot" (from the boot event + 20 us on, A3.6; 0045). `whole`: the claim needs
     every part, so a part that cannot run (PartSkip, Ctx.part) leaves no pass; a tuple: only where
-    the endpoint offers all these fixtures and the run gives these parameters."""
+    the endpoint offers all these fixtures and the run gives these parameters. `own_boot`: the test
+    cannot put back what it changes; not in lists for --boot per-list."""
     def deco(fn):
         fn.whole = whole
+        fn.own_boot = own_boot
         fn.trace_pins = trace_pins
         fn.trace_since = trace_since
         for i in ids:

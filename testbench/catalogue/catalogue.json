@@ -83,12 +83,19 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
-   "needs": [],
+   "also": [
+    "host"
+   ],
+   "needs": [
+    "power.cycle",
+    "time.advance"
+   ],
    "pending": [],
    "tx_part": false,
-   "notes": [],
-   "timeout_s": 90
+   "notes": [
+    "ends without a secret and without a window: never on a radio, and not in a per-list boot"
+   ],
+   "timeout_s": 1800
   },
   {
    "id": "T-A1-05",
@@ -304,13 +311,19 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
+   "also": [
+    "host"
+   ],
    "needs": [
-    "time.scale"
+    "power.cycle",
+    "time.advance"
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "ends without a secret and without a window: never on a radio, and not in a per-list boot"
+   ],
+   "timeout_s": 1800
   },
   {
    "id": "T-A1-17",

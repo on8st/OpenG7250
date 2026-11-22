@@ -17,7 +17,7 @@ import re
 import struct
 import time
 
-from .core import Ctx, RadioClock, test
+from .core import Ctx, RadioClock, Skip, test
 from .mgmt import CMD, FLASH_WINDOW_S, Mgmt, build, config_tlv, read_log, req_retransmit, send_retransmit, tlv
 from .p2 import Host, value, wait_reachable
 from .t_flash import SECTOR, flog, flog_start, in_range, is_erase, store_range, stretch
@@ -267,6 +267,107 @@ def erased_reset(ctx, s: bytes):
         if known:
             ctx.eq("neither store sector holds the old secret (failed erase finished)", where(ctx, secs, second), [])
     ctx.eq("SET_FIRST_SECRET", first_secret(ctx, os.urandom(32)), 0)
+
+
+# ---------------- T-A1-16, T-A1-04 ----------------
+WINDOW_S = 300
+
+
+@test("T-A1-16", "T-A1-04", own_boot=True)
+def t_a1_16(ctx: Ctx):
+    """A1.10 "First secret": the window opens only in factory state, lasts 300 s from network up; a
+    restart inside it opens a fresh one; once it ran out, or a secret is set, no restart reopens it.
+    It ends without a secret and without a window: the model is put back with vendor.install, an
+    emulator boots afresh for the next test, a radio would stay locked out, so never on one."""
+    from .t_update import advance
+    if ctx.kind not in ("refmodel", "emulator"):
+        raise Skip("leaves the radio without a secret and without a window: only on the reference model or an emulator")
+    for fx in ("power.cycle", "time.advance"):
+        ctx.need(fx)
+    if ctx.kind == "refmodel":
+        ctx.need("vendor.install")
+    restarts = ["power.cycle"] + (["reset.wdt"] if has(ctx, "reset.wdt") else [])
+    clock = RadioClock(ctx)
+
+    def window():
+        """IDENTIFY tags 11, 12: (secret set, window open, seconds left)."""
+        with Mgmt(ctx.net) as c:
+            c.clock = clock
+            r = req_retransmit(c, "IDENTIFY")
+            t = tlv(r["payload"]) if r and r["status"] == 0 else {}
+        w = t.get(12, b"")
+        ctx.got(t.get(11) and len(w) == 3, "IDENTIFY tags 11 and 12")
+        return t[11] == b"\x01", w[0] == 1, int.from_bytes(w[1:], "big")
+
+    def restarted(how: str):
+        ctx.fixture(how)
+        wait_reachable(ctx, how)
+
+    def closed(when: str, secret_set: bool):
+        st = first_secret(ctx, os.urandom(32))
+        ctx.eq(f"{when}: SET_FIRST_SECRET 36", st, 36)
+        ctx.eq(f"{when}: no window (tag 12), secret set (tag 11)", window()[:2][::-1], (False, secret_set))
+        return st == 36
+
+    def opened(when: str):
+        was, is_open, left = window()
+        return ctx.check(f"{when}: no secret, the window open with at most {WINDOW_S} s left", not was and is_open and 0 < left <= WINDOW_S,
+                         f"secret set {was}, open {is_open}, {left} s left")
+
+    try:
+        was, is_open, _ = window()
+        if not is_open:
+            s = secret(ctx)  # or Skip: no secret known and no window
+            with updating(ctx, s, restart_at_end=False) as u:
+                ctx.eq("FACTORY_RESET: 0", factory_reset(ctx, u)[0], 0)
+                u.s = b""
+            ctx.endpoint.get("_learned", {}).pop("secret", None)
+        if not opened("in factory state"):
+            return
+        for how in restarts:
+            advance(ctx, 100)
+            before = window()[2]
+            t0 = clock.now()
+            restarted(how)
+            if opened(f"{how} inside the window"):
+                left, took = window()[2], clock.now() - t0
+                ctx.check(f"{how} inside the window: a fresh {WINDOW_S} s", left >= WINDOW_S - took - 2, f"{before} s left before, {left} s "
+                          f"{took:.1f} s after the restart began")
+        s = os.urandom(32)
+        if not ctx.eq("SET_FIRST_SECRET in the window", first_secret(ctx, s), 0):
+            return
+        closed("after a secret is set", True)
+        for how in restarts:
+            restarted(how)
+            closed(f"a secret set, after {how}", True)
+        with updating(ctx, s, restart_at_end=False) as u:
+            if not ctx.eq("FACTORY_RESET: 0", factory_reset(ctx, u)[0], 0):
+                return
+            u.s = b""
+        ctx.endpoint.get("_learned", {}).pop("secret", None)
+        if not opened("after FACTORY_RESET"):
+            return
+        # the end of the window, against the seconds left the radio itself reports
+        t0, left = clock.now(), window()[2]
+        if left > 12:
+            advance(ctx, left - 10)
+            elapsed = clock.now() - t0 + (0 if clock.emu else left - 10)
+            is_open = window()[1]
+            if elapsed < left - 2:
+                ctx.check("the window open until its end", is_open, f"{elapsed:.1f} s into the {left} s left")
+            else:
+                ctx.notes.append("'open until its end' not judged: the radio's time ran past it")
+        advance(ctx, 15)
+        if not closed(f"{WINDOW_S} s after network up", False):
+            return
+        for how in restarts:
+            restarted(how)
+            closed(f"the window run out, after {how}: not reopened", False)
+        ctx.notes.append("restarts: " + ", ".join(restarts) + " (RESTART needs a secret)")
+    finally:
+        if has(ctx, "vendor.install"):
+            ctx.fixture("vendor.install")
+            ctx.endpoint.get("_learned", {}).pop("secret", None)
 
 
 # ---------------- T-A1-28 ----------------

@@ -137,6 +137,9 @@ CAL_SET = ([f"P-RF-{i}" for i in range(1, 6)] + [f"P-PWR-{i}" for i in range(1, 
 ECC_LIMIT = ("it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip "
              "gives on the read")
 OVERRIDES: dict[str, dict] = {
+    **{t: {"target": "emulator", "also": ["host"], "needs": ["power.cycle", "time.advance"],
+           "notes": ["ends without a secret and without a window: never on a radio, and not in a per-list boot"]}
+       for t in ("T-A1-04", "T-A1-16")},
     "T-A1-28": {"also": ["host"],
                 "notes": ["S2 and T3 (tags 9, 10) only with a calibration set that holds P-PWR-2; the FACTORY_RESET part only "
                           "from address mode DHCP (tag 1 = 0)"]},
@@ -429,7 +432,7 @@ TIMEOUTS: dict[str, int] = {
     "T-B8-10": 120, "T-A1-91": 1500, "T-A1-28": 240, "T-A1-39": 300, "T-A1-92": 2700,
     "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-76": 120,
     # requests that may do flash work: each may take 15 s (0069), a factory reset 17 s more
-    "T-A1-03": 90, "T-A1-04": 90, "T-A1-20": 90, "T-A1-22": 90, "T-A1-63": 240, "T-A1-64": 90, "T-A1-65": 120,
+    "T-A1-03": 90, "T-A1-04": 1800, "T-A1-16": 1800, "T-A1-20": 90, "T-A1-22": 90, "T-A1-63": 240, "T-A1-64": 90, "T-A1-65": 120,
     "T-A1-75": 120, "T-B5-21": 180,
     "T-B5-22": 1800, "T-A1-85": 300, "T-A1-86": 1800, "T-A1-87": 300, "T-EMU-IDLE": 120,
 }
