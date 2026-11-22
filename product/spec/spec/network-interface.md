@@ -64,7 +64,13 @@ A1.3–A1.10 as the only protocol. Its reference implementation is a standalone 
 tool, `g7250ctl` (planned at `product/tools/g7250ctl/`, GPL-3.0-or-later): identify, show version
 and state, install an image (new firmware or an owner-supplied stock image, A1.8a), verify,
 activate, abort, rollback, return to stock (the streaming installation of A1.8a item 3), read
-logs, set the first secret. It MUST pass every A1 conformance test of Annex X3 against the reference model (0019).
+logs, set the first secret. It MUST drive every command of Table A1-2 against the reference model
+(0019), and the host-side behaviour it implements MUST be tested there: request ids and
+retransmission (A1.4, with the flash-work window of 0069), authentication and the
+`CHANGE_SECRET` mask (A1.10), the update sequence (A1.8: the package for the slot not running,
+every block again after a failed verify), and the package file checks (Annex M "Package file")
+(T-A1-93; 0070). The T-A1 tests of Annex X3 are tests of the radio; `g7250ctl` may be the host
+that runs them.
 AetherSDR's firmware page uses the same protocol and follows the CLI (annex Q-O4). The very first
 install, on a radio still running stock firmware, cannot use this protocol; it goes once through
 the vendor path on the controller (A1.8a item 9; 0028).
@@ -127,7 +133,13 @@ Table A1-1 — Management message header (0020 §27)
   host for 5 s, for up to 4 hosts (IP address and port), evicting the least recently used;
   after expiry a repeated authenticated request fails with status 33, because its challenge
   is spent (0022 §11).
-- A host SHOULD retransmit after 500 ms without a reply, at most 5 times (0020 §24).
+- A host SHOULD retransmit after 500 ms without a reply, at most 5 times (0020 §24). For a
+  request that may do flash work (`SET_CONFIG`, `SET_FIRST_SECRET`, `CHANGE_SECRET`,
+  `FACTORY_RESET`, `SET_CALIBRATION`, `CLEAR_CALIBRATION`, `UPDATE_BEGIN`, `UPDATE_BLOCK`,
+  `UPDATE_ACTIVATE`, `ROLLBACK`) a host SHOULD instead keep retransmitting every 500 ms for at
+  least 16 s, because the reply may take up to `t_flash_reply` = 15 s (B2.3 "Flash work";
+  0069). Retransmissions that arrive during the flash work are repeats, answered from the
+  stored reply once it has ended and not executed again; a host uses the first reply.
 - A datagram with another magic MUST be dropped without reply. A datagram with the right
   magic whose type (byte 6) is not 1 (request) MUST be dropped without reply and counted, so
   that two radios never answer each other's replies (0022 §73 item 20). A datagram with the right
@@ -311,8 +323,39 @@ trips and faults, TX arm and disarm, host takeover, level changes, configuration
 the source address (including P2 Set IP, B3.9), every update step, authentication failures and
 port conflicts (L-2; 0007, Consequences). It is read in pages by sequence number (L-3). Size
 and persistence: the log is kept in RAM, its size is a firmware choice, and it is lost at
-power loss; whether it survives a warm reset is pending hardware (P-SYS-2; HIS-13, HIS-18)
-(0035). Packet, error and sequence-gap counters are read
+power loss (0035).
+
+- **Kept over a reset** (0068). The log ring MUST be kept over every reset without power
+  loss (commanded resets, the trial's own reset, watchdog and other resets), as the counters
+  of A3.5 are, in RAM not initialised at start (range the firmware's choice). Each entry
+  carries a check word; at start an entry that fails its check and every entry after it are
+  dropped. Sequence numbers continue from the last entry kept, so `READ_LOG` pages stay
+  consistent (L-3); after a power loss, or a ring that fails as a whole, the log starts empty
+  and sequence numbers start at 0. Kept entries keep their uptime of the previous run.
+- **The reason before a commanded reset** (0068). Before every reset it commands, after the
+  unkey and RF gone (A1.9 step 4), the firmware MUST log the reason as its last entry:
+  `restart: restart` (`RESTART`), `restart: factory-reset` (`FACTORY_RESET`),
+  `restart: update-activated slot <s> <version>` (`UPDATE_ACTIVATE`),
+  `restart: update-abandoned` (the 10-minute rule of A1.8, also after `UPDATE_ABORT`),
+  `restart: installer-abandoned` (A1.8a item 3, before the first erase),
+  `restart: trial-unconfirmed` (A1.8, 60 s), and for `ROLLBACK` the line of A1.8 "`ROLLBACK`".
+  Slots and versions are written as A1.8 "Log names" says.
+- **The start entry** (0068). At every start the boot stage MUST write, as the first entry of
+  the run, `start after <cause>: log kept` or `start after <cause>: log lost` ("lost": the ring
+  started empty); it is the only writer of the start entry, and the application continues the
+  ring. `<cause>` is named from the MCU's reset flags, read once per start by the boot stage
+  and then cleared; with several flags set, the first of `watchdog` (either watchdog),
+  `software`, `power-on`, `brown-out`, `pin`; `unknown` only when no flag is set. The start
+  entry, `IDENTIFY` tag 17, the reset counters of A3.5 and `WDT_RESET_AT_START` use that one
+  reading; whether the flags are trustworthy on this radio is P-SYS-2 (HIS-13, HIS-18). Right
+  after it the boot stage writes its outcomes: `boot: trial of slot <s>
+  started`, `boot: rollback to slot <s> (trial not confirmed)`, `boot: slot <s> refused:
+  <check>` (A1.8 "Boot-stage refusals").
+- **Pending hardware** (0068). Whether this RAM survives the stage before the boot stage is
+  P-SYS-9 (HIS-13), measured by the same radio check as the counters. Until it is set the log
+  MAY start empty after a reset (`log lost`); nothing else depends on it.
+
+Packet, error and sequence-gap counters are read
 with `GET_STATS` (0020 §19, §28).
 
 A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
@@ -726,6 +769,19 @@ A1.10 **Security on a LAN** (0008, Security):
   secret and carries the new secret masked as new secret XOR HMAC-SHA256(old secret, "G7NS"
   ‖ challenge) [RFC2104], so it does not cross the network in the clear. Apart from
   `SET_FIRST_SECRET`, the secret never crosses the network.
+- **The old secret in flash** (0069). `CHANGE_SECRET` MUST write the new secret by a
+  compaction into the other store sector, before its reply (its one erase, B2.3 "Flash
+  work"), so that the sector holding the old secret is no longer live and the live sector
+  never holds an older secret record. **Start check:** at every start, before the management
+  socket opens, the firmware MUST check the non-live store sector and, if it holds a secret
+  record other than the live secret (or any while the live generation has none), erase it once
+  and log `store: stale secret erased`; a non-live sector holding only the live secret is
+  left. With the next compaction, which erases the stale sector too, the old secret is not
+  readable from flash after the next start. If the store falls back to the non-live sector's
+  generation at that start (A1.6 "Store writes", newest commit word unreadable), that sector
+  is live and is kept; this is logged. `SET_FIRST_SECRET` never
+  replaces a secret (the window opens only while none is set), and `FACTORY_RESET` erases the
+  old secret from both sectors (B2.3).
 - **Replies are not authenticated** (known limit, 0022 §11): a host on the LAN can forge a
   reply. A tool SHOULD verify a write by reading the value back.
 - **First secret.** In factory state, during a one-time window after the first power-on or
@@ -1943,6 +1999,18 @@ holds may be lost, and a P2 session may end by its watchdog (B5.6) and be restar
   runs only as part of the management write that needs it;
 - the host learns of it from the management reply, which is sent after the flash work has
   ended, and from the update state (`UPDATE_STATUS`, `IDENTIFY`);
+- **one erase per request, and the reply time** (0069): a request MUST do at most one sector
+  erase and program at most one sector (128 KiB); a staging slot is erased sector by sector as
+  its blocks arrive, never as a whole in one request. A request that ends in a commanded reset
+  (A1.9) MAY do more after its reply and before the reset: at most two sector erases, the reset
+  following within 17 s of the reply, with the rules below; `FACTORY_RESET` uses this to erase
+  the old secret from both store sectors (A1.6a); an erase that fails there is logged (A1.7)
+  and finished at the next start before the management socket opens. The reply to a request
+  that does flash work MUST be sent within `t_flash_reply` = 15 s of its receipt, success or failure: an erase
+  of at most `t_erase_max`, one sector of 4096 words at 580 µs ([STM32H72x] Table 48, x8), a
+  failure declared at the latest 2 × `t_erase_max` into a hung operation, and 0.5 s. A request
+  from any host that arrives meanwhile is answered after the work, if its stored reply time
+  and the receive buffer allow; the host's retry covers it otherwise;
 - **during flash work** (0065), up to `t_erase_max`, the maximum 128 KiB sector erase time of
   the MCU's datasheet for the program/erase parallelism the firmware sets: 4 s at x8, 3.6 s at
   x16, 2.2 s at x32, so at most 4 s ([STM32H72x] Table 48; [HIS] HIS 10): the processor watchdog MUST NOT
@@ -3618,7 +3686,7 @@ Table M-2 — `IDENTIFY` TLVs (A1.5 items I-1 to I-6)
 | 14 | 6 | owner IP address and UDP port, zeros if none (I-4) |
 | 15 | 4 | `TX_ARM_STATE` word (I-4) |
 | 16 | 4 | uptime in ms (I-5) |
-| 17 | 1 | last reset cause, 0 unknown (I-5; P-SYS-2) |
+| 17 | 1 | last reset cause, from the reset flags as A1.7 "The start entry" names it: 0 unknown, 1 power-on, 2 software, 3 watchdog, 4 brown-out, 5 pin (I-5; P-SYS-2; 0068) |
 | 18 | 5 | versions: management major, minor; P2 (44); record major, minor (I-5) |
 | 19 | 1 | controller state: 0 unknown, 1 not detected, 2 detected (I-6) |
 | 20 | 1 | TX calibrated: record `tx` bit 4 (I-7; A1.12) |
@@ -3661,6 +3729,16 @@ Table M-4 — Package header (A1.8), the payload of `UPDATE_BEGIN` after the fla
 | 18–49 | SHA-256 of the image (for a foreign image: the value the owner supplies) |
 | 50–51 | signature length, 0 in this version (A1.8, U-4) |
 | 52 | target slot: 0 either slot (or a foreign image), 1 slot A, 2 slot B (A1.8, slot-linked images; 0043) |
+
+**Package file** (0071). A package file is the 53 bytes of Table M-4 followed immediately by the
+image and nothing else; its length is 53 + bytes 14–17, no signature bytes follow (bytes 50–51
+are 0, U-4), and the SHA-256 of bytes 18–49 is over the image bytes. Name, for an image of this
+firmware: `g7250-<major>.<minor>.<build>-slot-<a|b>.g7pk` (a convention; a host reads the header).
+The firmware build writes them, one per slot (0043); for a foreign image the host builds the
+header at install time (A1.8a) and MAY save it in the same layout. A host MUST refuse a file
+whose length, magic, header version, signature length or image hash does not match, before it
+sends anything. It sends bytes 0–52 as the `UPDATE_BEGIN` payload after the flags byte and the
+image as the blocks, block *n* being image bytes 512 *n* to 512 *n* + 511.
 
 Table M-5 — Calibration entries (A1.12)
 
@@ -3732,14 +3810,14 @@ Table P-1 — Pending hardware parameters
 | P-NET-2 | Whether the CH394 MAC address is unique per unit ([HIS] HIS 40) | A1.5, B3 | HIS-15 | the CH394 value is used as it is |
 | P-NET-3 | Whether the CH394 reports the destination address (unicast, directed or limited broadcast) of a received UDP datagram ([HIS] HIS 40, HIS 90) | B3.9 (Set IP) | HIS-14 | treat every Set IP as unicast or directed broadcast: own subnet only, any source while link-local (B3.9) |
 | P-SYS-1 | Pin states between reset and the boot stage's GPIO init (board pull resistors on the RF control pins of [HIS] HIS 85, and what the vendor bootloader leaves); whether they hold the safe levels in that window | A3.6, A3.5 | HIS-13 | outside this spec before the boot stage runs; the boot stage sets the safe state within 20 µs of its first instruction (A3.6; 0045) |
-| P-SYS-2 | Reset cause (power-on, software, watchdog), and whether the log survives a warm reset | A1.7, Table B8-3 `WDT_RESET_AT_START`, Annex M tag 17 | HIS-13, HIS-18 | reset cause reported as 0 (unknown); the log is lost at every reset |
+| P-SYS-2 | Whether the MCU's reset flags, read by the boot stage after the vendor bootloader has run, name the cause of each kind of reset (power-on, software, watchdog, brown-out, pin) correctly on this radio; the radio check gives each kind of reset and reads the start entry and tag 17. Whether the log survives a warm reset is part of P-SYS-9 (0068) | A1.7, Table B8-3 `WDT_RESET_AT_START`, Annex M tag 17 | HIS-13, HIS-18 | the cause is named from the flags as read (A1.7; 0068); nothing that locks or unlocks TX relies on the name |
 | P-SYS-3 | Power-up path without the controller (HIS 20 H1/H2) | part A scope (0029) | HIS-17 | none; observation T0-P2 |
 | P-SYS-4 | Behaviour of the stock controller's panel with a silent main unit | part A scope (0023) | HIS-17 | CTRL idle ([HIS] HIS 70) |
 | P-SYS-5 | Drill F1: the vendor bootloader starts an image of this firmware, and the vendor path installs the stock firmware into an empty application area; whether the vendor bootloader uses an application sector as staging, sector 6 in particular, which holds half of the store ([HIS] HIS 15 rule 5) | A1.8 (slot layout, store location; 0061), A1.8a items 3, 9 (0028) | HIS-19 | no first install before F1; foreign `UPDATE_BEGIN` gets status 56 |
 | P-SYS-6 | Power draw in idle, for a later standby (0029) | part A scope | — | quiet idle only |
 | P-SYS-7 | Start mode of the independent watchdog (IWDG1_SW option byte, [HIS] HIS 10, HIS 90) | A1.8a item 3 (installer), firmware | HIS-13 | the firmware and the installer service the watchdog whenever it may run |
 | P-SYS-8 | SEND and TUNER interfaces on the main unit: whether and how the firmware drives or reads them | A3.6, A3.7, B4.8 `atu` bit 4, `regmap_groups` bit 7 | HIS-09 | released (inactive) and not offered |
-| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`), [HIS] HIS 10, HIS 90 (`72591aa`, range at `069ea0b`: a system reset does not clear SRAM and AXI SRAM has a 64-bit ECC word, both MEDIUM; whether the stage before 0x08020000 writes the firmware's persist block is not known). The persist block is a range of AXI SRAM that the firmware chooses (currently 0x2401FF80–0x2401FFFF, 128 bytes, the range [HIS] `069ea0b` names); it holds every counter named here. Radio check: test T-A3-60 (the counters kept over a `RESTART` and over a processor watchdog reset, cleared by a power cycle) | A3.5 "Counters", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters are kept as far as the hardware keeps them, and nothing relies on them |
+| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`, and the log ring of A1.7, 0068), [HIS] HIS 10, HIS 90 (`72591aa`, range at `069ea0b`: a system reset does not clear SRAM and AXI SRAM has a 64-bit ECC word, both MEDIUM; whether the stage before 0x08020000 writes the firmware's persist block is not known). The persist block is a range of AXI SRAM that the firmware chooses (currently 0x2401FF80–0x2401FFFF, 128 bytes, the range [HIS] `069ea0b` names); it holds every counter named here. Radio check: test T-A3-60 (the counters kept over a `RESTART` and over a processor watchdog reset, cleared by a power cycle) | A3.5 "Counters", A1.7 "Kept over a reset", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters and the log are kept as far as the hardware keeps them, and nothing relies on them; the log may start empty (`log lost`) |
 | P-RX-1 | Physical receive paths behind the two receive tuning words ([HIS] HIS 80) | B2, B3, 0004 | HIS-02 | one DDC |
 | P-RX-2 | FPGA configuration frame (command 0x01, [HIS] HIS 80): meaning and safe values of the status byte 0 and of bytes 9–18 (per-rate calibration among them), position of the spectral-inversion flag; which tuning word (offset 1 or 5) is DDC0; I/Q order of the 0x04 samples; bus set-up, strobe width and turnaround. Set from the unit's factory calibration, confirmed on the radio ("P-RX-2 route" below; 0060). Encoding: flags (u8: bit 0 I and Q swapped, bit 1 spectrum inverted), tuning-word offset (u8: 1 or 5), the other receive tuning word (u32) and the word at offset 19 (u32), both from the capture at its lowest frequency and written unchanged, then per offered rate: rate index (u8), byte 0 (u8), bytes 9–18 (10 bytes). The flags act on the 0x04 samples, bit 0 first, then bit 1 (negate Q after any swap): both set give (Q, −I) | B6.1, B6.7, B4.8 `streams` | HIS-01, HIS-02 | DDC0 not offered (`streams` bit 0 = 0, `STREAM_STATUS` reason 2); no configuration frame written outside the A3.6 safe state |
 | P-TX-1 | The third tuning word as the transmit word ([HIS] HIS 80, HYPOTHESIS) | B10 (firmware) | HIS-02 | not applicable while TX is disabled |
@@ -3875,12 +3953,12 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-31 | `SWITCH_LEVEL` during a firmware update gets status 58. |
 | T-A1-32 | A region change while a P2 session runs and TX is armed gets status 57; on level 2 while armed it gets status 50 (after G6). |
 | T-A1-33 | `UPDATE_STATUS` while armed and keyed is answered with status 0 and changes nothing; every other update command gets status 50. |
-| T-A1-34 | After `UPDATE_BEGIN` and 10 min without an update command, the update is aborted and logged and the radio restarts into the running image; RX works afterwards (reference model). |
+| T-A1-34 | After `UPDATE_BEGIN` and 10 min without an update command, the update is aborted and the radio restarts into the running image. After the restart `READ_LOG` returns, in sequence with no gap, `restart: update-abandoned` with an uptime of the previous run within 5 s of `UPDATE_BEGIN` plus 10 min, then `start after software: log kept`, then the new run's entries; `UPDATE_STATUS` reports idle, `IDENTIFY` tag 10 reports 0, and RX works (reference model or emulator; on the radio once P-SYS-9 is set, before that only the start entry, `log kept` or `log lost`; A1.7, A1.8; 0068). |
 | T-A1-35 | While armed and keyed, a DHCP renewal with another address, a lease expiry, a DHCPNAK and an address conflict each unkey, drop the arm with `SESSION_CHANGED` and end the session, and the radio uses the new address (or stops using the old one) only after forward power is below `P_rf_off` or `t_rf_off` has passed; a renewal with the same address and netmask changes nothing (reference model; A1.11a). |
 | T-A1-36 | With the reference model holding forward power above `P_rf_off` after the unkey, `RESTART` while keyed unkeys and disarms, does not reset, logs the event, enters the fault state with `RF_NOT_KEYED` and replies with status 59 after `t_reset_wait` (2 s); `UPDATE_ACTIVATE` and `ROLLBACK` in the same state get 59 as well (A1.9). |
 | T-A1-37 | After `UPDATE_BEGIN` and 10 min without an update command, with forward power held above `P_rf_off`, the radio does not restart, logs it and stays in the update state and in fault (reference model; A1.8, A1.9). |
 | T-A1-38 | `RESTART`, `FACTORY_RESET` and `SWITCH_LEVEL` while keyed: the `TX_STATE` push showing unkeyed and the `TX_ARM_STATE` push showing the drop leave the radio before the management reply; a retransmission of `RESTART` with the same request id during the wait for RF gone is answered with status 1 and does not start a second reset (A1.9, A2.5a). |
-| T-A1-39 | After `FACTORY_RESET` with every item of Table A1-4 changed beforehand: C-1, C-2, C-5, C-6, C-7 and the TCI port are at their factory defaults, the first-secret window is open, and the C-3 limits, the log, the fault and reset counters, `TRIP_COUNT` and the firmware images are unchanged (A1.6a). |
+| T-A1-39 | After `FACTORY_RESET` with every item of Table A1-4 changed beforehand: C-1, C-2, C-5, C-6, C-7 and the TCI port are at their factory defaults, the first-secret window is open, and the C-3 limits, the log, the fault and reset counters, `TRIP_COUNT` and the firmware images are unchanged; on the emulator neither store sector holds the old secret after the reset, the reset comes within 17 s of the reply with every erase stretched to `t_erase_max`, and an erase failed after the reply is logged and finished at the next start before the management socket opens (A1.6a; B2.3 "Flash work"; 0069). |
 | T-A1-40 | An arm write and `UPDATE_BEGIN` sent so that they reach the radio within 1 ms of each other, repeated 1000 times: each time either the arm is confirmed and `UPDATE_BEGIN` gets status 50, or `UPDATE_BEGIN` succeeds and the arm is rejected with `MAINTENANCE`; never both (reference model; A1.8). |
 | T-A1-41 | With forward power held above `P_rf_off` (reference model), `FACTORY_RESET` while keyed gets status 59 and changes nothing of Table A1-4: the secret still works, no first-secret window opens, and C-1, C-2, C-6, C-7 and the TCI port are unchanged; the attempt is logged; without RF it restores Table A1-4 only with the reset (A1.6a). |
 | T-A1-42 | Identification requests from 200 sources inside the subnet at 10 per second each get at most 50 replies per second in total; from sources outside the subnet at most 10 per second; all management replies together at most 100 per second; the excess is counted (A1.10). |
@@ -3926,9 +4004,12 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-82 | After `UPDATE_ABORT`, a stray `UPDATE_BLOCK` (54), `UPDATE_VERIFY` (55), `UPDATE_ACTIVATE` (55), `UPDATE_BEGIN` (58), `ROLLBACK` (58) and a second `UPDATE_ABORT` (0) sent every 60 s do not delay the restart: the radio restarts into the running image 10 min (± 5 s) after the reply to the first `UPDATE_ABORT`, logs it, and RX works afterwards; the same with a `RESTART` after 2 min restarts at once. During a transfer, a block refused with 53 every 60 s does not delay the abandonment either (reference model or emulator; A1.8 "What restarts the timer", "After `UPDATE_ABORT`"; 0063). |
 | T-A1-83 | A power loss during the boot stage's trial-attempt write starts the trial image as a trial at the next start (or the previous image), and one during the self-confirmation write starts the previous image, logged; in each case one bootable image starts and the store is readable (emulator; A1.8 "Torn boot-record writes"; 0064). |
 | T-A1-84 | Running a confirmed image with a good other slot, `ROLLBACK` replies 0, logs the rollback line, resets and starts the other image as a trial, which confirms itself; with the other slot empty or bad it gets 55; during a trial boot 58; while armed 50; the started image that fails to confirm returns to the image that sent `ROLLBACK` (reference model or emulator; A1.8 "`ROLLBACK`"; 0064). |
-| T-A1-85 | With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported (emulator; B2.3 "Flash work"; 0065). |
+| T-A1-85 | With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported; the 55 reply to an erase that does not end comes within 15 s of the request (emulator; B2.3 "Flash work"; 0065, 0069). |
 | T-A1-86 | A power loss after each word of a store write, and at points during the erase of the other store sector in a compaction: after the restart each item holds its old or its new value, never a mix or an older value, a write answered 0 is kept, and the generation does not go back (emulator, flash.log; A1.6 "Store writes"; 0065). |
 | T-A1-87 | A double ECC error in a record of the live store sector, and one in the newest commit word: the store opens without a fault or reset, uses the older record or the previous generation, logs it, and later writes skip the word; an item with no readable record takes its Table A1-4 value (emulator, if it models flash ECC; A1.6 "Store writes"; 0065). |
+| T-A1-91 | Each commanded reset (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`, the trial's 60 s limit, the abandonment after `UPDATE_ABORT`) leaves its `restart:` line as the last entry before the start entry; after a trial that resets before confirming, `boot: rollback to slot <s> (trial not confirmed)` follows the start entry; a watchdog reset keeps the entries before it, followed by `start after watchdog: log kept`; a power cycle gives `start after power-on: log lost` with sequence numbers from 0; a kept ring with one entry corrupted keeps the entries before it and drops it and those after (reference model or emulator; A1.7 "Kept over a reset"; 0068). |
+| T-A1-92 | On the emulator, after the reply to `CHANGE_SECRET` the flash dump shows the new secret only in the live store sector and the old secret only in the other, stale sector; after a `RESTART`, and after a power cycle, neither sector holds the old secret, and flash.log shows the stale sector erased before the management socket opens, with `store: stale secret erased` in the log; a non-live sector that holds only the live secret is not erased at start; after a `FACTORY_RESET` whose second erase was made to fail, the next start erases the sector with the old secret; a `SET_CONFIG` that needs a compaction before any restart erases the stale sector then; each reply within 15 s with one erase per request; with the new generation's commit word made unreadable before the restart, the store falls back, keeps the stale sector and logs it (A1.10 "The old secret in flash"; B2.3 "Flash work"; 0069). |
+| T-A1-93 | `g7250ctl` against the reference model: every command of Table A1-2 is sent; a lost reply is retransmitted with the same request id and payload every 500 ms, 5 times, and for a request that may do flash work for at least 16 s, while every new request gets a new id; each authenticated request uses one fresh challenge and `CHANGE_SECRET` sends the masked secret; an update picks the package for the slot not running (tag 23), after a failed verify sends every block again in order with new ids, and confirms the result with `IDENTIFY` after the reset; package files with a wrong length, magic, header version, signature length or hash are refused before `UPDATE_BEGIN` (reference model; A1.1a; Annex M "Package file"; 0070, 0071). |
 | T-A1-88 | Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header, one of them an intact image with 32 bytes appended (header length and hash adjusted), which the log names `header`, not `integrity`. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending every block again with new request ids, in order, replaces the received data and the next verify succeeds; a block sent again alone is accepted and written, and `UPDATE_STATUS` shows any blocks the radio counts as not received again (reference model or emulator; A1.8 "Image check", "`UPDATE_VERIFY`"; 0067). |
 | T-A1-89 | `IDENTIFY` tag 9 for the other slot: 1 after a good verify; 0 from the first erase of `UPDATE_BEGIN`, after `UPDATE_ABORT` and after a failed verify, also after a restart; 2 when one byte of a confirmed other image is changed and the radio restarts; `ROLLBACK` with the other slot at 0 or 2 gets 55 and changes nothing; after a trial that failed to confirm itself, tag 9 for that slot stays 1 and `ROLLBACK` to it is accepted and starts it as a trial (reference model or emulator; A1.8 "Integrity in `IDENTIFY`"; 0067). |
 | T-A1-90 | One byte of the staged image changed after a good verify and `UPDATE_ACTIVATE`: the boot stage does not start the trial slot, starts the previous image, logs `boot: slot B refused: integrity` (slot named by its letter) and the rollback, and tag 10 reports 2; one byte of the confirmed active image changed with a good other slot: the other slot starts without a trial and the change is logged; both slots changed: the boot stage holds the safe state and the radio does not answer (emulator; A1.8 "Boot-stage refusals"; 0067). |
@@ -4099,7 +4180,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
 | T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost; in each case `GET_STATS` `hp_rx` rises by exactly the number of packets sent (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 "High Priority bursts", Table B2-2; 0053, 0054, 0058). |
 | T-B5-21 | While armed: `SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET` (as a commanded reset, A1.9) and `SET_CALIBRATION` get status 50 or first unkey and disarm as their rules say, and no flash work starts while TX is armed or keyed; unarmed, a `SET_CONFIG` is answered only after its flash write has ended (emulator; B2.3 "Flash work"; 0055). |
-| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run ("idle"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on; a pin of Table A3-6b forced to the other level during a stretched erase gives `TX_PATH_NOT_BLOCKED` no later than 20 ms after the erase ends, and one forced and released within the erase gives no fault unless the firmware's samples in its wait loop saw it for 10 ms (B2.3 "Flash work"; A3.6b; 0065, 0066). |
+| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run ("idle"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on; a pin of Table A3-6b forced to the other level during a stretched erase gives `TX_PATH_NOT_BLOCKED` no later than 20 ms after the erase ends, and one forced and released within the erase gives no fault unless the firmware's samples in its wait loop saw it for 10 ms Reply time (0069): with every word program also at its maximum, a host that retransmits every 500 ms for 16 s completes an update, a `SET_CONFIG` with a compaction and an installer sector; each reply comes within 15 s of the request, each request is executed once although its retransmissions arrive during the erase, and flash.log shows at most one sector erase per request (B2.3 "Flash work"; A1.4; A3.6b; 0065, 0066, 0069). |
 
 ### Streams (B6)
 
