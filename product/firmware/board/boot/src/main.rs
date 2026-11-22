@@ -134,8 +134,9 @@ fn main() -> ! {
             let active = before.map_or(Slot::A, |r| r.active);
             match c {
                 Choice::Trial(s) => note(format_args!("boot: trial of slot {} started", slot_name(s))),
+                // The active slot was refused: the other one, also if that was a used-up trial.
+                Choice::Boot(s) if s != active => note(format_args!("boot: fallback to slot {} (active slot refused, no trial)", slot_name(s))),
                 Choice::Boot(s) if trial => note(format_args!("boot: rollback to slot {} (trial not confirmed)", slot_name(s))),
-                Choice::Boot(s) if s != active => note(format_args!("boot: rollback to slot {}", slot_name(s))),
                 _ => {}
             }
             c

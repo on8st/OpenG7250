@@ -22,6 +22,10 @@ pub trait Updater {
     fn verify_note(&self) -> (u8, u32, Option<&'static str>) {
         (0, 0, None)
     }
+    /// The last `UPDATE_BLOCK` or `UPDATE_VERIFY` made room in the store (for the log, once).
+    fn room_made(&mut self) -> bool {
+        false
+    }
     /// `UPDATE_ACTIVATE`: the boot record names the staged image as the trial (U-5).
     fn activate(&mut self, now: u64) -> Result<(), Status>;
     /// `UPDATE_ABORT`; false if it had no effect (a second abort: 0063 addendum).

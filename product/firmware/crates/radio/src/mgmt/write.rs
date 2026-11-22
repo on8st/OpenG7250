@@ -59,8 +59,8 @@ pub enum Reason {
     FactoryReset,
     /// `UPDATE_ACTIVATE`: the slot (1 A, 2 B) and version that start as the trial.
     Activated { slot: u8, version: u32 },
-    /// `ROLLBACK`: its line (A1.8) was logged when it was accepted.
-    Rollback,
+    /// `ROLLBACK`: the line of A1.8 "`ROLLBACK`".
+    Rollback(super::Rollback),
     UpdateAbandoned,
     TrialUnconfirmed,
 }
@@ -74,7 +74,20 @@ impl Reason {
             Reason::Activated { slot, version: v } => {
                 r.log(uptime_ms, format_args!("restart: update-activated slot {} {}.{}.{}", slot_letter(slot), v >> 24, (v >> 16) & 0xFF, v & 0xFFFF));
             }
-            Reason::Rollback => {}
+            Reason::Rollback(super::Rollback { from: (f, fv), to: (t, tv) }) => r.log(
+                uptime_ms,
+                format_args!(
+                    "rollback commanded: slot {} {}.{}.{} to slot {} {}.{}.{}",
+                    slot_letter(f),
+                    fv >> 24,
+                    (fv >> 16) & 0xFF,
+                    fv & 0xFFFF,
+                    slot_letter(t),
+                    tv >> 24,
+                    (tv >> 16) & 0xFF,
+                    tv & 0xFFFF
+                ),
+            ),
             Reason::UpdateAbandoned => r.log(uptime_ms, format_args!("restart: update-abandoned")),
             Reason::TrialUnconfirmed => r.log(uptime_ms, format_args!("restart: trial-unconfirmed")),
         }
@@ -120,6 +133,13 @@ impl<W: Words> Server<W> {
             at += e.encode(&mut p[at..]).unwrap_or(0);
         }
         (Status::Ok, at)
+    }
+
+    /// `UPDATE_BLOCK` or `UPDATE_VERIFY` made room in the store (0067 addendum).
+    fn note_room(&mut self, now: u64, ctx: &mut Ctx<'_>) {
+        if ctx.update.room_made() {
+            self.log.push(now, format_args!("store: room made (update)"));
+        }
     }
 
     /// `SET_FIRST_SECRET` (A1.10): only in the one-time window while no secret is set.
@@ -295,7 +315,9 @@ impl<W: Words> Server<W> {
             }
             Command::UpdateBlock => {
                 let Ok(blk) = payload::Block::decode(payload) else { return (Status::Malformed, 0) };
-                match ctx.update.block(blk.number, blk.crc_ok(), blk.data, now) {
+                let r = ctx.update.block(blk.number, blk.crc_ok(), blk.data, now);
+                self.note_room(now, ctx);
+                match r {
                     Ok(received) => {
                         p[..8].copy_from_slice(&payload::block_reply(blk.number, received));
                         (Status::Ok, 8)
@@ -313,6 +335,7 @@ impl<W: Words> Server<W> {
                     return (Status::Malformed, 0);
                 }
                 let r = ctx.update.verify(now);
+                self.note_room(now, ctx);
                 // Every update step is logged (A1.7): a good verify with the slot and version,
                 // a failed one with the check that failed.
                 let (slot, v, failed) = ctx.update.verify_note();
@@ -324,8 +347,10 @@ impl<W: Words> Server<W> {
                         (Status::Ok, 32)
                     }
                     Err(s) => {
-                        if s == Status::VerificationFailed {
-                            self.log.push(now, format_args!("update verify failed: {}", failed.unwrap_or("no transfer")));
+                        // The check that failed; a write failure is logged as such, and a verify
+                        // with no transfer changes nothing.
+                        if let (Status::VerificationFailed, Some(word)) = (s, failed) {
+                            self.log.push(now, format_args!("update verify failed: {word}"));
                         }
                         (s, 0)
                     }
@@ -367,24 +392,9 @@ impl<W: Words> Server<W> {
                 match ctx.update.rollback(now) {
                     Ok(r) => {
                         self.reset_pending = true;
-                        let _ = self.effects.push(Effect::Restart(Reason::Rollback));
-                        let slot = slot_letter;
-                        let v = |x: u32| (x >> 24, (x >> 16) & 0xFF, x & 0xFFFF);
-                        let (f, t) = (v(r.from.1), v(r.to.1));
-                        self.log.push(
-                            now,
-                            format_args!(
-                                "rollback commanded: slot {} {}.{}.{} to slot {} {}.{}.{}",
-                                slot(r.from.0),
-                                f.0,
-                                f.1,
-                                f.2,
-                                slot(r.to.0),
-                                t.0,
-                                t.1,
-                                t.2
-                            ),
-                        );
+                        // Its line of A1.8 is the last entry before the reset (0068 addendum).
+                        let _ = self.effects.push(Effect::Restart(Reason::Rollback(r)));
+                        self.log.push(now, format_args!("ROLLBACK by {a}.{b}.{c}.{d}:{}", src.1));
                         (Status::Ok, 0)
                     }
                     Err(s) => (s, 0),

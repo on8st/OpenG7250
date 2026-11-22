@@ -170,6 +170,10 @@ impl Updater for Port<'_> {
         Ok(h)
     }
 
+    fn room_made(&mut self) -> bool {
+        self.u.stager.take_room_made()
+    }
+
     fn verify_note(&self) -> (u8, u32, Option<&'static str>) {
         let slot = g7250_update::stage::slot_code(self.u.run.slot.other());
         (slot, self.u.stager.staged_version().unwrap_or(0), self.u.stager.verify_failure())

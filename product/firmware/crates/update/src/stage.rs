@@ -53,6 +53,8 @@ pub enum Refusal {
     TooLarge = 61,
     /// The package's image is linked for the running slot (0043).
     RunningSlot = 63,
+    /// Nothing taken: room made in the store (0067 addendum).
+    RoomMade = 64,
 }
 
 /// `UPDATE_BEGIN` (flags and Table M-4), as plain values.
@@ -118,6 +120,8 @@ pub struct Stager {
     prepared: [bool; SECTORS],
     /// The staging mark of this transfer is set in the store (0067).
     marked: bool,
+    /// The store was compacted for a mark, for the log.
+    room_made: bool,
     count: u32,
     last_ms: u64,
     /// Why the last UPDATE_VERIFY failed, for the log (A1.7 "every update step"): "missing-blocks",
@@ -133,7 +137,7 @@ impl Default for Stager {
 
 impl Stager {
     pub const fn new() -> Self {
-        Stager { phase: Phase::Idle, offer: None, received: [0; BLOCKS / 32], next: 0, prepared: [false; SECTORS], marked: false, count: 0, last_ms: 0, verify_failed: None }
+        Stager { phase: Phase::Idle, offer: None, received: [0; BLOCKS / 32], next: 0, prepared: [false; SECTORS], marked: false, room_made: false, count: 0, last_ms: 0, verify_failed: None }
     }
 
     pub fn phase(&self) -> Phase {
@@ -233,7 +237,8 @@ impl Stager {
     /// transfer (so before the first erase), and again before a block that cancels a good verify
     /// (0067). A mark that cannot be written is a write failure (0043). UPDATE_BEGIN makes room
     /// for many marks; should it run out, the block makes room again (its one erase, 0069), takes
-    /// nothing and gets 55: the transfer goes on, and the block sent again is taken.
+    /// nothing and gets 64: the transfer goes on, and the block sent again is taken (0067
+    /// addendum). A 64 restarts the 10-minute timer.
     pub fn block_marked<S: FlashIo, F: FlashIo>(
         &mut self,
         store: Option<&mut Store<S>>,
@@ -257,7 +262,11 @@ impl Stager {
         });
         match set {
             Some(Ok(true)) => self.marked = true,
-            Some(Ok(false)) => return Err(Refusal::VerifyFailed),
+            Some(Ok(false)) => {
+                self.room_made = true;
+                self.last_ms = now;
+                return Err(Refusal::RoomMade);
+            }
             _ => {
                 self.phase = Phase::Discarded;
                 return Err(Refusal::VerifyFailed);
@@ -266,17 +275,25 @@ impl Stager {
         self.block(io, run, n, crc_ok, data, now)
     }
 
-    /// `UPDATE_VERIFY` with the staging mark: a good verify clears it before it counts (0067). A
-    /// verify never erases (0069): the block that set the mark left room to clear it, and without
-    /// room it gets 55.
+    /// `UPDATE_VERIFY` with the staging mark: a good verify clears it before it counts (0067),
+    /// making room for that record if it must (its one erase; 0067 addendum). A record that
+    /// cannot be written is a write failure: the transfer is discarded (0043).
     pub fn verify_marked<S: FlashIo, F: FlashIo>(&mut self, store: Option<&mut Store<S>>, io: &mut F, run: &Running, now: u64) -> Result<[u8; 32], Refusal> {
         let hash = self.verify(io, run, now)?;
         if self.marked {
-            match store.filter(|s| s.free() >= MARK).map(|s| crate::boot::set_staging(s, None)) {
+            let mut made = false;
+            let cleared = store.map(|s| {
+                if s.free() < MARK {
+                    s.compact()?;
+                    made = true;
+                }
+                crate::boot::set_staging(s, None)
+            });
+            self.room_made |= made;
+            match cleared {
                 Some(Ok(())) => self.marked = false,
                 _ => {
-                    self.phase = Phase::Receiving;
-                    self.verify_failed = Some("store");
+                    self.phase = Phase::Discarded;
                     return Err(Refusal::VerifyFailed);
                 }
             }
@@ -402,6 +419,11 @@ impl Stager {
             return Err("header");
         }
         Ok(hash)
+    }
+
+    /// A block or a verify made room in the store since the last call (for the log).
+    pub fn take_room_made(&mut self) -> bool {
+        core::mem::take(&mut self.room_made)
     }
 
     /// The staging mark is set: blocks were taken and no good verify ended them (0067).

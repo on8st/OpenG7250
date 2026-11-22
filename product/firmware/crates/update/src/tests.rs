@@ -960,33 +960,63 @@ fn one_erase_per_update_request_0069() {
 }
 
 #[test]
-fn a_block_without_room_for_its_mark_makes_room_and_is_refused_0069() {
+fn store_full_during_a_transfer_64_and_a_verify_that_makes_room_t_a1_88() {
     let (s, _) = installed(true); // the store full but for less than 64 bytes
     let img = image(Slot::B, V2, 2000, 7);
     let run = running(Slot::A, V1);
     let s = core::cell::RefCell::new(s);
     let mut io = Shared(&s);
     let mut st = Store::open(Shared(&s), Writer::Application { running: Slot::A }).unwrap();
-    while st.free() >= 64 {
-        st.put(Kind::Config, 1, &[7u8; 8]).unwrap();
-    }
+    let fill = |st: &mut Store<Shared>, left: u32| {
+        while st.free() >= left {
+            st.put(Kind::Config, 1, &[7u8; 8]).unwrap();
+        }
+    };
+    fill(&mut st, 64);
     let mut g = Stager::new();
     let n = g.begin(&offer(&img, V2), &run, 0).unwrap(); // no reserve here
     let e = s.borrow().erases;
-    assert_eq!(g.block_marked(Some(&mut st), &mut io, &run, 0, true, block_of(&img, 0), 1), Err(Refusal::VerifyFailed));
+    assert_eq!(g.block_marked(Some(&mut st), &mut io, &run, 0, true, block_of(&img, 0), 400_000), Err(Refusal::RoomMade));
+    assert_eq!(Refusal::RoomMade as u16, 64);
+    assert!(g.take_room_made() && !g.take_room_made());
     assert_eq!((s.borrow().erases - e, g.status()), (1, (1, 0, 4)), "one erase, nothing taken, the transfer goes on");
+    // A 64 restarts the timer.
+    assert!(!g.abandoned(400_000 + stage::ABANDON_MS - 1) && g.abandoned(400_000 + stage::ABANDON_MS));
+    for k in 0..n {
+        g.block_marked(Some(&mut st), &mut io, &run, k, true, block_of(&img, k), 400_001).unwrap();
+    }
+    // The store filled up meanwhile: a block gets 64 and loses nothing; a verify makes the room
+    // itself (its one erase) and completes.
+    fill(&mut st, 32);
+    let e = s.borrow().erases;
+    assert_eq!(g.block_marked(Some(&mut st), &mut io, &run, 1, true, block_of(&img, 1), 400_002), Err(Refusal::RoomMade));
+    assert_eq!((s.borrow().erases - e, g.status()), (1, (1, 4, 4)));
+    fill(&mut st, 32);
+    assert!(g.take_room_made());
+    let e = s.borrow().erases;
+    assert!(g.verify_marked(Some(&mut st), &mut io, &run, 400_003).is_ok());
+    assert_eq!((s.borrow().erases - e, g.take_room_made(), g.verify_failure()), (1, true, None));
+    drop(st);
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 1);
+}
+
+#[test]
+fn a_verify_whose_mark_cannot_be_written_discards_the_transfer_0043() {
+    let (s, _) = installed(false);
+    let img = image(Slot::B, V2, 2000, 7);
+    let run = running(Slot::A, V1);
+    let s = core::cell::RefCell::new(s);
+    let mut io = Shared(&s);
+    let mut st = Store::open(Shared(&s), Writer::Application { running: Slot::A }).unwrap();
+    let mut g = Stager::new();
+    let n = g.begin(&offer(&img, V2), &run, 0).unwrap();
     for k in 0..n {
         g.block_marked(Some(&mut st), &mut io, &run, k, true, block_of(&img, k), 1).unwrap();
     }
-    // No room for the verify's mark: 55, no erase; a block makes room; then it succeeds.
-    while st.free() >= 32 {
-        st.put(Kind::Config, 1, &[7u8; 8]).unwrap();
-    }
-    let e = s.borrow().erases;
+    s.borrow_mut().budget = Some(0);
     assert_eq!(g.verify_marked(Some(&mut st), &mut io, &run, 2), Err(Refusal::VerifyFailed));
-    assert_eq!((g.verify_failure(), s.borrow().erases - e, g.status().0), (Some("store"), 0, 1));
-    let e = s.borrow().erases;
-    assert_eq!(g.block_marked(Some(&mut st), &mut io, &run, 1, true, block_of(&img, 1), 3), Err(Refusal::VerifyFailed));
-    assert_eq!((s.borrow().erases - e, g.status()), (1, (1, 4, 4)), "a block makes the room, nothing lost");
-    assert!(g.verify_marked(Some(&mut st), &mut io, &run, 3).is_ok());
+    assert_eq!((g.phase(), g.verify_failure()), (Phase::Discarded, None));
+    drop(st);
+    s.borrow_mut().power_on();
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 0);
 }

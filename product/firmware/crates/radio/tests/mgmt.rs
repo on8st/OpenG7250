@@ -14,6 +14,9 @@ struct Model {
     activated: bool,
     fail_writes: bool,
     trial: bool,
+    /// The next block finds the store full (64, once).
+    full: bool,
+    room: bool,
 }
 
 impl Updater for Model {
@@ -39,6 +42,10 @@ impl Updater for Model {
         if n != self.received {
             return Err(Status::BlockOutOfOrder);
         }
+        if core::mem::take(&mut self.full) {
+            self.room = true;
+            return Err(Status::RoomMade);
+        }
         if self.fail_writes {
             self.received = 0;
             return Err(Status::VerificationFailed);
@@ -52,6 +59,9 @@ impl Updater for Model {
         }
         self.verified = true;
         Ok([0x5A; 32])
+    }
+    fn room_made(&mut self) -> bool {
+        core::mem::take(&mut self.room)
     }
     fn verify_note(&self) -> (u8, u32, Option<&'static str>) {
         (2, 0x0001_0002, (!self.verified).then_some("missing-blocks"))
@@ -554,10 +564,15 @@ fn rollback_is_logged_with_slots_and_versions() {
     assert!(s.take_effects().is_empty());
     w.up.trial = false;
     assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::Rollback, &[], 1000).0, Status::Ok);
-    assert_eq!(s.take_effects().as_slice(), &[Effect::Restart(Reason::Rollback)]);
+    let fx = s.take_effects();
+    assert!(matches!(fx.as_slice(), [Effect::Restart(Reason::Rollback(_))]));
+    let Effect::Restart(reason) = fx[0].clone() else { unreachable!() };
+    s.log.push(1_500, format_args!("something in between"));
+    reason.log(&mut s.log.0, 1_600);
     let log = w.call(&mut s, HOST, &req(30, Command::ReadLog, &[0, 0, 0, 0]), 2000).unwrap().2;
     let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
     assert_eq!(e.last().unwrap(), "rollback commanded: slot A 0.1.2 to slot B 0.1.1");
+    assert_eq!(e.iter().filter(|t| t.contains("rollback commanded")).count(), 1, "once, as the last entry");
 }
 
 #[test]
@@ -704,7 +719,7 @@ fn reasons_before_a_commanded_reset_0068() {
     assert_eq!(last(Reason::Activated { slot: 2, version: 0x0001_0002 }), "restart: update-activated slot B 0.1.2");
     assert_eq!(last(Reason::UpdateAbandoned), "restart: update-abandoned");
     assert_eq!(last(Reason::TrialUnconfirmed), "restart: trial-unconfirmed");
-    assert_eq!(last(Reason::Rollback), "before", "its line was logged when it was accepted");
+    assert_eq!(last(Reason::Rollback(g7250_radio::mgmt::Rollback { from: (2, 0x0001_0002), to: (1, 0x0001_0001) })), "rollback commanded: slot B 0.1.2 to slot A 0.1.1");
 }
 
 #[test]
@@ -735,4 +750,26 @@ fn read_log_goes_on_over_a_reset_t_a1_34() {
     // From a sequence number on.
     let log = w.call(&mut s, HOST, &req(2, Command::ReadLog, &[0, 0, 0, 3]), 8_000).unwrap().2;
     assert_eq!(mgmt::payload::log_entries(&log).count(), 1);
+}
+
+#[test]
+fn store_full_64_is_logged_and_a_repeat_gets_it_again() {
+    // 0067 addendum, T-A1-88: 64 from the updater; a repeat with the same id is answered from the
+    // stored reply; a new request is a new try.
+    assert_eq!(Status::from_u16(64), Some(Status::RoomMade));
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::UpdateBegin, &package(1300, 2), 0).0, Status::Ok);
+    w.up.full = true;
+    let ch = w.call(&mut s, HOST, &req(20, Command::GetChallenge, &[]), 1000).unwrap().2;
+    let ch: [u8; 16] = ch.try_into().unwrap();
+    let mut b = [0u8; 1000];
+    let n = mgmt::build_request(&mut b, 21, Command::UpdateBlock, &block(0, &[0; 512]), Some((w.secret.as_ref().unwrap(), &ch))).unwrap();
+    assert_eq!(w.call(&mut s, HOST, &b[..n], 1001).unwrap().1, Status::RoomMade);
+    assert_eq!(w.call(&mut s, HOST, &b[..n], 1500).unwrap().1, Status::RoomMade, "a repeat: the stored 64");
+    assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::UpdateBlock, &block(0, &[0; 512]), 2000).0, Status::Ok, "a new request");
+    let log = w.call(&mut s, HOST, &req(40, Command::ReadLog, &[0, 0, 0, 0]), 3000).unwrap().2;
+    let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
+    assert_eq!(e.iter().filter(|t| *t == "store: room made (update)").count(), 1, "{e:?}");
 }
