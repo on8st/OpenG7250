@@ -50,7 +50,9 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   variable `G7250_SECRET`, never from the command line. The tool never prints or logs it.
 - `set-secret --generate <file>` and `change-secret --generate <file>` write a new random
   secret to a new file (an existing file is never overwritten; mode 0600 on Unix) before
-  sending it.
+  sending it. On Windows the tool does not restrict the file: it takes the access rights of
+  its folder, and the tool says so when it writes one. Keep secret files in your own profile
+  folder, not in a shared one.
 - `SET_FIRST_SECRET` carries the secret in the clear (spec A1.10, known risk): set it on a
   network you trust. `CHANGE_SECRET` sends it masked; afterwards the tool sends
   `END_WRITE_SESSION` signed with the new secret, which checks the change.
@@ -112,13 +114,16 @@ self-contained but links the system libraries (libSystem), as every macOS binary
 - A request that ends in a reset (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`)
   loses its stored reply in the reset (Table A1-4). The host rule of A1.4 (0074): after a
   lost reply, retransmitting stops at the first 33, and the 33 or the silence is resolved with
-  `IDENTIFY`, never with another request. The reset is seen when the last reset cause (tag 17)
-  is software (or unknown) and the radio started after the request: its uptime (tag 16) is
-  below the time since the request, or below the one read just before it; after
-  `UPDATE_ACTIVATE` and `ROLLBACK` a changed running slot (tag 23) is evidence too, the version
-  alone never. The log entry just before the start entry (`restart: restart`,
+  `IDENTIFY`, never with another request. The request counts as done only when the radio
+  started after it (uptime, tag 16, below the time since the request or below the one read
+  just before it) AND the last reset cause (tag 17) is software; for `UPDATE_ACTIVATE` and
+  `ROLLBACK` the running slot (tag 23) must have changed as well; the version is never
+  evidence. The log entry just before the start entry (`restart: restart`,
   `restart: factory-reset`, `restart: update-activated ...`, `rollback commanded: ...`) is
-  shown as well. Without that evidence the 33 is reported and nothing is sent again. Once
+  shown as well. Otherwise the 33 (or the silence) is reported with what `IDENTIFY` showed
+  (uptime, cause, slot; "cause unknown" when tag 17 is 0), the request is not sent again, and
+  the operator decides. After an answered request the request ran: any restart ends the wait,
+  and a cause other than software is named. Once
   verified, an install never sends `UPDATE_ABORT`.
 - After `UPDATE_ACTIVATE` the tool waits for the reset and reads the result back: the new
   version runs in the target slot, as a trial, until it has confirmed itself (0044), or the

@@ -131,7 +131,8 @@ pub enum Event {
     /// The reply to `UPDATE_ACTIVATE` or `ROLLBACK` was lost, and `IDENTIFY` shows the reset
     /// (A1.4 "Requests that end in a reset"); with the log's reason line if found.
     ReplyLostResetSeen { reason: Option<String> },
-    Restarted,
+    /// The radio answers again after the reset; with tag 17 when this wait saw the restart.
+    Restarted { cause: Option<u8> },
     Trial,
     Confirmed,
     Aborted { restart_needed: bool },
@@ -431,9 +432,11 @@ pub fn confirm(
     ev: &mut dyn FnMut(Event),
 ) -> Result<(), Failure> {
     if let Some(before) = before {
-        writes::wait_for_restart(client, to, before, w.restart)?;
+        let o = writes::wait_for_restart(client, to, before, w.restart)?;
+        ev(Event::Restarted { cause: Some(o.reset_cause) });
+    } else {
+        ev(Event::Restarted { cause: None });
     }
-    ev(Event::Restarted);
     let end = Instant::now() + w.confirm;
     let mut seen_trial = false;
     loop {

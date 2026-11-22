@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::*;
-use g7250ctl::reads::Failure;
+use g7250ctl::reads::{Failure, Observed};
 use g7250ctl::secret::Secret;
 use g7250ctl::update::{self, Event, Options, PackageFile, Waits};
 use hmac::{Hmac, KeyInit, Mac};
@@ -106,6 +106,11 @@ struct Radio {
     /// The uptime a reset starts from (0 by default). Above the uptime before the request, it
     /// models a request made a moment after a start: only the running slot shows the reset.
     reset_uptime: u32,
+    /// Tag 17: 2 (software) after a commanded reset, 3 (watchdog) after `restart_on_block`.
+    reset_cause: u8,
+    /// UPDATE_ACTIVATE resets (software) but the same slot runs again (the reset was not the
+    /// activation, as far as IDENTIFY can tell).
+    activate_keeps_slot: bool,
     old: ([u8; 4], u8),
     seen: Vec<Seen>,
 }
@@ -121,6 +126,7 @@ fn identify(r: &mut Radio) -> Vec<u8> {
                 r.running_slot = r.old.1;
                 r.update_state = 2;
                 r.uptime = 0;
+                r.reset_cause = 2;
             } else {
                 r.update_state = 0;
             }
@@ -129,7 +135,7 @@ fn identify(r: &mut Radio) -> Vec<u8> {
         }
     }
     let mut p = Vec::new();
-    for (t, v) in [(1u8, b"G7250".to_vec()), (4, r.running.to_vec()), (10, vec![r.update_state]), (16, r.uptime.to_be_bytes().to_vec()), (23, vec![r.running_slot])] {
+    for (t, v) in [(1u8, b"G7250".to_vec()), (4, r.running.to_vec()), (10, vec![r.update_state]), (16, r.uptime.to_be_bytes().to_vec()), (17, vec![r.reset_cause]), (23, vec![r.running_slot])] {
         p.push(t);
         p.push(v.len() as u8);
         p.extend(v);
@@ -196,6 +202,7 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
                 r.challenges.clear();
                 stored.clear();
                 r.uptime = r.reset_uptime;
+                r.reset_cause = 3;
                 return None;
             }
             let Some(t) = r.transfer.as_mut() else { return Some(reply_of(54, &[])) };
@@ -246,10 +253,13 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
             None => reply_of(55, &[]),
             Some(t) => {
                 r.old = (r.running, r.running_slot);
-                r.running = t.header[10..14].try_into().unwrap();
-                r.running_slot = 3 - r.running_slot;
-                r.update_state = 1;
+                if !r.activate_keeps_slot {
+                    r.running = t.header[10..14].try_into().unwrap();
+                    r.running_slot = 3 - r.running_slot;
+                    r.update_state = 1;
+                }
                 r.uptime = r.reset_uptime;
+                r.reset_cause = 2;
                 if r.drop_activate_reply {
                     r.drop_activate_reply = false;
                     stored.clear();
@@ -286,6 +296,7 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
             r.running = [1, 0, 0, 1];
             r.update_state = 1;
             r.uptime = r.reset_uptime;
+            r.reset_cause = 2;
             reply_of(0, &[])
         }
         _ => reply_of(16, &[]),
@@ -555,16 +566,21 @@ fn a_failure_with_a_transfer_in_progress_reads_update_status_then_aborts() {
 }
 
 #[test]
-fn an_activation_just_after_a_start_is_seen_by_the_running_slot() {
-    // The radio started a moment ago (uptime 0) and its reset starts from a higher uptime, so
-    // the uptime never falls below the one read before; the running slot changed.
+fn a_lost_activation_reply_with_a_software_reset_and_the_same_slot_is_not_told_as_activated() {
+    // A1.4 (0074 item 10): for UPDATE_ACTIVATE a changed running slot is needed as well. The
+    // tool reports what IDENTIFY showed, sends no new UPDATE_ACTIVATE and no abort.
     let img = image(512 * 2);
-    let (addr, st) = start(Radio { uptime: 0, reset_uptime: 5_000, drop_activate_reply: true, ..radio(1) });
-    let t = std::time::Instant::now();
-    update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |_| {}).unwrap();
-    assert!(t.elapsed() < Duration::from_secs(10), "no wait for the 30 s probe: {:?}", t.elapsed());
-    let r = st.lock().unwrap();
-    assert_eq!((r.running_slot, r.update_state, r.aborted), (2, 0, false));
+    let (addr, st) = start(Radio { drop_activate_reply: true, activate_keeps_slot: true, ..radio(1) });
+    let mut ev = Vec::new();
+    let f = update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |e| ev.push(e)).unwrap_err();
+    assert!(matches!(&f, Failure::ResetNotShown { seen: Some(Observed { reset_cause: 2, running_slot: 1, .. }), .. }), "{f:?}");
+    let t = f.to_string();
+    assert!(t.contains("does not show that UpdateActivate ran") && t.contains("reset cause software") && t.contains("slot A runs"), "{t}");
+    assert!(!ev.iter().any(|e| matches!(e, Event::Activated | Event::ReplyLostResetSeen { .. })), "{ev:?}");
+    let c = cmds(&st);
+    assert!(!c.contains(&0x44), "no abort: {c:x?}");
+    let activations: Vec<Vec<u8>> = st.lock().unwrap().seen.iter().filter(|s| s.cmd == 0x43).map(|s| s.raw.clone()).collect();
+    assert!(activations.iter().all(|a| *a == activations[0]), "only retransmissions of the one request");
 }
 
 #[test]

@@ -23,7 +23,7 @@ use g7250_proto::mgmt::payload::{Config, Identify};
 use g7250_proto::mgmt::{Command, MAX_REQUEST};
 use g7250_proto::mgmt_host;
 
-use crate::reads::{self, Calibration, Failure};
+use crate::reads::{self, Calibration, Failure, Observed};
 use crate::secret::Secret;
 use crate::transport::{Answer, Client};
 
@@ -143,9 +143,10 @@ pub fn touches_network(c: &Config) -> bool {
 ///
 /// A change of address or netmask ends the write session and discards the challenges (A1.10;
 /// 0074 item 9): then no `END_WRITE_SESSION` is sent, and any later write takes a new challenge
-/// (every authenticated request here does). Where the change is not certain (same address and
-/// netmask read back, the C-4 fallback) the session is ended as usual: with no session held it
-/// is answered 0 and changes nothing (0074 item 8).
+/// (every authenticated request here does). The change is certain when the radio answers at
+/// another address, or, with static addressing before and after, its netmask changed. Otherwise
+/// (DHCP involved, the C-4 fallback) the session is ended as usual: with no session held it is
+/// answered 0 and changes nothing (0074 item 8).
 pub fn set_config(client: &mut Client, to: SocketAddr, secret: &Secret, change: &Config) -> Result<ConfigSet, Failure> {
     let mut p = [0u8; MAX_REQUEST];
     let n = change.encode(&mut p).ok_or(Failure::Transport(crate::transport::Error::TooLarge))?;
@@ -174,7 +175,12 @@ pub fn set_config(client: &mut Client, to: SocketAddr, secret: &Secret, change: 
     for at in candidates {
         match reads::get_config(client, at) {
             Ok(back) => {
-                let moved = at != to || back.address != before.address || back.netmask != before.netmask;
+                // Certain only where the values are the ones in use: the address the radio
+                // answers at, and with static addressing before and after, the netmask. A
+                // configured value can change while the address in use does not (DHCP to a
+                // static address equal to the lease); then the session is ended as usual.
+                let both_static = before.address_mode == Some(1) && back.address_mode == Some(1);
+                let moved = at != to || (both_static && back.netmask != before.netmask);
                 if !moved {
                     let _ = end_session(client, at, secret);
                 }
@@ -301,10 +307,7 @@ pub struct Before {
     pub sent: Instant,
 }
 
-/// Tag 17 values (Table M-2): a commanded reset is a software reset. Unknown (0, no reset flag)
-/// is no evidence either way; any other cause (power-on, watchdog, brown-out, pin) is a
-/// different reset, not the one the request asked for.
-pub const RESET_CAUSE_UNKNOWN: u8 = 0;
+/// Tag 17 (Table M-2): a commanded reset is a software reset.
 pub const RESET_CAUSE_SOFTWARE: u8 = 2;
 
 impl Before {
@@ -313,15 +316,25 @@ impl Before {
         Before { uptime_ms: i.uptime_ms, running_slot: i.running_slot, slot_changes, sent: Instant::now() }
     }
 
-    /// Whether this `IDENTIFY` shows the reset: the radio started after the request (uptime
-    /// below the time since it, or below the uptime before it), or, for `UPDATE_ACTIVATE` and
-    /// `ROLLBACK`, the other slot runs; and the last reset cause is software (tag 17). The
-    /// version alone is no evidence: both slots may hold the same one.
-    pub fn restarted(&self, i: &Identify) -> bool {
+    fn started_after(&self, i: &Observed) -> bool {
         let since = self.sent.elapsed().as_millis().min(u32::MAX as u128) as u32;
-        let started_after = i.uptime_ms < self.uptime_ms || i.uptime_ms < since;
-        let cause = matches!(i.reset_cause, RESET_CAUSE_SOFTWARE | RESET_CAUSE_UNKNOWN);
-        cause && (started_after || (self.slot_changes && i.running_slot != self.running_slot))
+        i.uptime_ms < self.uptime_ms || i.uptime_ms < since
+    }
+
+    /// Whether this `IDENTIFY` shows a restart after the request, of any cause: the radio
+    /// started after it (uptime below the time since the request, or below the one before), or
+    /// for `UPDATE_ACTIVATE` and `ROLLBACK` the other slot runs. For the wait after an answered
+    /// request, which ran.
+    pub fn restarted(&self, i: &Observed) -> bool {
+        self.started_after(i) || (self.slot_changes && i.running_slot != self.running_slot)
+    }
+
+    /// Whether this `IDENTIFY` shows that the request ran, when its reply was lost (A1.4
+    /// "Requests that end in a reset"; 0074 item 10): the radio started after the request, the
+    /// last reset cause is software (tag 17 = 2, exactly), and for `UPDATE_ACTIVATE` and
+    /// `ROLLBACK` the running slot changed as well. The version alone is no evidence.
+    pub fn ran(&self, i: &Observed) -> bool {
+        self.started_after(i) && i.reset_cause == RESET_CAUSE_SOFTWARE && (!self.slot_changes || i.running_slot != self.running_slot)
     }
 }
 
@@ -345,9 +358,10 @@ pub const RESET_PROBE: std::time::Duration = std::time::Duration::from_secs(30);
 /// if the reply is lost, a retransmission after the reset meets a spent challenge and gets 33,
 /// or gets no reply at all while the radio restarts. Either is ambiguous: the request may have
 /// run. By the host rule of A1.4 (0074 item 10) retransmitting stops at the first 33 (the
-/// first reply ends the exchange), and the radio is then asked with `IDENTIFY` whether it
-/// restarted ([`Before::restarted`]), and the log for the reason. The request is never sent
-/// again with a new challenge here: without evidence the 33 (or the silence) is returned.
+/// first reply ends the exchange), and the radio is then asked with `IDENTIFY` whether it ran
+/// ([`Before::ran`]), and the log for the reason. The request is never sent again with a new
+/// challenge here: without that evidence the result is [`Failure::ResetNotShown`], with the
+/// restart `IDENTIFY` showed, if any.
 /// A 33 to the first send is a plain authentication failure.
 pub fn resetting(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command, payload: &[u8]) -> Result<Resetting, Failure> {
     let a = reads::identify(client, to)?;
@@ -358,10 +372,18 @@ pub fn resetting(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Comm
         Err(_) => false,
     };
     let r = authed_raw(client, to, secret, cmd, payload);
-    if ambiguous(&r) && wait_for_restart(client, to, before, RESET_PROBE).is_ok() {
+    if !ambiguous(&r) {
+        return r.map(|a| Resetting::Answered(a, before));
+    }
+    let seen = wait_for_restart(client, to, before, RESET_PROBE).ok();
+    if seen.is_some_and(|o| before.ran(&o)) {
         return Ok(Resetting::ResetSeen { reason: reset_reason(client, to, cmd) });
     }
-    r.map(|a| Resetting::Answered(a, before))
+    let failure = match r {
+        Ok(a) => Failure::Status(a, cmd),
+        Err(f) => f,
+    };
+    Err(Failure::ResetNotShown { failure: Box::new(failure), cmd, seen })
 }
 
 /// The log line that names the reset `cmd` asked for: the entry just before the last start
@@ -387,16 +409,18 @@ pub fn reset_reason(client: &mut Client, to: SocketAddr, cmd: Command) -> Option
     lines[..start].last().filter(|t| t.starts_with(prefix)).cloned()
 }
 
-/// After a reset: wait until the radio answers `IDENTIFY` again showing the reset
-/// ([`Before::restarted`]), within `limit`. Returns the new uptime in ms.
-pub fn wait_for_restart(client: &mut Client, to: SocketAddr, before: Before, limit: std::time::Duration) -> Result<u32, Failure> {
+/// After a reset: wait until the radio answers `IDENTIFY` again showing a restart of any cause
+/// ([`Before::restarted`]), within `limit`. Returns what it showed; the caller names a cause
+/// other than software.
+pub fn wait_for_restart(client: &mut Client, to: SocketAddr, before: Before, limit: std::time::Duration) -> Result<Observed, Failure> {
     let end = std::time::Instant::now() + limit;
     loop {
         match reads::identify(client, to) {
             Ok(a) => {
                 let i = Identify::decode(&a.payload).expect("checked by reads::identify");
-                if before.restarted(&i) {
-                    return Ok(i.uptime_ms);
+                let o = Observed { uptime_ms: i.uptime_ms, reset_cause: i.reset_cause, running_slot: i.running_slot };
+                if before.restarted(&o) {
+                    return Ok(o);
                 }
             }
             Err(Failure::Transport(crate::transport::Error::NoReply { .. })) => {}

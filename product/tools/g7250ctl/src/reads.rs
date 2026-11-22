@@ -21,6 +21,31 @@ pub enum Failure {
     Status(Answer, Command),
     /// The reply does not decode as Annex M gives it.
     Decode { from: SocketAddr, what: String },
+    /// A request that ends in a reset lost its reply (`failure`: the 33, or no reply), and
+    /// `IDENTIFY` does not show that it ran (A1.4 "Requests that end in a reset"): `seen` is the
+    /// restart it showed, if any. The request is not sent again; the operator decides.
+    ResetNotShown { failure: Box<Failure>, cmd: Command, seen: Option<Observed> },
+}
+
+/// What `IDENTIFY` showed after a restart: tags 16, 17 and 23.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Observed {
+    pub uptime_ms: u32,
+    pub reset_cause: u8,
+    pub running_slot: u8,
+}
+
+/// Tag 17 (Table M-2).
+pub fn reset_cause_name(c: u8) -> &'static str {
+    match c {
+        0 => "unknown",
+        1 => "power-on",
+        2 => "software",
+        3 => "watchdog",
+        4 => "brown-out",
+        5 => "pin",
+        _ => "not defined",
+    }
 }
 
 impl Failure {
@@ -29,6 +54,7 @@ impl Failure {
             Failure::Transport(transport::Error::NoReply { .. }) => crate::exit::NO_REPLY,
             Failure::Transport(_) | Failure::Decode { .. } => crate::exit::ERROR,
             Failure::Status(..) => crate::exit::STATUS,
+            Failure::ResetNotShown { failure, .. } => failure.exit_code(),
         }
     }
 }
@@ -52,6 +78,26 @@ impl fmt::Display for Failure {
                 Ok(())
             }
             Failure::Decode { from, what } => write!(f, "{from}: {what}"),
+            Failure::ResetNotShown { failure, cmd, seen } => {
+                write!(f, "{failure}; its reply was lost, and IDENTIFY does not show that {cmd:?} ran")?;
+                match seen {
+                    None => write!(f, " (no restart seen)")?,
+                    Some(o) if o.reset_cause == 0 => write!(
+                        f,
+                        ": the radio restarted, cause unknown (tag 17 = 0); uptime {}, slot {} runs",
+                        render::uptime(o.uptime_ms),
+                        crate::update::slot_name(o.running_slot)
+                    )?,
+                    Some(o) => write!(
+                        f,
+                        ": the radio restarted, reset cause {}; uptime {}, slot {} runs",
+                        reset_cause_name(o.reset_cause),
+                        render::uptime(o.uptime_ms),
+                        crate::update::slot_name(o.running_slot)
+                    )?,
+                }
+                write!(f, ". It is not sent again: check `g7250ctl info` and `g7250ctl logs` (A1.4)")
+            }
         }
     }
 }

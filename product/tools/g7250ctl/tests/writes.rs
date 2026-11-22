@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use common::*;
 use g7250_proto::mgmt::payload::Config;
-use g7250ctl::reads::Failure;
+use g7250ctl::reads::{Failure, Observed};
 use g7250ctl::secret::Secret;
 use g7250ctl::writes::{self, Whereabouts};
 use hmac::{Hmac, KeyInit, Mac};
@@ -330,7 +330,8 @@ fn restart_is_allowed_while_another_host_writes_and_sends_no_session_end() {
     assert_eq!(cmds(&st), vec![0x01, 0x10, 0x24], "IDENTIFY for the uptime, then the signed RESTART");
     assert_eq!((before.uptime_ms, before.slot_changes), (50_100, false), "a RESTART keeps the slot: only the uptime counts");
     let up = writes::wait_for_restart(&mut c, addr, before, std::time::Duration::from_secs(2)).unwrap();
-    assert!(up < 50_000);
+    assert!(up.uptime_ms < 50_000);
+    assert_eq!(up.reset_cause, 2);
 }
 
 #[test]
@@ -350,24 +351,58 @@ fn a_restart_with_its_reply_lost_is_told_from_identify_and_the_log_and_not_sent_
 }
 
 #[test]
-fn a_restart_is_seen_only_with_a_software_cause_and_a_start_after_the_request() {
-    use g7250_proto::mgmt::payload::Identify;
+fn a_lost_reply_counts_only_with_cause_software_and_for_the_slot_commands_a_changed_slot() {
+    // A1.4 (0074 item 10): uptime AND tag 17 = 2, and for UPDATE_ACTIVATE and ROLLBACK also a
+    // changed tag 23. Any restart still ends the wait after an answered request.
     let before = writes::Before { uptime_ms: 50_000, running_slot: 1, slot_changes: false, sent: std::time::Instant::now() };
     std::thread::sleep(std::time::Duration::from_millis(50));
-    let id = |uptime_ms, reset_cause, running_slot| Identify { uptime_ms, reset_cause, running_slot, ..Default::default() };
-    assert!(before.restarted(&id(10, 2, 1)), "software, started after the request");
-    assert!(before.restarted(&id(10, 0, 1)), "cause unknown: no evidence against");
-    assert!(!before.restarted(&id(10, 3, 1)), "a watchdog reset is not the one asked for");
-    assert!(!before.restarted(&id(10, 1, 1)), "nor a power-on");
-    assert!(!before.restarted(&id(50_200, 2, 1)), "still the same run");
-    // ROLLBACK and UPDATE_ACTIVATE: a changed slot is evidence too, the version is not.
-    let before = writes::Before { slot_changes: true, ..before };
-    assert!(before.restarted(&id(60_000, 2, 2)));
-    assert!(!before.restarted(&id(60_000, 2, 1)));
+    let o = |uptime_ms, reset_cause, running_slot| Observed { uptime_ms, reset_cause, running_slot };
+    assert!(before.ran(&o(10, 2, 1)), "software, started after the request");
+    for cause in [0, 1, 3, 4, 5] {
+        assert!(!before.ran(&o(10, cause, 1)), "cause {cause} is not evidence that the request ran");
+        assert!(before.restarted(&o(10, cause, 1)), "but it is a restart (cause {cause})");
+    }
+    assert!(!before.ran(&o(50_200, 2, 1)) && !before.restarted(&o(50_200, 2, 1)), "still the same run");
+    let slot = writes::Before { slot_changes: true, ..before };
+    assert!(slot.ran(&o(10, 2, 2)));
+    assert!(!slot.ran(&o(10, 2, 1)), "a software reset with the same slot running: not the activation");
+    assert!(slot.restarted(&o(10, 2, 1)));
+    assert!(!slot.ran(&o(60_000, 2, 2)), "a changed slot without a start after the request");
     // An uptime below the time since the request, even above the one before (a request just
     // after a start): the radio started after it.
     let early = writes::Before { uptime_ms: 5, running_slot: 1, slot_changes: false, sent: std::time::Instant::now() - std::time::Duration::from_secs(2) };
-    assert!(early.restarted(&id(1_000, 2, 1)));
+    assert!(early.ran(&o(1_000, 2, 1)));
+}
+
+#[test]
+fn a_lost_restart_reply_with_cause_unknown_is_not_told_as_done() {
+    let (addr, st) = start(State { secret: Some(OLD), uptime: 50_000, reset_cause: 1, reset_cause_after: Some(0), drop_first: Some(0x24), ..Default::default() });
+    let f = writes::reset(&mut client(), addr, &secret(OLD), g7250_proto::mgmt::Command::Restart).unwrap_err();
+    assert!(matches!(&f, Failure::ResetNotShown { seen: Some(Observed { reset_cause: 0, .. }), .. }), "{f:?}");
+    let t = f.to_string();
+    assert!(t.contains("status 33") && t.contains("the radio restarted, cause unknown") && t.contains("not sent again"), "{t}");
+    assert_eq!(f.exit_code(), g7250ctl::exit::STATUS);
+    let c = cmds(&st);
+    assert_eq!((c.iter().filter(|x| **x == 0x10).count(), c.iter().filter(|x| **x == 0x24).count()), (1, 2), "{c:x?}");
+}
+
+#[test]
+fn an_answered_restart_followed_by_a_watchdog_reset_ends_the_wait_and_names_the_cause() {
+    let (addr, _st) = start(State { secret: Some(OLD), uptime: 50_000, reset_cause: 1, reset_cause_after: Some(3), ..Default::default() });
+    let dir = std::env::temp_dir().join(format!("g7250ctl-writes-wdt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("secret");
+    std::fs::write(&file, "11".repeat(32)).unwrap();
+    let t0 = std::time::Instant::now();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_g7250ctl"))
+        .args(["--interval", "30", "restart", &addr.to_string(), "--wait", "--secret-file", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(g7250ctl::exit::OK as i32), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("restart done") && text.contains("reset cause watchdog (tag 17), not software"), "{text}");
+    assert!(t0.elapsed() < std::time::Duration::from_secs(10), "the wait ended at the restart, not at its limit");
 }
 
 #[test]
@@ -438,6 +473,22 @@ fn an_address_or_netmask_change_sends_no_session_end() {
     let g = st.lock().unwrap();
     assert!(g.seen.iter().rfind(|s| s.cmd == 0x31).unwrap().auth_ok);
     assert_eq!(g.holder, None);
+}
+
+#[test]
+fn dhcp_to_a_static_address_equal_to_the_lease_ends_the_session() {
+    // GET_CONFIG's address changes, the address in use does not: not certain, so the session
+    // is ended (the radio would answer 0 if it had ended it already).
+    let mut config = BTreeMap::new();
+    config.insert((1, 0), vec![0]);
+    config.insert((2, 0), vec![0, 0, 0, 0]);
+    config.insert((3, 0), vec![0, 0, 0, 0]);
+    let (addr, st) = start(State { secret: Some(OLD), config, ..Default::default() });
+    let change = Config { address_mode: Some(1), address: Some([127, 0, 0, 1]), netmask: Some([255, 0, 0, 0]), ..Default::default() };
+    let r = writes::set_config(&mut client(), addr, &secret(OLD), &change).unwrap();
+    assert_eq!(r.whereabouts, Whereabouts::At(addr));
+    let c = cmds(&st);
+    assert_eq!(c[c.len() - 2..], [0x10, 0x13], "{c:x?}");
 }
 
 #[test]

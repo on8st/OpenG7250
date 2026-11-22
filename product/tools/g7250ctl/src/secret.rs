@@ -81,7 +81,8 @@ impl Secret {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
     }
 
-    /// Write to a new file (refusing an existing one), owner read/write only on Unix.
+    /// Write to a new file (refusing an existing one), owner read/write only on Unix. Elsewhere
+    /// (Windows) the file takes the access rights of its folder: see [`rights_warning`].
     pub fn write_new(&self, path: &Path) -> Result<(), String> {
         let mut o = fs::OpenOptions::new();
         o.write(true).create_new(true);
@@ -95,6 +96,19 @@ impl Secret {
             .and_then(|_| f.sync_all())
             .map_err(|e| format!("{}: {e}", path.display()))
     }
+}
+
+/// The warning for a new secret file on a system where the tool cannot restrict its rights
+/// (anything but Unix: on Windows it takes the rights of its folder). `None` on Unix (mode 0600).
+pub fn rights_warning(path: &Path) -> Option<String> {
+    if cfg!(unix) { None } else { Some(not_restricted(path)) }
+}
+
+fn not_restricted(path: &Path) -> String {
+    format!(
+        "warning: {}: on this system the file takes the access rights of its folder; keep it in a folder only you can read (for example under your user profile), not in a shared one",
+        path.display()
+    )
 }
 
 #[cfg(test)]
@@ -124,6 +138,10 @@ mod tests {
         s.write_new(&p).unwrap();
         assert_eq!(Secret::from_file(&p).unwrap(), s);
         assert!(s.write_new(&p).is_err(), "an existing file is never overwritten");
+        // The warning is for systems other than Unix; its text is checked here as well.
+        assert_eq!(rights_warning(&p), None);
+        let w = not_restricted(Path::new("secret.hex"));
+        assert!(w.starts_with("warning: secret.hex: on this system the file takes the access rights of its folder"), "{w}");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

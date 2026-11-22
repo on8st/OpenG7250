@@ -232,6 +232,9 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &WriteCmd) -> O
                 Some(path) => {
                     let s = Secret::generate().map_err(|e| (exit::ERROR, e))?;
                     s.write_new(path).map_err(|e| (exit::ERROR, e))?;
+                    if let Some(w) = g7250ctl::secret::rights_warning(path) {
+                        eprintln!("{w}");
+                    }
                     s
                 }
                 None => secret.load()?,
@@ -246,6 +249,9 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &WriteCmd) -> O
                 (Some(path), _) => {
                     let s = Secret::generate().map_err(|e| (exit::ERROR, e))?;
                     s.write_new(path).map_err(|e| (exit::ERROR, e))?;
+                    if let Some(w) = g7250ctl::secret::rights_warning(path) {
+                        eprintln!("{w}");
+                    }
                     s
                 }
                 (None, Some(f)) => Secret::from_file(f).map_err(|e| (exit::USAGE, e))?,
@@ -324,7 +330,15 @@ fn reset(json: bool, policy: g7250ctl::transport::Policy, addr: &str, s: &Secret
     }
     let waited = writes::wait_for_restart(&mut c, to, before, Duration::from_secs(limit));
     match waited {
-        Ok(ms) => done(json, &format!("{what} done; the radio answers again (uptime {})", render::uptime(ms))),
+        Ok(o) => {
+            // The request ran (it was answered), so any restart ends the wait; a cause other
+            // than software is named (tag 17).
+            let cause = match o.reset_cause {
+                writes::RESET_CAUSE_SOFTWARE => String::new(),
+                c => format!("; reset cause {} (tag 17), not software: see `g7250ctl logs`", g7250ctl::reads::reset_cause_name(c)),
+            };
+            done(json, &format!("{what} done; the radio answers again (uptime {}){cause}", render::uptime(o.uptime_ms)))
+        }
         Err(e) if cmd == Command::FactoryReset => Err((
             e.exit_code(),
             format!("{e}; after a factory reset the radio takes its address from DHCP (or link-local): find it with `g7250ctl discover`"),
