@@ -101,8 +101,14 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0069 | Reply time of requests with flash work: one sector erase per request, reply within 15 s, host retransmits for 16 s | accepted (2026-11-22); addendum (start check) accepted (2026-11-22) |
 | 0070 | g7250ctl: drives every Table A1-2 command against the reference model; host-side behaviour tested (T-A1-93) | accepted (2026-11-22) |
 | 0071 | Package file: Table M-4 header followed by the image, `.g7pk`, written by the firmware build | accepted (2026-11-22) |
+| 0072 | C-3 limits that may be lost (number reserved; text held for the point with Table M-3) | accepted in principle (2026-11-22), held |
+| 0073 | Time over flash work: uptime and the listed limits count flash work; a limit due during it acts within 100 ms after it, before queued management requests | accepted (2026-11-22) |
+| 0074 | Management details from the g7250ctl runs: `UPDATE_ABORT` with no update state, `GET_STATS` counters of Table M-6, `READ_LOG` bit 1, write-session opening and end, address change, host rule after a reset | accepted (2026-11-22) |
+| 0075 | Unexpected stop of the firmware: RF control pins safe within 20 µs, log line, reset within 10 ms; a software reset without a reason line counts as `WDT_RESET_AT_START` | accepted (2026-11-22) |
+| 0076 | Radio drill F3 (P-SYS-10): power cuts in store writes, the unreadable word, kept RAM, one bus fault; the drill needs its own go; the RM0468 fixed case is open | accepted as text (2026-11-22); the drill needs its own go from ON8ST |
+| 0077 | Streaming installer: the write session continues there with `END_WRITE_SESSION`; the idle time pauses during the holder's own request; power loss with every sector written; `SET_FIRST_SECRET` gets 36 | accepted (2026-11-22) |
 
-All numbers 0001–0071 are now in use.
+All numbers 0001–0077 are now in use (0072 reserved, its text held).
 
 ## Open questions for ON8ST
 
