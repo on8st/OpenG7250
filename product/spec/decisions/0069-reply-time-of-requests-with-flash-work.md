@@ -1,7 +1,8 @@
 # 0069 — Reply time of requests that do flash work
 
 - Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
-  proposed 2026-11-22; answers a spec gap found by the emulator's flash model
+  addendum on the start check accepted (ON8ST, 2026-11-22, as at `78aa233`); proposed
+  2026-11-22; answers a spec gap found by the emulator's flash model
   (relayed by the openg7250 session, 2026-11-22)
 - Date: 2026-11-22
 - Builds on: 0020 §24 (retransmission), §27 (stored reply), 0055 (flash work), 0063, 0065
@@ -85,6 +86,80 @@ window for every management request that may do flash work.
    that does not end gets its 55 reply within 15 s. T-A1-39: after a `FACTORY_RESET` neither
    store sector holds the old secret, and the reset comes within 17 s of the reply. T-A1-92
    (new): the old secret after `CHANGE_SECRET`.
+
+## Addendum: the start check after a fall-back, and torn records (accepted by ON8ST, 2026-11-22)
+
+Two firmware readings, relayed by the openg7250 session, 2026-11-22.
+
+1. **After a fall-back** (newest commit word unreadable, 0065 point 5). The live generation
+   is then the older one, and the other sector holds the failed newer generation, with the
+   newer secret if the failed write was a `CHANGE_SECRET`. That sector is erased by the start
+   check, as its wording says: this is meant. The failed generation cannot be used again (its
+   commit word is unreadable and is never programmed again, 0065), no host can read it for
+   diagnosis, and keeping it would keep a secret that is not in use readable in flash. The
+   start logs the fall-back line and `store: stale secret erased`. The radio is then back on
+   the older secret: a request authenticated with the newer one gets 33, and the log tells
+   the owner why.
+2. **Torn records** (a stale-sector erase or a compaction cut by a power loss). The rule "not
+   readable from flash after the next start" covers part of a secret too. The start check
+   therefore MUST erase the non-live sector also when it holds any word the store cannot place
+   in a complete, checked record, unless the sector is fully erased; a non-live sector that
+   holds only complete records with no secret other than the live one is left as before.
+   Such an erase is logged `store: non-live sector erased (unrecognised data)`.
+   - **Only with a live generation** (openg7250, 2026-11-22). This erase, and the start check
+     as a whole, is done only when the live sector holds a complete generation of this
+     firmware's store. With none in either sector (the first start after the install, or both
+     sectors holding data that is not this firmware's) the start check does nothing: the store
+     starts from the Table A1-4 values and its first write erases the sector it writes into,
+     as before.
+   - **"Complete generation"** (firmware finding, 2026-11-22). The live sector holds a complete
+     generation when either (a) its generation has a readable commit word, or (b) it holds the
+     store's first generation, which by the firmware's design carries no commit word, and at
+     least one record of it passes its check that is one of this closed list: the management
+     secret (A1.10), a configuration item (A1.6, C-1 to C-7), a calibration entry (A1.12). Other
+     records do not count: the boot counter (B10.2 item 5), the boot record (A1.8), the staging
+     mark (0067 point 4), the factory-reset mark, and any record a later version adds unless
+     it is added to this list. Nothing a start writes before the start check (the boot
+     record, the boot counter, a compaction that finishes a factory reset) is a new record of
+     this list, so the boot counter of this start cannot make a sector count (correction
+     after review, 2026-11-22). An erased sector, or one holding only data it cannot place in a checked
+     record, never holds a complete generation, so the start check never erases the other
+     sector on its behalf. The firmware's proposal (a commit, or a first generation that holds
+     a secret) is too narrow: a first generation with only configuration or calibration, fallen
+     back to from a failed newer generation that carries a secret, would leave that secret in
+     flash. Cases:
+     - the only committed generation is in sector 6, its commit word becomes unreadable, and
+       sector 7 is erased: sector 7 holds no complete generation, the start check does
+       nothing, and sector 6 is not erased (the store then reads as 0065 point 5 says). This
+       holds although the boot counter of this start lands in sector 7, and at every later
+       start until a record of the closed list is written there;
+     - fall-back after the first `CHANGE_SECRET` to the first generation, which holds the
+       first secret: (b) holds, and the failed newer generation is erased (point 1);
+     - fall-back to a first generation holding only configuration or calibration: (b) holds as
+       well, and the failed newer generation is erased.
+   - **Only the start check is limited** (firmware reading of its start order, 2026-11-22).
+     Other store writes at a start erase as A1.6 "Store writes" says: the boot counter or the
+     boot record compacts when the live sector is full, and finishing a factory reset compacts;
+     each erases the other sector first. These rules say only when the start check erases.
+   - **Accepted consequence.** In the first case above, the owner's first `SET_CONFIG` or
+     `SET_CALIBRATION` after it writes a record of the list into sector 7, and the next start
+     check erases sector 6. That is meant: sector 6's generation has not been in use since its
+     commit word became unreadable.
+   - **Assumption: a first generation is recognised by having no commit word.** A compaction
+     into a sector cut before its commit, with the other sector unreadable as well, looks the
+     same and may be partial. Treating it as complete needs two faults at once (a cut
+     compaction and an unreadable generation) and is accepted; no mark of a first generation
+     is required.
+   - **Sector 6 and the vendor bootloader** (0061, P-SYS-5). One store sector is sector 6,
+     where the vendor bootloader may stage ([HIS] HIS 15 rule 5). If it writes there at every
+     start, every start would erase that sector, and the store would lose its spare sector.
+     The drill F1 therefore counts this erase: after the install and one store write, a
+     `RESTART` and a power cycle MUST each start with no `store: non-live sector erased
+     (unrecognised data)` line. If such a line appears, the store location of 0061 is decided
+     again before any further install.
+
+Tests: T-A1-92 (a fall-back after a `CHANGE_SECRET`; a stale-sector erase cut by a power loss;
+no erase without a live generation); the drill F1 (P-SYS-5).
 
 ## Alternatives considered
 
