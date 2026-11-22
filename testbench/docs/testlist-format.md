@@ -1,6 +1,6 @@
-# Test list and result format (v1.7)
+# Test list and result format (v1.9)
 
-- Status: **v1.7**, 2026-11-21. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
+- Status: **v1.9**, 2026-11-22. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
   the first answers of the emulator side (openg7250-emu, relayed by openg7250): the address
   mapping of section 3, the fixture plan of section 4, and its four proposals (emulated-time
   timeouts, boot per test, artifacts, "not modelled" errors), all accepted. v1.2 folded in its
@@ -15,8 +15,12 @@
   the keying pins). v1.6 takes over the emulator's proposal of `net.log` (the image's sends and
   arrivals in emulated time), `eth.log` (MACRAW frames), `arp.peer` and `ip.conflict`, for the
   takeover timing of A2.4 and the address rules of A1.11 (0049). v1.7 adds `net.inject` and
-  `time.wait`, so that judged bursts are placed and waits counted in emulated time. Changes
-  are marked **(v1.1)** to **(v1.7)**. Each version only adds fields, apart
+  `time.wait`, so that judged bursts are placed and waits counted in emulated time. v1.8 is the
+  emulator's flash controller with its fixtures and the forces (section 7 items 6 and 7), v1.9 the
+  fixtures newer than it: `flash.dump`, `flash.fill`, `log.corrupt`, `reset.flags`, and the
+  reference model's `flash.delay` and `store.full`. The `minor` of the files is informative only:
+  no reader decides anything by it; what a runner offers is in the endpoint's `fixtures`. Changes
+  are marked **(v1.1)** to **(v1.7)**, later ones by their version in the text. Each version only adds fields, apart
   from that one rename of a count nobody reads. A v1.3 reader keeps working if it treats an
   unknown level as "not driven".
 - Purpose: the file that `product_run.py <elf> <tests> -o <result>` reads (`<tests>`), and the file
@@ -58,7 +62,7 @@ hand-written subset.
 ```json
 {
   "format": "g7250-testlist",
-  "version": 1, "minor": 7,
+  "version": 1, "minor": 9,
   "spec":  { "branch": "spec/draft", "commit": "0e075f2" },
   "his":   { "commit": "d07627e" },
   "catalogue": { "commit": "<tb/main commit>", "sha256": "<of catalogue.json>" },
@@ -102,7 +106,7 @@ hand-written subset.
 
 ```json
 {
-  "format": "g7250-endpoint", "version": 1, "minor": 7,
+  "format": "g7250-endpoint", "version": 1, "minor": 9,
   "kind": "emulator",
   "radio": { "ip": "192.168.73.10", "netmask": "255.255.255.0", "mac": "02:00:00:00:72:50",
              "connect": { "1024": "127.0.0.1:41024", "1025": "127.0.0.1:41025",
@@ -404,7 +408,7 @@ a real input.
 
 ```json
 {
-  "format": "g7250-testresult", "version": 1, "minor": 7,
+  "format": "g7250-testresult", "version": 1, "minor": 9,
   "testlist": { "sha256": "…" },
   "subject":  { "kind": "emulator", "elf_sha256": "…", "fw_version": "0.1.0+12" },
   "runner":   { "name": "product_run.py", "version": "…", "emulator_commit": "…" },
@@ -512,6 +516,8 @@ A test with target `emulator` is also run against the reference model. A test wi
      reset (T-A1-85).
    - `power.cut {after_flash_words: n} | {during_erase: 0..1} | {at_address: a}`; a cut entry in
      `flash.log` has `result: "cut"` with `words_written` or `fraction_done` (T-A1-83, T-A1-86).
+     Armed with `during_erase` before a `RESTART`, it hits the first erase after it, whichever it
+     is (T-A1-92 checks that it was the stale sector's).
    - `flash.ecc {address, type: "double"|"single"}`; each detection is a `flash.log` entry
      `{op: "ecc", type, address, boot}` (T-A1-87).
    - Every erase and program entry carries `fpga_bus: "idle"|"open"` at its start (T-B5-22).
@@ -531,13 +537,15 @@ A test with target `emulator` is also run against the reference model. A test wi
      image may overwrite it); `null` releases (the channel takes the word the image last wrote);
      the image's start-up safe state (PB14 low) and `power.cycle` clear it; traced
      `{"kind": "dac_force", channel, value, t_us}` (T-A3-61).
-   - Proposed: `flash.dump {address, len}` → `{hex}`: flash as it is now, at most 32768 bytes per
+   - Proposed (v1.9): `flash.dump {address, len}` → `{hex}`: flash as it is now, at most 32768 bytes per
      call (T-A1-39, T-A1-92: the bench looks for the 32 bytes of a secret it set itself);
      `flash.fill {address, len, data?}`: these bytes of flash become `data` (hex) repeated over
-     `len`, or erased without `data`; aligned to 32 bytes, ECC consistent (an earlier
+     `len`, which the length of `data` must divide, or erased without `data`; aligned to 32
+     bytes, refused while the image does flash work, ECC consistent (an earlier
      `flash.ecc` there is gone), a 32-byte word of only FF is an erased one, no `flash.log` entry,
-     kept across `power.cycle`, refused outside the store sectors (T-A1-92: foreign data, an
-     erased sector, the store put back from a dump); and
+     kept across `power.cycle`, only within 0x080C0000 to 0x080FFFFF, refused outside; built by
+     the emulator in this shape (T-A1-92: foreign data, an erased sector, the store put back from
+     a dump); and
      `log.corrupt {seq}`: the kept log entry with that sequence number changed in RAM so that its
      check fails at the next start (T-A1-91; the layout is the firmware's, so an emulator needs its
      address from the firmware side). The reference model has `log.corrupt`, and

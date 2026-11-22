@@ -20,6 +20,7 @@ from pathlib import Path
 from . import core
 from . import t_a2, t_a3, t_atu, t_cw, t_flash, t_log, t_mgmt, t_stale, t_store, t_update, t_p2, t_tx_locked  # noqa: F401  (register tests)
 
+FORMAT_MINOR = 9  # docs/testlist-format.md; informative only: nothing is decided by it
 HERE = Path(__file__).resolve().parent
 CATALOGUE = HERE.parent / "catalogue" / "catalogue.json"
 
@@ -55,7 +56,7 @@ def cmd_list(a) -> int:
         if t.get("timeout_s"):
             e["timeout_s"] = t["timeout_s"]
         tests.append(e)
-    doc = {"format": "g7250-testlist", "version": 1, "minor": 7, "spec": cat["spec"], "his": cat["his"],
+    doc = {"format": "g7250-testlist", "version": 1, "minor": FORMAT_MINOR, "spec": cat["spec"], "his": cat["his"],
            "catalogue": {"commit": git_commit(),
                          "sha256": hashlib.sha256(CATALOGUE.read_bytes()).hexdigest()},
            "defaults": {"timeout_s": 30}, "boot": a.boot, "tests": tests}
@@ -107,7 +108,7 @@ def cmd_run(a) -> int:
     if a.o:
         summary = {s: sum(1 for r in results if r["status"] == s)
                    for s in ("pass", "fail", "skip", "blocked", "error", "not_run")}
-        doc = {"format": "g7250-testresult", "version": 1, "minor": 7, "testlist": {"sha256": tl_hash},
+        doc = {"format": "g7250-testresult", "version": 1, "minor": FORMAT_MINOR, "testlist": {"sha256": tl_hash},
                "subject": {"kind": endpoint.get("kind"), "model": endpoint.get("model")},
                "runner": {"name": "testbench", "version": 1}, "testbench": {"commit": git_commit()},
                "started": started,
