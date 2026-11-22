@@ -45,7 +45,8 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0070 (proposed; g7250ctl Q5): A1.1a says what `g7250ctl` must do against the reference model
   (every command, and its host-side behaviour tested) instead of passing the radio's tests.
 - 0071 (proposed; g7250ctl Q6): the package file, Table M-4 header followed by the image;
-  name, writer and host checks (Annex M "Package file"). Test T-A1-93 new.
+  name, writer and host checks (Annex M "Package file"). Test T-A1-93 new. Released builds
+  carry a version not used before; development builds are told apart by the image's SHA-256.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 
