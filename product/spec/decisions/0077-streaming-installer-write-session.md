@@ -57,8 +57,8 @@ Accepted text that changes:
   own request (point 2); refreshing and the repeat rule are unchanged.
 - B2.3 "time over flash work" (0073): the list names the pause.
 
-Tests: T-A1-60 (identification, 36, 58, the write session over the installer, and the 50 s
-spacing around the block that completes a sector) and T-A1-15 (a stretched compaction from
+Tests: T-A1-60 (identification, 36, 58, the write session over the installer, and the 57 s
+spacing (corrected by 0078) around the block that completes a sector) and T-A1-15 (a stretched compaction from
 the holder) extended. T-A1-50 is unchanged: its requests do no long flash work.
 
 Cost: the installer keeps the 60 s idle timer, answers `END_WRITE_SESSION` and pauses the idle

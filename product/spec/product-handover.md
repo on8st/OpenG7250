@@ -107,8 +107,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0075 | Unexpected stop of the firmware: RF control pins safe within 20 µs, log line, reset within 10 ms; a software reset without a reason line counts as `WDT_RESET_AT_START` | accepted (2026-11-22) |
 | 0076 | Radio drill F3 (P-SYS-10): power cuts in store writes, the unreadable word, kept RAM, one bus fault; the drill needs its own go; the RM0468 fixed case is open | accepted as text (2026-11-22); the drill needs its own go from ON8ST |
 | 0077 | Streaming installer: the write session continues there with `END_WRITE_SESSION`; the idle time pauses during the holder's own request; power loss with every sector written; `SET_FIRST_SECRET` gets 36 | accepted (2026-11-22) |
+| 0078 | Evidence of a commanded reset: a commanded-reset word in kept RAM; reads of kept RAM never stop the start; test timings; counter details and the definition of a gap | accepted (2026-11-22) |
 
-All numbers 0001–0077 are now in use (0072 reserved, its text held).
+All numbers 0001–0078 are now in use (0072 reserved, its text held).
 
 ## Open questions for ON8ST
 
