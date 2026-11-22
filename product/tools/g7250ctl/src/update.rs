@@ -185,19 +185,18 @@ pub fn update_status(client: &mut Client, to: SocketAddr) -> Result<UpdateStatus
     UpdateStatus::decode(&a.payload).map_err(|_| decode(&a, "UPDATE_STATUS reply does not decode (Table M-1)"))
 }
 
-/// The `IDENTIFY` fields an update needs (Table M-2 tags 4, 10, 16, 23).
+/// The `IDENTIFY` fields an update needs (Table M-2 tags 4, 10, 23).
 #[derive(Clone, Copy, Debug)]
 struct Ident {
     running: Version,
     update_state: u8,
-    uptime_ms: u32,
     running_slot: u8,
 }
 
 fn identify(client: &mut Client, to: SocketAddr) -> Result<Ident, Failure> {
     let a = reads::identify(client, to)?;
     let i = Identify::decode(&a.payload).expect("checked by reads::identify");
-    Ok(Ident { running: i.running, update_state: i.update_state, uptime_ms: i.uptime_ms, running_slot: i.running_slot })
+    Ok(Ident { running: i.running, update_state: i.update_state, running_slot: i.running_slot })
 }
 
 /// Send one block, with the 64 and 53 rules. Returns "blocks received".
@@ -290,6 +289,12 @@ pub fn install(
     // Start, or pick up a transfer in progress for this package.
     let mut from = 0;
     let mut begun = false;
+    // Once verified, a failure is never answered with UPDATE_ABORT: the activation may have
+    // run (its reply lost), and an abort would then hit the new image. The transfer stays
+    // verified; `install --resume` verifies and activates again.
+    let mut verified = false;
+    // The uptime before the activation, or None once the reset has been seen.
+    let mut restart_from = None;
     if opts.resume {
         let st = update_status(client, to)?;
         if !(matches!(st.state, 1 | 2) && st.count == file.blocks()) {
@@ -323,9 +328,16 @@ pub fn install(
         }
         send_blocks(client, to, secret, file, from, ev)?;
         verify(client, to, secret, file, opts.verify_retries, ev)?;
-        let a = writes::authed(client, to, secret, Command::UpdateActivate, &mgmt_host::activate_request(false))?;
-        if mgmt_host::parse_flag_reply(&a.payload) != Some(false) {
-            return Err(decode(&a, "UPDATE_ACTIVATE reply is not 'permanent 0' (Table M-1)"));
+        verified = true;
+        match writes::resetting(client, to, secret, Command::UpdateActivate, &mgmt_host::activate_request(false))? {
+            writes::Resetting::ResetSeen => restart_from = None,
+            writes::Resetting::Answered(a, before) if a.ok() => {
+                if mgmt_host::parse_flag_reply(&a.payload) != Some(false) {
+                    return Err(decode(&a, "UPDATE_ACTIVATE reply is not 'permanent 0' (Table M-1)"));
+                }
+                restart_from = Some(before);
+            }
+            writes::Resetting::Answered(a, _) => return Err(Failure::Status(a, Command::UpdateActivate)),
         }
         ev(Event::Activated);
         Ok(())
@@ -338,6 +350,8 @@ pub fn install(
             {
                 let _ = writes::end_session(client, to, secret);
             }
+        } else if verified {
+            ev(Event::LeftForResume);
         } else if should_abort(&f) {
             if let Ok(restart_needed) = abort(client, to, secret) {
                 ev(Event::Aborted { restart_needed });
@@ -350,25 +364,27 @@ pub fn install(
     match opts.wait {
         None => Ok(Outcome::Activated),
         Some(w) => {
-            confirm(client, to, id.uptime_ms, target, Some(file.header.version), w, ev)?;
+            confirm(client, to, restart_from, target, Some(file.header.version), w, ev)?;
             Ok(Outcome::Confirmed)
         }
     }
 }
 
-/// After an activation or a `ROLLBACK`: wait for the reset, check that `slot` runs (with
-/// `version` if given), then wait for the self-confirmation (tag 10 back to 0) or report the
-/// rollback.
+/// After an activation or a `ROLLBACK`: wait for the reset (unless `uptime_before` is None:
+/// already seen), check that `slot` runs (with `version` if given), then wait for the
+/// self-confirmation (tag 10 back to 0) or report the rollback.
 pub fn confirm(
     client: &mut Client,
     to: SocketAddr,
-    uptime_before: u32,
+    uptime_before: Option<u32>,
     slot: u8,
     version_want: Option<Version>,
     w: Waits,
     ev: &mut dyn FnMut(Event),
 ) -> Result<(), Failure> {
-    writes::wait_for_restart(client, to, uptime_before, w.restart)?;
+    if let Some(before) = uptime_before {
+        writes::wait_for_restart(client, to, before, w.restart)?;
+    }
     ev(Event::Restarted);
     let end = Instant::now() + w.confirm;
     let mut seen_trial = false;
@@ -414,15 +430,18 @@ pub fn rollback(client: &mut Client, to: SocketAddr, secret: &Secret, wait: Opti
         2 => 1,
         s => return Err(other(format!("IDENTIFY reports running slot {s} (tag 23)"), to)),
     };
-    let a = writes::authed_raw(client, to, secret, Command::Rollback, &[])?;
-    if !a.ok() {
-        if !matches!(a.status_code, 16..=19 | 32..=35) {
-            let _ = writes::end_session(client, to, secret);
+    let restart_from = match writes::resetting(client, to, secret, Command::Rollback, &[])? {
+        writes::Resetting::ResetSeen => None,
+        writes::Resetting::Answered(a, before) if a.ok() => Some(before),
+        writes::Resetting::Answered(a, _) => {
+            if !matches!(a.status_code, 16..=19 | 32..=35) {
+                let _ = writes::end_session(client, to, secret);
+            }
+            return Err(Failure::Status(a, Command::Rollback));
         }
-        return Err(Failure::Status(a, Command::Rollback));
-    }
+    };
     if let Some(w) = wait {
-        confirm(client, to, id.uptime_ms, target, None, w, ev)?;
+        confirm(client, to, restart_from, target, None, w, ev)?;
     }
     Ok(target)
 }

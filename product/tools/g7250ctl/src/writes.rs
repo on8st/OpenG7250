@@ -252,17 +252,56 @@ pub fn switch_level(client: &mut Client, to: SocketAddr, secret: &Secret, level:
 
 /// `RESTART` (A1.9) or `FACTORY_RESET` (A1.6a): the reset ends the write session, so no
 /// `END_WRITE_SESSION` follows. A refusal (59 RF present, 35, ...) is reported; then the
-/// session is ended if one may be held.
-pub fn reset(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command) -> Result<(), Failure> {
+/// session is ended if one may be held. Returns `Some(uptime before)` to wait from, or `None`
+/// if the reset has already been seen (a lost reply, [`resetting`]).
+pub fn reset(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command) -> Result<Option<u32>, Failure> {
     debug_assert!(matches!(cmd, Command::Restart | Command::FactoryReset));
-    let a = authed_raw(client, to, secret, cmd, &[])?;
-    if !a.ok() {
-        if cmd == Command::FactoryReset && may_hold_session(a.status_code) {
-            let _ = end_session(client, to, secret);
+    match resetting(client, to, secret, cmd, &[])? {
+        Resetting::ResetSeen => Ok(None),
+        Resetting::Answered(a, before) if a.ok() => Ok(Some(before)),
+        Resetting::Answered(a, _) => {
+            if cmd == Command::FactoryReset && may_hold_session(a.status_code) {
+                let _ = end_session(client, to, secret);
+            }
+            Err(Failure::Status(a, cmd))
         }
-        return Err(Failure::Status(a, cmd));
     }
-    Ok(())
+}
+
+/// The outcome of a request that ends in a commanded reset.
+#[derive(Debug)]
+pub enum Resetting {
+    /// The reply came (any status); with the uptime read just before the request, for
+    /// [`wait_for_restart`].
+    Answered(Answer, u32),
+    /// The reply was lost, but `IDENTIFY` shows the radio restarted: the request ran.
+    ResetSeen,
+}
+
+/// How long [`resetting`] waits to see a reset after a lost reply.
+pub const RESET_PROBE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// An authenticated request that ends in a commanded reset (`RESTART`, `FACTORY_RESET`,
+/// `UPDATE_ACTIVATE`, `ROLLBACK`). Its stored reply does not survive the reset (Table A1-4), so
+/// if the reply is lost, a retransmission after the reset meets a spent challenge and gets 33,
+/// or gets no reply at all while the radio restarts. Either is ambiguous: the request may have
+/// run. The radio is then asked with `IDENTIFY` whether it restarted (uptime below the one
+/// read before the request). A 33 to the first send is a plain authentication failure.
+pub fn resetting(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command, payload: &[u8]) -> Result<Resetting, Failure> {
+    let before = {
+        let a = reads::identify(client, to)?;
+        g7250_proto::mgmt::payload::Identify::decode(&a.payload).expect("checked by reads::identify").uptime_ms
+    };
+    let ambiguous = |r: &Result<Answer, Failure>| match r {
+        Ok(a) => a.status_code == 33 && a.sends > 1,
+        Err(Failure::Transport(crate::transport::Error::NoReply { .. })) => true,
+        Err(_) => false,
+    };
+    let r = authed_raw(client, to, secret, cmd, payload);
+    if ambiguous(&r) && wait_for_restart(client, to, before, RESET_PROBE).is_ok() {
+        return Ok(Resetting::ResetSeen);
+    }
+    r.map(|a| Resetting::Answered(a, before))
 }
 
 /// After a reset: wait until the radio answers `IDENTIFY` again with an uptime below `before`

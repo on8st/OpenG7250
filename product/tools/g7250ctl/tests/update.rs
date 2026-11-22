@@ -98,6 +98,8 @@ struct Radio {
     /// After activation: IDENTIFYs in trial before the confirmation, or a rollback.
     trial_identifies: u32,
     trial_rolls_back: bool,
+    /// Lose the reply to UPDATE_ACTIVATE; the reset then discards the stored replies.
+    drop_activate_reply: bool,
     old: ([u8; 4], u8),
     seen: Vec<Seen>,
 }
@@ -233,9 +235,20 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
                 r.running_slot = 3 - r.running_slot;
                 r.update_state = 1;
                 r.uptime = 0;
+                if r.drop_activate_reply {
+                    r.drop_activate_reply = false;
+                    stored.clear();
+                    r.challenges.clear();
+                    return None;
+                }
                 reply_of(0, &[0])
             }
         },
+        0x44 if r.update_state == 1 && r.transfer.is_none() => {
+            // Recorded so that a test can see it; a host must not send it here.
+            r.aborted = true;
+            reply_of(0, &[1])
+        }
         0x44 => {
             r.transfer = None;
             r.aborted = true;
@@ -505,6 +518,25 @@ fn a_silent_radio_is_left_for_resume_and_resume_continues() {
     let b: Vec<u32> = blocks(&st).iter().map(|x| x.0).collect();
     assert_eq!(b, vec![0, 1, 2, 3, 3, 4], "blocks 3 and 4 after the resume");
     assert_eq!(cmds(&st).iter().filter(|c| **c == 0x40).count(), 1, "no second UPDATE_BEGIN");
+}
+
+#[test]
+fn a_lost_activation_reply_is_resolved_with_identify_and_never_aborted() {
+    // Found against the reference model: the reply to UPDATE_ACTIVATE is lost, the reset
+    // discards the stored reply, the retransmission gets 33 (challenge spent). The radio did
+    // restart into the new image; the host must see that and must not send UPDATE_ABORT.
+    let img = image(900);
+    // A radio that has just restarted (small uptime), as in the reference-model run: the
+    // restart is judged against the uptime read just before the activation, not at the start.
+    let (addr, st) = start(Radio { drop_activate_reply: true, trial_identifies: 1, uptime: 200, ..radio(1) });
+    let mut ev = Vec::new();
+    let out = update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |e| ev.push(e)).unwrap();
+    assert_eq!(out, update::Outcome::Confirmed);
+    let c = cmds(&st);
+    assert!(!c.contains(&0x44), "no UPDATE_ABORT: {c:x?}");
+    assert_eq!(c.iter().filter(|x| **x == 0x43).count(), 2, "UPDATE_ACTIVATE sent and retransmitted once");
+    let g = st.lock().unwrap();
+    assert_eq!((g.running_slot, g.update_state, g.aborted), (2, 0, false));
 }
 
 #[test]

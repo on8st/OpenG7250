@@ -292,7 +292,7 @@ fn restart_is_allowed_while_another_host_writes_and_sends_no_session_end() {
     let (addr, st) = start(State { secret: Some(OLD), holder: Some(other), uptime: 50_000, ..Default::default() });
     let mut c = client();
     writes::reset(&mut c, addr, &secret(OLD), g7250_proto::mgmt::Command::Restart).unwrap();
-    assert_eq!(cmds(&st), vec![0x10, 0x24]);
+    assert_eq!(cmds(&st), vec![0x01, 0x10, 0x24], "IDENTIFY for the uptime, then the signed RESTART");
     let up = writes::wait_for_restart(&mut c, addr, 50_000, std::time::Duration::from_secs(2)).unwrap();
     assert!(up < 50_000);
 }
@@ -304,7 +304,7 @@ fn refused_factory_reset_is_reported() {
     let f = writes::reset(&mut c, addr, &secret(OLD), g7250_proto::mgmt::Command::FactoryReset).unwrap_err();
     assert!(f.to_string().contains("status 59: reset refused: RF present"), "{f}");
     // A refused FACTORY_RESET may have opened the session: it is ended.
-    assert_eq!(cmds(&st), vec![0x10, 0x22, 0x10, 0x13]);
+    assert_eq!(cmds(&st), vec![0x01, 0x10, 0x22, 0x10, 0x13]);
 }
 
 #[test]

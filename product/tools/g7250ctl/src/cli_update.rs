@@ -126,7 +126,7 @@ fn progress(json: bool) -> impl FnMut(Event) {
                 "update aborted{}",
                 if restart_needed { "; the radio needs a restart (g7250ctl restart) before RX works again" } else { "" }
             ),
-            Event::LeftForResume => eprintln!("the radio stopped answering; the transfer is left as it is: `install --resume` within 10 min continues it"),
+            Event::LeftForResume => eprintln!("the transfer is left as it is (no abort): `install --resume` within 10 min continues it"),
         }
     }
 }

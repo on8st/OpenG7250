@@ -53,6 +53,9 @@ enum Cmd {
         /// Use P2 discovery on port 1024 (B3.2) instead; lists any P2 radio.
         #[arg(long)]
         p2: bool,
+        /// Discovery port for --p2 (B3.1: 1024); replies are taken only from this port.
+        #[arg(long, default_value_t = discovery::PORT, value_name = "PORT")]
+        p2_port: u16,
     },
     /// Show identification: model, MAC, firmware versions, update state, owner (A1.5).
     Info {
@@ -156,7 +159,7 @@ pub(crate) fn open(policy: Policy, addr: &str) -> Result<(Client, SocketAddr), (
 
 fn run(cli: &Cli, policy: Policy) -> Outcome {
     match &cli.cmd {
-        Cmd::Discover { wait, broadcast, port, p2 } => discover_cmd(cli.json, policy, *wait, broadcast, *port, *p2),
+        Cmd::Discover { wait, broadcast, port, p2, p2_port } => discover_cmd(cli.json, policy, *wait, broadcast, *port, *p2, *p2_port),
         Cmd::Info { addr } => {
             let (mut c, to) = open(policy, addr)?;
             let a = reads::identify(&mut c, to).map_err(fail)?;
@@ -244,10 +247,10 @@ fn logs_cmd(json: bool, policy: Policy, addr: &str, from: u32, follow: bool, pol
     Ok(exit::OK)
 }
 
-fn discover_cmd(json: bool, policy: Policy, wait: f64, broadcast: &[Ipv4Addr], port: u16, p2: bool) -> Outcome {
+fn discover_cmd(json: bool, policy: Policy, wait: f64, broadcast: &[Ipv4Addr], port: u16, p2: bool, p2_port: u16) -> Outcome {
     let wait = Duration::from_secs_f64(wait.max(0.0));
     if p2 {
-        let found = discover::p2_all(&discover::targets(broadcast, discovery::PORT), discovery::PORT, wait, policy.interval, policy.retransmits)
+        let found = discover::p2_all(&discover::targets(broadcast, p2_port), p2_port, wait, policy.interval, policy.retransmits)
             .map_err(|e| (exit::ERROR, e.to_string()))?;
         if json {
             println!("{}", Json::array(found.iter().map(|f| render::p2_json(f.from, &f.reply))));

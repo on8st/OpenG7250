@@ -92,6 +92,17 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   image in the other slot (0064) and waits the same way. `package <file>` checks a file
   and shows its header without sending anything.
 
+## Runs against the reference model
+
+`scripts/lossy-relay.py LISTEN TARGET SECONDS` sits between the tool and the model and drops
+the first reply to every request once, so that retransmission is exercised (the model's
+fixtures delay replies but lose none):
+
+```sh
+python3 scripts/lossy-relay.py 22251 21251 120 &
+g7250ctl install 127.0.0.1:22251 a.g7pk b.g7pk --secret-file radio.secret
+```
+
 ## Exit codes
 
 | Code | Meaning |

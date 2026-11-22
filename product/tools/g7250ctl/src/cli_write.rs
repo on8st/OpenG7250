@@ -304,14 +304,16 @@ fn confirm(prompt: &str) -> Result<(), (u8, String)> {
 
 fn reset(json: bool, policy: g7250ctl::transport::Policy, addr: &str, s: &Secret, cmd: Command, wait: bool, limit: u64) -> Outcome {
     let (mut c, to) = open(policy, addr)?;
-    let before = reads::identify(&mut c, to).map_err(fail)?;
-    let up = Identify::decode(&before.payload).expect("checked by reads::identify").uptime_ms;
-    writes::reset(&mut c, to, s, cmd).map_err(fail)?;
+    let from = writes::reset(&mut c, to, s, cmd).map_err(fail)?;
     let what = if cmd == Command::Restart { "restart" } else { "factory reset" };
     if !wait {
         return done(json, &format!("{what} accepted"));
     }
-    match writes::wait_for_restart(&mut c, to, up, Duration::from_secs(limit)) {
+    let waited = match from {
+        Some(up) => writes::wait_for_restart(&mut c, to, up, Duration::from_secs(limit)),
+        None => reads::identify(&mut c, to).map(|a| Identify::decode(&a.payload).map(|i| i.uptime_ms).unwrap_or(0)),
+    };
+    match waited {
         Ok(ms) => done(json, &format!("{what} done; the radio answers again (uptime {})", render::uptime(ms))),
         Err(e) if cmd == Command::FactoryReset => Err((
             e.exit_code(),
