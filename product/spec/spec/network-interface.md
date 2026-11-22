@@ -194,6 +194,7 @@ Table A1-3 — Management status codes (0020 §27)
 | | | 61 | image too large for the application area (A1.8a item 3; 0028) or, for an image of this firmware, for its slot (A1.8; 0061) |
 | | | 62 | refused: the value needs the calibration set (A1.12; 0039) |
 | | | 63 | image linked for the running slot (A1.8; 0043) |
+| | | 64 | nothing taken: room made in the store, send the block again as a new request (A1.8 "Store full during a transfer"; 0067 addendum) |
 
 **Malformed payload** (0056). Status 17 also covers a payload that does not have the size or
 structure Annex M gives for its command (a wrong length, a TLV that runs past the end, a missing
@@ -330,15 +331,20 @@ power loss (0035).
   of A3.5 are, in RAM not initialised at start (range the firmware's choice). Each entry
   carries a check word; at start an entry that fails its check and every entry after it are
   dropped. Sequence numbers continue from the last entry kept, so `READ_LOG` pages stay
-  consistent (L-3); after a power loss, or a ring that fails as a whole, the log starts empty
-  and sequence numbers start at 0. Kept entries keep their uptime of the previous run.
+  consistent (L-3); after a power loss, or a ring that fails as a whole (its oldest entry
+  failing included), the log starts empty and sequence numbers start at 0. **Power loss**
+  here and for the counters of A3.5 means a start whose reset flags include power-on or
+  brown-out, whatever cause the start entry names, or a start with no reset flag at all
+  (0068 addendum, accepted 2026-11-22). Kept entries keep their uptime of the previous run.
 - **The reason before a commanded reset** (0068). Before every reset it commands, after the
   unkey and RF gone (A1.9 step 4), the firmware MUST log the reason as its last entry:
   `restart: restart` (`RESTART`), `restart: factory-reset` (`FACTORY_RESET`),
   `restart: update-activated slot <s> <version>` (`UPDATE_ACTIVATE`),
   `restart: update-abandoned` (the 10-minute rule of A1.8, also after `UPDATE_ABORT`),
   `restart: installer-abandoned` (A1.8a item 3, before the first erase),
-  `restart: trial-unconfirmed` (A1.8, 60 s), and for `ROLLBACK` the line of A1.8 "`ROLLBACK`".
+  `restart: trial-unconfirmed` (A1.8, 60 s), and for `ROLLBACK` the line of A1.8 "`ROLLBACK`",
+  also logged as the last entry before the reset, not when the command is accepted (0068
+  addendum).
   Slots and versions are written as A1.8 "Log names" says.
 - **The start entry** (0068). At every start the boot stage MUST write, as the first entry of
   the run, `start after <cause>: log kept` or `start after <cause>: log lost` ("lost": the ring
@@ -350,7 +356,8 @@ power loss (0035).
   reading; whether the flags are trustworthy on this radio is P-SYS-2 (HIS-13, HIS-18). Right
   after it the boot stage writes its outcomes: `boot: trial of slot <s>
   started`, `boot: rollback to slot <s> (trial not confirmed)`, `boot: slot <s> refused:
-  <check>` (A1.8 "Boot-stage refusals").
+  <check>`, `boot: fallback to slot <s> (active slot refused, no trial)` (A1.8 "Boot-stage
+  refusals"; 0068 addendum).
 - **Pending hardware** (0068). Whether this RAM survives the stage before the boot stage is
   P-SYS-9 (HIS-13), measured by the same radio check as the counters. Until it is set the log
   MAY start empty after a reset (`log lost`); nothing else depends on it.
@@ -381,7 +388,7 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   G7250 restarts into the running image in the same way, the staging area discarded
   (0022 §77 item 1).
   **What restarts the timer** (0063 addendum). "Update command" in the 10-minute rule means
-  an update command answered with status 0 or 1, other than `UPDATE_STATUS` and a second
+  an update command answered with status 0, 1 or 64 (0067 addendum), other than `UPDATE_STATUS` and a second
   `UPDATE_ABORT` (which changes nothing). A refused update command (any other status,
   54 and 55 of "No transfer in progress" among them) and a repeat answered from the stored
   reply (A1.4) neither restart nor extend any update timer, and change nothing else.
@@ -465,6 +472,13 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   verify the transfer stays in progress: the host may send blocks again and verify again, and
   `UPDATE_ACTIVATE` gets 55 until a verify succeeds. `UPDATE_ACTIVATE` adds no check of its
   own; an accepted `UPDATE_BLOCK` after a good verify cancels that verify.
+- **Store full during a transfer** (0067 addendum, accepted 2026-11-22). An `UPDATE_BLOCK`
+  that finds no room in the store for what it must record makes room (its one erase, B2.3
+  "Flash work"), takes nothing of the block and answers 64; the transfer goes on and "blocks
+  received" is unchanged. The host sends the same block again as a new request (a new request
+  id), and it is taken. An `UPDATE_VERIFY` that needs room makes it and completes in the same
+  request. Either logs `store: room made (update)`. Status 55 still discards the transfer
+  ("Write failure").
 - **Blocks sent again** (0067). During a transfer, an `UPDATE_BLOCK` for a block number already
   received, sent as a new request (a new request id, so not a repeat of A1.4) with a good CRC,
   MUST be accepted and written: its data replaces what was received for that block, and the
@@ -479,7 +493,9 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   previous image, logs `boot: slot <s> refused: <check>` and the rollback, and the update
   state becomes "rolled back" (Table M-2 tag 10 = 2). A confirmed active slot that fails it:
   the boot stage starts the other slot if that slot counts as good (tag 9 = 1, below), as the
-  active image and without a trial, records this in the boot record and logs it; the update
+  active image and without a trial, records this in the boot record and logs
+  `boot: slot <s> refused: <check>` and `boot: fallback to slot <s> (active slot refused, no
+  trial)` (0068 addendum); the update
   state becomes "rolled back". If neither slot passes, the boot stage holds the A3.6 safe
   state, services the watchdog and does not start the network; recovery is the vendor path
   (A1.8a item 9). **Log names** (0067): in every update and boot log line, the `ROLLBACK` line
@@ -489,7 +505,7 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   name `hash` or `header`; a version is written `major.minor.build`. A failed `UPDATE_VERIFY`
   names, before any of these, `missing-blocks` when a block has not been received (A1.8
   "Blocks sent again") and `unreadable` when a received word cannot be read for the hash
-  (0067 addendum, proposed 2026-11-22).
+  (0067 addendum, accepted 2026-11-22).
 - **Integrity in `IDENTIFY`** (0067; Table M-2 tag 9), per slot: 1 good, the slot passed the
   image check when last judged and its staging, if any, ended with a good `UPDATE_VERIFY`;
   0 none, the slot is erased, has no image record, or its staging has not ended with a good
@@ -531,8 +547,9 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   during a trial boot"; during an update: 58) and the other slot holds an image of this
   firmware that checks good (`IDENTIFY` tag 9 = 1 for that slot, a slot whose trial failed
   included; 0067); otherwise it gets 55 and nothing changes. It needs no downgrade flag. When accepted, the G7250 writes the boot
-  record, logs `rollback commanded: slot <from> <version> to slot <to> <version>`, replies
-  with status 0 and resets as a commanded reset (A1.9; status 59 and no change if RF stays).
+  record, replies with status 0 and resets as a commanded reset (A1.9; status 59 and no
+  change if RF stays), logging `rollback commanded: slot <from> <version> to slot <to>
+  <version>` as the last entry before the reset (A1.7; 0068 addendum).
   The image started is a trial (U-6): if it does not confirm itself, the boot stage returns to
   the image that carried out the `ROLLBACK`. Configuration that the older image does not
   understand is kept but not used (U-8).
@@ -1483,7 +1500,8 @@ A3.5 **Fault state** (0007, Decision 5):
   `NOT_CLEARABLE`.
 - **Counters** (0022 §27). The fault entry counter per code, a reset counter per reset cause
   and `TRIP_COUNT` count since power-on. They MUST survive `RESTART` and every other reset
-  without loss of power and are cleared only at power-on. They are kept in RAM; whether that RAM
+  without loss of power and are cleared only at power-on (a start with a power-on or brown-out
+  flag, or with no reset flag, counts as power-on: A1.7 "Kept over a reset"; 0068 addendum). They are kept in RAM; whether that RAM
   content survives a reset without power loss, including the vendor bootloader that runs
   before the boot stage, is pending hardware (P-SYS-9; HIS-13). P-SYS-9 is part of the freeze
   rule of Annex P: until it is shown, TX stays locked, so a lost count can never let a
@@ -3818,7 +3836,7 @@ Table P-1 — Pending hardware parameters
 | P-NET-2 | Whether the CH394 MAC address is unique per unit ([HIS] HIS 40) | A1.5, B3 | HIS-15 | the CH394 value is used as it is |
 | P-NET-3 | Whether the CH394 reports the destination address (unicast, directed or limited broadcast) of a received UDP datagram ([HIS] HIS 40, HIS 90) | B3.9 (Set IP) | HIS-14 | treat every Set IP as unicast or directed broadcast: own subnet only, any source while link-local (B3.9) |
 | P-SYS-1 | Pin states between reset and the boot stage's GPIO init (board pull resistors on the RF control pins of [HIS] HIS 85, and what the vendor bootloader leaves); whether they hold the safe levels in that window | A3.6, A3.5 | HIS-13 | outside this spec before the boot stage runs; the boot stage sets the safe state within 20 µs of its first instruction (A3.6; 0045) |
-| P-SYS-2 | Whether the MCU's reset flags, read by the boot stage after the vendor bootloader has run, name the cause of each kind of reset (power-on, software, watchdog, brown-out, pin) correctly on this radio; the radio check gives each kind of reset and reads the start entry and tag 17. Whether the log survives a warm reset is part of P-SYS-9 (0068) | A1.7, Table B8-3 `WDT_RESET_AT_START`, Annex M tag 17 | HIS-13, HIS-18 | the cause is named from the flags as read (A1.7; 0068); nothing that locks or unlocks TX relies on the name |
+| P-SYS-2 | Whether the MCU's reset flags, read by the boot stage after the vendor bootloader has run, name the cause of each kind of reset (power-on, software, watchdog, brown-out, pin) correctly on this radio; the radio check gives each kind of reset and reads the start entry and tag 17, and shows that every reset without power loss sets at least one flag (a start with no flag counts as power loss, 0068 addendum); P-SYS-9 is not set before this is shown. Whether the log survives a warm reset is part of P-SYS-9 (0068) | A1.7, Table B8-3 `WDT_RESET_AT_START`, Annex M tag 17 | HIS-13, HIS-18 | the cause is named from the flags as read (A1.7; 0068); nothing that locks or unlocks TX relies on the name |
 | P-SYS-3 | Power-up path without the controller (HIS 20 H1/H2) | part A scope (0029) | HIS-17 | none; observation T0-P2 |
 | P-SYS-4 | Behaviour of the stock controller's panel with a silent main unit | part A scope (0023) | HIS-17 | CTRL idle ([HIS] HIS 70) |
 | P-SYS-5 | Drill F1: the vendor bootloader starts an image of this firmware, and the vendor path installs the stock firmware into an empty application area; whether the vendor bootloader uses an application sector as staging, sector 6 in particular, which holds half of the store ([HIS] HIS 15 rule 5) | A1.8 (slot layout, store location; 0061), A1.8a items 3, 9 (0028) | HIS-19 | no first install before F1; foreign `UPDATE_BEGIN` gets status 56 |
@@ -4015,12 +4033,12 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-85 | With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported; the 55 reply to an erase that does not end comes within 15 s of the request (emulator; B2.3 "Flash work"; 0065, 0069). |
 | T-A1-86 | A power loss after each word of a store write, and at points during the erase of the other store sector in a compaction: after the restart each item holds its old or its new value, never a mix or an older value, a write answered 0 is kept, and the generation does not go back (emulator, flash.log; A1.6 "Store writes"; 0065). |
 | T-A1-87 | A double ECC error in a record of the live store sector, and one in the newest commit word: the store opens without a fault or reset, uses the older record or the previous generation, logs it, and later writes skip the word; an item with no readable record takes its Table A1-4 value (emulator, if it models flash ECC; A1.6 "Store writes"; 0065). |
-| T-A1-91 | Each commanded reset (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`, the trial's 60 s limit, the abandonment after `UPDATE_ABORT`) leaves its `restart:` line as the last entry before the start entry; after a trial that resets before confirming, `boot: rollback to slot <s> (trial not confirmed)` follows the start entry; a watchdog reset keeps the entries before it, followed by `start after watchdog: log kept`; a power cycle gives `start after power-on: log lost` with sequence numbers from 0; a kept ring with one entry corrupted keeps the entries before it and drops it and those after (reference model or emulator; A1.7 "Kept over a reset"; 0068). |
+| T-A1-91 | Each commanded reset (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`, the trial's 60 s limit, the abandonment after `UPDATE_ABORT`) leaves its `restart:` line as the last entry before the start entry; after a trial that resets before confirming, `boot: rollback to slot <s> (trial not confirmed)` follows the start entry; a watchdog reset keeps the entries before it, followed by `start after watchdog: log kept`; a power cycle gives `start after power-on: log lost` with sequence numbers from 0; a kept ring with one entry corrupted keeps the entries before it and drops it and those after; with the oldest entry corrupted, or a start with no reset flag, or with the power-on flag set beside the software flag, the start entry reads `log lost` (`start after unknown: log lost` with no flag) with sequence numbers from 0 and the counters of A3.5 from 0; the `ROLLBACK` line is the last entry before the start entry, not followed by other entries of the old run (reference model or emulator; A1.7 "Kept over a reset"; 0068 and its addendum). |
 | T-A1-92 | On the emulator, after the reply to `CHANGE_SECRET` the flash dump shows the new secret only in the live store sector and the old secret only in the other, stale sector; after a `RESTART`, and after a power cycle, neither sector holds the old secret, and flash.log shows the stale sector erased before the management socket opens, with `store: stale secret erased` in the log; a non-live sector that holds only the live secret is not erased at start; after a `FACTORY_RESET` whose second erase was made to fail, the next start erases the sector with the old secret; a `SET_CONFIG` that needs a compaction before any restart erases the stale sector then; each reply within 15 s with one erase per request; with the new generation's commit word made unreadable before the restart, the store falls back, keeps the stale sector and logs it (A1.10 "The old secret in flash"; B2.3 "Flash work"; 0069). |
 | T-A1-93 | `g7250ctl` against the reference model: every command of Table A1-2 is sent; a lost reply is retransmitted with the same request id and payload every 500 ms, 5 times, and for a request that may do flash work for at least 16 s, while every new request gets a new id; each authenticated request uses one fresh challenge and `CHANGE_SECRET` sends the masked secret; an update picks the package for the slot not running (tag 23), after a failed verify sends every block again in order with new ids, and confirms the result with `IDENTIFY` after the reset; package files with a wrong length, magic, header version, signature length or hash are refused before `UPDATE_BEGIN` (reference model; A1.1a; Annex M "Package file"; 0070, 0071). |
-| T-A1-88 | Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header, one of them an intact image with 32 bytes appended (header length and hash adjusted), which the log names `header`, not `integrity`. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending every block again with new request ids, in order, replaces the received data and the next verify succeeds; an `UPDATE_VERIFY` with the last block not sent (a block left out in the middle would make the next one 54, out of order) gets 55 with `missing-blocks` in the log, not `hash`, and sending that last block then lets the verify succeed (0067 addendum); a block sent again alone is accepted and written, and `UPDATE_STATUS` shows any blocks the radio counts as not received again (reference model or emulator; A1.8 "Image check", "`UPDATE_VERIFY`"; 0067). |
+| T-A1-88 | Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header, one of them an intact image with 32 bytes appended (header length and hash adjusted), which the log names `header`, not `integrity`. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending every block again with new request ids, in order, replaces the received data and the next verify succeeds; an `UPDATE_VERIFY` with the last block not sent (a block left out in the middle would make the next one 54, out of order) gets 55 with `missing-blocks` in the log, not `hash`, and sending that last block then lets the verify succeed (0067 addendum); with the store made full, an `UPDATE_BLOCK` gets 64, the log shows `store: room made (update)`, `UPDATE_STATUS` shows the transfer still receiving with the same blocks received, and the block sent again with a new request id is taken, while a repeat with the same id gets 64 again; a verify with the store full succeeds (0067 addendum, full store); a block sent again alone is accepted and written, and `UPDATE_STATUS` shows any blocks the radio counts as not received again (reference model or emulator; A1.8 "Image check", "`UPDATE_VERIFY`"; 0067). |
 | T-A1-89 | `IDENTIFY` tag 9 for the other slot: 1 after a good verify; 0 from the first erase of `UPDATE_BEGIN`, after `UPDATE_ABORT` and after a failed verify, also after a restart; 2 when one byte of a confirmed other image is changed and the radio restarts; `ROLLBACK` with the other slot at 0 or 2 gets 55 and changes nothing; after a trial that failed to confirm itself, tag 9 for that slot stays 1 and `ROLLBACK` to it is accepted and starts it as a trial (reference model or emulator; A1.8 "Integrity in `IDENTIFY`"; 0067). |
-| T-A1-90 | One byte of the staged image changed after a good verify and `UPDATE_ACTIVATE`: the boot stage does not start the trial slot, starts the previous image, logs `boot: slot B refused: integrity` (slot named by its letter) and the rollback, and tag 10 reports 2; one byte of the confirmed active image changed with a good other slot: the other slot starts without a trial and the change is logged; both slots changed: the boot stage holds the safe state and the radio does not answer (emulator; A1.8 "Boot-stage refusals"; 0067). |
+| T-A1-90 | One byte of the staged image changed after a good verify and `UPDATE_ACTIVATE`: the boot stage does not start the trial slot, starts the previous image, logs `boot: slot B refused: integrity` (slot named by its letter) and the rollback, and tag 10 reports 2; one byte of the confirmed active image changed with a good other slot: the other slot starts without a trial and the log shows `boot: slot A refused: integrity` then `boot: fallback to slot B (active slot refused, no trial)` (0068 addendum); both slots changed: the boot stage holds the safe state and the radio does not answer (emulator; A1.8 "Boot-stage refusals"; 0067). |
 | T-A2-01 | Identification and record `level` report the active level and the owner (IP and port). |
 | T-A2-02 | A level change drops the arm with `LEVEL_CHANGE` (after G6). |
 | T-A2-03 | While level 2 is active, P2 C&C starts no session and no takeover (after G6). |
