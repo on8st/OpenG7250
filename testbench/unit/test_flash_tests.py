@@ -159,7 +159,12 @@ class FlashTestsTest(unittest.TestCase):
         self.assertTrue(run(t_flash.t_a1_86, FakeRadio(broken="mix")))
 
     def test_a1_87_passes_and_fails(self):
-        self.assertEqual(run(t_flash.t_a1_87, FakeRadio()), [])
+        notes = []
+        def keep(ctx):
+            t_flash.t_a1_87(ctx)
+            notes.extend(ctx.notes)
+        self.assertEqual(run(keep, FakeRadio()), [])
+        self.assertEqual(notes.count(t_flash.ECC_LIMIT), 1)  # two errors set, said once
         self.assertTrue(run(t_flash.t_a1_87, FakeRadio(broken="ecc")))
 
 

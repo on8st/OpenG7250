@@ -792,8 +792,10 @@ def t_b5_20(ctx):
     hp_before = {}
 
     def hp_rx():
+        """The counter; before a first packet a radio may leave it out of the list (0)."""
         st = stats(mg)
-        return None if st is None else st.get("hp_rx")
+        ctx.got(st, "GET_STATS")
+        return st.get("hp_rx")
 
     def burst(b: Burst, h: Host, pkts: list[bytes], offsets_us: list[int]):
         """Send a judged burst: GET_STATS before, net.log restarted, then the packets at their
@@ -821,11 +823,12 @@ def t_b5_20(ctx):
 
     def no_loss(b: Burst, n_sent: int):
         a, z = hp_before.get("n"), hp_rx()
-        if a is None or z is None:
-            ctx.notes.append(f"hp_rx not judged for burst {b.name}: GET_STATS has no hp_rx")
+        name = f"no loss in the burst: GET_STATS hp_rx +{n_sent} (0058) [burst {b.name}]"
+        if z is None:  # packets were read by now: B2.3 says they MUST be counted under this name
+            ctx.check(name, False, f"GET_STATS lists no hp_rx after the burst {b.tag()}")
         else:
-            ctx.check(f"no loss in the burst: GET_STATS hp_rx +{n_sent} (0058) [burst {b.name}]", z - a == n_sent,
-                      f"hp_rx {a} -> {z} (+{z - a}), sent {n_sent} {b.tag()}")
+            a = a or 0
+            ctx.check(name, z - a == n_sent, f"hp_rx {a} -> {z} (+{z - a}), sent {n_sent} {b.tag()}")
         if not netlog:
             return
         entries = []

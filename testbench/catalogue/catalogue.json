@@ -530,11 +530,16 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
+   "also": [
+    "host"
+   ],
    "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "S2 and T3 (tags 9, 10) only with a calibration set that holds P-PWR-2; the FACTORY_RESET part only from address mode DHCP (tag 1 = 0)"
+   ],
+   "timeout_s": 240
   },
   {
    "id": "T-A1-29",
@@ -1895,7 +1900,9 @@
    ],
    "pending": [],
    "tx_part": false,
-   "notes": [],
+   "notes": [
+    "on the emulator 'without a fault or reset' is not covered: it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip gives on the read"
+   ],
    "timeout_s": 300
   },
   {
@@ -1943,7 +1950,8 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "what the sectors hold needs flash.dump (proposed); the cases of the 0069 addendum need flash.ecc, power.cut and flash.fill (proposed)"
+    "what the sectors hold needs flash.dump (proposed); the cases of the 0069 addendum need flash.ecc, power.cut and flash.fill (proposed)",
+    "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip gives on the read"
    ],
    "timeout_s": 2700
   },

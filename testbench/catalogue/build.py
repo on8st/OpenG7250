@@ -134,7 +134,12 @@ TXR = {"target": "needs-radio", "also": ["host"]}
 CAL_SET = ([f"P-RF-{i}" for i in range(1, 6)] + [f"P-PWR-{i}" for i in range(1, 6)]
            + [f"P-SEN-{i}" for i in range(1, 6)] + ["P-TIM-1", "P-TIM-2", "P-RX-2", "P-TX-1",
                                                     "P-ATU-1", "P-ANT-1", "P-SYS-9"])  # P-SYS-9: 0050
+ECC_LIMIT = ("it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip "
+             "gives on the read")
 OVERRIDES: dict[str, dict] = {
+    "T-A1-28": {"also": ["host"],
+                "notes": ["S2 and T3 (tags 9, 10) only with a calibration set that holds P-PWR-2; the FACTORY_RESET part only "
+                          "from address mode DHCP (tag 1 = 0)"]},
     # A1: update and reset tests whose subject is the armed / keyed case
     **{t: TXR for t in ["T-A1-02", "T-A1-05", "T-A1-27", "T-A1-29", "T-A1-30", "T-A1-33",
                         "T-A1-38", "T-A1-40", "T-A1-52"]},
@@ -255,7 +260,8 @@ OVERRIDES: dict[str, dict] = {
                 "notes": ["the flash part (0069) needs flash.log, flash.timing, flash.fault and flash.dump"]},
     "T-A1-92": {"target": "emulator", "also": [], "needs": ["flash.log"],
                 "notes": ["what the sectors hold needs flash.dump (proposed); the cases of the 0069 addendum need flash.ecc, "
-                          "power.cut and flash.fill (proposed)"]},
+                          "power.cut and flash.fill (proposed)",
+                          "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: " + ECC_LIMIT]},
     "T-A1-93": {"target": "host", "also": [], "needs": [],
                 "notes": ["g7250ctl's own test against the reference model (0070); not run by this bench"]},
     "T-A1-83": {"target": "emulator", "also": [], "needs": ["power.cut", "time.advance", "flash.log", "hw.trace"]},
@@ -268,7 +274,8 @@ OVERRIDES: dict[str, dict] = {
                 "notes": ["slot.corrupt (proposed for the emulator); the both-slots case only on an emulator"]},
     "T-A1-85": {"target": "emulator", "also": [], "needs": ["flash.fault"]},
     "T-A1-86": {"target": "emulator", "also": [], "needs": ["flash.log", "power.cut"]},
-    "T-A1-87": {"target": "emulator", "also": [], "needs": ["flash.log", "flash.ecc", "power.cycle"]},
+    "T-A1-87": {"target": "emulator", "also": [], "needs": ["flash.log", "flash.ecc", "power.cycle"],
+                "notes": ["on the emulator 'without a fault or reset' is not covered: " + ECC_LIMIT]},
     "T-A1-77": {"target": "emulator", "also": [], "needs": ["flash.log"],
                 "notes": ["needs the update client (Table M-4 package) in the bench and the slot layout; flash.log v1.8"]},
     "T-A1-78": {"target": "emulator", "also": ["host"],
@@ -417,7 +424,7 @@ TIMEOUTS: dict[str, int] = {
     "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 900, "T-A1-09": 900, "T-A1-84": 600, "T-A1-83": 900,
     "T-A1-88": 900, "T-A1-89": 900, "T-A1-90": 900, "T-A1-67": 300, "T-A1-80": 300,
     "T-A1-05": 120, "T-A1-33": 120, "T-A1-23": 120, "T-A1-59": 120, "T-A1-78": 120, "T-A1-79": 120, "T-A1-81": 120,
-    "T-B8-10": 120, "T-A1-91": 1500, "T-A1-39": 300, "T-A1-92": 2700,
+    "T-B8-10": 120, "T-A1-91": 1500, "T-A1-28": 240, "T-A1-39": 300, "T-A1-92": 2700,
     "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-76": 120,
     # requests that may do flash work: each may take 15 s (0069), a factory reset 17 s more
     "T-A1-03": 90, "T-A1-04": 90, "T-A1-20": 90, "T-A1-22": 90, "T-A1-63": 240, "T-A1-64": 90, "T-A1-65": 120,

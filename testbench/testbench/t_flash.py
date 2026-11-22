@@ -32,6 +32,17 @@ def need(ctx, *fx):
         ctx.need(f)
 
 
+ECC_LIMIT = ("limit of the emulator: a double ECC error shows only in the flash flags, the bus fault the chip gives on the "
+             "read is not delivered; a pass does not cover 'without a fault or reset'")
+
+
+def double_ecc(ctx, address: int):
+    """A double ECC error at `address`; the result then says what the emulator cannot show."""
+    ctx.fixture("flash.ecc", address=address, type="double")
+    if ECC_LIMIT not in ctx.notes:
+        ctx.notes.append(ECC_LIMIT)
+
+
 def flog_start(ctx):
     ctx.fixture("flash.log", action="start")
 
@@ -532,7 +543,7 @@ def t_a1_86(ctx: Ctx):
 @test("T-A1-87")
 def t_a1_87(ctx: Ctx):
     """A1.6 "Store writes" (0065): a double ECC error in a store record and in the newest commit
-    word."""
+    word. Not covered on the emulator: ECC_LIMIT."""
     need(ctx, "flash.log", "flash.ecc", "power.cycle")
     s = secret(ctx)
     from .t_update import restart
@@ -561,14 +572,15 @@ def t_a1_87(ctx: Ctx):
         if not ctx.check(f"{where}: the store write of {base + 1} seen in flash.log", w is not None, "no program entry"):
             continue
         addr = w[i]
-        ctx.fixture("flash.ecc", address=addr, type="double")
+        double_ecc(ctx, addr)
         ctx.fixture("power.cycle")
         wait_reachable(ctx, f"ECC error in {where}")
         with mg(ctx, s) as u:
             got = tx_time(u)
             ctx.eq(f"{where} unreadable: the store opens and uses the older record or generation", got, base)
             ff = fault_flags(ctx)
-            ctx.check(f"{where}: without a fault (FAULT_FLAGS 0)", ff == 0, f"FAULT_FLAGS {ff}")
+            ctx.check(f"{where}: FAULT_FLAGS 0 (no bus fault is delivered by the emulator, so not 'without a fault or reset')",
+                      ff == 0, f"FAULT_FLAGS {ff}")
             ecc = [e for e in flog(ctx) if e.get("op") == "ecc"]
             ctx.check(f"{where}: the ECC error was seen by the radio", bool(ecc), f"{len(ecc)} ecc entries")
             flog_start(ctx)

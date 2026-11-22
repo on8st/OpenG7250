@@ -21,7 +21,7 @@ import os
 from .core import Ctx, PartSkip, RadioClock, test
 from .mgmt import Mgmt, identify
 from .p2 import wait_reachable
-from .t_flash import (REPLY_S, SECTOR, compaction_writes, cut_at_word, cut_entry, flog, flog_start, in_range, is_erase, mg, need,
+from .t_flash import (REPLY_S, SECTOR, compaction_writes, cut_at_word, cut_entry, double_ecc, flog, flog_start, in_range, is_erase, mg, need,
                       planned_cuts_seen, set_tx_time, store_range, tx_time, words)
 from .t_store import address, change_secret, first_secret, has, keep_secret, sectors, where
 from .t_update import secret, updating
@@ -394,7 +394,7 @@ def fall_back(ctx, st: State):
     word = commit_word(entries, st.secs)
     if not ctx.check("fall-back: the write of the new generation seen in flash.log", word is not None, "no program entry"):
         return None
-    ctx.fixture("flash.ecc", address=word, type="double")
+    double_ecc(ctx, word)
     er = store_erases(st.restart("a power cycle"), st.secs)
     st.use(old)
     kept = st.other(live)
@@ -430,7 +430,7 @@ def lost_sector(ctx, st: State):
         return False
     st.wiped = True  # from here the store is not the one of the start
     before = dump(ctx, six) if st.dump else None
-    ctx.fixture("flash.ecc", address=word, type="double")
+    double_ecc(ctx, word)
     for n in ("the first start", "the second start"):
         entries = st.restart("a power cycle")
         st.left(f"{label}, {n}", entries, six, before, skip=word)
@@ -538,7 +538,7 @@ def config_only(ctx, st: State):
         ctx.part(f"{label}: not run, the compaction did not leave the first generation in the other sector")
         return None
     for w in [*secret_words, word]:
-        ctx.fixture("flash.ecc", address=w, type="double")
+        double_ecc(ctx, w)
     er = which(st.secs, store_erases(st.restart("a power cycle"), st.secs))
     t = ident(ctx)
     with Mgmt(ctx.net) as c:

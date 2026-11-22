@@ -470,7 +470,7 @@ impl Mgmt {
             GET_CONFIG => (st::OK, self.conf_payload(r), None),
             SET_CONFIG => {
                 let mut tmp = Vec::new();
-                let s = self.set_config(r, payload, &mut tmp);
+                let s = self.set_config(r, payload, rx.src, &mut tmp);
                 out.extend(tmp);
                 let p = if s == st::OK { self.conf_payload(r) } else { vec![] };
                 (s, p, None)
@@ -853,7 +853,7 @@ impl Mgmt {
 
     /// SET_CONFIG (A1.6): validated as a whole; order of the command-specific codes 48, 49, 62
     /// (Table A1-3). Returns the status.
-    fn set_config(&mut self, r: &mut Radio, p: &[u8], out: &mut Vec<Tx>) -> u16 {
+    fn set_config(&mut self, r: &mut Radio, p: &[u8], src: Host, out: &mut Vec<Tx>) -> u16 {
         let mut c = self.conf.clone();
         let mut limits = r.persistent_limits;
         let (mut bad, mut looser, mut needs_cal, mut c3) = (false, false, false, false);
@@ -940,14 +940,21 @@ impl Mgmt {
         if c3 && r.armed() {
             r.drop_arm(crate::codes::drop::MAINTENANCE, out); // A1.9: unkey, drop, apply, reply
         }
+        // A1.6, A1.7: old value, new value and source, for every C-3 limit (band limits included)
         for k in 0..4 {
             if limits[k] != r.persistent_limits[k] {
-                r.logf(&format!("C-3 limit {k}: {} -> {} by {}", r.persistent_limits[k], limits[k], "management"));
+                r.logf(&format!("C-3 limit {k}: {} -> {} by {src}", r.persistent_limits[k], limits[k]));
+            }
+        }
+        for k in 0..c.band_limits.len() {
+            let (old, new) = (self.conf.band_limits[k], c.band_limits[k]);
+            if old != new {
+                r.logf(&format!("C-3 power limit of band {k}: {old} -> {new} (0.1 W) by {src}"));
             }
         }
         r.persistent_limits = limits;
         self.conf = c;
-        r.logf("configuration changed");
+        r.logf(&format!("configuration changed by {src}"));
         st::OK
     }
 }

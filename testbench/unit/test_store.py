@@ -6,7 +6,7 @@ import unittest
 from contextlib import contextmanager
 from unittest import mock
 
-from testbench import core, t_log, t_stale
+from testbench import core, t_flash, t_log, t_stale
 
 A, B = 0x080C0000, 0x080E0000
 SECTOR, W = 131072, 32
@@ -313,6 +313,7 @@ class OldSecret(unittest.TestCase):
         ctx = run()
         self.assertEqual(failed(ctx), [])
         self.assertEqual(ctx.parts, [])  # every case ran to its end
+        self.assertEqual(ctx.notes.count(t_flash.ECC_LIMIT), 1)  # what the emulator cannot show is in the result, once
         self.assertEqual(ctx.store.secret, bytes(range(32)))  # put back
 
     def test_every_case_judged(self):

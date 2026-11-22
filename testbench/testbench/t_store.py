@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 import struct
 import time
 
@@ -266,6 +267,114 @@ def erased_reset(ctx, s: bytes):
         if known:
             ctx.eq("neither store sector holds the old secret (failed erase finished)", where(ctx, secs, second), [])
     ctx.eq("SET_FIRST_SECRET", first_secret(ctx, os.urandom(32)), 0)
+
+
+# ---------------- T-A1-28 ----------------
+BUILT_IN_TX_MS, BUILT_IN_BAND = 300_000, 1000  # Table B8-2; A3.4 (100 W PEP; tag 8 in 0.1 W)
+
+
+def get_config(c: Mgmt) -> dict:
+    """GET_CONFIG by tag; tag 8 (one TLV per band) as {band: limit}."""
+    r = req_retransmit(c, "GET_CONFIG")
+    p = r["payload"] if r and r["status"] == 0 else b""
+    out, i = {8: {}}, 0
+    while i + 2 <= len(p):
+        v = p[i + 2:i + 2 + p[i + 1]]
+        if p[i] == 8 and len(v) == 3:
+            out[8][v[0]] = struct.unpack(">H", v[1:])[0]
+        elif p[i] != 8:
+            out[p[i]] = v
+        i += 2 + p[i + 1]
+    return out
+
+
+def names_value(text: str, value: int, scales: tuple) -> bool:
+    """The log text holds the value as a number of its own, in any of the units (the spec does not
+    fix the text): value / scale, for example 800 (0.1 W), 80 or 80.0 (W), 80000 (mW)."""
+    nums = [float(x) for x in re.findall(r"(?<![\d.])\d+(?:\.\d+)?(?![\d]|\.\d)", text)]
+    return any(abs(n - value / s) < 1e-6 for n in nums for s in scales)
+
+
+def logged_change(entries: list, old: int, new: int, ip: str, scales: tuple) -> bool:
+    """One entry with the old value, the new value and the source address (A1.6, A1.7)."""
+    for _, _, t in entries:
+        rest = re.sub(r"(?<![\d.])" + re.escape(ip) + r"(?::\d+)?(?!\d)", " ", t)  # its numbers are no values
+        if rest != t and names_value(rest, old, scales) and names_value(rest, new, scales):
+            return True
+    return False
+
+
+@test("T-A1-28")
+def t_a1_28(ctx: Ctx):
+    """A1.6 C-3, A1.7, Table A1-4: a loosened persistent limit is accepted and logged with old value,
+    new value and source; looser than built-in 49; built-in values not writable; FACTORY_RESET
+    keeps the limits."""
+    s = secret(ctx)
+    ip = ctx.host_ip
+    u32, u16 = (lambda v: struct.pack(">I", v)), (lambda v: struct.pack(">H", v))
+    with updating(ctx, s, restart_at_end=False) as u:
+        conf0 = get_config(u.c)
+        if not ctx.check("GET_CONFIG lists the TX time (tag 7) and the power limit per band (tag 8)", len(conf0.get(7, b"")) == 4
+                         and bool(conf0[8]), f"{conf0}"):
+            return
+        band = min(conf0[8])
+        tx0, band0 = struct.unpack(">I", conf0[7])[0], conf0[8][band]
+        tx = lambda v: (7, u32(v))
+        pw = lambda v: (8, bytes([band]) + u16(v))
+
+        def write(item):
+            r = u.req("SET_CONFIG", config_tlv(item))
+            return r["status"] if r else None
+
+        def now(tag):
+            c = get_config(u.c)
+            v = c[8].get(band) if tag == 8 else c.get(tag)
+            return int.from_bytes(v, "big") if isinstance(v, bytes) else v
+
+        # (name, tag, the TLV, tight, loosened, value at the start, the units a log text may use)
+        cases = [("TX time", 7, tx, 200_000, 250_000, tx0, (1, 1000)),
+                 (f"power of band {band}", 8, pw, 400, 600, band0, (1, 10, 0.01))]
+        for name, tag, scales in (("SWR limit S2", 9, (1, 100, 0.1)), ("PA temperature T3", 10, (1, 10, 0.01))):
+            v0 = int.from_bytes(conf0.get(tag, b""), "big")
+            if not v0 or write((tag, u16(v0))) != 0:
+                ctx.part(f"{name} (tag {tag}) not run: not set by the calibration set (A1.12)")
+                continue
+            cases.append((name, tag, lambda v, t=tag: (t, u16(v)), v0 - v0 // 10, v0 - v0 // 20, v0, scales))
+        try:
+            for name, tag, item, tight, loose, v0, scales in cases:
+                n0 = max([e[0] for e in read_log(u.c, complete=True)], default=-1)
+                if not ctx.eq(f"{name}: tightened to {tight}: 0", write(item(tight)), 0):
+                    continue
+                new = read_log(u.c, n0 + 1, complete=True)
+                if v0 != tight:
+                    ctx.check(f"{name}: the change logged with the source address {ip} (A1.7)", any(ip in e[2] for e in new), f"{[e[2] for e in new]}")
+                n0 = max([e[0] for e in new], default=n0)
+                ctx.eq(f"{name}: loosened to {loose}: 0", write(item(loose)), 0)
+                ctx.eq(f"{name}: in GET_CONFIG", now(tag), loose)
+                new = read_log(u.c, n0 + 1, complete=True)
+                ctx.check(f"{name}: the loosening logged with old value {tight}, new value {loose} and source {ip} in one entry (A1.6)",
+                          logged_change(new, tight, loose, ip, scales), f"{[e[2] for e in new]}")
+            for name, tag, item, built in (("TX time", 7, tx, BUILT_IN_TX_MS), (f"power of band {band}", 8, pw, BUILT_IN_BAND)):
+                was = now(tag)
+                ctx.eq(f"{name}: {built + 1}, looser than any built-in value: 49", write(item(built + 1)), 49)
+                ctx.eq(f"{name}: unchanged after it", now(tag), was)
+            kept = get_config(u.c)
+            if conf0.get(1) == b"\x00":
+                st, _, _ = factory_reset(ctx, u)
+                if ctx.eq("FACTORY_RESET: 0", st, 0):
+                    got = get_config(u.c)
+                    ctx.eq("FACTORY_RESET leaves the persistent limits unchanged (tags 7 to 10)", [got.get(k) for k in (7, 8, 9, 10)],
+                           [kept.get(k) for k in (7, 8, 9, 10)])
+                    new_s = os.urandom(32)
+                    u.s = new_s
+                    if not ctx.eq("SET_FIRST_SECRET after it: 0", first_secret(ctx, new_s), 0):
+                        return
+                    ctx.eq(f"TX time after FACTORY_RESET: {BUILT_IN_TX_MS + 1} still gets 49", write(tx(BUILT_IN_TX_MS + 1)), 49)
+            else:
+                ctx.part("'FACTORY_RESET leaves the persistent limits unchanged' not run: static address, which it would clear")
+        finally:
+            for name, _, item, _, _, v0, _ in cases:
+                ctx.eq(f"{name}: put back to {v0}", write(item(v0)), 0)
 
 
 # ---------------- the host rule of 0069 on the reference model (T-B5-22) ----------------

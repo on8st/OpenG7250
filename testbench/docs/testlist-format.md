@@ -519,7 +519,9 @@ A test with target `emulator` is also run against the reference model. A test wi
      Armed with `during_erase` before a `RESTART`, it hits the first erase after it, whichever it
      is (T-A1-92 checks that it was the stale sector's).
    - `flash.ecc {address, type: "double"|"single"}`; each detection is a `flash.log` entry
-     `{op: "ecc", type, address, boot}` (T-A1-87).
+     `{op: "ecc", type, address, boot}` (T-A1-87, T-A1-92). Limit: a double error shows only in the
+     flash flags; the bus fault the chip gives on the read is not delivered, so a pass does not
+     cover "without a fault or reset". The result says so wherever a test sets one.
    - Every erase and program entry carries `fpga_bus: "idle"|"open"` at its start (T-B5-22).
    - `console.log {action: "start"|"read"|"stop", from?}` → `{t_us, count, dropped, from, next,
      entries: [{t_us, t_first_us, boot, line}]}`: every debug-console line (without CR LF),

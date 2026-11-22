@@ -458,7 +458,8 @@ impl Radio {
             write_rejects: 0,
             update_in_progress: false,
             link_mbit: 100,
-            stats: HashMap::new(),
+            // the counters whose names the spec gives are listed from the start, at 0
+            stats: ["hp_rx", "cw_speed_clamped"].iter().map(|n| (n.to_string(), 0)).collect(),
             log: Vec::new(),
             log_seq: 0,
             log_corrupt: None,
