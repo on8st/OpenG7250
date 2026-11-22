@@ -43,6 +43,9 @@ python3 models/devices/spi_sink.py >/dev/null 2>&1 && ok spi_sink || bad spi_sin
 echo "[2f] control_i2c.py self-test (AIC3204 Control-peer + PCA9557)"
 python3 models/devices/control_i2c.py >/dev/null 2>&1 && ok control_i2c || bad control_i2c
 
+echo "[2g] fixture calls over 10 s are recorded (no emulator)"
+python3 tests/baseline/slow_calls_check.py >/dev/null 2>&1 && ok slow_calls || bad slow_calls
+
 if [ ! -x "$RN" ] && [ ! -f "$RN" ]; then
   echo "[3-4] SKIP (pinned Renode not found at tools/renode-1.17.0)"
 else

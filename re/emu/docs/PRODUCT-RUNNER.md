@@ -191,6 +191,15 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   polls the emulated time to the target, so other calls are answered meanwhile.
 - Self-test T-EMU-20.
 
+## Fixture calls over 10 s
+The test bench waits 30 s for the answer of a fixture call (tb 5fcdcf5); the stand-in bench does the
+same (it waited 10 s before). A `power.cycle` answers when the new emulator has started, which took
+4 to 10 s on a loaded host and can take longer. So that such a wait does not become a silent pass,
+every call over 10 s is in the result: `emulator.slow_fixture_calls` of its test (wait, the parts of a
+power cycle, agent requests over 1 s inside the call, the 1-minute load), a line in its `reason` also
+when it passes, and a count `slow_fixture_calls` for the run. A call not answered at the end of the
+test is listed as such. Checked without an emulator by tests/baseline/slow_calls_check.py.
+
 ## Format v1.9 fixtures
 
 `flash.dump`, `flash.fill` (docs/FLASH-model.md), and:

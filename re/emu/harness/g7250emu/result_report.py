@@ -26,6 +26,9 @@ def report(run, lines=60, grep=None):
     cr = r.get("emulator_crash_reports", "not recorded")
     out.append("EMULATOR CRASH REPORTS in the run's window: %s" % (
         "not readable" if cr is None else cr if isinstance(cr, str) else "%d%s" % (len(cr), " " + ", ".join(cr) if cr else "")))
+    sl = [(e["id"], x) for e in r["results"] for x in e.get("emulator", {}).get("slow_fixture_calls", [])]
+    out.append("FIXTURE CALLS over 10 s: %s" % ("none" if "slow_fixture_calls" in r and not sl else "not recorded" if not sl else "; ".join(
+        "%s %s %.1f s%s" % (i, x["op"], x["wait_s"], " not answered" if x.get("not_answered") else "") for i, x in sl)))
     sp = [(e["id"], e["emulator"]["ecc_spans_not_covered"]) for e in r["results"] if e.get("emulator", {}).get("ecc_spans_not_covered")]
     out.append("NOT COVERED, reads of a marked (ECC) word while its watchpoint is not in (PG set until 1 us after, first us of flash.ecc): %s" % (
         "no such span in this run" if not sp else "; ".join("%s: %d spans, at most %d instructions" % (i, s["spans"], s["max_instructions"]) for i, s in sp)))

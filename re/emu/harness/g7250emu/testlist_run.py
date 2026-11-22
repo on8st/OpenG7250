@@ -247,10 +247,11 @@ class Boot:
         """Power off and on again. Flash keeps its contents (dumped from the
         running emulator and loaded into the new one); RAM does not."""
         with self.cycle_lock:
-            self._power_cycle(cut)
+            return self._power_cycle(cut)
 
     def _power_cycle(self, cut):
         self.agent.cycling = True
+        t_begin = time.time()
         try:
             tracing = self.agent.trace is not None and not self.agent.trace.closed
             seq = 0
@@ -268,14 +269,19 @@ class Boot:
             dump = os.path.join(self.out, "flash-%d.bin" % self.boots)
             if self.agent.ask("flashdump " + dump, timeout=30, internal=True) == "ok":
                 self.flash = dump
+            t_quit = time.time()
             self.stop_emulator()
+            t_start = time.time()
             self.agent.conn = None          # the old emulator's link: wait for the new one
             self.start()
             self.fixtures.sock_new_boot(self.boots)
             self.agent.wait_connected(BOOT_WALL_TIMEOUT)
+            parts = {"before_quit_s": round(t_quit - t_begin, 3), "quit_s": round(t_start - t_quit, 3),
+                     "start_s": round(time.time() - t_start, 3)}
             if tracing:
                 self.agent.append_event({"seq": seq, "t_us": 0, "kind": "reset", "cause": "power"})
                 self.agent.ask(("trace start @%d %s" % (seq + 1, " ".join(self.fixtures.trace_pins))).strip(), internal=True)
+            return parts
         finally:
             self.agent.cycling = False
 
@@ -379,6 +385,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
     per_list = spec.get("boot") == "per-list"
     results = []
     run_notes = {BUS_FAULT_NOTE}
+    n_slow = 0
     shared = None
 
     def skip(t, reason):
@@ -523,6 +530,14 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                 e["reason"] = "not modelled: MACRAW" + (" (bench: %s)" % e["reason"] if e.get("reason") else "")
             else:
                 e.setdefault("reason", "emulator coverage: not modelled: MACRAW")
+        slow = bt.fixtures.slow_since(test_t0)
+        if slow:
+            e.setdefault("emulator", {})["slow_fixture_calls"] = slow
+            n_slow += len(slow)
+            txt = "fixture call over 10 s: " + ", ".join("%s %.1f s%s%s" % (
+                x["op"], x["wait_s"], " (not answered)" if x.get("not_answered") else "",
+                " (start of the emulator %.1f s, quit %.1f s)" % (x["parts"]["start_s"], x["parts"]["quit_s"]) if x.get("parts") else "") for x in slow)
+            e["reason"] = txt + ("; " + e["reason"] if e.get("reason") else "")
         sp = dict(bt.fixtures.ecc_spans)
         if sp["spans"]:
             e.setdefault("emulator", {})["ecc_spans_not_covered"] = sp
@@ -569,6 +584,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                             **({"dhcp_server_at_power_on": True} if dhcp_on else {}),
                             **({"flash_preload": ["0x%08X" % a for a, _ in flash_preload]} if flash_preload else {})),
         "emulator_crash_reports": crash_reports(run_t0, time.time()),
+        "slow_fixture_calls": n_slow,
         "started": started,
         "finished": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "results": results, "summary": summary,
@@ -578,6 +594,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
     json.dump(result, open(out_path, "w"), indent=2)
     for r in results:
         print("  %-7s %s %s" % (r.get("status", "?").upper(), r["id"], r.get("reason", "")))
+    print("fixture calls over 10 s: %d" % n_slow)
     cr = result["emulator_crash_reports"]
     print("emulator crash reports in the run's window: %s" % ("not readable" if cr is None else "%d%s" % (len(cr), " " + ", ".join(cr) if cr else "")))
     print("boot: %s" % pr.BOOT_MODES[boot][1])

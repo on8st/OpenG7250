@@ -479,6 +479,7 @@ class Agent:
         self.closed = False
         self.on_cut = None
         self.cycling = False
+        self.slow_asks = []                   # requests over SLOW_ASK_S (wall), with their answer
         self.events = 0
         self.lock = threading.Lock()
         threading.Thread(target=self._accept, daemon=True).start()
@@ -536,10 +537,14 @@ class Agent:
             while not self.replies.empty():
                 self.replies.get_nowait()
             self.conn.sendall((line + "\n").encode())
+            t = time.time()
             try:
-                return self.replies.get(timeout=timeout)
+                r = self.replies.get(timeout=timeout)
             except queue.Empty:
-                return None
+                r = None
+            if time.time() - t > SLOW_ASK_S:
+                self.slow_asks.append({"t_wall": t, "request": line[:60], "wait_s": round(time.time() - t, 3), "answered": r is not None})
+            return r
 
     def new_trace(self):
         """Open trace-<n>.jsonl (one file per start); returns its absolute path."""
@@ -571,6 +576,10 @@ class Agent:
             except OSError:
                 pass
         self.end_trace()
+
+
+SLOW_CALL_S = 10.0      # a fixture call that took longer is written to the result (the stand-in waits 30 s)
+SLOW_ASK_S = 1.0        # an agent request that took longer is named with it
 
 
 class FixtureServer:
@@ -620,6 +629,9 @@ class FixtureServer:
         self.sock_next = 0
         # flash.log across power cycles; what a new emulator must carry over
         self.fl_entries = []
+        self.slow_calls = []                  # fixture calls over SLOW_CALL_S
+        self.calls_open = {}                  # calls not answered yet (a hang stays visible)
+        self.local = threading.local()        # .parts: seconds of the power cycle this thread's call made
         self.fl_next = 0
         self.fl_origin = 0
         self.fl_on = True
@@ -651,11 +663,35 @@ class FixtureServer:
         for line in f:
             try:
                 req = json.loads(line)
-                rep = self.handle(req.get("op"), req.get("args") or {})
+                key, t = object(), time.time()
+                self.calls_open[key] = (req.get("op"), t, self.boot_no)
+                agent = self.agent_getter()
+                n = len(agent.slow_asks) if agent else 0
+                self.local.parts = None
+                try:
+                    rep = self.handle(req.get("op"), req.get("args") or {})
+                finally:
+                    self.calls_open.pop(key, None)
+                    if time.time() - t > SLOW_CALL_S:
+                        v = {"op": req.get("op"), "boot": self.boot_no, "t_wall": t, "wait_s": round(time.time() - t, 3)}
+                        if self.local.parts:
+                            v["parts"] = self.local.parts
+                        v["load_1min"] = round(os.getloadavg()[0], 1)
+                        v["agent_requests_over_1s"] = list(agent.slow_asks[n:]) if agent else []
+                        self.slow_calls.append(v)
             except Exception as e:  # noqa: BLE001
                 rep = {"ok": False, "error": "bad request: %s" % e}
             f.write(json.dumps(rep) + "\n")
             f.flush()
+
+    def slow_since(self, t0):
+        """Fixture calls of a test that took over SLOW_CALL_S, also one not answered yet."""
+        out = [x for x in list(self.slow_calls) if x["t_wall"] >= t0]
+        for op, t, boot in list(self.calls_open.values()):
+            if t >= t0 and time.time() - t > SLOW_CALL_S:
+                out.append({"op": op, "boot": boot, "t_wall": t, "wait_s": round(time.time() - t, 3), "not_answered": True,
+                            "load_1min": round(os.getloadavg()[0], 1)})
+        return out
 
     def _sock_count(self, agent):
         r = agent.ask("socklog 1000000000", timeout=30, internal=True) if agent else None
@@ -1185,7 +1221,7 @@ class FixtureServer:
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"at_us": int(r.split()[1])}}
         if op == "power.cycle":
-            self.on_power_cycle()
+            self.local.parts = self.on_power_cycle()
             return {"ok": True}
         if op == "time.advance":
             return {"ok": False, "error": "not offered: time.advance"}

@@ -31,7 +31,9 @@ def addr(s):
 
 class Ctl:
     def __init__(self, ep):
-        self.s = socket.create_connection(addr(ep["control"]["address"]), timeout=10)
+        # 30 s per fixture call, as the test bench (a power.cycle waits for the emulator's start); a call over 10 s
+        # is written to the result by the runner
+        self.s = socket.create_connection(addr(ep["control"]["address"]), timeout=30)
         self.f = self.s.makefile("rw")
 
     def op(self, name, **args):
