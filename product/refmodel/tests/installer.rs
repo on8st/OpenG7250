@@ -105,7 +105,7 @@ fn gate_closed_is_the_default() {
     assert_eq!(h.begin(&img, 0x00C8, 1000).0, st::NOT_SUPPORTED);
     assert_eq!(h.begin(&img, 0x00C8, 8 * SECTOR as u32).0, st::NOT_SUPPORTED); // 56 precedes 61 (T-A1-61)
     assert_eq!(h.begin(&img, 0x00C9, 1000).0, st::WRONG_HARDWARE);
-    assert!(h.r.mgmt.inst.is_none() && !h.r.update_in_progress);
+    assert!(h.r.mgmt().inst.is_none() && !h.r.update_in_progress);
 }
 
 #[test]
@@ -114,12 +114,12 @@ fn begin_checks_and_hand_over() {
     let img = image(1000);
     assert_eq!(h.begin(&img, 0x00C9, 1000).0, st::WRONG_HARDWARE);
     assert_eq!(h.begin(&img, 0x00C8, 7 * SECTOR as u32 + 1).0, st::TOO_LARGE_IMAGE);
-    assert!(h.r.mgmt.inst.is_none());
+    assert!(h.r.mgmt().inst.is_none());
     let (s, p) = h.begin(&img, 0x00C8, 1000);
     assert_eq!((s, p), (st::OK, vec![2, 0, 0, 0, 0, 2, 1])); // 512, two blocks, one-way
     assert!(h.r.log.iter().any(|e| e.2.contains("foreign image by 127.0.0.1:40000, 1000 bytes, SHA-256")));
     assert_eq!((h.status(), h.tag(10), h.tag(22)), ((3, 0), vec![3], vec![0]));
-    assert_eq!(h.r.mgmt.secret, Some(SECRET)); // in storage until the first erase
+    assert_eq!(h.r.mgmt().secret, Some(SECRET)); // in storage until the first erase
     for cmd in [GET_STATS] {
         assert_eq!(h.plain(cmd, &[]).unwrap().0, st::UPDATE_IN_PROGRESS);
     }
@@ -143,11 +143,11 @@ fn whole_installation() {
     for n in 0..255 {
         assert_eq!(h.block(n, &img, false), st::OK);
     }
-    assert_eq!((h.status(), h.r.mgmt.secret.is_some()), ((3, 0), true)); // no sector before all its blocks
+    assert_eq!((h.status(), h.r.mgmt().secret.is_some()), ((3, 0), true)); // no sector before all its blocks
     assert_eq!(h.block(255, &img, true), st::BAD_CRC);
-    assert_eq!((h.status(), h.r.mgmt.secret.is_some()), ((3, 0), true));
+    assert_eq!((h.status(), h.r.mgmt().secret.is_some()), ((3, 0), true));
     assert_eq!(h.block(255, &img, false), st::OK);
-    assert_eq!((h.status(), h.r.mgmt.secret.is_some(), h.tag(22)), ((4, 1), false, vec![1]));
+    assert_eq!((h.status(), h.r.mgmt().secret.is_some(), h.tag(22)), ((4, 1), false, vec![1]));
     assert_eq!(h.tag(12)[0], 0); // no first-secret window
     assert_eq!(h.req(ABORT, &[]).0, st::ONE_WAY);
     assert_eq!(h.req(VERIFY, &[]).0, st::VERIFY_FAILED);
@@ -207,8 +207,8 @@ fn back_before_the_first_erase() {
                 h.r.reset("power-on", None);
             }
         }
-        assert!(h.r.mgmt.inst.is_none() && h.r.app == App::Own, "{how}");
-        assert_eq!((h.status(), h.tag(10), h.r.mgmt.secret), ((0, 0), vec![0], Some(SECRET)), "{how}");
+        assert!(h.r.mgmt().inst.is_none() && h.r.app == App::Own, "{how}");
+        assert_eq!((h.status(), h.tag(10), h.r.mgmt().secret), ((0, 0), vec![0], Some(SECRET)), "{how}");
         if how != "power" {
             assert!(h.r.log.iter().any(|e| e.2 == "restart: installer-abandoned"), "{how}");
         }

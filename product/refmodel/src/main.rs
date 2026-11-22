@@ -338,7 +338,7 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
         }
         "installer.state" if r.cfg.f1_open => {
             // model only, --f1 open: what the application area holds (A1.8a item 3)
-            let i = r.mgmt.inst.as_ref();
+            let i = r.mgmt().inst.as_ref();
             let state = match r.app {
                 App::Stock => "stock",
                 App::Nothing => "nothing",
@@ -350,7 +350,7 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 ("state", J::Str(state.into())),
                 ("sectors", J::Num(i.map_or(0, |i| i.sectors) as f64)),
                 ("bytes_written", J::Num(i.map_or(0, |i| i.flash.len()) as f64)),
-                ("secret_stored", J::Bool(r.mgmt.secret.is_some())),
+                ("secret_stored", J::Bool(r.mgmt().secret.is_some())),
             ]))
         }
         "vendor.install" => {

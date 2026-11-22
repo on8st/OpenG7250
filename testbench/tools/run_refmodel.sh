@@ -38,10 +38,13 @@ if [ "$base" = "0" ] && [ "${G7250_ALLOW_SPEC_PORTS:-0}" != "1" ]; then
 fi
 mkdir -p "$out"
 command -v cargo >/dev/null 2>&1 || PATH="$(dirname "$(rustup which cargo)"):$PATH"
-(cd "$root/product/refmodel" && cargo build --release --offline -q)
+# G7250_PROFILE=debug runs the model's debug build, with overflow checks (default: release)
+profile=${G7250_PROFILE:-release}
+if [ "$profile" = debug ]; then rel=""; else rel="--release"; fi
+(cd "$root/product/refmodel" && cargo build $rel --offline -q)
 python3 "$here/tools/ports_free.py" "$base" || { echo "not starting: ports in use" >&2; exit 2; }
 # shellcheck disable=SC2086
-"$root/product/refmodel/target/release/g7250-refmodel" --port-base "$base" $model_args --endpoint-file "$out/ep.json" >"$out/model.log" 2>&1 &
+"$root/product/refmodel/target/$profile/g7250-refmodel" --port-base "$base" $model_args --endpoint-file "$out/ep.json" >"$out/model.log" 2>&1 &
 pid=$!
 trap 'kill $pid 2>/dev/null || true' EXIT INT TERM
 sleep 1

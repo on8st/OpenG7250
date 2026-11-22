@@ -365,7 +365,8 @@ pub struct Radio {
     lim_link: Limiter<Host>,
     lim_update: Limiter<Host>,
     last_unasked: HashMap<Host, u64>,
-    pub mgmt: Mgmt,
+    /// None while a management request or tick runs (it holds the state itself); see reset()
+    mgmt: Option<Mgmt>,
     pub resets: u64,
     /// The stored calibration set (A1.12); kept by FACTORY_RESET, lost only with the model.
     pub cal: Option<Calibration>,
@@ -491,7 +492,7 @@ impl Radio {
             lim_link: Limiter::new(100 * MS, 1, 10),
             lim_update: Limiter::new(100 * MS, 1, usize::MAX),
             last_unasked: HashMap::new(),
-            mgmt: Mgmt::new(now),
+            mgmt: Some(Mgmt::new(now)),
             resets: 0,
             cal,
             keyer: Keyer::new(keyer::Settings { iambic: false, mode_b: false, strict: false, speed: 0, weight: 50 }),
@@ -881,16 +882,16 @@ impl Radio {
         self.now = now;
         let mut out = Vec::new();
         // A1.8a item 3: another image or none; in the installer discovery and the P2 ports are closed
-        if self.app != App::Own || (self.mgmt.inst.is_some() && rx.local_port != port::MGMT) {
+        if self.app != App::Own || (self.mgmt().inst.is_some() && rx.local_port != port::MGMT) {
             return out;
         }
         self.run_keyer(now, &mut out);
         let ip = *rx.src.ip();
         match rx.local_port {
             port::MGMT => {
-                let mut m = std::mem::replace(&mut self.mgmt, Mgmt::new(now));
+                let mut m = self.mgmt.take().expect("management state");
                 m.on_request(self, rx, &mut out);
-                self.mgmt = m;
+                self.mgmt = Some(m);
                 return out;
             }
             port::DISCOVERY => self.on_1024(rx, &mut out),
@@ -1731,9 +1732,9 @@ impl Radio {
             }
         });
         out.extend(due);
-        let mut m = std::mem::replace(&mut self.mgmt, Mgmt::new(now));
+        let mut m = self.mgmt.take().expect("management state");
         m.tick(self, &mut out);
-        self.mgmt = m;
+        self.mgmt = Some(m);
         // ATU tune cycle (A3.9b item 6; 0047): ended by itself, or by the ATU tune time
         if let Some((start, end_at, _)) = self.atu.cycle {
             if self.tx.keyed && self.tx.source == SRC_ATU {
@@ -1790,14 +1791,20 @@ impl Radio {
         out
     }
 
+    /// The management state, outside a management request or tick.
+    pub fn mgmt(&self) -> &Mgmt {
+        self.mgmt.as_ref().expect("management state")
+    }
+
     /// Power lost, or a reset, outside this firmware (A1.8a item 3): after the installer's first erase
     /// the application area holds the stock image if all of it was written, else nothing valid; a
     /// stock image or an empty area stays as it is. True: this firmware does not start.
     pub fn not_this_firmware(&mut self) -> bool {
-        if let Some(i) = self.mgmt.inst.as_ref() {
+        let m = self.mgmt.as_mut().expect("management state");
+        if let Some(i) = m.inst.as_ref() {
             if i.erased() {
                 self.app = if i.complete() { App::Stock } else { App::Nothing };
-                self.mgmt.inst = None;
+                m.inst = None;
             }
         }
         self.app != App::Own
@@ -1860,7 +1867,11 @@ impl Radio {
         self.hw = Hw::default(); // the trace flags count from boot
         self.booted_at = self.now;
         self.resets += 1;
-        self.mgmt.on_reset(self.now);
+        // a reset from inside the management channel (a request, or a deadline of its tick, which
+        // may lie before this tick's time after time.advance) resets the channel's state itself
+        if let Some(m) = self.mgmt.as_mut() {
+            m.on_reset(self.now);
+        }
         self.logf(&format!("start after {cause}: log {}", if kept { "kept" } else { "lost" }));
         for l in boot_lines {
             self.logf(&l);

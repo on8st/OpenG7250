@@ -16,7 +16,8 @@ tested before and alongside the real firmware.
 
 ```
 cargo build --release --offline
-cargo test --offline
+cargo test --offline              # the debug build: overflow checks on
+cargo test --release --offline    # and the build the bench runs
 target/release/g7250-refmodel --ip 127.0.0.1 --netmask 255.0.0.0 \
     --tx locked --control 127.0.0.1:7290 --endpoint-file /tmp/ep.json
 ```
@@ -42,7 +43,7 @@ protocol crate, and the firmware never uses this code (0037).
 | `--cal full` | as `--tx unlocked` |
 | `--port-base N` (default 20000) | spec port p at local port N + p, control at N + 7290; the endpoint file carries `radio.connect` and the bench host ranges at N + 9000 … N + 9199. Refuses any N whose ports touch 1024–7251 or 30000–38299 (the emulator runner's), so the model and the runner never share a port; `0` = the spec ports, only when no emulator run can be going |
 | `--f1 closed` (default) | the F1 gate of A1.8a item 3 (P-SYS-5) is closed: a foreign `UPDATE_BEGIN` gets 56, as on every radio today |
-| `--f1 open` | the gate counts as passed and the streaming installer of A1.8a item 3 runs (for T-A1-54, -55, -58, -60 to -62 and `g7250ctl`, with a synthetic opaque image only): the hand-over log, installer state, 60 after the first erase, the 10-minute rule before it, the secret erased with the first sector; after a good activation the model answers nothing (a stock image runs), after a power loss in writing nothing either (no valid application). Fixture, only with this option: `installer.state {}` → `state` (`own`, `before-erase`, `writing`, `stock`, `nothing`), `sectors`, `bytes_written`, `secret_stored`. Always offered: `vendor.install {}` puts this firmware back as after the vendor path (no secret, a new first-secret window). Not modelled: RF present (59), flash errors and erase times, a power loss inside an erase or a write (a sector is written whole or not at all), the one-sector RAM buffer, the pins, PTT and KEY inputs and watchdog of the installer, and what the vendor bootloader does with the result. The endpoint's `model.f1_gate` says which |
+| `--f1 open` | the gate counts as passed and the streaming installer of A1.8a item 3 runs (for T-A1-54, -55, -58, -60 to -62 and `g7250ctl`, with a synthetic opaque image only): the hand-over log, installer state, 60 after the first erase, the 10-minute rule before it, the secret erased with the first sector; after a good activation the model answers nothing (a stock image runs), after a power loss in writing nothing either (no valid application). Fixture, only with this option: `installer.state {}` → `state` (`own`, `before-erase`, `writing`, `stock`, `nothing`), `sectors`, `bytes_written`, `secret_stored`. Always offered: `vendor.install {}` puts this firmware back as after the vendor path (no secret, a new first-secret window). Choices where A1.8a is silent: power lost with every sector written and the hash right counts as stock (vendor behaviour, not specified); `UPDATE_ACTIVATE` without the flag gets its 17 after authentication. Not modelled: RF present (59), flash errors and erase times, a power loss inside an erase or a write (a sector is written whole or not at all), the one-sector RAM buffer, the pins, PTT and KEY inputs and watchdog of the installer, and what the vendor bootloader does with the result. The endpoint's `model.f1_gate` says which |
 
 A calibration set can also be written and cleared at run time with `SET_CALIBRATION` and
 `CLEAR_CALIBRATION` (A1.12); record `tx` bit 4 follows from the next session on.
