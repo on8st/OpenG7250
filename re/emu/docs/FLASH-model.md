@@ -156,3 +156,22 @@ firmware's run sheet with a TEST image that compacts its store at every start,
 and reports the image's own console lines, the forced condition and the ST-05
 evidence. Default erase duration 4 s, a labelled STAND-IN (longer than the
 2 s watchdog) until the datasheet maximum is set.
+
+## A cut takes the state at its instant
+Until 8a2a100 a cut halted the core and told the runner, and the emulator ran on until the runner had read
+the logs and dumped the flash: an erase went on (and could end: its entry changed from `cut` to `ok`), the
+dump took the erased part from the time of the dump, a watchdog reset could start the core again (seen: the
+image ran a second erase after the cut; by reading only: during the erase, the entry would become `reset` and
+the sector be dumped with its old content), and a core stalled by a fetch ran again when the
+erase ended. Now, for power.cut in every form and for power.cycle (its halt, with the machine paused for it):
+- `Freeze` copies the 2 MiB of flash in the event that halts the core, with the erased part of a running
+  erase up to that instant (whole 32-byte words) at 0xFF, closes its entry as `cut` with `fraction_done`, and
+  keeps the ECC marks. Dumps, flash.log and the marks for the next start come from that copy.
+- After it: no flash operation starts or ends, a watchdog does not reset, a reset does not start the core, an
+  erase's end does not let a stalled core run; the CH394 sends nothing and the agent sends no trace event; the
+  runner drops net, socket and console log entries with a later time.
+- The copy costs host time only (`cut_copy_host_us` in the result); emulated time does not move in it.
+- Limits: an access of the core already in the same translated block may still run after the halt (T-EMU-28
+  shows no second flash word is programmed, with the one sequence it tries); a DMA transfer or a SEND already
+  started at the cut is not looked at; the emulator itself is not paused at a cut, only at power.cycle.
+flash_dump_check compares each cut erase with its recorded fraction where old content is known.

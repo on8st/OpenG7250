@@ -897,6 +897,119 @@ def run_test(tid, ep):
                          len(cuts) == 1 and cuts[0]["op"] == "erase" and cuts[0]["sector"] == 7 and 0.45 <= cuts[0]["fraction_done"] <= 0.55, str(cuts)))
         ctl.op("flash.timing", erase_us=None)
         return out
+    if tid == "T-EMU-28":
+        # the state at a cut is the state at that instant, also when the runner is slow after it
+        # (run with G7250_TEST_CUT_DELAY_S; without it the checks say little)
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 13))
+
+        def drain():
+            sk.setblocking(False)
+            n = 0
+            try:
+                while True:
+                    sk.recv(2048)
+                    n += 1
+            except OSError:
+                return n
+
+        def cmd(payload, wait=20.0, again=False):
+            drain()
+            sk.settimeout(2.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+        S7, N, out = 0x080E0000, 131072, []
+        old = b"".join((0x5A000000 + i).to_bytes(4, "little") for i in range(N // 4))
+
+        def dump():
+            b = b""
+            for o in range(0, N, 32768):
+                r = ctl.op("flash.dump", address=S7 + o, len=32768)
+                b += bytes.fromhex((r.get("value") or {}).get("hex", ""))
+            return b
+
+        def prepare(erase_us):
+            ctl.op("flash.timing", erase_us=erase_us)
+            cmd(b"FR", again=True, wait=90.0)
+            f = ctl.op("flash.fill", address=S7, len=4096, data=old[:4096].hex())
+            for o in range(4096, N, 4096):
+                ctl.op("flash.fill", address=S7 + o, len=4096, data=old[o:o + 4096].hex())
+            ctl.op("flash.log", action="start")
+            return f.get("ok") and dump() == old
+
+        def verdict(name, ready, lo, hi, quiet=True):
+            e = [x for x in (ctl.op("flash.log", action="read").get("value") or {}).get("entries", []) if x.get("op") == "erase"]
+            b = dump()
+            f = e[0].get("fraction_done", -1) if e else -1
+            edge = int(N * f) & ~31 if f >= 0 else -1
+            near = any(b[:k] == b"\xff" * k and b[k:] == old[k:] for k in (edge - 32, edge, edge + 32) if 0 <= k <= N)
+            kept = next((i for i in range(0, N, 32) if b[i:i + 32] != b"\xff" * 32), N)
+            out.append(check(name, ready and len(e) == 1 and e[0]["result"] == "cut" and lo <= f <= hi and near and quiet,
+                             "ready %s, entries %s, first word not 0xFF at fraction %.4f, recorded %.4f, quiet %s" % (
+                                 ready, [(x.get("result"), x.get("fraction_done")) for x in e], kept / N, f, quiet)))
+        # 1. a cut during an erase, the runner slow after it
+        ok = prepare(200000)
+        ctl.op("power.cut", during_erase=0.5)
+        cmd(b"FE", wait=1.0)
+        cmd(b"FR", again=True, wait=90.0)
+        verdict("a cut at half of an erase, the runner slow after it: the entry is cut, the sector is erased to that word and kept beyond it", ok, 0.49, 0.51)
+        # 2. the watchdog running over the cut (0.5 s, the cut at 0.2 s of the erase)
+        ok = prepare(400000)
+        ctl.op("power.cut", during_erase=0.5)
+        fw = cmd(b"FW")
+        cmd(b"FE", wait=1.0)
+        cmd(b"FR", again=True, wait=90.0)
+        verdict("the watchdog runs over a cut: no reset after it, the entry is cut, the content as at the cut", ok and fw is not None, 0.49, 0.51)
+        # 3. a timed cut while the core is stalled by a fetch during the erase: the core does not run again
+        ok = prepare(2000000)
+        t = (ctl.op("hw.observe").get("value") or {}).get("t_us")
+        drain()
+        k = ctl.op("power.cut", at_us=(t or 0) + 500000)
+        sk.sendto(b"FE", addr(c))
+        sk.settimeout(8.0)
+        try:
+            late = sk.recv(2048)
+        except socket.timeout:
+            late = None
+        cmd(b"FR", again=True, wait=90.0)
+        verdict("a timed cut during a fetch stall: no answer of the image after it, the entry is cut, the content as at the cut",
+                ok and t is not None and k.get("ok"), 0.1, 0.4, quiet=late is None)
+        # 4. a power cycle during an erase: the moment of its halt (emulated time runs fast while the core is
+        # stalled, so the erase is long)
+        ok = prepare(40000000)
+        drain()
+        sk.sendto(b"FE", addr(c))
+        time.sleep(0.3)
+        p = ctl.op("power.cycle")
+        n = drain()
+        cmd(b"FR", again=True, wait=90.0)
+        verdict("a power cycle during an erase: the entry is cut at the halt, the content as then", ok and p.get("ok"), 0.005, 0.95, quiet=n == 0)
+        # 5. a cut after a flash word: the next word, programmed back to back by the image, is not programmed
+        ctl.op("flash.timing", erase_us=200000)
+        cmd(b"FR", again=True, wait=90.0)
+        cmd(b"FE")
+        ctl.op("flash.log", action="start")
+        ctl.op("power.cut", after_flash_words=1)
+        cmd(b"FQ\x00", wait=1.0)
+        cmd(b"FR", again=True, wait=90.0)
+        e = [x for x in (ctl.op("flash.log", action="read").get("value") or {}).get("entries", []) if x.get("op") == "program"]
+        b = dump()
+        out.append(check("a cut after the first of two words written back to back: the second is not programmed, the log has one word",
+                         len(e) == 1 and e[0]["result"] == "cut" and e[0]["words"] == 1 and e[0].get("torn") == "0x080E0000" and b[32:64] == b"\xff" * 32,
+                         "%s second word %s" % (e, b[32:40].hex())))
+        ctl.op("flash.timing", erase_us=None)
+        return out
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

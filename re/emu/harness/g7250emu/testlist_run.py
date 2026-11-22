@@ -236,6 +236,8 @@ class Boot:
                     break
                 v = json.loads(r[3:])
                 for e in v.get("entries", []):
+                    if not self.agent.before_cut(e):
+                        continue
                     e["boot"] = self.boots
                     f.write(json.dumps(e) + "\n")
                 if v.get("next", 0) >= v.get("count", 0) or v.get("next", 0) == nxt:
@@ -258,7 +260,10 @@ class Boot:
             if tracing:
                 seq = sum(1 for _ in open(self.agent.trace.name))
             if not cut:
-                self.agent.ask("halt", internal=True)          # supply gone: the core stops first
+                r = self.agent.ask("halt", internal=True)      # supply gone: the core stops first, the state is taken
+                self.agent.cut_us = int(r.split()[1]) if r and r.startswith("ok ") else None
+            if os.environ.get("G7250_TEST_CUT_DELAY_S"):       # self-checks: a runner that is slow after the cut
+                time.sleep(float(os.environ["G7250_TEST_CUT_DELAY_S"]))
             self.save_netlog()
             try:
                 self.fixtures.sock_pull()
@@ -273,6 +278,7 @@ class Boot:
             self.stop_emulator()
             t_start = time.time()
             self.agent.conn = None          # the old emulator's link: wait for the new one
+            self.agent.cut_us = None
             self.start()
             self.fixtures.sock_new_boot(self.boots)
             self.agent.wait_connected(BOOT_WALL_TIMEOUT)
@@ -550,6 +556,8 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             e.setdefault("emulator", {})["flash_ecc"] = {"calls": len(ecc), "not_in_force": no}
             if no:
                 e["reason"] = "flash.ecc not in force when answered: %s%s" % (", ".join(no), "; " + e["reason"] if e.get("reason") else "")
+        if bt.fixtures.freeze_us:
+            e.setdefault("emulator", {})["cut_copy_host_us"] = {"cuts": len(bt.fixtures.freeze_us), "max": max(bt.fixtures.freeze_us)}
         sp = dict(bt.fixtures.ecc_spans)
         if sp["spans"]:
             e.setdefault("emulator", {})["ecc_spans_not_covered"] = sp

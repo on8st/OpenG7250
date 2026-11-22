@@ -98,8 +98,16 @@ namespace Antmicro.Renode.Peripherals.Timers
         // fixture reset.wdt: reset the MCU as a watchdog timeout would
         public void WatchdogReset() { Expire("wdt"); }
 
+        private bool SupplyOff()
+        {
+            IPeripheral ft;
+            if(!machine.TryGetByName("sysbus.flashtiming", out ft)) return false;
+            return (bool)ft.GetType().GetProperty("StoppedByCut").GetValue(ft);
+        }
+
         private void Expire(string cause)
         {
+            if(SupplyOff()) return;                // a cut: the watchdog has no supply either
             lock(sync) pendingCause = cause;
             this.Log(LogLevel.Warning, "IWDG: MCU reset ({0})", cause);
             machine.RequestReset();
@@ -158,6 +166,11 @@ namespace Antmicro.Renode.Peripherals.Timers
         private void Boot()
         {
             var bus = machine.SystemBus;
+            if(SupplyOff())
+            {
+                foreach(var cpu in bus.GetCPUs()) cpu.IsHalted = true;
+                return;
+            }
             foreach(var cpu in bus.GetCPUs())
             {
                 uint sp = bus.ReadDoubleWord(bootAddress), pc = bus.ReadDoubleWord(bootAddress + 4);

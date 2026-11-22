@@ -1,0 +1,22 @@
+{
+ "format": "g7250-testlist",
+ "version": 1,
+ "minor": 2,
+ "defaults": {
+  "timeout_s": 20
+ },
+ "boot": "per-list",
+ "tests": [
+  {
+   "id": "T-EMU-28",
+   "title": "the state at a cut is the state at that instant, the runner slow after it",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 400
+  }
+ ],
+ "note": "Run with G7250_TEST_CUT_DELAY_S (a runner that is slow after a cut): without it the checks say little. Each check fails with the cut code before the freeze, where the erase and the watchdog ran on until the flash was dumped."
+}

@@ -665,8 +665,10 @@ namespace Antmicro.Renode.Peripherals.SPI
             return true;
         }
 
+        public bool PowerOff { get; set; }     // the supply is off (a cut): nothing leaves the chip
         private void ToBridge(byte type, byte[] p)
         {
+            if(PowerOff) return;
             var s = stream;
             if(s == null) return;
             var f = new byte[3 + p.Length];

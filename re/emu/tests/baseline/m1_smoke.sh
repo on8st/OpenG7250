@@ -228,5 +228,18 @@ else
   echo "  skip (no arm-none-eabi-gcc or Renode)"
 fi
 
+echo "[11] the state at a cut is the state at that instant, the runner slow after it (T-EMU-28)"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
+  if G7250_TEST_CUT_DELAY_S=3 G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
+       tests/fakebench/cut-freeze.json --run-id smoke-cut >/dev/null 2>&1 \
+     && python3 harness/g7250emu/flash_dump_check.py .private/product-runs/smoke-cut list | grep -q "^list: dumps equal the log"; then
+    ok "cut freeze: T-EMU-28 passes and the dumps agree with the recorded fractions"
+  else
+    bad "cut freeze (see .private/product-runs/smoke-cut/result.json)"
+  fi
+else
+  echo "  skip (no arm-none-eabi-gcc or Renode)"
+fi
+
 echo
 [ $fail -eq 0 ] && { echo "M1 smoke: ALL PASS"; exit 0; } || { echo "M1 smoke: FAILURES"; exit 1; }

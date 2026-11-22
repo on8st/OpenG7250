@@ -16,7 +16,9 @@ the same boot is left out; after an erase in a boot, words that kept their old c
 in an interrupted erase are left out; so are the words slot.corrupt changed. flash.fill calls (fixture-log.jsonl) are replayed in
 their order: a filled word that no later entry of the boot touches must hold the fill's data
 in the dump (its own count); an image write between the pull before a fill and the fill itself
-counts as after it.
+counts as after it. A cut erase is also checked against its recorded fraction (cut_erase): the sector must read
+0xFF up to it and keep its content beyond it, where the content before the erase is known and not 0xFF;
+where nothing is known beyond the cut, that is said ("nothing to tell"), it is not a pass.
 """
 import json
 import os
@@ -37,6 +39,25 @@ def fill_words(x):
     return {a + i: full[i:i + 32] for i in range(0, n, 32)}
 
 
+def cut_erase(e, before, cur):
+    """(text, wrong) for a cut erase. before: {word address: bytes, None (programmed, content not known)}."""
+    a, n, f = int(e["address"], 16), e["len"], e.get("fraction_done")
+    if f is None:
+        return "no fraction in the log", True
+    words = n // 32
+    tol = 3 if len(str(f).partition(".")[2]) <= 3 else 1          # older logs have three digits
+    edge = int(n * f) // 32
+    wd = lambda i: cur[a - BASE - LO + 32 * i:a - BASE - LO + 32 * i + 32]
+    low = [i for i in range(0, max(0, edge - tol)) if wd(i) != FF]
+    known = [i for i in range(min(words, edge + tol), words) if before.get(a + 32 * i, FF) != FF]
+    lost = [i for i in known if (wd(i) == FF if before[a + 32 * i] is None else wd(i) != before[a + 32 * i])]
+    t = "cut erase at fraction %s: %d of %d words before it not erased; " % (f, len(low), max(0, edge - tol))
+    t += "beyond it nothing to tell (no old content known)" if not known else "beyond it %d of %d words with old content changed" % (len(lost), len(known))
+    if lost:
+        t += " (last at fraction %.4f)" % (max(lost) / words)
+    return t, bool(low or lost)
+
+
 def check(d):
     log = [json.loads(l) for l in open(os.path.join(d, "flash-log.jsonl")) if l.strip()]
     fx = os.path.join(d, "fixture-log.jsonl")
@@ -45,13 +66,15 @@ def check(d):
     while os.path.isfile(os.path.join(d, "flash-%d.bin" % n)):
         cur = open(os.path.join(d, "flash-%d.bin" % n), "rb").read()[LO:HI]
         if len(cur) != HI - LO:
-            rows.append((n, None, None, None, "dump too short"))
+            rows.append((n, None, None, None, "dump too short", True))
             break
         base = prev if prev is not None else b"\xff" * (HI - LO)
         mine = [(i, 1, e) for i, e in enumerate(log) if e.get("boot") == n]
         mine += [(x["after"], 0, {"op": "fill", "words": fill_words(x)}) for x in fills if x["boot"] == n]
         mine = [e for _, _, e in sorted(mine, key=lambda t: t[:2])]
         filled, maybe = {}, set()
+        before = {BASE + LO + i: base[i:i + 32] for i in range(0, HI - LO, 32)}     # content as far as the log tells it
+        cuts, odd = [], []
         changed = {BASE + LO + i for i in range(0, HI - LO, 32) if cur[i:i + 32] != base[i:i + 32] and cur[i:i + 32] != FF}
         logged, erased_later = set(), set()
         for e in mine:
@@ -59,7 +82,24 @@ def check(d):
                 logged -= set(e["words"])
                 erased_later -= set(e["words"])
                 filled.update(e["words"])
+                before.update(e["words"])
                 continue
+            if e["op"] in ("erase", "bank_erase") and e.get("result") != "cut" and "fraction_done" in e:
+                odd.append("erase with a fraction but result %s" % e.get("result"))
+            if e["op"] == "erase" and e.get("result") == "cut" and int(e["address"], 16) >= BASE + LO:
+                cuts.append(cut_erase(e, dict(before), cur))
+            if e["op"] in ("erase", "bank_erase"):
+                fa = int(e.get("address", "0x08000000"), 16)
+                for w in range(fa, fa + e.get("len", 0x100000), 32):
+                    before[w] = FF if not e.get("result", "").startswith(("error", "reset", "running", "cut")) else before.get(w)
+            elif e["op"] == "program" and e.get("result") == "ok":
+                fa = int(e["address"], 16)
+                for w in range(fa, fa + e["len"], 32):
+                    before[w] = None
+            elif e["op"] in ("corrupt", "restore", "program"):
+                fa = int(e["address"], 16) & ~31
+                for w in range(fa, fa + e.get("len", 32), 32):
+                    before[w] = FF                # not followed: nothing is claimed for it
             if e["op"] in ("erase", "bank_erase", "program"):
                 fa = int(e.get("address", "0x08000000"), 16)
                 for w in range(fa, fa + e.get("len", 0x100000), 32):
@@ -86,7 +126,11 @@ def check(d):
         wrong = [w for w, v in filled.items() if cur[w - BASE - LO:w - BASE - LO + 32] not in (v, FF if w in maybe else v)]
         changed -= set(filled)
         rows.append((n, len(changed), sorted(changed - logged) + sorted(wrong), sorted(logged - changed - same),
-                     "; ".join("%s cut at %s" % (e["op"], e.get("torn") or e.get("address")) for e in mine if e.get("result") == "cut")))
+                     "; ".join("%s cut at %s" % (e["op"], e.get("torn") or e.get("address")) for e in mine if e.get("result") == "cut"), False))
+        if cuts or odd:
+            r = rows[-1]
+            bad = [t for t, x in cuts if x] + odd
+            rows[-1] = r[:4] + ("; ".join([r[4]] * bool(r[4]) + [t for t, _ in cuts] + odd), bool(bad))
         prev, n = cur, n + 1
     return rows, n, max([e.get("boot", 1) for e in log] or [1])
 
@@ -103,12 +147,12 @@ if __name__ == "__main__":
         if not rows:
             print("%s: no dump (no power cycle): not checked" % t)
             continue
-        bad = any(r[1] is None or r[2] or r[3] for r in rows)
+        bad = any(r[1] is None or r[2] or r[3] or r[5] for r in rows)
         print("%s: %s" % (t, "DIFFERENT: no cut or ECC result of this test is evidence" if bad else "dumps equal the log"))
-        for b, c, miss, extra, cut in rows:
+        for b, c, miss, extra, cut, off in rows:
             if c is None:
                 print("   boot %d: %s" % (b, cut))
                 continue
             print("   boot %d: %d words changed; not logged %d %s; logged but unchanged %d %s%s"
-                  % (b, c, len(miss), [hex(x) for x in miss[:4]], len(extra), [hex(x) for x in extra[:4]], "; " + cut if cut else ""))
+                  % (b, c, len(miss), [hex(x) for x in miss[:4]], len(extra), [hex(x) for x in extra[:4]], ("; NOT AT ITS FRACTION: " if off else "; ") + cut if cut else ""))
         print("   boot %d and later: no dump, not checked" % n)

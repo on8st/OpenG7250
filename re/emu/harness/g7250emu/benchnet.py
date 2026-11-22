@@ -479,6 +479,7 @@ class Agent:
         self.closed = False
         self.on_cut = None
         self.cycling = False
+        self.cut_us = None                    # emulated time of the cut of this emulator; nothing after it counts
         self.slow_asks = []                   # requests over SLOW_ASK_S (wall), with their answer
         self.events = 0
         self.lock = threading.Lock()
@@ -509,6 +510,7 @@ class Agent:
         for line in f:
                 line = line.rstrip("\n")
                 if line.startswith("cut "):
+                    self.cut_us = int(line.split()[1])
                     if self.on_cut:
                         threading.Thread(target=self.on_cut, daemon=True).start()
                     continue
@@ -520,6 +522,10 @@ class Agent:
                         t.flush()
                 else:
                     self.replies.put(line)
+
+    def before_cut(self, e):
+        """False for a log entry made after the cut of this emulator."""
+        return self.cut_us is None or e.get("t_us") is None or e["t_us"] <= self.cut_us
 
     def wait_connected(self, timeout):
         t0 = time.time()
@@ -639,6 +645,7 @@ class FixtureServer:
         self.fl_on = True
         self.fl_open = None
         self.erase_us = None                  # flash.timing erase_us in force
+        self.freeze_us = []                   # host us of the copy at each cut or power cycle
         self.ecc_spans = {"spans": 0, "instructions": 0, "max_instructions": 0}
         self.endpoint_extra = {}              # the runner's own endpoint keys, also in net.endpoint
         self.ecc = {}                         # word address -> "double"|"single", kept like the flash
@@ -720,6 +727,8 @@ class FixtureServer:
                 return
             v = json.loads(r[3:])
             for e in v.get("entries", []):
+                if not agent.before_cut(e):
+                    continue
                 e["boot"] = self.boot_no
                 self.sock_entries.append(e)
             if v.get("next", 0) <= self.sock_next:
@@ -764,6 +773,8 @@ class FixtureServer:
             v = {}
         n, tot, mx = v.get("EccSpans", 0), v.get("EccSpanInstr", 0), v.get("EccSpanInstrMax", 0)
         last = getattr(self, "_span_last", (0, 0, 0)) if getattr(self, "_span_boot", None) == self.boot_no else (0, 0, 0)
+        if v.get("FreezeUs", -1) >= 0:
+            self.freeze_us.append(v["FreezeUs"])
         s = self.ecc_spans
         s["spans"] += n - last[0]
         s["instructions"] += tot - last[1]
@@ -783,7 +794,7 @@ class FixtureServer:
             for e in self.fl_entries:                 # a cut erase: the first fraction is erased
                 if e.get("boot") == self.boot_no and e.get("op") == "erase" and e.get("result") == "cut":
                     lo = int(e["address"], 16)
-                    hi = lo + int(e["len"] * e.get("fraction_done", 0))
+                    hi = lo + (int(e["len"] * e.get("fraction_done", 0)) & ~31)
                     self.ecc = {a: t for a, t in self.ecc.items() if not lo <= a < hi}
         r = agent.ask("ch394silent ?", timeout=10, internal=True) if agent else None
         self.silent_left = int(r.split()[1]) if r and r.startswith("ok ") else 0
@@ -819,6 +830,8 @@ class FixtureServer:
                 return
             v = json.loads(r[3:])
             for e in v.get("entries", []):
+                if not agent.before_cut(e):
+                    continue
                 e["boot"] = self.boot_no
                 self.con_entries.append(e)
             if v.get("next", 0) <= self.con_next:

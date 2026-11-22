@@ -78,12 +78,6 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             cut.LimitReached += () =>
             {
                 cut.Enabled = false;
-                lock(sync)
-                {
-                    double f = eraseLenUs > 0 ? Math.Min(1.0, (NowUs() - eraseStartUs) / (double)eraseLenUs) : 0;
-                    eraseResultExtra = ", \"fraction_done\": " + f.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-                    SetEraseResult("cut", NowUs());
-                }
                 Stop("cut during erase");
             };
             Hook();
@@ -97,7 +91,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public ulong RefreshesDuringLastErase { get; private set; }
         public ulong WordsProgrammed { get { return words; } }
         public bool Erasing { get { return erasing; } }
-        public bool StoppedByCut { get; private set; }
+        public bool StoppedByCut { get; private set; }    // also: the state of the supply, read by the watchdog's Boot
+        public long FreezeUs { get; private set; } = -1;  // host time of the copy at the cut (-1: none)
         public ulong EopReads { get; private set; }       // SR1 reads with EOP while PG (diagnostics)
         public ulong WordsNotFound { get; private set; }  // an EOP with no changed word found
         public string StopReason { get; private set; } = "";
@@ -158,7 +153,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                     + ", \"from\": " + from + ", \"next\": " + to + ", \"entries\": [" + string.Join(", ", flashLog.GetRange(from, to - from)) + "]}";
             }
         }
-        private void Add(string e) { if(flashLog.Count >= 100000) flashLogDropped++; else flashLog.Add(e); }
+        private void Add(string e) { if(frozen != null) return; if(flashLog.Count >= 100000) flashLogDropped++; else flashLog.Add(e); }
         private static int Sector(ulong a) { return (int)((a - FlashBase) / SectorSize); }
         // fpga_bus at an operation's start: "open" while a bus cycle is open, i.e. STB (PE9,
         // his/80) is an output driven low; "idle" otherwise (GPIOE MODER and ODR, RM0468)
@@ -450,9 +445,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             lock(sync)
             {
-                var s = new List<string>();
-                foreach(var kv in eccWords) s.Add("0x" + kv.Key.ToString("X8") + "=" + (kv.Value ? "double" : "single"));
-                return string.Join(",", s);
+                if(frozen != null) return frozenEcc;
+                return string.Join(",", EccEntries());
             }
         }
         public void AddEccText(string address, bool dbl) { AddEcc(Convert.ToInt64(address, 16), dbl, true); }
@@ -481,6 +475,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private ulong eraseUs; private string eraseResultExtra = "";
         private void SetEraseResult(string result, ulong tEnd)
         {
+            if(frozen != null) return;
             if(eraseEntry < 0 || eraseEntry >= flashLog.Count) return;
             bool bank = eraseSize > SectorSize;
             flashLog[eraseEntry] = "{\"t_us\": " + eraseT0 + ", \"op\": \"" + (bank ? "bank_erase" : "erase") + "\", \"bank\": 1"
@@ -539,6 +534,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public void WriteDoubleWord(long offset, uint value) { }
         public void Reset()
         {
+            if(StoppedByCut) return;               // the supply is off: nothing after the cut counts
             lock(sync)
             {
                 CloseProgram();
@@ -568,6 +564,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private void Word()
         {
             bool stop;
+            if(StoppedByCut) return;
             lock(sync)
             {
                 words++;
@@ -580,11 +577,56 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             if(stop) Stop("cut after flash word " + words);
         }
 
+        // The supply goes off: everything the next start gets is taken here, at this instant, whatever
+        // runs on in the emulator until the runner has read it (the erase, the watchdog, other models).
+        private byte[] frozen; private string frozenEcc = "";
+        public ulong FrozenAtUs { get; private set; }
+        public void Freeze(string why)
+        {
+            lock(sync)
+            {
+                if(frozen != null) return;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var data = machine.SystemBus.ReadBytes(FlashBase, (int)(FlashEnd - FlashBase) * 2);
+                CloseProgram();
+                if(erasing && snapshot != null)
+                {
+                    // the part of the sector that is done reads 0xFF, the rest keeps its content; an erase that
+                    // never ends (flash.fault) has no part done
+                    double f = !neverEnding && eraseLenUs > 0 ? Math.Min(1.0, (NowUs() - eraseStartUs) / (double)eraseLenUs) : 0;
+                    ulong done = (ulong)(eraseSize * f) & ~0x1FUL;
+                    for(ulong i = 0; i < done; i++) data[eraseAddr - FlashBase + i] = 0xFF;
+                    eraseResultExtra = ", \"fraction_done\": " + f.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+                    SetEraseResult("cut", NowUs());
+                }
+                busy.Enabled = false; cut.Enabled = false;
+                frozenEcc = string.Join(",", EccEntries());
+                FrozenAtUs = NowUs();
+                StoppedByCut = true;
+                StopReason = why;
+                frozen = data;                     // from here the log and the marks are closed
+                FreezeUs = sw.ElapsedTicks * 1000000L / System.Diagnostics.Stopwatch.Frequency;
+            }
+            foreach(var n in new[] { "sysbus.spi6.ch394", "sysbus.spi1.agent" })
+            {
+                IPeripheral x;
+                if(!machine.TryGetByName(n, out x)) continue;
+                var p = x.GetType().GetProperty("PowerOff");
+                if(p != null) p.SetValue(x, true);
+            }
+        }
+
+        private List<string> EccEntries()
+        {
+            var s = new List<string>();
+            foreach(var kv in eccWords) s.Add("0x" + kv.Key.ToString("X8") + "=" + (kv.Value ? "double" : "single"));
+            return s;
+        }
+
         private void Stop(string why)
         {
-            StoppedByCut = true;
-            StopReason = why;
             foreach(var cpu in machine.SystemBus.GetCPUs()) cpu.IsHalted = true;
+            Freeze(why);
             this.Log(LogLevel.Info, "flash: core stopped ({0})", why);
             if(NotifyCut)
             {
@@ -599,6 +641,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         private uint BeforeWrite(uint value, long offset)
         {
+            if(StoppedByCut) return offset == CR1 ? lastCr1 : value;      // the supply is off: nothing starts
             if(offset == 0x004)
             {
                 // KEYR1: the unlock sequence 0x45670123, 0xCDEF89AB clears LOCK
@@ -755,6 +798,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private void Done()
         {
             busy.Enabled = false;
+            if(StoppedByCut) return;
             lock(sync) { erasing = false; FinishErase(); }
             RefreshesDuringLastErase = WatchdogRefreshes() - refreshesAtStart;
             SetBlockHook(false);
@@ -830,6 +874,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         // the flash as it is after power loss now: an erase in progress is only partly done
         public void DumpFlash(string path)
         {
+            lock(sync) if(frozen != null) { System.IO.File.WriteAllBytes(path, frozen); return; }
             var data = machine.SystemBus.ReadBytes(FlashBase, (int)(FlashEnd - FlashBase) * 2);
             lock(sync)
             {

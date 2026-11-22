@@ -932,6 +932,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 {
                     cutTimer.Enabled = false;
                     foreach(var cpu in machine.SystemBus.GetCPUs()) cpu.IsHalted = true;
+                    FreezeFlash("cut at a time");
                     Send("cut " + NowUs());
                 };
             }
@@ -940,6 +941,14 @@ namespace Antmicro.Renode.Peripherals.SPI
             cutTimer.Value = delta;
             cutTimer.Enabled = true;
             return "ok " + (now + delta);
+        }
+
+        // the flash layer takes the state at this instant (it also sets PowerOff here and in the CH394)
+        public bool PowerOff { get; set; }
+        private void FreezeFlash(string why)
+        {
+            IPeripheral ft;
+            if(machine.TryGetByName("sysbus.flashtiming", out ft)) ft.GetType().GetMethod("Freeze").Invoke(ft, new object[] { why });
         }
 
         // a power.cut placed by the flash layer (after a flash word, during an erase): as the timed cut
@@ -972,7 +981,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(w.Length >= 2 && w[1] == "info")
             {
                 var parts = new List<string>();
-                foreach(var n in new[] { "Erases", "FetchesDuringErase", "FirstFetchPc", "RefreshesDuringLastErase", "WordsProgrammed", "EopReads", "WordsNotFound", "EccSpans", "EccSpanInstr", "EccSpanInstrMax" })
+                foreach(var n in new[] { "Erases", "FetchesDuringErase", "FirstFetchPc", "RefreshesDuringLastErase", "WordsProgrammed", "EopReads", "WordsNotFound", "EccSpans", "EccSpanInstr", "EccSpanInstrMax", "FreezeUs", "FrozenAtUs" })
                     parts.Add("\"" + n + "\": " + Convert.ToString(t.GetProperty(n).GetValue(ft), CultureInfo.InvariantCulture));
                 foreach(var n in new[] { "PrimaskAtErase", "StopReason" })
                     parts.Add("\"" + n + "\": \"" + t.GetProperty(n).GetValue(ft) + "\"");
@@ -1213,9 +1222,15 @@ namespace Antmicro.Renode.Peripherals.SPI
                     }
                     case "cut": return ScheduleCut(ulong.Parse(w[1], CultureInfo.InvariantCulture));
                     case "flashdump": return FlashDump(line.Substring(10));
-                    case "halt":
-                        foreach(var cpu in machine.SystemBus.GetCPUs()) cpu.IsHalted = true;
-                        return "ok";
+                    case "halt":     // power.cycle: the machine is stopped, its state taken, and it stays stopped
+                    {
+                        using(machine.ObtainPausedState())
+                        {
+                            foreach(var cpu in machine.SystemBus.GetCPUs()) cpu.IsHalted = true;
+                            FreezeFlash("power cycle");
+                        }
+                        return "ok " + NowUs();
+                    }
                     case "link":
                     {
                         IPeripheral ch;
@@ -1266,6 +1281,7 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         private void Send(string line)
         {
+            if(PowerOff && line.StartsWith("ev ")) return;      // nothing after the cut
             var s = stream;
             if(s == null) { dropped++; return; }
             var b = Encoding.ASCII.GetBytes(line + "\n");
