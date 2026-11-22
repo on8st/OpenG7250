@@ -48,6 +48,11 @@ pub enum Effect {
 const LOG_ENTRIES: usize = 64;
 const LOG_TEXT: usize = 72;
 
+/// A slot in a log line is named by its letter (A1.8 "Log names"; 0067).
+fn slot_letter(code: u8) -> char {
+    if code == 1 { 'A' } else { 'B' }
+}
+
 /// RAM log ring (A1.7: kept in RAM, lost at power loss; size a firmware choice).
 pub struct Log {
     entries: [(u32, u32, u8, [u8; LOG_TEXT]); LOG_ENTRIES],
@@ -266,6 +271,7 @@ impl Server {
                     Ok(count) => {
                         let _ = self.effects.push(Effect::UpdateStarted);
                         let v = pkg.version;
+                        let staging = slot_letter(ctx.update.verify_note().0);
                         self.log.push(
                             now,
                             format_args!(
@@ -275,7 +281,7 @@ impl Server {
                                 v.minor,
                                 v.build,
                                 if downgrade { " (downgrade)" } else { "" },
-                                pkg.target_slot
+                                staging
                             ),
                         );
                         let r = payload::BeginReply { block_size: mgmt::BLOCK_DATA as u16, block_count: count, one_way: false };
@@ -294,7 +300,7 @@ impl Server {
                     }
                     Err(Status::VerificationFailed) => {
                         // 0043: a write failure discards the transfer and is logged.
-                        self.log.push(now, format_args!("update: write of block {} to the staging slot failed; transfer discarded", blk.number));
+                        self.log.push(now, format_args!("update: write of block {} to slot {} failed; transfer discarded", blk.number, slot_letter(ctx.update.verify_note().0)));
                         (Status::VerificationFailed, 0)
                     }
                     Err(s) => (s, 0),
@@ -308,7 +314,7 @@ impl Server {
                 // Every update step is logged (A1.7): a good verify with the slot and version,
                 // a failed one with the check that failed.
                 let (slot, v, failed) = ctx.update.verify_note();
-                let slot = if slot == 1 { 'A' } else { 'B' };
+                let slot = slot_letter(slot);
                 match r {
                     Ok(h) => {
                         self.log.push(now, format_args!("update verified: slot {slot} {}.{}.{}", v >> 24, (v >> 16) & 0xFF, v & 0xFFFF));
@@ -359,7 +365,7 @@ impl Server {
                     Ok(r) => {
                         self.reset_pending = true;
                         let _ = self.effects.push(Effect::Restart);
-                        let slot = |s: u8| if s == 2 { 'B' } else { 'A' };
+                        let slot = slot_letter;
                         let v = |x: u32| (x >> 24, (x >> 16) & 0xFF, x & 0xFFFF);
                         let (f, t) = (v(r.from.1), v(r.to.1));
                         self.log.push(

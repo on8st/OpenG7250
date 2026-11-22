@@ -19,6 +19,7 @@ pub struct Sim {
     pub ecc_on_cut: bool,
     pub budget: Option<usize>,
     pub steps: usize,
+    pub erases: usize,
     /// A step failed for lack of power since the last `power_on`.
     pub lost: bool,
 }
@@ -33,7 +34,7 @@ pub enum SimErr {
 impl Sim {
     pub fn new() -> Self {
         let n = APPLICATION_AREA.len() as usize;
-        Sim { mem: vec![0xFF; n], written: vec![false; n / 32], bad: vec![false; n / 32], ecc_on_cut: false, budget: None, steps: 0, lost: false }
+        Sim { mem: vec![0xFF; n], written: vec![false; n / 32], bad: vec![false; n / 32], ecc_on_cut: false, budget: None, steps: 0, erases: 0, lost: false }
     }
 
     pub fn power_on(&mut self) {
@@ -53,13 +54,6 @@ impl Sim {
         Ok(())
     }
 
-    /// Every word of the span reads without an ECC error (the board's `flash::probe`).
-    pub fn readable(&self, start: u32, len: u32) -> bool {
-        let o = ((start - APPLICATION_AREA.start) / 32) as usize;
-        let n = len.div_ceil(32) as usize;
-        !self.bad[o..o + n].iter().any(|&b| b)
-    }
-
     /// Make the flash word at `addr` unreadable (a double ECC error).
     pub fn tear(&mut self, addr: u32) {
         self.bad[((addr - APPLICATION_AREA.start) / FLASH_WORD) as usize] = true;
@@ -75,6 +69,26 @@ impl Sim {
         let mut v = data.to_vec();
         v.resize(data.len().div_ceil(32) * 32, 0xFF);
         self.program(start, &v).unwrap();
+    }
+}
+
+/// The simulated flash shared by a store and a stager, as on the board.
+#[derive(Clone, Copy)]
+pub struct Shared<'a>(pub &'a core::cell::RefCell<Sim>);
+
+impl FlashIo for Shared<'_> {
+    type Error = SimErr;
+    fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), SimErr> {
+        self.0.borrow_mut().read(addr, buf)
+    }
+    fn unreadable(e: &SimErr) -> bool {
+        Sim::unreadable(e)
+    }
+    fn program(&mut self, addr: u32, data: &[u8]) -> Result<(), SimErr> {
+        self.0.borrow_mut().program(addr, data)
+    }
+    fn erase_sector(&mut self, addr: u32) -> Result<(), SimErr> {
+        self.0.borrow_mut().erase_sector(addr)
     }
 }
 
@@ -123,6 +137,7 @@ impl FlashIo for Sim {
         }
         let o = (addr - APPLICATION_AREA.start) as usize;
         let n = SECTOR_SIZE as usize;
+        self.erases += 1;
         let cut = self.step().is_err();
         let end = if cut { o + n / 2 } else { o + n };
         self.mem[o..end].fill(0xFF);

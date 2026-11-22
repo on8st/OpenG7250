@@ -4,7 +4,7 @@
 //! (A1.5 identification, A1.6 configuration, A1.12 calibration set; Annex M).
 
 use g7250_layout::header::Kind as ImageKind;
-use g7250_layout::{BOOT_STAGE, HEADER_OFFSET, Range, Slot};
+use g7250_layout::{BOOT_STAGE, Range, Slot};
 use g7250_proto::mgmt as m;
 use g7250_proto::mgmt::payload::{Config, Identify, Version};
 use g7250_store::{Kind, Store};
@@ -33,19 +33,11 @@ fn version_of(v: u32) -> Version {
     Version { major: (v >> 24) as u8, minor: (v >> 16) as u8, build: v as u16 }
 }
 
-/// Integrity code of Table M-2 tag 9 (0 none: erased header, 1 good, 2 bad) and the version.
-fn image_state(kind: ImageKind, r: Range) -> (u8, Version) {
+/// The boot stage's version, if its image checks good.
+fn boot_stage_version() -> Version {
     const RAM: Range = Range::new(0x2400_0000, 0x2402_0000);
-    let h = HEADER_OFFSET as usize;
-    // An unreadable (ECC) word anywhere in the area: integrity bad (R0), and no slice read.
-    let Ok(image) = g7250_board::flash::mapped(r) else { return (2, Version::default()) };
-    if image[h..h + 4].iter().all(|&b| b == 0xFF) {
-        return (0, Version::default());
-    }
-    match g7250_layout::header::validate(image, kind, r, RAM) {
-        Ok(hdr) => (1, version_of(hdr.fw_version)),
-        Err(_) => (2, Version::default()),
-    }
+    let mut io = g7250_board::flash::RawFlash::new(g7250_layout::Writer::Application { running: Slot::A });
+    g7250_update::image::check(&mut io, ImageKind::BootStage, BOOT_STAGE, RAM, &mut || {}).map_or(Version::default(), |h| version_of(h.fw_version))
 }
 
 /// Factory configuration (Table A1-4; A1.6): DHCP with link-local fall-back, no static
@@ -108,18 +100,18 @@ impl MgmtInit {
             }
         };
 
-        let (_, boot_v) = image_state(ImageKind::BootStage, BOOT_STAGE);
-        let (other_int, other_v) = image_state(ImageKind::Application, slot.other().range());
+        let update = crate::update::BoardUpdate::new(store.as_mut(), slot);
+        let boot_v = boot_stage_version();
         let identify = Identify {
             model: b"G7250",
             mac: [0; 6],
             serial: None,
             running: Version { major: g7250_board::FW_MAJOR, minor: g7250_board::FW_MINOR, build: g7250_board::FW_BUILD },
-            other_slot: other_v,
+            other_slot: Version::default(), // per request: the last judgement (other_slot)
             boot_stage: boot_v,
             hw_revision: 0,
             stock_flags: 0,
-            integrity: [1, other_int],
+            integrity: [1, 0], // the running image: 1 while it runs (0067); the other: other_slot
             update_state: 0,
             secret_set: secret.is_some(),
             window: (false, 0),
@@ -138,12 +130,17 @@ impl MgmtInit {
             layout: g7250_layout::IDENTIFY_LAYOUT, // tag 25 (0062): the layout the link uses
             ll_unprobed: false, // set by the net loop (0057)
         };
-        let update = crate::update::BoardUpdate::new(store.as_mut(), slot);
         let mut identify = identify;
         identify.update_state = update.state as u8;
         identify.running_slot = g7250_update::stage::slot_code(slot);
         MgmtInit { store, secret, config, calibration, identify, update, store_unreadable, fell_back }
     }
+}
+
+/// `IDENTIFY` tags 5 and 9 for the other slot: its last judgement (A1.8; 0067).
+pub fn other_slot(id: &mut Identify<'_>, u: &crate::update::BoardUpdate) {
+    id.integrity[1] = u.other;
+    id.other_slot = if u.other == 1 { version_of(u.other_version) } else { Version::default() };
 }
 
 /// Carry out a store effect of a management write before the reply; returns the effects that

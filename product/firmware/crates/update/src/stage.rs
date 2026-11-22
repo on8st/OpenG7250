@@ -114,10 +114,12 @@ pub struct Stager {
     next: u32,
     /// The slot sectors erased for this transfer.
     prepared: [bool; SECTORS],
+    /// The staging mark of this transfer is set in the store (0067).
+    marked: bool,
     count: u32,
     last_ms: u64,
-    /// Why the last UPDATE_VERIFY failed, for the log (A1.7 "every update step"): "missing
-    /// blocks", "hash", a word of the image check, or "header" (0067).
+    /// Why the last UPDATE_VERIFY failed, for the log (A1.7 "every update step"): "missing-blocks",
+    /// "hash", a word of the image check, or "header" (0067).
     verify_failed: Option<&'static str>,
 }
 
@@ -129,7 +131,7 @@ impl Default for Stager {
 
 impl Stager {
     pub const fn new() -> Self {
-        Stager { phase: Phase::Idle, offer: None, received: [0; BLOCKS / 32], next: 0, prepared: [false; SECTORS], count: 0, last_ms: 0, verify_failed: None }
+        Stager { phase: Phase::Idle, offer: None, received: [0; BLOCKS / 32], next: 0, prepared: [false; SECTORS], marked: false, count: 0, last_ms: 0, verify_failed: None }
     }
 
     pub fn phase(&self) -> Phase {
@@ -225,8 +227,50 @@ impl Stager {
         Ok(count)
     }
 
-    /// `UPDATE_BLOCK` `n` with its data; `crc_ok` from the request. Returns blocks received.
-    pub fn block<F: FlashIo>(&mut self, io: &mut F, run: &Running, n: u32, crc_ok: bool, data: &[u8], now: u64) -> Result<u32, Refusal> {
+    /// `UPDATE_BLOCK` with the staging mark: set in the store before the first block of a
+    /// transfer (so before the first erase), and again before a block that cancels a good verify
+    /// (0067). A mark that cannot be written is a write failure (0043).
+    pub fn block_marked<S: FlashIo, F: FlashIo>(
+        &mut self,
+        store: Option<&mut Store<S>>,
+        io: &mut F,
+        run: &Running,
+        n: u32,
+        crc_ok: bool,
+        data: &[u8],
+        now: u64,
+    ) -> Result<u32, Refusal> {
+        self.accepts(n, crc_ok, data.len() as u32)?;
+        if !self.marked {
+            match store.map(|s| crate::boot::set_staging(s, Some(run.slot.other()))) {
+                Some(Ok(())) => self.marked = true,
+                _ => {
+                    self.phase = Phase::Discarded;
+                    return Err(Refusal::VerifyFailed);
+                }
+            }
+        }
+        self.block(io, run, n, crc_ok, data, now)
+    }
+
+    /// `UPDATE_VERIFY` with the staging mark: a good verify clears it before it counts (0067).
+    pub fn verify_marked<S: FlashIo, F: FlashIo>(&mut self, store: Option<&mut Store<S>>, io: &mut F, run: &Running, now: u64) -> Result<[u8; 32], Refusal> {
+        let hash = self.verify(io, run, now)?;
+        if self.marked {
+            match store.map(|s| crate::boot::set_staging(s, None)) {
+                Some(Ok(())) => self.marked = false,
+                _ => {
+                    self.phase = Phase::Receiving;
+                    self.verify_failed = Some("store");
+                    return Err(Refusal::VerifyFailed);
+                }
+            }
+        }
+        Ok(hash)
+    }
+
+    /// Whether an `UPDATE_BLOCK` is taken (its length if it is).
+    fn accepts(&self, n: u32, crc_ok: bool, len: u32) -> Result<(), Refusal> {
         // No transfer in progress: 54, before the CRC (53), nothing changes (0063).
         if !matches!(self.phase, Phase::Receiving | Phase::Verified) {
             return Err(Refusal::OutOfOrder);
@@ -239,9 +283,15 @@ impl Stager {
             return Err(Refusal::OutOfOrder);
         }
         let expect = if n + 1 == self.count { o.length - n * BLOCK } else { BLOCK };
-        if data.len() as u32 != expect {
+        if len != expect {
             return Err(Refusal::Malformed);
         }
+        Ok(())
+    }
+
+    /// `UPDATE_BLOCK` `n` with its data; `crc_ok` from the request. Returns blocks received.
+    pub(crate) fn block<F: FlashIo>(&mut self, io: &mut F, run: &Running, n: u32, crc_ok: bool, data: &[u8], now: u64) -> Result<u32, Refusal> {
+        self.accepts(n, crc_ok, data.len() as u32)?;
         if self.put_block(io, run, n, data).is_err() {
             self.phase = Phase::Discarded;
             return Err(Refusal::VerifyFailed);
@@ -299,7 +349,7 @@ impl Stager {
     /// `UPDATE_VERIFY` (U-4; 0067): (1) the SHA-256 of the received bytes, (2) the image check of
     /// the staging slot, as at a start, (3) the image record against the package header; the
     /// first that fails is named for the log. Returns the computed hash.
-    pub fn verify<F: FlashIo>(&mut self, io: &mut F, run: &Running, now: u64) -> Result<[u8; 32], Refusal> {
+    pub(crate) fn verify<F: FlashIo>(&mut self, io: &mut F, run: &Running, now: u64) -> Result<[u8; 32], Refusal> {
         // No transfer in progress: 55, nothing changes (0063).
         if !matches!(self.phase, Phase::Receiving | Phase::Verified) {
             self.verify_failed = None;
@@ -324,7 +374,7 @@ impl Stager {
     fn checks<F: FlashIo>(&self, io: &mut F, run: &Running) -> Result<[u8; 32], &'static str> {
         let o = match self.offer {
             Some(o) if self.received() == self.count => o,
-            _ => return Err("missing blocks"),
+            _ => return Err("missing-blocks"),
         };
         let other = run.slot.other();
         let hash = sha256(io, other.range().start, o.length).map_err(|_| image::Check::Unreadable.word())?;
@@ -337,6 +387,11 @@ impl Stager {
             return Err("header");
         }
         Ok(hash)
+    }
+
+    /// The staging mark is set: blocks were taken and no good verify ended them (0067).
+    pub fn staging_marked(&self) -> bool {
+        self.marked
     }
 
     /// Why the last verify of a transfer failed (`None` after a good one): for the log.

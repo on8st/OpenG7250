@@ -17,8 +17,8 @@
 //! loss can carry an invalid ECC, and a CPU read of it returns a bus error (RM0468, flash ECC:
 //! double error, DBECCERR1). [`read_tolerant`] reads with bus faults ignored (FAULTMASK set and
 //! SCB CCR.BFHFNMIGN, ARMv7-M) and reports such a word from FLASH_SR1, instead of a fault and a
-//! watchdog reset at every start. The store scan skips the word like a torn one; a slot with
-//! one is not bootable ([`probe`]).
+//! watchdog reset at every start. The store scan skips the word like a torn one; an image
+//! with one fails the image check (g7250_update::image).
 
 use g7250_layout::{FLASH_BASE, FLASH_WORD, FlashGuard, Op, SECTOR_SIZE, Writer};
 use g7250_store::FlashIo;
@@ -235,31 +235,6 @@ pub fn read_tolerant(addr: u32, buf: &mut [u8]) -> Result<(), ()> {
             wr(SCB_CFSR as *mut u32, CFSR_BFSR);
             return Err(());
         }
-    }
-    Ok(())
-}
-
-/// The flash of `r` as a slice, once [`probe`] found every word of it readable; else the address
-/// of the first unreadable word. Image checks read through this, never through a raw slice.
-pub fn mapped(r: g7250_layout::Range) -> Result<&'static [u8], u32> {
-    probe(r.start, r.end)?;
-    // SAFETY: on-chip flash, always mapped, and every word of it reads without an ECC error.
-    Ok(unsafe { core::slice::from_raw_parts(r.start as *const u8, r.len() as usize) })
-}
-
-/// Check that every flash word of `[start, end)` can be read (one read per 32-byte word, which
-/// makes the flash check the whole word's ECC). Returns the address of the first unreadable
-/// word. A caller validates an image from its mapped slice only after this, so that a torn word
-/// in it cannot fault (a slot staged when the power failed).
-pub fn probe(start: u32, end: u32) -> Result<(), u32> {
-    let mut a = start & !(FLASH_WORD - 1);
-    let mut b = [0u8; 1];
-    while a < end {
-        crate::safe::boot_poll();
-        if read_tolerant(a, &mut b).is_err() {
-            return Err(a);
-        }
-        a += FLASH_WORD;
     }
     Ok(())
 }

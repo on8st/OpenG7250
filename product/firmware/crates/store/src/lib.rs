@@ -58,11 +58,13 @@ pub enum Kind {
     Secret = 5,
     /// End of a compaction: the sector holds a complete generation (payload: generation, u32).
     Commit = 6,
+    /// The slot whose staging has not ended with a good `UPDATE_VERIFY` (A1.8; 0067).
+    Staging = 7,
 }
 
 impl Kind {
     /// The kinds that carry data (copied by a compaction).
-    pub const DATA: [Kind; 5] = [Kind::BootRecord, Kind::BootCounter, Kind::Config, Kind::Calibration, Kind::Secret];
+    pub const DATA: [Kind; 6] = [Kind::BootRecord, Kind::BootCounter, Kind::Config, Kind::Calibration, Kind::Secret, Kind::Staging];
     fn from_u8(v: u8) -> Option<Kind> {
         Self::DATA.iter().copied().chain([Kind::Commit]).find(|k| *k as u8 == v)
     }
@@ -371,6 +373,13 @@ impl<F: FlashIo> Store<F> {
         self.compact_keep(|k| !drop(k))
     }
 
+    /// Make sure that `bytes` of records can be appended without an erase: compacts now if the
+    /// live sector has less room (0069: one erase per request, at a request of the caller's
+    /// choice).
+    pub fn reserve(&mut self, bytes: u32) -> Result<(), Error<F::Error>> {
+        if self.free() < bytes { self.compact() } else { Ok(()) }
+    }
+
     /// Force a compaction now (management or test).
     pub fn compact(&mut self) -> Result<(), Error<F::Error>> {
         self.compact_keep(|_| true)
@@ -378,8 +387,8 @@ impl<F: FlashIo> Store<F> {
 
     fn compact_keep(&mut self, keep: impl Fn(Kind) -> bool) -> Result<(), Error<F::Error>> {
         // (0) Copy the newest record of every kind kept to RAM.
-        let mut saved: [(u8, u16, [u8; MAX_PAYLOAD]); 5] = [(0, 0, [0; MAX_PAYLOAD]); 5];
-        let mut have = [false; 5];
+        let mut saved: [(u8, u16, [u8; MAX_PAYLOAD]); Kind::DATA.len()] = [(0, 0, [0; MAX_PAYLOAD]); Kind::DATA.len()];
+        let mut have = [false; Kind::DATA.len()];
         for (i, k) in Kind::DATA.iter().enumerate() {
             if !keep(*k) {
                 continue;

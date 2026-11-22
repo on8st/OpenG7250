@@ -8,7 +8,9 @@
 //! - the application: the activation ([`activate`], U-5), the confirmation ([`confirm`], U-6)
 //!   and `ROLLBACK` ([`rollback`]).
 
+use crate::image::Check;
 use g7250_layout::Slot;
+use g7250_layout::header::Header;
 use g7250_layout::select::{self, BootRecord, Choice, RECORD_LEN};
 use g7250_store::{Error, FlashIo, Kind, Store};
 
@@ -37,15 +39,52 @@ fn next_seq(r: Option<BootRecord>) -> u32 {
 /// the active slot starts instead (a trial that cannot be counted could restart for ever).
 pub fn boot_stage<F: FlashIo>(s: &mut Store<F>, valid: impl Fn(Slot) -> bool) -> Choice {
     let rec = load(s).ok().flatten();
-    let choice = select::choose(rec, &valid);
+    let open = staging_open(s).ok().flatten();
+    let choice = select::choose(rec, open, &valid);
     if let Some(new) = select::record_for(rec, choice) {
         if save(s, &new).is_err() {
             if let (Choice::Trial(_), Some(r)) = (choice, rec) {
-                return select::choose(Some(BootRecord { trial: None, ..r }), &valid);
+                return select::choose(Some(BootRecord { trial: None, ..r }), open, &valid);
             }
         }
     }
     choice
+}
+
+/// The slot whose staging has not ended with a good `UPDATE_VERIFY` (A1.8 "Integrity in
+/// `IDENTIFY`"; 0067 point 4), kept across a reset. A record of its own: an update that comes to
+/// nothing leaves the boot record as it was.
+pub fn staging_open<F: FlashIo>(s: &mut Store<F>) -> Result<Option<Slot>, Error<F::Error>> {
+    let mut b = [0u8; 1];
+    Ok(match s.get(Kind::Staging, &mut b)? {
+        Some((_, 1)) => match b[0] {
+            0 => Some(Slot::A),
+            1 => Some(Slot::B),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// Set or clear the staging mark.
+pub fn set_staging<F: FlashIo>(s: &mut Store<F>, open: Option<Slot>) -> Result<(), Error<F::Error>> {
+    let b = match open {
+        Some(Slot::A) => 0,
+        Some(Slot::B) => 1,
+        None => 0xFF,
+    };
+    s.put(Kind::Staging, 1, &[b])
+}
+
+/// `IDENTIFY` tag 9 for a slot (0067 point 4): 0 none (its staging is open, it is erased or has no
+/// image record), 1 good, 2 bad (an image record that fails the image check).
+pub fn integrity(staging_open: bool, check: &Result<Header, Check>) -> u8 {
+    match check {
+        _ if staging_open => 0,
+        Ok(_) => 1,
+        Err(Check::NoRecord) => 0,
+        Err(_) => 2,
+    }
 }
 
 /// Update state for `IDENTIFY` tag 10 (I-3).

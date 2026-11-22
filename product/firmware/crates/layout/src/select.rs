@@ -109,11 +109,17 @@ pub fn last_record(area: &[u8]) -> Option<BootRecord> {
 }
 
 /// The boot stage's record update for a choice: a trial uses up one attempt before it starts; a
-/// trial that is out of attempts and unconfirmed is rolled back (U-6). `None`: nothing to write.
+/// trial that is refused, or out of attempts and unconfirmed, is rolled back (U-6); an active
+/// slot that is refused hands over to the other slot, which becomes the active image without a
+/// trial ("rolled back" too; 0067 point 3.2). `None`: nothing to write.
 pub fn record_for(record: Option<BootRecord>, choice: Choice) -> Option<BootRecord> {
-    let r = record?;
+    // No record: slot A, confirmed.
+    let r = record.unwrap_or(BootRecord { active: Slot::A, trial: None, attempts_left: 0, confirmed: true, seq: 0, rolled_back: false });
     match (r.trial, choice) {
         (Some(t), Choice::Trial(s)) if t == s => Some(BootRecord { attempts_left: r.attempts_left.saturating_sub(1), seq: r.seq + 1, ..r }),
+        (_, Choice::Boot(s)) if s != r.active => {
+            Some(BootRecord { active: s, trial: None, attempts_left: 0, confirmed: true, rolled_back: true, seq: r.seq + 1 })
+        }
         (Some(_), _) if !r.confirmed => Some(BootRecord { trial: None, attempts_left: 0, rolled_back: true, seq: r.seq + 1, ..r }),
         _ => None,
     }
@@ -130,12 +136,14 @@ pub enum Choice {
     NoImage,
 }
 
-/// Choose the slot. `valid(slot)` tells whether the slot holds a sealed, valid image.
-pub fn choose(record: Option<BootRecord>, valid: impl Fn(Slot) -> bool) -> Choice {
+/// Choose the slot. `valid(slot)` tells whether the slot passes the image check; it is asked only
+/// for a slot about to be started, in order. `open`: the slot whose staging has not ended with a
+/// good verify; it is never a trial nor the slot to fall back to (0067 point 3).
+pub fn choose(record: Option<BootRecord>, open: Option<Slot>, valid: impl Fn(Slot) -> bool) -> Choice {
     let fallback = |preferred: Slot| {
         if valid(preferred) {
             Choice::Boot(preferred)
-        } else if valid(preferred.other()) {
+        } else if open != Some(preferred.other()) && valid(preferred.other()) {
             Choice::Boot(preferred.other())
         } else {
             Choice::NoImage
@@ -144,7 +152,7 @@ pub fn choose(record: Option<BootRecord>, valid: impl Fn(Slot) -> bool) -> Choic
     match record {
         None => fallback(Slot::A),
         Some(r) => match r.trial {
-            Some(t) if !r.confirmed && r.attempts_left > 0 && valid(t) => Choice::Trial(t),
+            Some(t) if !r.confirmed && r.attempts_left > 0 && open != Some(t) && valid(t) => Choice::Trial(t),
             // Trial used up, invalid or confirmed elsewhere: roll back to the active slot (U-6).
             _ => fallback(r.active),
         },
@@ -157,39 +165,68 @@ mod tests {
 
     #[test]
     fn no_record_prefers_a() {
-        assert_eq!(choose(None, |_| true), Choice::Boot(Slot::A));
-        assert_eq!(choose(None, |s| s == Slot::B), Choice::Boot(Slot::B));
-        assert_eq!(choose(None, |_| false), Choice::NoImage);
+        assert_eq!(choose(None, None, |_| true), Choice::Boot(Slot::A));
+        assert_eq!(choose(None, None, |s| s == Slot::B), Choice::Boot(Slot::B));
+        assert_eq!(choose(None, None, |_| false), Choice::NoImage);
     }
 
     #[test]
     fn trial_then_rollback() {
         let mut r = BootRecord { active: Slot::A, trial: Some(Slot::B), attempts_left: 1, confirmed: false, seq: 3, rolled_back: false };
-        assert_eq!(choose(Some(r), |_| true), Choice::Trial(Slot::B));
+        assert_eq!(choose(Some(r), None, |_| true), Choice::Trial(Slot::B));
         r.attempts_left = 0;
-        assert_eq!(choose(Some(r), |_| true), Choice::Boot(Slot::A));
+        assert_eq!(choose(Some(r), None, |_| true), Choice::Boot(Slot::A));
         // A trial image that is not valid is never started.
         r.attempts_left = 1;
-        assert_eq!(choose(Some(r), |s| s == Slot::A), Choice::Boot(Slot::A));
+        assert_eq!(choose(Some(r), None, |s| s == Slot::A), Choice::Boot(Slot::A));
     }
 
     #[test]
     fn trial_attempt_then_rollback_records() {
         let r = BootRecord { active: Slot::A, trial: Some(Slot::B), attempts_left: 1, confirmed: false, seq: 3, rolled_back: false };
         // First start: one attempt used up, then the trial runs.
-        let c = choose(Some(r), |_| true);
+        let c = choose(Some(r), None, |_| true);
         assert_eq!(c, Choice::Trial(Slot::B));
         let r2 = record_for(Some(r), c).unwrap();
         assert_eq!((r2.attempts_left, r2.trial, r2.seq), (0, Some(Slot::B), 4));
         // Next start without confirmation: rollback to A, flagged.
-        let c = choose(Some(r2), |_| true);
+        let c = choose(Some(r2), None, |_| true);
         assert_eq!(c, Choice::Boot(Slot::A));
         let r3 = record_for(Some(r2), c).unwrap();
         assert_eq!((r3.trial, r3.active, r3.rolled_back), (None, Slot::A, true));
         // A confirmed record needs no write.
         let ok = BootRecord { active: Slot::B, trial: None, attempts_left: 0, confirmed: true, seq: 9, rolled_back: false };
-        assert_eq!(record_for(Some(ok), choose(Some(ok), |_| true)), None);
+        assert_eq!(record_for(Some(ok), choose(Some(ok), None, |_| true)), None);
         assert_eq!(record_for(None, Choice::Boot(Slot::A)), None);
+    }
+
+    #[test]
+    fn a_refused_active_slot_hands_over_to_the_other_one_t_a1_90() {
+        let ok = BootRecord { active: Slot::B, trial: None, attempts_left: 0, confirmed: true, seq: 9, rolled_back: false };
+        let c = choose(Some(ok), None, |s| s == Slot::A);
+        assert_eq!(c, Choice::Boot(Slot::A), "not a trial");
+        let n = record_for(Some(ok), c).unwrap();
+        assert_eq!((n.active, n.trial, n.confirmed, n.rolled_back, n.seq), (Slot::A, None, true, true, 10));
+        // The next start is ordinary.
+        assert_eq!(record_for(Some(n), choose(Some(n), None, |_| true)), None);
+        // Never to a slot whose staging did not end with a good verify; none left: no image, no
+        // record.
+        let c = choose(Some(ok), Some(Slot::A), |s| s == Slot::A);
+        assert_eq!((c, record_for(Some(ok), c)), (Choice::NoImage, None));
+        assert_eq!(choose(None, Some(Slot::B), |s| s == Slot::B), Choice::NoImage);
+        // No record yet (a first install) and A refused: B, recorded.
+        let c = choose(None, None, |s| s == Slot::B);
+        assert_eq!(record_for(None, c).map(|n| (n.active, n.rolled_back)), Some((Slot::B, true)));
+        // A trial of a slot whose staging is open is not started.
+        let t = BootRecord { active: Slot::A, trial: Some(Slot::B), attempts_left: 1, confirmed: false, seq: 3, rolled_back: false };
+        assert_eq!(choose(Some(t), Some(Slot::B), |_| true), Choice::Boot(Slot::A));
+        // Only the slots to be started are checked: an active slot that passes is enough.
+        let asked = core::cell::Cell::new(0);
+        choose(Some(ok), None, |_| {
+            asked.set(asked.get() + 1);
+            true
+        });
+        assert_eq!(asked.get(), 1);
     }
 
     #[test]

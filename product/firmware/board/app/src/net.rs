@@ -710,8 +710,14 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let slot_name = if mgmt.update.run.slot == g7250_layout::Slot::A { "A" } else { "B" };
     match mgmt.update.state {
         g7250_update::boot::UpdateState::RolledBack => {
-            server.log.push(Instant::now().as_millis(), format_args!("rollback: the trial image was not confirmed; running slot {}", slot_name));
-            println!("net: running slot {} after a rollback (trial not confirmed)", slot_name);
+            let now = Instant::now().as_millis();
+            let other = if slot_name == "A" { "B" } else { "A" };
+            // Until the boot stage writes its own lines (0068): what it refused, from the same check.
+            if let (2, Some(word)) = (mgmt.update.other, mgmt.update.other_failed) {
+                server.log.push(now, format_args!("boot: slot {other} refused: {word}"));
+            }
+            server.log.push(now, format_args!("boot: rollback to slot {slot_name}"));
+            println!("net: running slot {} after a rollback", slot_name);
         }
         g7250_update::boot::UpdateState::Trial => {
             server.log.push(Instant::now().as_millis(), format_args!("trial boot of slot {}", slot_name));
@@ -974,6 +980,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                     let now = Instant::now().as_millis();
                     let t_mgmt = Instant::now();
                     let mut ident = mgmt.identify;
+                    crate::mgmt_init::other_slot(&mut ident, &mgmt.update);
                     ident.uptime_ms = now as u32;
                     ident.tx_arm_state = p2.tx.arm_state_reg();
                     ident.owner = p2.session.owner().unwrap_or(([0; 4], 0));

@@ -135,35 +135,18 @@ pub enum Invalid {
 
 /// CRC over `image[..length]` with the header's `crc` field taken as zero.
 pub fn image_crc(image: &[u8], length: usize) -> u32 {
-    image_crc_polled(image, length, &mut || {})
-}
-
-/// As [`image_crc`], calling `poll` between chunks of [`POLL_CHUNK`] bytes (the boot stage's TX
-/// path check, A3.6b: at least every 5 ms while it works).
-pub fn image_crc_polled(image: &[u8], length: usize, poll: &mut dyn FnMut()) -> u32 {
-    let h = crate::HEADER_OFFSET as usize;
-    let crc_at = h + CRC_FIELD;
+    let crc_at = crate::HEADER_OFFSET as usize + CRC_FIELD;
     let mut c = crc32::init();
     c = crc32::update(c, &image[..crc_at]);
     c = crc32::update(c, &[0, 0, 0, 0]);
-    for chunk in image[crc_at + 4..length].chunks(POLL_CHUNK) {
-        c = crc32::update(c, chunk);
-        poll();
-    }
+    c = crc32::update(c, &image[crc_at + 4..length]);
     crc32::finish(c)
 }
 
-/// Bytes between two polls in [`image_crc_polled`]: about 0.1 ms of CRC at 64 MHz.
-pub const POLL_CHUNK: usize = 1024;
-
 /// Check that `image` (the bytes of a slot, starting at the slot's first byte) holds a sealed,
 /// bootable application linked for `slot`.
+/// For the host tools; the radio streams the same check over its flash (`g7250_update::image`).
 pub fn validate(image: &[u8], kind: Kind, region: Range, ram: Range) -> Result<Header, Invalid> {
-    validate_polled(image, kind, region, ram, &mut || {})
-}
-
-/// As [`validate`], calling `poll` while it computes the CRC (see [`image_crc_polled`]).
-pub fn validate_polled(image: &[u8], kind: Kind, region: Range, ram: Range, poll: &mut dyn FnMut()) -> Result<Header, Invalid> {
     let h = crate::HEADER_OFFSET as usize;
     let hdr = Header::parse(image.get(h..).ok_or(Invalid::NoHeader)?).ok_or(Invalid::NoHeader)?;
     if hdr.magic != MAGIC {
@@ -185,7 +168,7 @@ pub fn validate_polled(image: &[u8], kind: Kind, region: Range, ram: Range, poll
     if len < h + HEADER_LEN || len > region.len() as usize || len > image.len() {
         return Err(Invalid::BadLength);
     }
-    if image_crc_polled(image, len, poll) != hdr.crc {
+    if image_crc(image, len) != hdr.crc {
         return Err(Invalid::BadCrc);
     }
     // Initial stack pointer in RAM, reset vector inside the image, Thumb bit set.

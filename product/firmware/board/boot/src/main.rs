@@ -11,6 +11,7 @@
 #![no_std]
 #![no_main]
 
+use core::cell::Cell;
 use cortex_m_rt::entry;
 use g7250_board::{FW_BETA, FW_MAJOR, FW_MINOR, FW_BUILD, FW_VERSION, console, early_init, println, reset, safe, wdg};
 use g7250_layout::header::{self, Header, Kind};
@@ -18,6 +19,7 @@ use g7250_board::flash::RawFlash;
 use g7250_layout::select::Choice;
 use g7250_layout::{BOOT_STAGE, Range, Slot, Writer};
 use g7250_store::Store;
+use g7250_update::image;
 
 #[unsafe(link_section = ".image_header")]
 #[used]
@@ -85,27 +87,22 @@ fn main() -> ! {
     wdg::start();
     println!("boot: safe state held, watchdog {} ms", wdg::TIMEOUT_MS);
 
+    // The image check (A1.8; 0067) of a slot about to be started, once; the reads poll the TX path
+    // check. A refusal is named in the log words of A1.8.
+    let checked = [Cell::new(None), Cell::new(None)];
     let valid = |s: Slot| {
-        let r = s.range();
-        // A word torn by a power loss while the slot was staged reads with an ECC error: the
-        // slot is then not bootable, and the scan does not fault (R0).
-        let image = match g7250_board::flash::mapped(r) {
-            Ok(i) => i,
-            Err(at) => {
-                println!("boot: slot {} not bootable: unreadable flash word at {:#010x} (ECC)", slot_name(s), at);
-                return false;
-            }
-        };
-        match header::validate_polled(image, Kind::Application, r, APP_RAM, &mut safe::boot_poll) {
-            Ok(_) => true,
-            Err(e) => {
-                println!("boot: slot {} not bootable: {:?}", slot_name(s), e);
-                false
-            }
+        let c = &checked[s as usize];
+        if let Some(ok) = c.get() {
+            return ok;
         }
+        let mut io = RawFlash::new(Writer::BootStage);
+        let r = image::check(&mut io, Kind::Application, s.range(), APP_RAM, &mut safe::boot_poll);
+        if let Err(e) = r {
+            println!("boot: slot {} refused: {}", slot_name(s), e.word());
+        }
+        c.set(Some(r.is_ok()));
+        r.is_ok()
     };
-    let (va, vb) = (valid(Slot::A), valid(Slot::B));
-    let valid = |s: Slot| if s == Slot::A { va } else { vb };
     let choice = match Store::open(RawFlash::new(Writer::BootStage), Writer::BootStage) {
         Ok(mut store) => {
             let before = g7250_update::boot::load(&mut store).ok().flatten();
@@ -119,17 +116,23 @@ fn main() -> ! {
                     r.seq
                 );
             }
+            if let Ok(Some(s)) = g7250_update::boot::staging_open(&mut store) {
+                println!("boot: slot {} not for a start: its staging did not end with a good verify", slot_name(s));
+            }
             let c = g7250_update::boot::boot_stage(&mut store, valid);
-            let after = g7250_update::boot::load(&mut store).ok().flatten();
-            if after.is_some_and(|r| r.rolled_back) && before.is_some_and(|r| !r.rolled_back) {
-                println!("boot: trial not confirmed: rolled back (U-6)");
+            let trial = before.is_some_and(|r| r.trial.is_some() && !r.confirmed);
+            let active = before.map_or(Slot::A, |r| r.active);
+            match c {
+                Choice::Boot(s) if trial => println!("boot: rollback to slot {} (trial not confirmed)", slot_name(s)),
+                Choice::Boot(s) if s != active => println!("boot: rollback to slot {}", slot_name(s)),
+                _ => {}
             }
             c
         }
         Err(e) => {
             // No record can be read or written: no trial (it could not be counted).
             println!("boot: store not readable ({:?}); no trial boot", e);
-            g7250_layout::select::choose(None, valid)
+            g7250_layout::select::choose(None, None, valid)
         }
     };
     match choice {

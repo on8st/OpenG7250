@@ -54,7 +54,7 @@ impl Updater for Model {
         Ok([0x5A; 32])
     }
     fn verify_note(&self) -> (u8, u32, Option<&'static str>) {
-        (2, 0x0001_0002, (!self.verified).then_some("missing blocks"))
+        (2, 0x0001_0002, (!self.verified).then_some("missing-blocks"))
     }
     fn activate(&mut self, _: u64) -> Result<(), Status> {
         if !self.verified {
@@ -514,7 +514,7 @@ fn update_verify_is_logged_good_and_failed() {
     assert_eq!(authed(&mut w, &mut s, HOST, 70, Command::UpdateVerify, &[], 3000).0, Status::Ok);
     let log = w.call(&mut s, HOST, &req(80, Command::ReadLog, &[0, 0, 0, 0]), 4000).unwrap().2;
     let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
-    assert!(e.iter().any(|t| t == "update verify failed: missing blocks"), "{e:?}");
+    assert!(e.iter().any(|t| t == "update verify failed: missing-blocks"), "{e:?}");
     assert!(e.iter().any(|t| t == "update verified: slot B 0.1.2"), "{e:?}");
 }
 
@@ -574,7 +574,7 @@ fn update_write_failure_is_55_and_logged_and_begin_in_trial_is_58() {
     let (st, p) = authed(&mut w, &mut s, HOST, 130, Command::ReadLog, &[0, 0, 0, 0], 13000);
     assert_eq!(st, Status::Ok);
     let text = String::from_utf8_lossy(&p);
-    assert!(text.contains("write of block 0 to the staging slot failed"), "{text}");
+    assert!(text.contains("write of block 0 to slot B failed"), "{text}");
     // Abort says a restart is needed.
     let (st, p) = authed(&mut w, &mut s, HOST, 140, Command::UpdateAbort, &[], 14000);
     assert_eq!((st, p), (Status::Ok, vec![1]));

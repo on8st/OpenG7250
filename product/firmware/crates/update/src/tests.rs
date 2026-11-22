@@ -3,7 +3,7 @@
 //! Update, trial boot, confirmation and rollback with power cut at every flash step.
 
 use crate::boot::{self, UpdateState};
-use crate::sim::Sim;
+use crate::sim::{Shared, Sim};
 use crate::stage::{self, Offer, Phase, Refusal, Running, Stager};
 use g7250_layout::header::{self, Header, Kind as ImgKind};
 use g7250_layout::select::{self, Choice};
@@ -47,10 +47,9 @@ fn running(slot: Slot, version: u32) -> Running {
     Running { slot, version, hw_revision: 0, trial: false, app_ram: RAM }
 }
 
-/// As the boot stage: every word of the slot readable (`flash::mapped`, R0), then the header.
-fn valid(s: &Sim, slot: Slot) -> bool {
-    let r = slot.range();
-    s.readable(r.start, r.len()) && header::validate(s.bytes(r.start, r.len()), ImgKind::Application, r, RAM).is_ok()
+/// As the boot stage: the image check of the slot (A1.8; 0067).
+fn valid(s: &mut Sim, slot: Slot) -> bool {
+    crate::image::check(s, ImgKind::Application, slot.range(), RAM, &mut || {}).is_ok()
 }
 
 /// The boot stage at a start: its choice (writes the store as the boot stage).
@@ -392,7 +391,7 @@ fn abort_and_abandonment() {
     // The 10-minute rule also runs after an abort (T-A1-46).
     assert!(g.abandoned(5000 + stage::ABANDON_MS));
     // A discarded transfer is never activated; slot B is not bootable.
-    assert!(!valid(&s, Slot::B));
+    assert!(!valid(&mut s, Slot::B));
     assert_eq!(boot(&mut s), Choice::Boot(Slot::A));
 }
 
@@ -410,14 +409,14 @@ fn after_the_blocks_the_staging_slot_holds_the_image_t_a1_83_84() {
 
 #[test]
 fn a_failed_verify_records_its_check() {
-    // For the log (A1.7): missing blocks, then a wrong hash, then an image that is not runnable.
+    // For the log (A1.7): missing-blocks, then a wrong hash, then an image that is not runnable.
     let (mut s, _) = installed(false);
     let run = running(Slot::A, V1);
     let b = image(Slot::B, V2, 2148, 9);
     let mut g = Stager::new();
     let n = g.begin(&offer(&b, V2), &run, 0).unwrap();
     assert!(g.verify(&mut s, &run, 1).is_err());
-    assert_eq!(g.verify_failure(), Some("missing blocks"));
+    assert_eq!(g.verify_failure(), Some("missing-blocks"));
     for k in 0..n {
         let d = &b[(k * stage::BLOCK) as usize..((k + 1) * stage::BLOCK).min(b.len() as u32) as usize];
         g.block(&mut s, &run, k, true, d, 1).unwrap();
@@ -748,7 +747,7 @@ fn blocks_sent_again_replace_what_was_received() {
     assert_eq!(s.steps, steps + 1 + 16);
     assert_eq!(g.status(), (1, 257, 260));
     assert!(g.verify(&mut s, &run, 5).is_err());
-    assert_eq!(g.verify_failure(), Some("missing blocks"));
+    assert_eq!(g.verify_failure(), Some("missing-blocks"));
     // Every block again, in order: the last data of each block is what is verified.
     for k in 0..260 {
         g.block(&mut s, &run, k, true, block_of(&good, k), 6).unwrap();
@@ -766,4 +765,196 @@ fn blocks_sent_again_replace_what_was_received() {
     assert_eq!(g.block(&mut s, &run, 4, true, block_of(&good, 4), 1), Err(Refusal::OutOfOrder));
     assert_eq!(g.block(&mut s, &run, 3, true, block_of(&good, 3), 1), Ok(2));
     assert_eq!(g.block(&mut s, &run, 0, true, block_of(&good, 0), 1), Ok(3));
+}
+
+/// Tag 9 of a slot as the application judges it.
+fn tag9(s: &mut Sim, slot: Slot) -> u8 {
+    let open = {
+        let mut st = Store::open(&mut *s, Writer::BootStage).unwrap();
+        boot::staging_open(&mut st).unwrap() == Some(slot)
+    };
+    let c = crate::image::check(s, ImgKind::Application, slot.range(), RAM, &mut || {});
+    boot::integrity(open, &c)
+}
+
+/// A whole transfer and verify with the staging mark, over one flash, as the board does it.
+fn marked_update(s: &core::cell::RefCell<Sim>, g: &mut Stager, img: &[u8], o: Offer) -> Result<(), Refusal> {
+    let run = running(Slot::A, V1);
+    let n = g.begin(&o, &run, 0)?;
+    let mut io = Shared(s);
+    let mut st = Store::open(Shared(s), Writer::Application { running: Slot::A }).map_err(|_| Refusal::VerifyFailed)?;
+    st.reserve(4096).map_err(|_| Refusal::VerifyFailed)?;
+    for k in 0..n {
+        g.block_marked(Some(&mut st), &mut io, &run, k, true, block_of(img, k), 1)?;
+    }
+    g.verify_marked(Some(&mut st), &mut io, &run, 2)?;
+    Ok(())
+}
+
+#[test]
+fn tag_9_through_an_update_t_a1_89() {
+    let run = running(Slot::A, V1);
+    let img = image(Slot::B, V2, 2000, 7);
+    let (s, _) = installed(false);
+    let s = core::cell::RefCell::new(s);
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 0, "erased");
+    let mut g = Stager::new();
+    marked_update(&s, &mut g, &img, offer(&img, V2)).unwrap();
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 1, "good verify");
+    // A new transfer: BEGIN alone changes nothing; the first block (the first erase) gives 0,
+    // also after a restart (a new stager), although the slot's old image was good.
+    let img2 = image(Slot::B, header::version(1, 0, 3), 2000, 9);
+    let mut g = Stager::new();
+    g.begin(&offer(&img2, header::version(1, 0, 3)), &run, 0).unwrap();
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 1);
+    let mut io = Shared(&s);
+    let mut st = Store::open(Shared(&s), Writer::Application { running: Slot::A }).unwrap();
+    // A refused block sets no mark.
+    assert_eq!(g.block_marked(Some(&mut st), &mut io, &run, 0, false, block_of(&img2, 0), 1), Err(Refusal::BadCrc));
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 1);
+    g.block_marked(Some(&mut st), &mut io, &run, 0, true, block_of(&img2, 0), 1).unwrap();
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 0);
+    g.abort(2);
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 0, "after UPDATE_ABORT");
+    // Every block but no verify, then a failed verify: 0, whatever the bytes.
+    let mut g = Stager::new();
+    let mut o = offer(&img, V2);
+    o.sha256[0] ^= 1;
+    assert!(marked_update(&s, &mut g, &img, o).is_err());
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 0, "failed verify of a good image");
+    // A good verify later: 1; a block that cancels it: 0; verified again: 1.
+    let mut g = Stager::new();
+    marked_update(&s, &mut g, &img, offer(&img, V2)).unwrap();
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 1);
+    let mut st = Store::open(Shared(&s), Writer::Application { running: Slot::A }).unwrap();
+    g.block_marked(Some(&mut st), &mut io, &run, 1, true, block_of(&img, 1), 3).unwrap();
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 0);
+    g.verify_marked(Some(&mut st), &mut io, &run, 4).unwrap();
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 1);
+    // The boot record was never written by all this.
+    assert_eq!(record(&mut s.borrow_mut()), None);
+    // One byte changed later: 2.
+    let i = (Slot::B.range().start - g7250_layout::APPLICATION_AREA.start) as usize + 1800;
+    s.borrow_mut().mem[i] ^= 1;
+    assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 2);
+    // No store: the block is a write failure, nothing is erased.
+    let mut g = Stager::new();
+    g.begin(&offer(&img, V2), &run, 0).unwrap();
+    let before = s.borrow().mem.clone();
+    let none: Option<&mut Store<Shared>> = None;
+    assert_eq!(g.block_marked(none, &mut io, &run, 0, true, block_of(&img, 0), 1), Err(Refusal::VerifyFailed));
+    assert_eq!(s.borrow().mem, before);
+}
+
+#[test]
+fn a_slot_whose_trial_failed_stays_good_and_is_a_rollback_target_t_a1_89() {
+    // 0067 point d: tag 9 reports integrity; the failed trial shows in tag 10.
+    let (s, a) = installed(false);
+    let img = image(Slot::B, V2, 2000, 7);
+    let s = core::cell::RefCell::new(s);
+    let mut g = Stager::new();
+    marked_update(&s, &mut g, &img, offer(&img, V2)).unwrap();
+    let mut s = s.into_inner();
+    {
+        let mut st = Store::open(&mut s, Writer::Application { running: Slot::A }).unwrap();
+        g.activate(&mut st, &running(Slot::A, V1), 3).unwrap();
+    }
+    assert_eq!(boot(&mut s), Choice::Trial(Slot::B));
+    assert_eq!(boot(&mut s), Choice::Boot(Slot::A), "not confirmed: back");
+    assert_eq!(boot::state(record(&mut s), Slot::A), UpdateState::RolledBack);
+    assert_eq!(tag9(&mut s, Slot::B), 1);
+    {
+        let mut st = Store::open(&mut s, Writer::Application { running: Slot::A }).unwrap();
+        boot::rollback(&mut st, Slot::A).unwrap();
+    }
+    assert_eq!(boot(&mut s), Choice::Trial(Slot::B), "a trial again");
+    assert_eq!(s.bytes(Slot::A.range().start, a.len() as u32), &a[..]);
+}
+
+#[test]
+fn boot_refusals_t_a1_90() {
+    // The trial slot changed after the verify: the previous image, rolled back.
+    let (mut s, _, _) = activated(false);
+    let at = |slot: Slot| (slot.range().start - g7250_layout::APPLICATION_AREA.start) as usize + 2000;
+    s.mem[at(Slot::B)] ^= 1;
+    assert_eq!(image_word(&mut s, Slot::B), Some("integrity"));
+    assert_eq!(boot(&mut s), Choice::Boot(Slot::A));
+    assert_eq!(boot::state(record(&mut s), Slot::A), UpdateState::RolledBack);
+    // The confirmed active image changed, the other slot good: the other one, no trial, recorded.
+    let (mut s, _, _) = activated(false);
+    boot(&mut s);
+    assert!(confirm(&mut s, Slot::B));
+    s.mem[at(Slot::B)] ^= 1;
+    assert_eq!(boot(&mut s), Choice::Boot(Slot::A));
+    assert_eq!(boot::state(record(&mut s), Slot::A), UpdateState::RolledBack);
+    assert_eq!(record(&mut s).map(|r| (r.active, r.trial, r.confirmed)), Some((Slot::A, None, true)));
+    assert_eq!(boot(&mut s), Choice::Boot(Slot::A), "an ordinary start from then on");
+    // Both changed: no image.
+    s.mem[at(Slot::A)] ^= 1;
+    assert_eq!(boot(&mut s), Choice::NoImage);
+}
+
+#[test]
+fn power_loss_at_every_step_of_a_marked_transfer() {
+    // The slot held a good image (tag 9 = 1). Whatever the cut, the running image starts, and a
+    // slot whose bytes changed never counts as good unless the verify ended.
+    let old = image(Slot::B, V2, 2000, 7);
+    let new = image(Slot::B, header::version(1, 0, 3), 1500, 9);
+    for ecc in [false, true] {
+        let (s, _) = installed(true); // the store nearly full: BEGIN makes room
+        let s = core::cell::RefCell::new(s);
+        marked_update(&s, &mut Stager::new(), &old, offer(&old, V2)).unwrap();
+        let mut base = s.into_inner();
+        base.ecc_on_cut = ecc;
+        base.steps = 0;
+        let go = |s: Sim| {
+            let s = core::cell::RefCell::new(s);
+            let r = marked_update(&s, &mut Stager::new(), &new, offer(&new, header::version(1, 0, 3)));
+            (s.into_inner(), r)
+        };
+        let n = go(base.clone()).0.steps;
+        assert!(n > 40);
+        for cut in 0..=n {
+            let mut c = base.clone();
+            c.budget = Some(cut);
+            let (mut c, r) = go(c);
+            c.power_on();
+            assert_eq!(boot(&mut c), Choice::Boot(Slot::A), "ecc {ecc} cut {cut}");
+            let t = tag9(&mut c, Slot::B);
+            let is = |img: &[u8]| c.bytes(Slot::B.range().start, img.len() as u32) == img;
+            if r.is_ok() {
+                assert_eq!(t, 1);
+            } else if t == 1 {
+                assert!(is(&old) || is(&new), "ecc {ecc} cut {cut}: good but neither image");
+            } else {
+                assert_eq!(t, 0, "ecc {ecc} cut {cut}");
+            }
+        }
+    }
+}
+
+#[test]
+fn one_erase_per_update_request_0069() {
+    // With the store nearly full: BEGIN's reserve compacts (one erase); then the first block of a
+    // sector does its one erase, the others and the verify none.
+    let (s, _) = installed(true);
+    let img = image(Slot::B, V2, 260 * 512, 7);
+    let run = running(Slot::A, V1);
+    let s = core::cell::RefCell::new(s);
+    let mut g = Stager::new();
+    let mut io = Shared(&s);
+    let mut st = Store::open(Shared(&s), Writer::Application { running: Slot::A }).unwrap();
+    let erases = |s: &core::cell::RefCell<Sim>| s.borrow().erases;
+    let e0 = erases(&s);
+    g.begin(&offer(&img, V2), &run, 0).unwrap();
+    st.reserve(4096).unwrap();
+    assert_eq!(erases(&s), e0 + 1, "BEGIN");
+    for k in 0..260 {
+        let e = erases(&s);
+        g.block_marked(Some(&mut st), &mut io, &run, k, true, block_of(&img, k), 1).unwrap();
+        assert_eq!(erases(&s) - e, (k % 256 == 0) as usize, "block {k}");
+    }
+    let e = erases(&s);
+    g.verify_marked(Some(&mut st), &mut io, &run, 2).unwrap();
+    assert_eq!(erases(&s), e, "VERIFY");
 }

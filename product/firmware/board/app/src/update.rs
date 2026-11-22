@@ -55,12 +55,16 @@ use g7250_proto::mgmt::Status;
 use g7250_proto::mgmt::payload::Package;
 use g7250_radio::mgmt::Updater;
 use g7250_update::boot::{self, UpdateState};
+use g7250_update::image;
 use g7250_update::stage::{Offer, Refusal, Running, Stager};
 
 /// Run time after which a trial image confirms itself.
 pub const CONFIRM_AFTER_MS: u64 = 10_000;
 /// A trial must confirm itself within 60 s of its start (U-6).
 pub const TRIAL_LIMIT_MS: u64 = 60_000;
+
+/// Room the store keeps free at UPDATE_BEGIN for staging marks (one flash word each).
+const MARK_ROOM: u32 = 4096;
 
 const APP_RAM: Range = Range::new(0x2400_0000, 0x2402_0000);
 
@@ -69,16 +73,34 @@ pub struct BoardUpdate {
     pub run: Running,
     /// Update state at start (IDENTIFY tag 10).
     pub state: UpdateState,
+    /// The other slot as last judged (IDENTIFY tag 9; A1.8 "Integrity in `IDENTIFY`"): 0 none,
+    /// 1 good, 2 bad; its version if good; the failed check for the log.
+    pub other: u8,
+    pub other_version: u32,
+    pub other_failed: Option<&'static str>,
 }
 
 impl BoardUpdate {
     /// From the boot record at start.
-    pub fn new(store: Option<&mut NvStore>, slot: Slot) -> Self {
-        let rec = store.and_then(|s| boot::load(s).ok().flatten());
+    pub fn new(mut store: Option<&mut NvStore>, slot: Slot) -> Self {
+        let rec = store.as_deref_mut().and_then(|s| boot::load(s).ok().flatten());
         let state = boot::state(rec, slot);
         let run = Running { slot, version: g7250_board::FW_VERSION, hw_revision: 0, trial: state == UpdateState::Trial, app_ram: APP_RAM };
         TRIAL_PENDING.store(run.trial, Ordering::Relaxed);
-        BoardUpdate { stager: Stager::new(), run, state }
+        let mut u = BoardUpdate { stager: Stager::new(), run, state, other: 0, other_version: 0, other_failed: None };
+        u.judge(store);
+        u
+    }
+
+    /// Judge the other slot: at start, at a good verify, at each `ROLLBACK` (0067 point 4).
+    pub fn judge(&mut self, store: Option<&mut NvStore>) {
+        let other = self.run.slot.other();
+        let open = store.and_then(|s| boot::staging_open(s).ok().flatten()) == Some(other);
+        let mut io = RawFlash::new(Writer::Application { running: self.run.slot });
+        let c = image::check(&mut io, ImageKind::Application, other.range(), APP_RAM, &mut || {});
+        self.other = boot::integrity(open, &c);
+        self.other_version = if self.other == 1 { c.map_or(0, |h| h.fw_version) } else { 0 };
+        self.other_failed = c.err().map(|e| e.word());
     }
 
     /// The trial's self-confirmation (U-6). Returns true when the record was written.
@@ -98,14 +120,6 @@ impl BoardUpdate {
 
 fn status(r: Refusal) -> Status {
     Status::from_u16(r as u16).unwrap_or(Status::VerificationFailed)
-}
-
-/// The version of the image in the other slot, if it checks good.
-fn other_slot_version(slot: Slot) -> Option<u32> {
-    let r = slot.other().range();
-    // A slot with an unreadable (ECC) word is not valid, and is never read through a slice.
-    let image = g7250_board::flash::mapped(r).ok()?;
-    g7250_layout::header::validate(image, ImageKind::Application, r, APP_RAM).ok().map(|h| h.fw_version)
 }
 
 /// The [`Updater`] of one management request: the stager and the store.
@@ -129,17 +143,31 @@ impl Updater for Port<'_> {
             signature_len: p.signature_len,
             target_slot: p.target_slot,
         };
-        self.u.stager.begin(&o, &self.u.run, now).map_err(status)
+        let n = self.u.stager.begin(&o, &self.u.run, now).map_err(status)?;
+        // Room in the store for the staging marks of this transfer, so that no block and no
+        // verify needs a second erase (0069: one erase per request; here it is BEGIN's own).
+        if !self.store.as_deref_mut().is_some_and(|s| s.reserve(MARK_ROOM).is_ok()) {
+            self.u.stager.abort(now);
+            return Err(Status::VerificationFailed);
+        }
+        Ok(n)
     }
 
     fn block(&mut self, n: u32, crc_ok: bool, data: &[u8], now: u64) -> Result<u32, Status> {
         let mut io = RawFlash::new(Writer::Application { running: self.u.run.slot });
-        self.u.stager.block(&mut io, &self.u.run, n, crc_ok, data, now).map_err(status)
+        let r = self.u.stager.block_marked(self.store.as_deref_mut(), &mut io, &self.u.run, n, crc_ok, data, now);
+        if self.u.stager.staging_marked() {
+            // From the first erase until a good verify: tag 9 = 0.
+            (self.u.other, self.u.other_version) = (0, 0);
+        }
+        r.map_err(status)
     }
 
     fn verify(&mut self, now: u64) -> Result<[u8; 32], Status> {
         let mut io = RawFlash::new(Writer::Application { running: self.u.run.slot });
-        self.u.stager.verify(&mut io, &self.u.run, now).map_err(status)
+        let h = self.u.stager.verify_marked(self.store.as_deref_mut(), &mut io, &self.u.run, now).map_err(status)?;
+        self.u.judge(self.store.as_deref_mut());
+        Ok(h)
     }
 
     fn verify_note(&self) -> (u8, u32, Option<&'static str>) {
@@ -164,7 +192,11 @@ impl Updater for Port<'_> {
         // During a trial boot or in the update state: 58. Without a good image of this firmware
         // in the other slot (IDENTIFY tag 9): 55, nothing changes (A1.8 "ROLLBACK"; 0064).
         self.u.stager.rollback_allowed(&self.u.run).map_err(status)?;
-        let Some(to_ver) = other_slot_version(self.u.run.slot) else { return Err(Status::VerificationFailed) };
+        self.u.judge(self.store.as_deref_mut());
+        if self.u.other != 1 {
+            return Err(Status::VerificationFailed);
+        }
+        let to_ver = self.u.other_version;
         let Some(s) = self.store.as_deref_mut() else { return Err(Status::VerificationFailed) };
         boot::rollback(s, self.u.run.slot).map_err(|_| Status::VerificationFailed)?;
         let code = g7250_update::stage::slot_code;

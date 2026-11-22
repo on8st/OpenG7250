@@ -18,7 +18,7 @@ pub trait Updater {
     fn verify(&mut self, now: u64) -> Result<[u8; 32], Status>;
     /// For the log after UPDATE_VERIFY (A1.7 "every update step"): the staging slot (1 A, 2 B)
     /// and the staged version after a good verify; after a failed one, the failed check
-    /// ("missing blocks", "hash", a word of the image check, or "header"; 0067).
+    /// ("missing-blocks", "hash", a word of the image check, or "header"; 0067).
     fn verify_note(&self) -> (u8, u32, Option<&'static str>) {
         (0, 0, None)
     }
