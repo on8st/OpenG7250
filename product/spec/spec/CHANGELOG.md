@@ -61,6 +61,10 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   every reset without power loss sets a flag, before P-SYS-9 is set; oldest entry failing means
   log lost; the `ROLLBACK` line is logged last before the reset; fallback line `boot: fallback
   to slot <s> (active slot refused, no trial)`. A1.7, A1.8, A3.5, P-SYS-2; T-A1-90, T-A1-91.
+- 0069 addendum (proposed; firmware readings): after a fall-back the start check erases the
+  sector with the failed newer generation (meant); the start check also erases a non-live
+  sector holding data it cannot place in a complete record, so no part of an old secret
+  survives the next start. A1.10; T-A1-92.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 
