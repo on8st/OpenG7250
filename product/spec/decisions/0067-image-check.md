@@ -1,7 +1,7 @@
 # 0067 — What an image of this firmware must be: the image check, VERIFY and IDENTIFY tag 9
 
 - Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
-  addendum on two log words proposed 2026-11-22; proposed 2026-11-21; answers testbench finding SF-31
+  addenda on two log words and on a full store proposed 2026-11-22; proposed 2026-11-21; answers testbench finding SF-31
 - Date: 2026-11-21
 - Builds on: 0008 (U-4, U-5, U-6), 0028 (boot stage), 0043 (slot-linked images), 0044
   (self-confirmation), 0061 (slot size), 0064 (`ROLLBACK`), 0065 (ECC errors).
@@ -134,6 +134,31 @@ can stop before its check 1 (the hash) can run. It names, in this order and befo
 
 The order of a failed verify's checks is therefore: `missing-blocks`, `unreadable`, `hash`, the
 rest of the image check (`no-record` to `vectors`), `header`. Each still gives status 55.
+Test: T-A1-88 (a verify with the last block not sent: the log names `missing-blocks`, not
+`hash`).
+
+## Addendum: no room in the store during a transfer (proposed, 2026-11-22)
+
+Firmware question, relayed by the openg7250 session, 2026-11-22. The mark "staging not ended
+with a good verify" (point 4) is kept in the store; a long transfer can find the store full.
+Making room is a compaction, the request's one erase (0069), and an `UPDATE_BLOCK` that may
+also need the erase of a staging sector cannot do both.
+
+1. **Not 55.** Status 55 keeps its meaning of A1.8 "Write failure" for an update: the transfer
+   is discarded. A host that follows that rule would start again with `UPDATE_BEGIN` and get
+   58, because the transfer is in fact still open; so 55 must not also mean "go on".
+2. **New status 64, "nothing taken: room made in the store; send again".** An `UPDATE_BLOCK`
+   that finds no room in the store for what it must record makes room (its one erase), takes
+   nothing of the block, and answers 64. The transfer goes on; "blocks received" is unchanged.
+   The host sends the same block again as a new request (a new request id; a repeat with the
+   same id gets the stored 64 reply, A1.4), and it is taken. A 64 restarts the 10-minute timer
+   like 0 and 1, because the transfer moved on.
+3. **`UPDATE_VERIFY` never fails for room.** Hashing needs no erase, so a verify that needs
+   room makes it (its one erase) and completes in the same request. No log word "store" is
+   needed among the verify words.
+4. **Log line** for either: `store: room made (update)`.
+5. **Host rule:** on 64, send that block again with a new request id; no `UPDATE_STATUS` is
+   needed. Test T-A1-88 (store full on a block and on a verify).
 
 ## Alternatives considered
 
