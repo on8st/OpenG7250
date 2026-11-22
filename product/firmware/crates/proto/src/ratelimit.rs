@@ -14,6 +14,44 @@ struct Entry {
     used: bool,
 }
 
+/// Whether at least `min_ms` passed from `last_ms` to `now_ms`, for a limit of one per `min_ms`.
+/// The clock counts whole milliseconds, so two times that many ticks apart may be up to one
+/// tick closer in reality (T-A2-13: 99.6 ms measured for 100 ticks): one tick more is needed.
+pub const fn apart(last_ms: u64, now_ms: u64, min_ms: u64) -> bool {
+    now_ms.saturating_sub(last_ms) > min_ms
+}
+
+/// At most one event per interval and source (address and port): a real interval, not a fixed
+/// window. A small table; the source seen longest ago gives way.
+pub struct Spaced<const N: usize> {
+    table: [Option<([u8; 4], u16, u64)>; N],
+}
+
+impl<const N: usize> Spaced<N> {
+    pub const fn new() -> Self {
+        Self { table: [None; N] }
+    }
+
+    pub fn allow(&mut self, ip: [u8; 4], port: u16, now_ms: u64, min_ms: u64) -> bool {
+        if let Some(e) = self.table.iter_mut().flatten().find(|e| (e.0, e.1) == (ip, port)) {
+            if !apart(e.2, now_ms, min_ms) {
+                return false;
+            }
+            e.2 = now_ms;
+            return true;
+        }
+        let i = (0..N).min_by_key(|&i| self.table[i].map_or(0, |e| e.2 + 1)).unwrap_or(0);
+        self.table[i] = Some((ip, port, now_ms));
+        true
+    }
+}
+
+impl<const N: usize> Default for Spaced<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct RateLimit<const N: usize> {
     per_source: u16,
     total: u16,
@@ -79,6 +117,35 @@ impl<const N: usize> RateLimit<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_per_interval_also_with_truncated_times() {
+        // T-A2-13: events at 0.999 ms and 100.6 ms (99.6 ms apart) are ticks 0 and 100.
+        let tick = |us: u64| us / 1000;
+        for phase in [0u64, 1, 500, 999] {
+            for gap in [99_001u64, 99_600, 99_999] {
+                assert!(!apart(tick(phase), tick(phase + gap), 100), "phase {phase} gap {gap}");
+            }
+            assert!(apart(tick(phase), tick(phase + 101_000), 100));
+        }
+        // Writes every 30 ms for 0.6 s: 5 answers, never closer than 100 ms.
+        let mut s: Spaced<8> = Spaced::new();
+        let mut sent = vec![];
+        for k in 0..20u64 {
+            let us = 999 + 30_000 * k;
+            if s.allow([10, 0, 0, 1], 5000, tick(us), 100) {
+                sent.push(us);
+            }
+        }
+        assert!(sent.windows(2).all(|w| w[1] - w[0] >= 100_000), "{sent:?}");
+        assert_eq!(sent.len(), 5);
+        // Another source has its own interval; a full table drops the oldest source.
+        assert!(s.allow([10, 0, 0, 2], 5000, 600, 100));
+        for k in 0..8u16 {
+            assert!(s.allow([10, 0, 0, 3], k, 601 + k as u64, 100));
+        }
+        assert!(!s.allow([10, 0, 0, 3], 7, 650, 100));
+    }
 
     #[test]
     fn ten_per_source_fifty_total() {

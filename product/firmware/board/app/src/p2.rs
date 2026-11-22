@@ -6,7 +6,7 @@
 
 use g7250_board::println;
 use g7250_ch394::{Ch394, Error as ChError};
-use g7250_proto::ratelimit::RateLimit;
+use g7250_proto::ratelimit::{RateLimit, Spaced, apart};
 use g7250_radio::regmap::{self, Pair, RegMap, WriteCtx};
 use g7250_radio::session::{Addr, CnC, EndReason, Event, Session};
 use core::cell::RefCell;
@@ -68,12 +68,14 @@ pub struct P2 {
     /// The unasked record of this session has gone out (B4.4 item 2: once per session).
     unasked_sent: bool,
     /// `CAP_REQUEST` answers to non-owners: at most once per 1 s per source (B4.4 item 3) ...
-    record_last: [Option<(Addr, u64)>; 8],
+    record_last: Spaced<8>,
     /// ... and 10 per second in total.
     record_total: RateLimit<1>,
     /// Last NOT_OWNER answer per source (B8.5: one per 100 ms).
-    not_owner_last: [Option<(Addr, u64)>; 8],
-    refused_limit: RateLimit<8>,
+    not_owner_last: Spaced<8>,
+    /// Link refusals (B5.8): once per 100 ms per source, 10 per second in total.
+    refused_last: Spaced<8>,
+    refused_total: RateLimit<1>,
     next_status_ms: u64,
     pub link_ok: bool,
     pub dropped_reg_from_7250: u64,
@@ -107,20 +109,6 @@ pub struct P2 {
     pub trial: bool,
     /// Last reason-10 answer to a run request during an update (at most one per 100 ms).
     last_update_answer: Option<u64>,
-}
-
-/// At most one event per `min_ms` per source; a small table, the oldest entry reused.
-fn spaced(t: &mut [Option<(Addr, u64)>; 8], from: Addr, now: u64, min_ms: u64) -> bool {
-    if let Some(e) = t.iter_mut().flatten().find(|e| e.0 == from) {
-        if now.saturating_sub(e.1) < min_ms {
-            return false;
-        }
-        e.1 = now;
-        return true;
-    }
-    let i = t.iter().position(|e| e.is_none()).unwrap_or_else(|| (0..t.len()).min_by_key(|&i| t[i].map_or(0, |e| e.1)).unwrap());
-    t[i] = Some((from, now));
-    true
 }
 
 pub type Chip = Ch394<crate::net::CsDevice<'static>>;
@@ -174,10 +162,11 @@ impl P2 {
             seq7250: regmap::Port7250Seq::default(),
             last_unasked: None,
             unasked_sent: false,
-            record_last: [None; 8],
+            record_last: Spaced::new(),
             record_total: RateLimit::new(u16::MAX, 10),
-            not_owner_last: [None; 8],
-            refused_limit: RateLimit::new(10, 10),
+            not_owner_last: Spaced::new(),
+            refused_last: Spaced::new(),
+            refused_total: RateLimit::new(u16::MAX, 10),
             next_status_ms: 0,
             link_ok: true,
             dropped_reg_from_7250: 0,
@@ -254,7 +243,7 @@ impl P2 {
     /// Its own limit, apart from the `NOT_OWNER` limit of B8.5 (A2.4, "Notice destination").
     fn old_owner_packet(&mut self, chip: &mut Chip, from: Addr, now: u64) {
         if let Some(n) = self.notice.as_mut() {
-            if n.from == from && now < n.until_ms && n.last_repeat_ms.is_none_or(|t| now.saturating_sub(t) >= NOTICE_REPEAT_MIN_MS) {
+            if n.from == from && now < n.until_ms && n.last_repeat_ms.is_none_or(|t| apart(t, now, NOTICE_REPEAT_MIN_MS)) {
                 n.last_repeat_ms = Some(now);
                 Self::send_notice(chip, n);
             }
@@ -457,7 +446,7 @@ impl P2 {
                     }
                 }
                 Event::Refused { from } => {
-                    if self.refused_limit.allow(from.0, from.1, now) {
+                    if self.refused_last.allow(from.0, from.1, now, 100) && self.refused_total.allow([0; 4], 0, now) {
                         let p = [(regmap::addr::LINK_STATUS, self.regs.link_status), (regmap::addr::STREAM_STATUS, 0x08)];
                         self.send_regs_other(chip, from, &p);
                     }
@@ -467,7 +456,7 @@ impl P2 {
     }
 
     fn send_unasked_record(&mut self, chip: &mut Chip, dest: Addr, now: u64) {
-        if self.unasked_sent || self.last_unasked.is_some_and(|(a, t)| a == dest && now - t < 1000) {
+        if self.unasked_sent || self.last_unasked.is_some_and(|(a, t)| a == dest && !apart(t, now, 1000)) {
             return;
         }
         self.unasked_sent = true;
@@ -512,7 +501,7 @@ impl P2 {
         let Some(old) = self.notice.as_ref().map(|n| n.from) else { return };
         let pair = |a: Addr, b: Addr| (a, b) == (old, new) || (a, b) == (new, old);
         match self.takeover_log.as_mut() {
-            Some((a, b, t, n)) if pair(*a, *b) && now.saturating_sub(*t) < 1000 => *n += 1,
+            Some((a, b, t, n)) if pair(*a, *b) && !apart(*t, now, 1000) => *n += 1,
             other => {
                 let skipped = match other {
                     Some((a, b, _, n)) if pair(*a, *b) => *n,
@@ -587,7 +576,7 @@ impl P2 {
         if self.update_in_progress {
             // No session during an update; a run request is answered with STREAM_STATUS
             // reason 10, at most once per 100 ms (A1.8; T-A1-23).
-            if kind == CnC::HighPriority && p.len() > 4 && p[4] & 0x01 != 0 && self.last_update_answer.is_none_or(|t| now.saturating_sub(t) >= 100) {
+            if kind == CnC::HighPriority && p.len() > 4 && p[4] & 0x01 != 0 && self.last_update_answer.is_none_or(|t| apart(t, now, 100)) {
                 self.last_update_answer = Some(now);
                 let pairs = [(regmap::addr::STREAM_STATUS, self.stream_status())];
                 self.send_regs_other(chip, from, &pairs);
@@ -679,21 +668,16 @@ impl P2 {
             if ans.record_sent {
                 // B4.4 item 3: once per 1 s per source (a real interval, not a fixed window), 10
                 // per second in total; requests above it are dropped and counted.
-                if !spaced(&mut self.record_last, from, now, 1000) || !self.record_total.allow([0; 4], 0, now) {
+                if !self.record_last.allow(from.0, from.1, now, 1000) || !self.record_total.allow([0; 4], 0, now) {
                     self.dropped_record += 1;
                     return;
                 }
             }
             if ans.not_owner {
-                let i = self.not_owner_last.iter().position(|e| e.is_some_and(|(a, _)| a == from));
-                if let Some(i) = i {
-                    if now - self.not_owner_last[i].unwrap().1 < 100 {
-                        self.dropped_not_owner += 1;
-                        return;
-                    }
+                if !self.not_owner_last.allow(from.0, from.1, now, 100) {
+                    self.dropped_not_owner += 1;
+                    return;
                 }
-                let slot = i.or_else(|| self.not_owner_last.iter().position(|e| e.is_none())).unwrap_or(0);
-                self.not_owner_last[slot] = Some((from, now));
             }
         }
         if owner {
