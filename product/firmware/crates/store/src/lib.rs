@@ -423,10 +423,33 @@ impl<F: FlashIo> Store<F> {
         self.compact_keep(|k| k != Kind::Wipe && !drop(k))
     }
 
+    /// The live sector holds a complete generation (A1.10; 0069 addendum): one with a readable
+    /// commit word, or the first generation (generation 0, which has none) with a checked record
+    /// of this closed list: secret, configuration, calibration. What a start writes before its
+    /// start check (the boot counter, the boot record) does not count, nor do the staging and the
+    /// wipe mark: with the commit of the only generation in sector 6 unreadable, an erased sector
+    /// 7 is live as generation 0 and would soon hold those.
+    fn live_complete(&mut self) -> Result<bool, Error<F::Error>> {
+        if self.generation > 0 {
+            return Ok(true);
+        }
+        let mut counts = false;
+        self.walk(STORE_SECTORS[self.live], |_, f| {
+            counts |= matches!(f.kind, Kind::Secret | Kind::Config | Kind::Calibration);
+            Ok(())
+        })?;
+        Ok(counts)
+    }
+
     /// The sector that is not live holds a record of `kind` other than `live` (any, if the live
     /// sector has none). A record that does not check (torn, a half erased sector) counts as
-    /// another one: some of its bytes may still be there.
+    /// another one: some of its bytes may still be there. Never without a complete generation in
+    /// the live sector ([`Self::live_complete`]): the other sector may then hold the only copy of
+    /// the store.
     pub fn stale_holds_other(&mut self, kind: Kind, live: Option<&[u8]>) -> Result<bool, Error<F::Error>> {
+        if !self.live_complete()? {
+            return Ok(false);
+        }
         let r = STORE_SECTORS[1 - self.live];
         let mut addr = r.start;
         while addr + FLASH_WORD <= r.end {
@@ -452,8 +475,8 @@ impl<F: FlashIo> Store<F> {
         Ok(false)
     }
 
-    /// Erase the sector that is not live. Always safe: the live sector holds a complete
-    /// generation.
+    /// Erase the sector that is not live. For the start check only after
+    /// [`Self::stale_holds_other`]; otherwise the first step of a compaction.
     pub fn erase_stale(&mut self) -> Result<(), Error<F::Error>> {
         let r = STORE_SECTORS[1 - self.live];
         self.guard(Op::Erase, r.start, r.len())?;
@@ -960,7 +983,7 @@ mod tests {
     const OLD: [u8; 32] = [0x91; 32];
     const NEW: [u8; 32] = [0x37; 32];
 
-    /// A store with the old secret, some other records and a compaction behind it.
+    /// A store with the old secret and some other records.
     fn with_secret() -> Sim {
         let mut s = Store::open(Sim::new(), APP).unwrap();
         s.put(Kind::Config, 1, b"config v1").unwrap();
@@ -1112,6 +1135,76 @@ mod tests {
                     assert_eq!(get(&mut s, Kind::Secret).unwrap(), OLD);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn no_erase_at_start_without_a_complete_live_generation_0069() {
+        // The only generation is in sector 6 and sector 7 is erased (by the start check after a
+        // first change of the secret); then the commit word of sector 6 becomes unreadable, and
+        // sector 7 is live as generation 0. Nothing may erase sector 6 at a start.
+        let mut s = Store::open(Sim::new(), APP).unwrap();
+        s.put(Kind::Config, 1, b"config v1").unwrap();
+        s.put(Kind::Secret, 1, &OLD).unwrap();
+        s.replace(Kind::Secret, 1, &NEW).unwrap();
+        assert_eq!((s.live_sector(), s.generation()), (0, 1));
+        let commit = s.end - padded(4);
+        let mut s = Store::open(s.release(), APP).unwrap();
+        assert!(start_check(&mut s));
+        assert!(!s.io.written[(SECTOR_SIZE / FLASH_WORD) as usize..].iter().any(|&w| w), "sector 7 erased");
+        let mut io = s.release();
+        io.bad[((commit - STORE.start) / FLASH_WORD) as usize] = true;
+        let sector6 = io.mem[..SECTOR_SIZE as usize].to_vec();
+        let same = |s: &Store<Sim>| s.io.mem[..SECTOR_SIZE as usize] == sector6[..];
+        let mut s = Store::open(io, APP).unwrap();
+        assert_eq!((s.live_sector(), s.generation(), get(&mut s, Kind::Secret)), (1, 0, None));
+        assert!(!start_check(&mut s) && same(&s));
+        // Nor with what a start writes before its start check, and other records that do not
+        // count, in sector 7, at this start and the next ones.
+        for k in [Kind::BootCounter, Kind::BootRecord, Kind::Staging, Kind::Wipe] {
+            s.put(k, 1, &[1, 0, 0, 0]).unwrap();
+            assert!(!start_check(&mut s) && same(&s), "{k:?}");
+            s = Store::open(s.release(), APP).unwrap();
+            assert!(!start_check(&mut s) && same(&s), "{k:?}");
+        }
+        // The owner's first record of the list: the next start erases sector 6 (accepted).
+        for k in [Kind::Config, Kind::Calibration, Kind::Secret] {
+            let mut t = Store::open(s.io.clone(), APP).unwrap();
+            t.put(k, 1, &[0x11; 32]).unwrap();
+            let mut t = Store::open(t.release(), APP).unwrap();
+            assert!(start_check(&mut t), "{k:?}");
+            assert!(!holds(&t.io, 0, &NEW));
+            assert_eq!(get(&mut t, k).unwrap(), [0x11; 32]);
+        }
+        // An empty store, and foreign data in both sectors: nothing either.
+        assert!(!start_check(&mut Store::open(Sim::new(), APP).unwrap()));
+        let mut io = Sim::new();
+        io.mem.fill(0x5A);
+        io.written.fill(true);
+        assert!(!start_check(&mut Store::open(io, APP).unwrap()));
+    }
+
+    #[test]
+    fn a_failed_first_change_is_erased_after_a_fall_back_to_the_first_generation_0069() {
+        // The first generation (no commit word) holds only the first secret, only configuration,
+        // or only calibration; the newer generation with NEW has an unreadable commit word. The
+        // first generation stays in use, and NEW is in neither sector after the start check.
+        for k in [Kind::Secret, Kind::Config, Kind::Calibration] {
+            let mut s = Store::open(Sim::new(), APP).unwrap();
+            s.put(k, 1, &OLD).unwrap();
+            s.replace(Kind::Secret, 1, &NEW).unwrap();
+            let commit = s.end - padded(4);
+            let mut io = s.release();
+            io.bad[((commit - STORE.start) / FLASH_WORD) as usize] = true;
+            let mut s = Store::open(io, APP).unwrap();
+            assert_eq!((s.live_sector(), s.generation()), (1, 0));
+            assert!(s.fell_back());
+            s.next_boot_counter().unwrap();
+            assert!(start_check(&mut s), "{k:?}");
+            assert!(!holds(&s.io, 0, &NEW) && !holds(&s.io, 1, &NEW), "{k:?}");
+            let mut s = Store::open(s.release(), APP).unwrap();
+            assert_eq!(get(&mut s, k).unwrap(), OLD, "{k:?}");
+            assert!(!start_check(&mut s));
         }
     }
 }
