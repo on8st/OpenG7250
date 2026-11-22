@@ -360,11 +360,45 @@ def no_transfer_checks(ctx, u: Updater, when: str):
     ctx.eq(f"{when}: nothing written, UPDATE_STATUS idle", (st or {}).get("state"), 0)
 
 
-@test("T-A1-80")
+def abort_no_state(ctx, u: Updater, when: str):
+    """UPDATE_ABORT with no update state (0074): 0 with "restart needed" 0, and nothing changes."""
+    with Host(ctx.net) as h:
+        h.start()
+        h.recv(0.3)
+        n0 = last_log_seq(u)
+        r = u.req("UPDATE_ABORT")
+        ctx.eq(f"{when}: UPDATE_ABORT with no update state: 0, restart needed 0", (r["status"], r["payload"]) if r else None, (0, b"\x00"))
+        ctx.check(f"{when}: it is logged", bool(logs_since(u, n0)), "no new log entry")
+        ctx.eq(f"{when}: UPDATE_STATUS idle", (u.status() or {}).get("state"), 0)
+        got = []
+        for _ in range(10):  # the same session: status packets go on without a new start
+            h.keepalive()
+            got = [p for p, _, _ in h.recv(0.3) if p == 1025]
+            if got:
+                break
+        ctx.check(f"{when}: the P2 session goes on (status packets)", bool(got), "none in 3 s")
+        ss = value(h.write([(STREAM_STATUS, 0)]), STREAM_STATUS)
+        ctx.check(f"{when}: no stream stopped for an update (STREAM_STATUS DDC0 reason not 10)", ss is not None and ss & 0x7F != 10, f"{ss}")
+        h.stop()
+
+
+@test("T-A1-80", whole=True)
 def t_a1_80(ctx: Ctx):
-    """A1.8 "No transfer in progress" (0063): after a restart, after UPDATE_ABORT and after an
-    activation."""
+    """A1.8 "No transfer in progress" (0063, 0074): after a restart, after UPDATE_ABORT and after an
+    activation; UPDATE_ABORT with no update state."""
     s = secret(ctx)
+    with updating(ctx, s):
+        pass  # a RESTART: no UPDATE_BEGIN since the start
+    with updating(ctx, s, restart_at_end=False) as u:
+        abort_no_state(ctx, u, "after a restart")
+        if "time.advance" in ctx.endpoint.get("fixtures", []):
+            up0 = uptime_s(u)
+            advance(ctx, 605)
+            up = uptime_s(u)
+            ctx.check("no restart 10 min after that UPDATE_ABORT (uptime goes on)", None not in (up0, up) and up >= up0 + 600,
+                      f"uptime {up0} -> {up} s")
+        else:
+            ctx.part("'no restart after 10 min' not run: no time.advance")
     with updating(ctx, s) as u:
         no_transfer_checks(ctx, u, "after a restart")
         run, other, ver, lay = facts(ctx, u)
@@ -388,10 +422,19 @@ def t_a1_80(ctx: Ctx):
     time.sleep(0.3)
     wait_reachable(ctx, "UPDATE_ACTIVATE")
     with updating(ctx, s, restart_at_end=False) as u:
+        trial = u.identify().get(10) == b"\x01"
+        if trial:
+            abort_no_state(ctx, u, "in a trial image before confirmation")
+        else:
+            ctx.part("UPDATE_ABORT in a trial image: it had confirmed itself before it was reached")
         no_transfer_checks(ctx, u, "after an activation")
-        deadline = time.monotonic() + 20  # let the trial confirm itself, not left half-way
-        while time.monotonic() < deadline and u.identify().get(10) == b"\x01":
+        # let the trial confirm itself, not left half-way
+        w0, t0 = time.monotonic(), u.c.clock.now()
+        while (time.monotonic() - w0 < 20 or (u.c.clock.emu and time.monotonic() - w0 < 240 and u.c.clock.now() - t0 < 20)) \
+                and u.identify().get(10) == b"\x01":
             time.sleep(0.5)
+        if trial:
+            ctx.eq("the trial confirms as usual (tag 10 = 0)", u.identify().get(10), b"\x00")
 
 
 @test("T-A1-81")

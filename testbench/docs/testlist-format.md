@@ -555,16 +555,20 @@ A test with target `emulator` is also run against the reference model. A test wi
      ring unchanged until then (T-A1-91; the layout is the firmware's, so an emulator offers it
      only when its runner knows the ring). The emulator (emu/bench `8a2a100`, minor 9) has these
      three and `reset.flags`. The reference model has `log.corrupt`, and
-     `flash.delay {us, count}`: the flash work of the next `count` requests takes `us` (T-B5-22),
+     `flash.delay {us, count}`: the flash work of the next `count` requests takes `us` (T-B5-22,
+     T-A1-15, T-A1-60),
      `store.full {}`: the next `UPDATE_BLOCK` or `UPDATE_VERIFY` finds no room in the store
      (T-A1-88), and `reset.flags {flags: [...]}`: the reset flags of the next start, e.g. `[]` or
      `["software", "power-on"]` (T-A1-91). On the emulator `reset.flags` acts on the next MCU reset,
      not on a power cycle; the model takes it at the next start of any kind; the bench uses it only
      before a `RESTART`. Started
      with `--f1 open` (off by default; endpoint `model.f1_gate`) the model also has
-     `installer.state {}` for the streaming installer of A1.8a item 3 (product/refmodel/README.md);
-     no test of the bench uses it yet. `vendor.install {}` (always) puts the model back as after the
-     vendor path: no secret, a new first-secret window (T-A1-16).
+     `installer.state {}` for the streaming installer of A1.8a item 3 (product/refmodel/README.md;
+     T-A1-60, T-A1-62). `vendor.install {}` (always) puts the model back as after the
+     vendor path: no secret, a new first-secret window (T-A1-16, T-A1-60).
+     Pending, not built: a fixture that raises a processor fault (an undefined instruction in the
+     running image at a chosen emulated time, in thread mode and in an interrupt handler; T-A3-62,
+     0075). Its name and shape are not agreed; the bench does not call it.
    - `slot.corrupt {slot: 1|2, offset: n, xor?: 0x01}` → `{slot, address, old, new, t_us}`: the
      byte at `offset` from the slot start (0x08040000, 0x08080000) XORed (default one bit) with
      its ECC kept consistent (it reads as changed data, no ECC error); `{slot, restore: true}`

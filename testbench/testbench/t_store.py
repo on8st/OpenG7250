@@ -73,8 +73,7 @@ def state_before(c: Mgmt):
 
 
 def new_start(log0: list, up0: float | None, log: list, up: float | None) -> str:
-    """Why this answer comes from an image that started after `log0` and `up0` were read, or "". No
-    sum of uptime and elapsed time: whether uptime counts flash work is open, so it may run late."""
+    """Why this answer comes from an image that started after `log0` and `up0` were read, or ""."""
     old = {e[0]: e for e in log0}
     for e in log:  # a start entry that was not there (also where the numbers began again: log lost)
         if e[2].startswith("start after ") and old.get(e[0]) != e:
@@ -127,7 +126,7 @@ def factory_reset(ctx, u: Updater):
     return st, None if up is None else clock.now() - t0 - up, UPTIME_BASIS
 
 
-UPTIME_BASIS = "the uptime of IDENTIFY, which may run late by flash work (open with the spec session); start-up included"
+UPTIME_BASIS = "the uptime of IDENTIFY (it counts flash work, 0073); start-up included"
 
 
 def sectors(u: Updater) -> list[int]:
@@ -357,6 +356,12 @@ def t_a1_16(ctx: Ctx):
                 ctx.check("the window open until its end", is_open, f"{elapsed:.1f} s into the {left} s left")
             else:
                 ctx.notes.append("'open until its end' not judged: the radio's time ran past it")
+        if ctx.kind == "emulator":  # the claim of 0073 is the emulator's: a part not shown leaves no pass there
+            n_parts = len(ctx.parts)
+            going_on = hung_at_the_end(ctx, clock, window)
+            ctx.no_pass = ctx.no_pass or len(ctx.parts) > n_parts
+            if not going_on:
+                return
         advance(ctx, 15)
         if not closed(f"{WINDOW_S} s after network up", False):
             return
@@ -368,6 +373,59 @@ def t_a1_16(ctx: Ctx):
         if has(ctx, "vendor.install"):
             ctx.fixture("vendor.install")
             ctx.endpoint.get("_learned", {}).pop("secret", None)
+
+
+def hung_at_the_end(ctx, clock, window) -> bool:
+    """0073: host A's SET_FIRST_SECRET 2 s before the window ends, its erase hung until it fails;
+    B's request received during that work and A's retry get 36. False: the secret got set."""
+    from .t_flash import flog, running
+    from .t_update import advance
+    from .mgmt import send_retransmit
+    if not (has(ctx, "flash.fault") and has(ctx, "flash.log")):
+        ctx.part("a SET_FIRST_SECRET hung over the end of the window not run: no flash.fault or flash.log")
+        return True
+    back = stretched(ctx)
+    try:
+        with Mgmt(ctx.net) as a, Mgmt(ctx.net) as b:
+            a.clock = b.clock = clock
+            left = window()[2]
+            if left > 3:
+                advance(ctx, left - 2.5)
+            _, is_open, left = window()
+            if not is_open or left > 5:
+                ctx.part(f"a SET_FIRST_SECRET hung over the end of the window: not placed ({left} s left, open {is_open})")
+                return True
+            flog_start(ctx)
+            ctx.fixture("flash.fault", op="erase", never_end=True)
+            msg_a = build(CMD["SET_FIRST_SECRET"], os.urandom(32), a.next_id())
+            msg_b = build(CMD["SET_FIRST_SECRET"], os.urandom(32), b.next_id())
+            a.post(msg_a)
+            w0, seen = time.monotonic(), False
+            while not seen and time.monotonic() - w0 < 60 and not (got := a.listen(msg_a, 0.02)):
+                seen = any(running(e) for e in flog(ctx))
+            if seen:
+                b.post(msg_b)
+                got = []
+                t0 = clock.now()
+                while not got and clock.now() - t0 < FLASH_WINDOW_S and time.monotonic() - w0 < 300:
+                    got = a.listen(msg_a, 0.5)
+            st = got[0]["status"] if got else None
+            if st == 0:
+                keep_secret(ctx, msg_a[18:])
+                ctx.part("a SET_FIRST_SECRET hung over the end of the window: answered 0, the erase that hangs was not its own")
+                return False
+            if not seen:
+                ctx.part(f"a SET_FIRST_SECRET hung over the end of the window: no erase running in flash.log (answered {st})")
+                return True
+            ctx.eq("SET_FIRST_SECRET whose erase hangs over the end of the window: 55", st, 55)
+            rb = b.listen(msg_b, 1.0)
+            rb = rb[0] if rb else send_retransmit(b, msg_b, 4.0, "SET_FIRST_SECRET of B")
+            ctx.eq("B's SET_FIRST_SECRET received during that work: 36", rb["status"] if rb else None, 36)
+            ra = req_retransmit(a, "SET_FIRST_SECRET", os.urandom(32))
+            ctx.eq("A's retry after the 55: 36", ra["status"] if ra else None, 36)
+    finally:
+        back()
+    return True
 
 
 # ---------------- T-A1-28 ----------------

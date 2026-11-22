@@ -162,6 +162,12 @@ def t_b10_41(ctx):
     ctx.notes.append("'with bit 4 = 1 the arm is accepted': T-A1-63 (calibration set, host)")
 
 
+def duc_not_tx(ctx):
+    from .mgmt import Mgmt, stats
+    with Mgmt(ctx.net) as c:
+        return (stats(c) or {}).get("duc_not_tx")
+
+
 @test("T-B10-42")
 def t_b10_42(ctx):
     with host(ctx) as h:
@@ -169,6 +175,7 @@ def t_b10_42(ctx):
         tok = token_of(ctx, h, pairs)
         h.write([(TX_MODE_CLASS, 1)])
         h.write([(TX_ARM, tok ^ ARM_MAGIC)])
+        counted = duc_not_tx(ctx)
         for _ in range(20):
             h.send(PORT_DUCIQ, bytes(1444))
         ss = value(h.write([(STREAM_STATUS, 0)]), STREAM_STATUS)
@@ -200,7 +207,13 @@ def t_b10_42(ctx):
         if has_obs(ctx):
             safe(ctx, "after DUC I&Q, PTT and CWX")
         h.stop()
-    ctx.notes.append("'discarded and counted': the GET_STATS counter name is not fixed by the spec")
+    if counted is not None:
+        now = duc_not_tx(ctx)
+        # a burst may lose packets on the way to an emulator: at least one counted, never more than sent
+        ctx.check("the owner's 20 DUC I&Q packets are counted (GET_STATS duc_not_tx; Table M-6)", now is not None and
+                  1 <= now - counted <= 20, f"duc_not_tx {counted} -> {now}")
+    else:
+        ctx.check("GET_STATS lists duc_not_tx (Table M-6)", False, "not listed, or no reply")
 
 
 @test("T-B10-L07")

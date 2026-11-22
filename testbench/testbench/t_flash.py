@@ -144,6 +144,42 @@ def compaction_writes(ctx, u: Updater, start_ms: int, lo: int, hi: int, limit: i
     return None
 
 
+def near_compaction(ctx, u: Updater, lo: int, hi: int, start_ms: int, left: int = 0):
+    """SET_CONFIG writes until the sector being written has room for `left` more of them: the one
+    after those is then expected to need a compaction (a store that appends; the test that uses
+    it asks flash.log for the erase). The last value written, or None with the reason in ctx._near."""
+    def one(v):
+        n0 = len(flog(ctx))
+        r = set_tx_time(u, v)
+        progs = [e for e in flog(ctx, n0) if e.get("op") == "program" and in_range(e, lo, hi)]
+        return (r["status"] if r else None), progs
+    flog_start(ctx)
+    v = start_ms
+    for _ in range(4):  # two would do; a compaction may fall in one of the first
+        v += 1
+        st, progs = one(v)
+        if st != 0 or not progs:
+            ctx.__dict__["_near"] = f"a SET_CONFIG answered {st}, {len(progs)} store programs in flash.log"
+            return None
+        size = sum(int(e.get("len", 32)) for e in progs)
+        a = progs[-1]["address"]
+        end = (int(a, 0) if isinstance(a, str) else a) + int(progs[-1].get("len", 32))
+        room = lo + ((end - lo + SECTOR - 1) // SECTOR) * SECTOR - end
+        n = room // size - left
+        if n <= 0:
+            return v
+        if size < 4096:  # an appended write, not a compaction
+            break
+    for k in range(n):
+        v += 1
+        r = set_tx_time(u, v)
+        if not r or r["status"] != 0:
+            ctx.__dict__["_near"] = f"write {k + 1} of {n} answered {r['status'] if r else None}"
+            return None
+    ctx.__dict__["_near"] = f"{n} writes of {size} bytes, room for {left} more"
+    return v
+
+
 def is_erase(e: dict) -> bool:
     return e.get("op") == "erase"
 
@@ -196,6 +232,35 @@ def stretch(ctx, erase_us: int, program_us: int | None = None):
     return back
 
 
+def uptime_sample(ctx, u: Updater):
+    """(emulated time before, uptime, emulated time after) one IDENTIFY, in ms; or None."""
+    t = lambda: (ctx.fixture("hw.observe") or {}).get("t_us")
+    a, up, b = t(), u.identify().get(16, b""), t()
+    return (a / 1000, struct.unpack(">I", up)[0], b / 1000) if len(up) == 4 and None not in (a, b) else None
+
+
+UPTIME_RES_MS = 1.0  # tag 16 counts whole ms
+CLOCK_PPM = 50  # "plus the tolerance of the clock it is counted from" (0073): a crystal
+
+
+def uptime_behind(a, b) -> tuple[float, float]:
+    """(least, most) ms by which uptime fell behind emulated time between two uptime_sample()s."""
+    up = b[1] - a[1]
+    return b[0] - a[2] - up - UPTIME_RES_MS, b[2] - a[0] - up + UPTIME_RES_MS
+
+
+def judge_uptime(ctx, label: str, a, b, n: int):
+    """0073: after n requests with flash work uptime is behind by no more than n ms. Judged on the
+    least the two samples leave open, never stricter than the spec."""
+    if a is None or b is None:
+        ctx.part(f"{label}: uptime over flash work not judged: no hw.observe t_us, or no IDENTIFY")
+        return
+    least, most = uptime_behind(a, b)
+    allowed = n + (b[2] - a[0]) * CLOCK_PPM / 1e6
+    ctx.check(f"{label}: uptime behind the emulator's time by no more than {n} ms after {n} requests with flash work (0073)",
+              least <= allowed, f"behind by {least:.1f} to {most:.1f} ms over {(b[2] - a[0]) / 1000:.1f} s")
+
+
 def flash_work(ctx, s: bytes, t_max: int):
     from .t_tx_locked import safe
     from .t_update import facts, newer, pkg, restart, rx_works
@@ -204,6 +269,8 @@ def flash_work(ctx, s: bytes, t_max: int):
         old = tx_time(u)
         flog_start(ctx)
         up0 = (u.identify().get(16) or b"\0\0\0\0")
+        obs = "hw.observe" in ctx.endpoint.get("fixtures", [])
+        s0 = uptime_sample(ctx, u) if obs else None
         with Host(ctx.net) as h:
             h.start()
             h.recv(0.3)
@@ -212,6 +279,9 @@ def flash_work(ctx, s: bytes, t_max: int):
                       ctx.__dict__.get("_compaction", ""))
             safe(ctx, "after the store compaction")
             h.stop()
+        s1 = uptime_sample(ctx, u) if obs else None
+        if res is not None:
+            judge_uptime(ctx, "the SET_CONFIG writes and their compaction", s0, s1, res[1])
         worst = ctx.__dict__.get("_reply", (0.0, 0))
         ctx.check("each SET_CONFIG: the reply within 15 s of the request, at most one sector erase (0069)",
                   worst[0] <= REPLY_S and worst[1] <= 1, f"slowest reply {worst[0]:.2f} s of radio time, most erases {worst[1]}")
@@ -237,6 +307,7 @@ def flash_work(ctx, s: bytes, t_max: int):
             if st != 0:
                 break
         u.c.timed = False
+        judge_uptime(ctx, "the update's requests", s1, uptime_sample(ctx, u) if obs else None, len(rows))
         ctx.check("an update (its slot erases) transferred", st == 0, u.said(step, st))
         ctx.check("each update request: the reply within 15 s, at most one sector erase (0069)",
                   all(t <= REPLY_S and e <= 1 for _, _, t, e in rows), f"{rows}")
@@ -370,7 +441,74 @@ def erase_force_cases(ctx, s: bytes, t_max: int):
             restart(ctx, u)
 
 
-@test("T-A1-85")
+def stream_reason10(ctx) -> bool:
+    """A run request is answered with STREAM_STATUS reason 10 (update in progress)."""
+    from .p2 import PORT_REG, STREAM_STATUS, parse_regs
+    with Host(ctx.net) as h:
+        for _ in range(20):
+            h.keepalive()
+            for _, d, _ in h.recv(0.2, PORT_REG):
+                v = value(parse_regs(d), STREAM_STATUS)
+                if v is not None and v & 0x7F == 10:
+                    h.running = False
+                    return True
+        h.running = False
+    return False
+
+
+def after_write_failure(ctx, s: bytes):
+    """A1.8 "Write failure" (0074): the erase that fails is the one of the second sector, 60 s after the
+    last block answered 0, so that a 55 that restarted the 10 minutes would show."""
+    from .t_update import advance, expect_restart_at, facts, newer, pkg, restart, slot_bytes
+    from .update import block_payload
+    if "time.advance" not in ctx.endpoint.get("fixtures", []):
+        ctx.part("the 10 minutes after a write failure not run: no time.advance")
+    with mg(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        if slot_bytes(lay, other) < 2 * SECTOR:
+            ctx.part("after a write failure: the slot has one sector only, no block of a transfer begins another")
+            return
+        img = image(SECTOR + 1024, seed=853)
+        r = u.begin(pkg(img, newer(ver), other))
+        if not ctx.eq("after a write failure: UPDATE_BEGIN accepted", r["status"] if r else None, 0):
+            restart(ctx, u)
+            return
+        st, _ = u.blocks(img[:SECTOR])
+        if not ctx.eq("after a write failure: the first sector's blocks", st, 0):
+            restart(ctx, u)
+            return
+        clock = u.c.clock
+        t0 = clock.now()
+        timed = "time.advance" in ctx.endpoint.get("fixtures", [])
+        if timed:
+            advance(ctx, 60)
+        ctx.fixture("flash.fault", op="erase", flag="PGSERR")
+        k = SECTOR // 512
+        r = u.req("UPDATE_BLOCK", block_payload(k, img[512 * k:512 * k + 512]))
+        st = r["status"] if r else None
+        if st == 0:
+            ctx.part("after a write failure: the block that begins the second sector was answered 0, its erase came earlier")
+            restart(ctx, u)
+            return
+        ctx.eq("an UPDATE_BLOCK whose erase ends with an error flag: 55", st, 55)
+        ctx.eq("after it UPDATE_STATUS reports idle", (u.status() or {}).get("state"), 0)
+        ctx.check("after it a run request gets reason 10 (update in progress)", stream_reason10(ctx), "no STREAM_STATUS with reason 10")
+        if timed:
+            expect_restart_at(ctx, u, "the last block answered 0, then the 55", 600, clock.now() - t0)
+        else:
+            restart(ctx, u)
+    with mg(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        ctx.fixture("flash.fault", op="erase", flag="PGSERR")
+        img = image(2148, seed=854)
+        st, step = u.full(img, pkg(img, newer(ver), other))
+        if ctx.eq("a second write failure: 55", st, 55):
+            r = u.begin(pkg(img, newer(ver), other))
+            ctx.eq("after the 55 a new UPDATE_BEGIN is accepted", r["status"] if r else None, 0)
+        restart(ctx, u)
+
+
+@test("T-A1-85", whole=True)
 def t_a1_85(ctx: Ctx):
     """B2.3 "flash work that fails" (0065)."""
     need(ctx, "flash.fault")
@@ -396,6 +534,7 @@ def t_a1_85(ctx: Ctx):
         ctx.check("INTERNAL_ERROR raised", ff is not None and ff >> INTERNAL_ERROR & 1, f"FAULT_FLAGS {ff}")
         ctx.eq("the running image unchanged", u.identify().get(23, b"")[:1], bytes([run]))
         restart(ctx, u)
+    after_write_failure(ctx, s)
     with mg(ctx, s) as u:
         run, other, ver, lay = facts(ctx, u)
         old = tx_time(u)

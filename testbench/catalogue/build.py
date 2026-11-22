@@ -140,6 +140,27 @@ OVERRIDES: dict[str, dict] = {
     **{t: {"target": "emulator", "also": ["host"], "needs": ["power.cycle", "time.advance"],
            "notes": ["ends without a secret and without a window: never on a radio, and not in a per-list boot"]}
        for t in ("T-A1-04", "T-A1-16")},
+    "T-A1-15": {"target": "emulator", "also": ["host"], "needs": ["time.advance"], "pending": [],
+                "notes": ["the stretched compaction needs flash.timing and flash.log (the reference model: flash.delay)"]},
+    "T-A1-60": {"target": "host", "also": [], "needs": ["installer.state", "vendor.install", "time.advance"],
+                "notes": ["only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open; the stretched erase is "
+                          "flash.delay there"]},
+    "T-A1-62": {"target": "host", "also": [], "needs": ["installer.state", "vendor.install", "time.advance"],
+                "notes": ["only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open"]},
+    "T-A1-80": {"target": "emulator", "also": ["host"], "needs": ["time.advance"]},
+    "T-A1-94": {"target": "emulator", "also": [], "tx_part": False,
+                "needs": ["flash.timing", "flash.log", "flash.fault", "time.advance", "net.log", "gpio.force", "hw.observe", "hw.trace"],
+                "notes": ["the compaction is sent half an erase before the 60 s limit, not at 55 s: one stretched erase of 4 s from "
+                          "55 s would end before it"]},
+    "T-A1-95": {"target": "emulator", "also": ["host"], "needs": ["power.cycle"], "tx_part": False},
+    "T-A1-96": {"target": "emulator", "also": ["host"], "needs": [], "tx_part": False, "pending": []},
+    "T-A1-97": {"target": "emulator", "also": ["host"], "needs": [], "tx_part": False},
+    "T-A1-98": {"target": "emulator", "also": ["host"], "needs": [], "tx_part": False,
+                "notes": ["the DHCP renewal needs dhcp.server and power.cycle; on the reference model the sockets stay and the "
+                          "management channel sees the new address"]},
+    "T-A3-62": {"target": "emulator", "also": ["host"], "needs": ["time.advance"], "pending": [], "tx_part": True,
+                "notes": ["the unexpected stop itself is pending: the emulator's fault fixture; the keyed part pending TX; built: the "
+                          "commanded resets, the lost reason line, the trial's reset; never a pass until then"]},
     "T-A1-28": {"also": ["host"],
                 "notes": ["S2 and T3 (tags 9, 10) only with a calibration set that holds P-PWR-2; the FACTORY_RESET part only "
                           "from address mode DHCP (tag 1 = 0)"]},
@@ -427,14 +448,16 @@ UNCOVERED = [
 TIMEOUTS: dict[str, int] = {
     # a real package is about 275 blocks, two datagrams each at 18 per second: 30 s per update
     "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 900, "T-A1-09": 900, "T-A1-84": 600, "T-A1-83": 900,
-    "T-A1-88": 900, "T-A1-89": 900, "T-A1-90": 900, "T-A1-67": 300, "T-A1-80": 300,
+    "T-A1-88": 900, "T-A1-89": 900, "T-A1-90": 900, "T-A1-67": 300, "T-A1-80": 1000,
     "T-A1-05": 120, "T-A1-33": 120, "T-A1-23": 120, "T-A1-59": 120, "T-A1-78": 120, "T-A1-79": 120, "T-A1-81": 120,
     "T-B8-10": 120, "T-A1-91": 1500, "T-A1-28": 240, "T-A1-39": 300, "T-A1-92": 2700,
     "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-76": 120,
     # requests that may do flash work: each may take 15 s (0069), a factory reset 17 s more
     "T-A1-03": 90, "T-A1-04": 1800, "T-A1-16": 1800, "T-A1-20": 90, "T-A1-22": 90, "T-A1-63": 240, "T-A1-64": 90, "T-A1-65": 120,
     "T-A1-75": 120, "T-B5-21": 180,
-    "T-B5-22": 1800, "T-A1-85": 300, "T-A1-86": 1800, "T-A1-87": 300, "T-EMU-IDLE": 120,
+    "T-A1-15": 1200, "T-A1-60": 2000, "T-A1-62": 900, "T-A1-94": 1800, "T-A1-95": 60, "T-A1-96": 120, "T-A1-97": 180,
+    "T-A1-98": 300, "T-A3-62": 600,
+    "T-B5-22": 1800, "T-A1-85": 1200, "T-A1-86": 1800, "T-A1-87": 300, "T-EMU-IDLE": 120,
 }
 
 

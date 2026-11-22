@@ -132,20 +132,18 @@ def t_a1_14(ctx):
         ctx.eq("same id, other command: executed", r3[0]["cmd"] if r3 else None, CMD["IDENTIFY"])
 
 
-def counted_excess(before: dict, after: dict, excess: int) -> tuple[bool, str]:
-    """Some counter rose by exactly the excess (the spec gives it no name)."""
-    rises = {k: after[k] - before.get(k, 0) for k in after if after[k] != before.get(k, 0)}
-    return excess in rises.values(), f"excess {excess}, rises {rises}"
-
-
 @test("T-A1-26", whole=True)
 def t_a1_26(ctx):
-    """A1.10 S4: at most 20 replies per second per source; the excess counted in GET_STATS. 45
-    requests (under the 2 KB of Table B2-2), so that the excess, 25, is not the number of replies."""
+    """A1.10 S4: at most 20 replies per second per source; the excess counted in GET_STATS
+    (mg_rate_drop, Table M-6). 45 requests are under the 2 KB of Table B2-2."""
+    burst(ctx, 45)
+
+
+def burst(ctx, sent: int):
+    """`sent` requests at once from one source: the replies, and mg_rate_drop against the excess."""
     import select
     from .mgmt import stats
     from .t_a2 import netlog_read, same_clock
-    sent = 45
     netlog = "net.log" in ctx.endpoint.get("fixtures", [])
     with m(ctx) as c, m(ctx) as other:  # `other` is another source port, with a limit of its own
         before = ctx.got(stats(other), "GET_STATS")
@@ -162,21 +160,23 @@ def t_a1_26(ctx):
                 n += time.monotonic() - w0 < 0.8
             elif c.clock.now() - t0 > 2.0:
                 break
-        ctx.check("at most 20 replies per second per source", 1 <= n <= 20, f"{n} replies")
+        ctx.check(f"{sent} requests at once: at most 20 replies per second per source", 1 <= n <= 20, f"{n} replies")
         if netlog:
             mine = [e for e in netlog_read(ctx) if e.get("radio_port") == 7251 and str(e.get("peer", "")).endswith(f":{c.port}")]
             taken, replies = (sum(e.get("dir") == d for e in mine) for d in ("to_radio", "from_radio"))
         elif same_clock(ctx):  # the reference model: no datagram is lost on the way
             taken, replies = sent, total
         else:
-            ctx.part("'the excess is counted' not judged: no net.log, so what the radio took of the 45 requests is not known")
+            ctx.part("'the excess is counted' not judged: no net.log, so what the radio took of the requests is not known")
             return
         after = ctx.got(stats(other), "GET_STATS")
         excess = taken - replies
-        if excess in (0, replies, taken):
+        if excess <= 0:
             ctx.part(f"'the excess is counted' not shown: {taken} requests taken, {replies} replies")
             return
-        ctx.check("the excess is counted in GET_STATS: a counter rose by it (its name is not fixed)", *counted_excess(before, after, excess))
+        rise = after.get("mg_rate_drop", 0) - before.get("mg_rate_drop", 0)
+        ctx.check("the excess is counted in GET_STATS: mg_rate_drop rises by it", "mg_rate_drop" in after and rise == excess,
+                  f"{taken} requests taken, {replies} replies, mg_rate_drop {before.get('mg_rate_drop')} -> {after.get('mg_rate_drop')}")
 
 
 @test("T-A2-01")
