@@ -299,7 +299,8 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "the stretched compaction needs flash.timing and flash.log (the reference model: flash.delay)"
+    "the stretched compaction needs flash.timing and flash.log (the reference model: flash.delay)",
+    "no evidence for the pause of the 60 s idle time (0077): 50 s after the last request the 60 s cannot fall inside the flash work; a pass shows nothing there"
    ],
    "timeout_s": 1200
   },
@@ -1280,7 +1281,8 @@
    "tx_part": true,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
-    "only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open; the stretched erase is flash.delay there"
+    "only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open; the stretched erase is flash.delay there",
+    "no evidence for the pause of the 60 s idle time (0077): 50 s after the last request the 60 s cannot fall inside the flash work; a pass shows nothing there"
    ],
    "timeout_s": 2000
   },

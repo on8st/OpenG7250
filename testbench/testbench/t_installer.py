@@ -12,7 +12,8 @@ import time
 from .core import Ctx, RadioClock, Skip, test
 from .mgmt import Mgmt, build, CMD, req_retransmit, send_retransmit, signed, tlv
 from .p2 import Host, wait_reachable
-from .t_store import first_secret, get_config, has
+from .t_details import NO_EVIDENCE_60
+from .t_store import get_config, has
 from .t_update import advance, last_log_seq, logs_since, secret, updating
 from .update import FLAG_FOREIGN, SECTOR, Updater, begin_payload, block_payload, header, image
 
@@ -172,6 +173,7 @@ def t_a1_60(ctx: Ctx):
         finally:
             a.c.close()
             b.c.close()
+        ctx.notes.append(NO_EVIDENCE_60)
         ctx.notes.append("not judged: 'sector 0 and the option bytes are never written' (the model has neither), TCI; the stretched erase "
                          "is flash.delay of the model")
     finally:

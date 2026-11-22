@@ -153,8 +153,13 @@ def t_a1_15(ctx: Ctx):
         idle_pause(ctx, ck, a, b, s, wr, end, held, tx)
 
 
+NO_EVIDENCE_60 = ("no evidence for the pause of the 60 s idle time (0077): with the request 50 s after the last one the 60 s cannot "
+                  "fall inside its flash work; a pass shows nothing there (the text is with the spec session)")
+
+
 def idle_pause(ctx, ck, a, b, s, wr, end, held, tx):
     """0077: a request with long flash work from the holder 50 s after its last request."""
+    ctx.notes.append(NO_EVIDENCE_60)
     if has(ctx, "flash.delay"):  # the reference model: the flash work of one request takes 8 s
         ctx.eq("A's write: 0", wr(a), 0)
         ck.wait(50)

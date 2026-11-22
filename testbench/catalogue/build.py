@@ -136,15 +136,17 @@ CAL_SET = ([f"P-RF-{i}" for i in range(1, 6)] + [f"P-PWR-{i}" for i in range(1, 
                                                     "P-ATU-1", "P-ANT-1", "P-SYS-9"])  # P-SYS-9: 0050
 ECC_LIMIT = ("it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip "
              "gives on the read")
+NO_EVIDENCE_60 = ("no evidence for the pause of the 60 s idle time (0077): 50 s after the last request the 60 s cannot fall inside "
+                  "the flash work; a pass shows nothing there")
 OVERRIDES: dict[str, dict] = {
     **{t: {"target": "emulator", "also": ["host"], "needs": ["power.cycle", "time.advance"],
            "notes": ["ends without a secret and without a window: never on a radio, and not in a per-list boot"]}
        for t in ("T-A1-04", "T-A1-16")},
     "T-A1-15": {"target": "emulator", "also": ["host"], "needs": ["time.advance"], "pending": [],
-                "notes": ["the stretched compaction needs flash.timing and flash.log (the reference model: flash.delay)"]},
+                "notes": ["the stretched compaction needs flash.timing and flash.log (the reference model: flash.delay)", NO_EVIDENCE_60]},
     "T-A1-60": {"target": "host", "also": [], "needs": ["installer.state", "vendor.install", "time.advance"],
                 "notes": ["only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open; the stretched erase is "
-                          "flash.delay there"]},
+                          "flash.delay there", NO_EVIDENCE_60]},
     "T-A1-62": {"target": "host", "also": [], "needs": ["installer.state", "vendor.install", "time.advance"],
                 "notes": ["only where the F1 gate (P-SYS-5) is open: the reference model with --f1 open"]},
     "T-A1-80": {"target": "emulator", "also": ["host"], "needs": ["time.advance"]},
