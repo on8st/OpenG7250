@@ -335,7 +335,7 @@ power loss (0035).
   failing included), the log starts empty and sequence numbers start at 0. **Power loss**
   here and for the counters of A3.5 means a start whose reset flags include power-on or
   brown-out, whatever cause the start entry names, or a start with no reset flag at all
-  (0068 addendum, proposed 2026-11-22). Kept entries keep their uptime of the previous run.
+  (0068 addendum, accepted 2026-11-22). Kept entries keep their uptime of the previous run.
 - **The reason before a commanded reset** (0068). Before every reset it commands, after the
   unkey and RF gone (A1.9 step 4), the firmware MUST log the reason as its last entry:
   `restart: restart` (`RESTART`), `restart: factory-reset` (`FACTORY_RESET`),
@@ -472,7 +472,7 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   verify the transfer stays in progress: the host may send blocks again and verify again, and
   `UPDATE_ACTIVATE` gets 55 until a verify succeeds. `UPDATE_ACTIVATE` adds no check of its
   own; an accepted `UPDATE_BLOCK` after a good verify cancels that verify.
-- **Store full during a transfer** (0067 addendum, proposed 2026-11-22). An `UPDATE_BLOCK`
+- **Store full during a transfer** (0067 addendum, accepted 2026-11-22). An `UPDATE_BLOCK`
   that finds no room in the store for what it must record makes room (its one erase, B2.3
   "Flash work"), takes nothing of the block and answers 64; the transfer goes on and "blocks
   received" is unchanged. The host sends the same block again as a new request (a new request
@@ -505,7 +505,7 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   name `hash` or `header`; a version is written `major.minor.build`. A failed `UPDATE_VERIFY`
   names, before any of these, `missing-blocks` when a block has not been received (A1.8
   "Blocks sent again") and `unreadable` when a received word cannot be read for the hash
-  (0067 addendum, proposed 2026-11-22).
+  (0067 addendum, accepted 2026-11-22).
 - **Integrity in `IDENTIFY`** (0067; Table M-2 tag 9), per slot: 1 good, the slot passed the
   image check when last judged and its staging, if any, ended with a good `UPDATE_VERIFY`;
   0 none, the slot is erased, has no image record, or its staging has not ended with a good
