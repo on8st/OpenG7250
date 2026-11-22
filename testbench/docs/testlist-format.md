@@ -543,8 +543,8 @@ A test with target `emulator` is also run against the reference model. A test wi
      `len`, which the length of `data` must divide, or erased without `data`; aligned to 32
      bytes, refused while the image does flash work, ECC consistent (an earlier
      `flash.ecc` there is gone), a 32-byte word of only FF is an erased one, no `flash.log` entry,
-     kept across `power.cycle`, only within 0x080C0000 to 0x080FFFFF, refused outside; built by
-     the emulator in this shape (T-A1-92: foreign data, an erased sector, the store put back from
+     kept across `power.cycle`, only within 0x080C0000 to 0x080FFFFF, refused outside; agreed
+     in this shape and planned for the emulator's next build (T-A1-92: foreign data, an erased sector, the store put back from
      a dump); and
      `log.corrupt {seq}`: the kept log entry with that sequence number changed in RAM so that its
      check fails at the next start (T-A1-91; the layout is the firmware's, so an emulator needs its
