@@ -42,7 +42,26 @@ event), ARR (preloaded with ARPE), CCR1–4 with compare interrupts, update
 interrupt, one-pulse mode, 16 or 32 bit; counting in emulated time at the
 kernel clock the clock model gives (`SetKernelClock`) / (PSC + 1). Not
 modelled: down and center-aligned counting, slave and trigger modes, input
-capture, PWM outputs on pins, DMA requests. Other timers (TIM1, 6–8, 15–17)
+capture, PWM outputs on pins, DMA requests. The count runs on the kernel clock
+without a pause and a register write moves only the next event. An earlier
+version restarted the prescaler at each write and dropped the fraction of a
+tick: an image that moves a compare register often ran slow (fw-01a108d, 71 to
+118 writes per 65.536 ms: 75 to 194 ppm; a bench image with a write every 8 us:
+5.2 %). Results of earlier runs with a ticker or a 60 s or 600 s limit ran up to
+194 ppm slow in the image's time. (The fw-01a108d figures of the writes
+and ppm, and those of the parity runs of 22 Nov 2026, rest on the reports sent
+that day: their logs were lost in a power cut.) `firmware-tests/bench/timmono_test.c`
+(T-EMU-24, `m1_smoke.sh` [9]) checks the count, the interrupt entries of a whole
+run (none with CNT before its event) and the rate.
+
+`G7250_TIM_DIAG=TIM12` (opt-in, only logs, slow): the events and accesses of
+that timer in a ring, the time of a 16-bit tick-less driver (one period per UIF
+and per CC1IF the image clears, the counter corrected by the parity of the
+period), parity against the counter with no flag pending, backward steps, merged
+flags, flags cleared unread, early entries, and every 128 overflows the writes
+and reads with a flag pending; lines TIMDIAG and TIMRING in renode.log.
+
+Other timers (TIM1, 6–8, 15–17)
 stay Renode's, with their frequency set by the clock model.
 
 ## DWT cycle counter
@@ -56,7 +75,10 @@ stops the counter, CYCCNT counts core clock cycles from the clock model
 (`SetKernelClock`) in emulated time and is writable; DWT_LAR writes accepted; the
 other counters and comparators are stored only. Resolution: the machine's virtual
 time step (the time quantum), not single cycles; a busy-wait on CYCCNT sees time
-move in those steps. Checked on fw-cbe8687: CYCCNT / 64 equals the emulated time
+move in those steps. Over a masked erase polled from RAM (T-EMU-25, 64 MHz) it
+agrees with TIM5 and TIM12 within 10 us between any two reads, 4 s and 8 s
+stretched, with an error flag, and up to the watchdog reset of a never-ending
+one. It wraps at 2^32 cycles (67 s at 64 MHz, 7.8 s at 550 MHz). Checked on fw-cbe8687: CYCCNT / 64 equals the emulated time
 (8 905 347 us against 8 905 222 us).
 
 ## Not modelled

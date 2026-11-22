@@ -619,6 +619,8 @@ class FixtureServer:
         self.fl_on = True
         self.fl_open = None
         self.erase_us = None                  # flash.timing erase_us in force
+        self.ecc_spans = {"spans": 0, "instructions": 0, "max_instructions": 0}
+        self.endpoint_extra = {}              # the runner's own endpoint keys, also in net.endpoint
         self.ecc = {}                         # word address -> "double"|"single", kept like the flash
         self.corrupt = {}                     # slot -> (address, xor)
         self.silent_left = 0                  # ch394.silent boots still to come at a power cycle
@@ -699,9 +701,37 @@ class FixtureServer:
                 return
             self.fl_next = v["next"]
 
+    def ecc_span_pull(self):
+        """Add this boot's spans without ECC watchpoints (a power cycle starts a new count)."""
+        agent = self.agent_getter()
+        r = agent.ask("ft info", timeout=10, internal=True) if agent else None
+        try:
+            v = json.loads(r[5:]) if r and r.startswith("info ") else {}
+        except ValueError:
+            v = {}
+        n, tot, mx = v.get("EccSpans", 0), v.get("EccSpanInstr", 0), v.get("EccSpanInstrMax", 0)
+        last = getattr(self, "_span_last", (0, 0, 0)) if getattr(self, "_span_boot", None) == self.boot_no else (0, 0, 0)
+        s = self.ecc_spans
+        s["spans"] += n - last[0]
+        s["instructions"] += tot - last[1]
+        s["max_instructions"] = max(s["max_instructions"], mx)
+        self._span_last, self._span_boot = (n, tot, mx), self.boot_no
+
     def before_power_cycle(self):
         self.flash_pull()
         agent = self.agent_getter()
+        self.ecc_span_pull()
+        r = agent.ask("ft ecclist", timeout=10, internal=True) if agent else None
+        if r is not None and r.startswith("ok"):      # what the flash holds now (an erase clears marks)
+            torn = {int(e["torn"], 16): "double" for e in self.fl_entries
+                    if e.get("boot") == self.boot_no and e.get("result") == "cut" and e.get("torn")}
+            self.ecc = {int(x.split("=")[0], 16): x.split("=")[1] for x in r[2:].strip().split(",") if x}
+            self.ecc.update(torn)
+            for e in self.fl_entries:                 # a cut erase: the first fraction is erased
+                if e.get("boot") == self.boot_no and e.get("op") == "erase" and e.get("result") == "cut":
+                    lo = int(e["address"], 16)
+                    hi = lo + int(e["len"] * e.get("fraction_done", 0))
+                    self.ecc = {a: t for a, t in self.ecc.items() if not lo <= a < hi}
         r = agent.ask("ch394silent ?", timeout=10, internal=True) if agent else None
         self.silent_left = int(r.split()[1]) if r and r.startswith("ok ") else 0
 
@@ -814,7 +844,7 @@ class FixtureServer:
                                           "lease_s": d.lease_s, "nak_next": d.nak_next, "binding": d.binding}}
         if op == "net.endpoint":
             br = self.bridge_getter() if self.bridge_getter else None
-            return {"ok": True, "value": br.endpoint(self.port, self.OFFERED)} if br else {"ok": False, "error": "no bridge"}
+            return {"ok": True, "value": dict(br.endpoint(self.port, self.OFFERED), **self.endpoint_extra)} if br else {"ok": False, "error": "no bridge"}
         if op == "link.set":
             sp = args.get("speed")
             if sp not in (0, 10, 100):

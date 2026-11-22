@@ -59,7 +59,11 @@ characteristics" (format v1.8 build).
 - **flash.log**: `erase` / `bank_erase` (t_us, t_end_us, result ok | cut with fraction_done |
   error:FLAG | busy (never ends) | reset), `program` (one entry per run of back-to-back
   32-byte words in one sector, found by comparing the bank with its last state at each EOP;
-  a cut gives result cut, words_written and `torn`), `option_write` (always refused: an
+  a cut gives result cut, words_written and `torn`; an entry ends at a reset, at a pause of
+  more than 1 ms of emulated time between two words, at any other flash operation and at a read
+  of the log; `t_us` and `t_last_us` are its first and last word, `fpga_bus` is taken at the
+  first. Before this an entry went on while the words were adjacent, over resets and pauses: runs
+  of fw-01a108d and earlier show such merged entries), `option_write` (always refused: an
   OPTSTART is not carried out), `ecc`, `corrupt`. Every erase and program carries `fpga_bus`:
   `open` when STB (PE9, his/80) is an output driven low at its start, else `idle`.
 - **flash.fault {op, after, flag, never_end}**: the next matching operation (after `after`
@@ -79,8 +83,19 @@ characteristics" (format v1.8 build).
   read**: the data reads as stored and only the flags show it. Renode's controller
   watches the bank's writes itself while PG is set, and a watchpoint of ours at the same
   addresses left it blind (no EOP, programming unseen): the ECC watchpoints are lifted
-  while PG is set (no ECC detection during a program) and put back at the first
-  controller access after PG is cleared.
+  while PG is set (no ECC detection during a program) and put back 1 us after PG is
+  cleared (a read of a marked word within that microsecond shows no error; an ECC word that
+  `flash.ecc` adds is in force at the same point). They are installed only from a timer event:
+  inside a store of the core, a read of the word in the same translated block crashed the
+  emulator (found by T-EMU-25; no crash in the fw-01a108d run). **Not covered: reads of a
+  marked word while PG is set, or in the microsecond after it or after a `flash.ecc`** (a driver
+  that programs and verifies at once reads there): they show no error and are not counted. The
+  runner counts the spans and their instructions (`emulator.ecc_spans_not_covered`,
+  result_report.py); the marks of a power cycle or a cut are in from the first instruction
+  (T-EMU-26). An erase clears the ECC marks of its range (a cut erase
+  those of the fraction done), also in what a power cycle carries over; a program alone keeps a
+  mark. Before this a mark stayed for good: T-A1-92's last check and the store write failure at
+  the end of T-A1-86 in the fw-01a108d run are that fault.
 - **power.cut {after_flash_words | during_erase | at_address}**: the layer stops the core
   at the k-th programmed word, at that fraction of the next erase, or at the programming of
   that word; the runner then power-cycles as for `power.cut {at_us}`. A new `power.cut`

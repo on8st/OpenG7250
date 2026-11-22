@@ -195,5 +195,29 @@ else
   echo "  skip (no arm-none-eabi-gcc or Renode)"
 fi
 
+echo "[9] own timers: no step back, no early interrupt entry, no loss by register writes (own timmono_test)"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
+  if G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/timmono_test.elf \
+       tests/fakebench/timmono.json --run-id smoke-timmono --no-address >/dev/null 2>&1; then
+    ok "timer check: TIM12 and the time built from it over the whole run"
+  else
+    bad "timer check (see .private/product-runs/smoke-timmono/result.json)"
+  fi
+else
+  echo "  skip (no arm-none-eabi-gcc or Renode)"
+fi
+
+echo "[10] ECC crash reproducer: T-EMU-22, -23, -25 in that order in one emulator (killed the emulator with 5960f2a, 2 of 2 runs)"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
+  if G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
+       tests/fakebench/ecc-crash.json --run-id smoke-ecc-crash >/dev/null 2>&1; then
+    ok "ECC crash reproducer: the emulator lives and the three tests pass"
+  else
+    bad "ECC crash reproducer (see .private/product-runs/smoke-ecc-crash/result.json)"
+  fi
+else
+  echo "  skip (no arm-none-eabi-gcc or Renode)"
+fi
+
 echo
 [ $fail -eq 0 ] && { echo "M1 smoke: ALL PASS"; exit 0; } || { echo "M1 smoke: FAILURES"; exit 1; }

@@ -18,6 +18,7 @@ of the runner itself against firmware-tests/bench/net_test.c:
 import argparse
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -482,6 +483,214 @@ def run_test(tid, ep):
         # the end is stamped at the emulator's next synchronisation point (100 us)
         out.append(check("that erase takes 1.1 s (x64), to one synchronisation quantum", e5[0] is not None and L2
                          and 1100000 <= L2[-1]["t_end_us"] - L2[-1]["t_us"] <= 1100200, str(L2[-1:])))
+        return out
+    if tid == "T-EMU-24":
+        # own timers: the image (timmono_test) reads TIM12 and its tick-less time without a pause,
+        # writes timer registers at any moment and checks every interrupt entry of the run
+        ctl.op("console.log", action="start")
+        rows, t0 = [], time.time()
+        while len(rows) < 4 and time.time() - t0 < 150.0:
+            time.sleep(2.0)
+            ents = (ctl.op("console.log", action="read").get("value") or {}).get("entries", [])
+            rows = [(e["t_us"], {m.group(1): int(m.group(2), 16) for m in re.finditer(r"(\w+) 0x([0-9A-Fa-f]+)", e.get("text", e.get("line", "")))})
+                    for e in ents if "timmono t " in e.get("text", e.get("line", ""))]
+        if len(rows) < 2:
+            return [check("timmono lines on the console", False, "%d lines" % len(rows))]
+        (ta, va), (tb, vb) = rows[0], rows[-1]
+        drift = (vb["t"] - va["t"]) - (tb - ta)          # both in us
+        span = tb - ta
+        return [check("time and counter never step backwards", vb["time_back"] == 0 and vb["cnt_back"] == 0, str(vb)),
+                check("no interrupt entry with CNT before its event (over the whole run)", vb["early"] == 0 and vb["upd"] + vb["half"] > 100, str(vb)),
+                check("every boundary taken once (two per 65536 us)", abs((vb["upd"] + vb["half"]) - vb["t"] // 32768) <= 2, str(vb)),
+                check("the counter keeps emulated time (a register write costs nothing): under 20 ppm or 60 us over the run",
+                      abs(drift) <= max(60, span * 20e-6), "drift %d us over %d us" % (drift, span))]
+    if tid == "T-EMU-25":
+        # flash.log entries end at a reset and at a pause; an erase clears ECC marks (also over a
+        # power cycle); net.endpoint gives the whole endpoint; net.log keeps the order of the
+        # sends; a masked erase: CYCCNT, TIM5 and TIM12 agree
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 9))
+
+        def cmd(payload, wait=20.0, again=False):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(2.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def words(d):
+            return tuple(int.from_bytes(d[i:i + 4], "big") for i in range(2, len(d) - 3, 4)) if d else ()
+
+        def log():
+            return (ctl.op("flash.log", action="read").get("value") or {}).get("entries", [])
+        DBECC, out = 1 << 26, []
+        ctl.op("flash.timing", erase_us=200000)
+        cmd(b"FR", again=True, wait=60.0)
+        # net.endpoint is whole
+        n = (ctl.op("net.endpoint").get("value") or {})
+        out.append(check("net.endpoint: minor, flash_timing, usart1_timed, time_scale as in the endpoint",
+                         all(k in n and n[k] == ep.get(k) for k in ("minor", "flash_timing", "usart1_timed", "time_scale")),
+                         str({k: n.get(k) for k in ("minor", "usart1_timed", "time_scale")})))
+        # flash.log: back-to-back words are one entry; a pause and a reset end it
+        ctl.op("flash.log", action="start")
+        cmd(b"FE")
+        q = words(cmd(b"FQ\x00"))
+        time.sleep(0.3)
+        cmd(b"FP\x02")
+        cmd(b"FX", wait=1.0)
+        cmd(b"FR", again=True, wait=60.0)
+        cmd(b"FP\x03")
+        pg = [(int(x["address"], 16) - 0x080E0000) // 32 for x in log() if x["op"] == "program"]
+        pw = [x["words"] for x in log() if x["op"] == "program"]
+        out.append(check("two words back to back: one entry; a word after a pause: its own; a word after a reset: its own",
+                         pg == [0, 2, 3] and pw == [2, 1, 1], "first words %s, word counts %s, FQ %s" % (pg, pw, q)))
+        lt = [x for x in log() if x["op"] == "program"]
+        out.append(check("t_last_us in the program entries", all(x.get("t_last_us", -1) >= x["t_us"] for x in lt), str(lt[:1])))
+        # an erase clears ECC marks, also in what a power cycle carries over
+        cmd(b"FE"); cmd(b"FP\x03"); cmd(b"FP\x05")
+        ctl.op("flash.ecc", address=0x080E0000 + 32 * 5, type="double")
+        d1 = words(cmd(b"FD\x05"))
+        ctl.op("power.cycle")
+        cmd(b"FR", again=True, wait=90.0)
+        d2 = words(cmd(b"FD\x05"))
+        cmd(b"FE"); cmd(b"FP\x05")
+        d3 = words(cmd(b"FD\x05"))
+        ctl.op("power.cycle")
+        cmd(b"FR", again=True, wait=90.0)
+        d4 = words(cmd(b"FD\x05"))
+        out.append(check("flash.ecc: the double error shows, also after a power cycle",
+                         d1 and d1[0] & DBECC and d2 and d2[0] & DBECC, str((d1, d2))))
+        out.append(check("erase and program again: no error, also after a power cycle (the mark is not carried over)",
+                         d3 and not d3[0] & DBECC and d3[1] == 0xA5000500 and d4 and not d4[0] & DBECC, str((d3, d4))))
+        # net.log keeps the order of the sends
+        ctl.op("net.log", action="start")
+        sk.settimeout(3.0)
+        sent = [bytes([0x61 + i]) * (8 + i) for i in range(6)]
+        for x in sent:
+            sk.sendto(x, addr(c))
+        got, t0 = [], time.time()
+        while len(got) < len(sent) and time.time() - t0 < 15.0:
+            try:
+                got.append(sk.recv(2048))
+            except socket.timeout:
+                break
+        ents = (ctl.op("net.log", action="read").get("value") or {}).get("entries", [])
+        tx = [(e["t_us"], e["head"]) for e in ents if e.get("dir") == "from_radio" and e.get("radio_port") == 1024]
+        # the radio's SEND order is the order it received the datagrams in (one loop, socket 0)
+        rx = [e["head"] for e in ents if e.get("dir") == "to_radio" and e.get("radio_port") == 1024]
+        out.append(check("net.log: sends in order, t_us never going back, in the order received", len(tx) == len(sent)
+                         and [x[0] for x in tx] == sorted(x[0] for x in tx) and [x[1] for x in tx] == rx[:len(tx)], "%d sends, %d received back" % (len(tx), len(got))))
+        # masked erases: cycles (64 MHz) against TIM5 and TIM12
+        for us, kind in ((4000000, "4 s"), (8000000, "8 s"), (4000000, "4 s with PGSERR")):
+            ctl.op("flash.timing", erase_us=us)
+            if "PGSERR" in kind:
+                ctl.op("flash.fault", op="erase", flag="PGSERR")
+            w = words(cmd(b"FC", wait=120.0))
+            ok = len(w) == 6
+            cyc, t5, t12, worst = (w[1] / 64.0, w[2], w[3], w[4]) if ok else (0, 0, 0, 0)
+            out.append(check("masked erase %s: cycles/64, TIM5 and TIM12 within 1000 us of each other and of the length" % kind,
+                             ok and abs(cyc - t5) <= 1000 and abs(t12 - t5) <= 1000 and abs(t5 - us) <= 1000 and bool(w[0] & (1 << 18)) == ("PGSERR" in kind),
+                             "cycles/64 %.1f, TIM5 %d, TIM12 %d, worst between reads %d us, polls %d" % (cyc, t5, t12, worst, w[5] if ok else 0)))
+        # a failing erase that never ends, ended by the watchdog: the figures up to the last poll
+        ctl.op("flash.fault", op="erase", never_end=True)
+        cmd(b"FW")
+        sk.sendto(b"FC", addr(c))
+        cmd(b"FR", again=True, wait=90.0)
+        w = words(cmd(b"FV"))
+        ok = len(w) == 6
+        cyc, t5, t12, worst = (w[1] / 64.0, w[2], w[3], w[4]) if ok else (0, 0, 0, 0)
+        out.append(check("a never-ending erase ended by the watchdog: the figures at the last poll agree within 1000 us, 0.2 to 0.7 s in",
+                         ok and abs(cyc - t5) <= 1000 and abs(t12 - t5) <= 1000 and 200000 <= t5 <= 700000,
+                         "cycles/64 %.1f, TIM5 %d, TIM12 %d, worst %d us" % (cyc, t5, t12, worst)))
+        ctl.op("flash.timing", erase_us=None)
+        return out
+    if tid == "T-EMU-26":
+        # ECC marks: a program, then a read of a marked word at once (an earlier layer crashed the
+        # emulator there); the first read after a power cut is covered
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 10))
+
+        def cmd(payload, wait=20.0, again=False):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(2.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def words(d):
+            return tuple(int.from_bytes(d[i:i + 4], "big") for i in range(2, len(d) - 3, 4)) if d else ()
+        DBECC, out = 1 << 26, []
+        ctl.op("flash.timing", erase_us=200000)
+        cmd(b"FR", again=True, wait=60.0)
+        cmd(b"FE"); cmd(b"FP\x05")
+        ctl.op("flash.ecc", address=0x080C0040, type="double")     # a mark elsewhere is enough to crash the earlier layer
+        ctl.op("flash.ecc", address=0x080E0000 + 32 * 5, type="double")
+        d0 = words(cmd(b"FD\x05"))
+        out.append(check("control: the marked word shows the double error", d0 and d0[0] & DBECC, str(d0)))
+        for n in range(3):
+            # words 6, 8 and 10 are programmed next to the marked words 5, 7 and 9
+            if n:
+                cmd(b"FP" + bytes([5 + 2 * n]))
+                ctl.op("flash.ecc", address=0x080E0000 + 32 * (5 + 2 * n), type="double")
+            g = words(cmd(b"FG" + bytes([5 + 2 * n])))
+            out.append(check("program, then read of the marked word at once: the emulator lives, the error shows some us later (%d)" % (n + 1),
+                             len(g) == 2 and g[1] & DBECC, "first read (inside the microsecond) SR1 %s, second %s" % tuple("0x%08X" % x for x in g) if len(g) == 2 else "no answer"))
+        # the case that crashed: a mark carried over a power cut, programs, a mark added while the
+        # watchpoints are lifted, then a command that writes FLASH_CCR1 and reads the marked word
+        ctl.op("power.cut", during_erase=0.5)
+        cmd(b"FE", wait=1.0)
+        cmd(b"FR", again=True, wait=90.0)
+        alive = []
+        for n in range(4):
+            cmd(b"FE"); cmd(b"FQ\x00"); time.sleep(0.3); cmd(b"FP\x02")
+            cmd(b"FX", wait=1.0)
+            cmd(b"FR", again=True, wait=60.0)
+            cmd(b"FE"); cmd(b"FP\x03"); cmd(b"FP\x05")
+            ctl.op("flash.ecc", address=0x080E0000 + 32 * 5, type="double")
+            g = words(cmd(b"FD\x05", wait=10.0))
+            alive.append(bool(g and g[0] & DBECC))
+        out.append(check("a mark added while the watchpoints are lifted, then read by a command at once: the emulator lives, the error shows (4 times)",
+                         alive == [True] * 4, str(alive)))
+        # a power cut that tears word 9 (fresh sector), read by the first code of the next start
+        cmd(b"FE")
+        k = ctl.op("power.cut", after_flash_words=1)
+        cmd(b"FP\x09", wait=1.0)
+        cmd(b"FR", again=True, wait=90.0)
+        f = words(cmd(b"FS"))
+        cuts = [x for x in (ctl.op("flash.log", action="read").get("value") or {}).get("entries", []) if x.get("result") == "cut"]
+        out.append(check("a torn word of a power cut: the first read of the next start shows the double error",
+                         k.get("ok") and len(f) == 2 and f[1] & DBECC and any(x.get("torn") == "0x080E0120" for x in cuts), "%s %s" % (f, cuts[-1:])))
+        ctl.op("flash.timing", erase_us=None)
         return out
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)

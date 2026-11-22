@@ -1,0 +1,22 @@
+{
+ "format": "g7250-testlist",
+ "version": 1,
+ "minor": 3,
+ "defaults": {
+  "timeout_s": 180
+ },
+ "tests": [
+  {
+   "id": "T-EMU-24",
+   "title": "TIM12 monotonic, no early interrupt entry, no loss by register writes",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "console.log"
+   ]
+  }
+ ]
+}

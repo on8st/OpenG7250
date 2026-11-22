@@ -138,7 +138,11 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private byte[] shadow;                 // the bank as last seen, to find each programmed word
         private ulong lastProg = 0;            // address of the last programmed flash word
         private int progEntry = -1;            // index of the open "program" entry (coalesced runs)
-        private ulong progStart, progEnd; private int progWords; ulong progT;
+        // a program entry is one run of back-to-back words: it is closed at a reset, at a pause of
+        // more than ProgramPauseUs of emulated time between two words, at any other operation
+        // and at a read of the log
+        public int ProgramPauseUs { get; set; } = 1000;
+        private ulong progStart, progEnd; private int progWords; private ulong progT, progLastT; private string progFpga;
         public string FlashLogRead(int from)
         {
             lock(sync)
@@ -198,12 +202,13 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             var w = machine.SystemBus.ReadBytes(found, 32);
             Array.Copy(w, 0, shadow, (int)(found - FlashBase), 32);
             // coalesce back-to-back words at increasing addresses in one sector
-            if(progEntry >= 0 && found == progEnd && Sector(found) == Sector(progStart)) { progEnd += 32; progWords++; }
+            if(progEntry >= 0 && found == progEnd && Sector(found) == Sector(progStart) && NowUs() - progLastT <= (ulong)ProgramPauseUs) { progEnd += 32; progWords++; }
             else
             {
                 CloseProgram();
-                progEntry = 1; progStart = found; progEnd = found + 32; progWords = 1; progT = NowUs();
+                progEntry = 1; progStart = found; progEnd = found + 32; progWords = 1; progT = NowUs(); progFpga = FpgaBus();
             }
+            progLastT = NowUs();
             lastProg = found;
         }
 
@@ -230,8 +235,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             if(progEntry < 0) return;
             Add("{\"t_us\": " + progT + ", \"op\": \"program\", \"bank\": 1, \"sector\": " + Sector(progStart)
                 + ", \"address\": \"0x" + progStart.ToString("X8") + "\", \"len\": " + (progEnd - progStart) + ", \"words\": " + progWords
-                + ", \"result\": \"" + result + "\"" + (result == "cut" ? ", \"words_written\": " + (progWords - 1) + ", \"torn\": \"0x" + lastProg.ToString("X8") + "\"" : "")
-                + ", \"fpga_bus\": \"" + FpgaBus() + "\"}");
+                + ", \"t_last_us\": " + progLastT + ", \"result\": \"" + result + "\"" + (result == "cut" ? ", \"words_written\": " + (progWords - 1) + ", \"torn\": \"0x" + lastProg.ToString("X8") + "\"" : "")
+                + ", \"fpga_bus\": \"" + progFpga + "\"}");
             progEntry = -1;
         }
 
@@ -292,7 +297,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         // a flash.log entry (once while the flag is set). Not modelled: the bus error a double
         // error gives on the AXI read (the data reads as stored)
         private readonly Dictionary<ulong, bool> eccWords = new Dictionary<ulong, bool>();
-        public string AddEcc(long address, bool dbl)
+        public string AddEcc(long address, bool dbl) { return AddEcc(address, dbl, false); }
+        private string AddEcc(long address, bool dbl, bool atStart)
         {
             ulong w = (ulong)address & ~31UL;
             if(w < FlashBase || w >= FlashEnd) return "address outside the flash bank";
@@ -301,15 +307,37 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 if(eccWords.ContainsKey(w)) { eccWords[w] = dbl || eccWords[w]; return null; }
                 eccWords[w] = dbl;
             }
-            if(!eccLifted) InstallEcc(w);
+            // from the agent's thread: the hooks are installed at the next timer event
+            // (in the start-up script the core does not run yet: at once, so the first read is covered)
+            if(atStart) lock(sync) { if(!eccLifted) InstallEcc(w); }
+            else lock(sync) { eccRefresh = true; ScheduleEcc(); }
             return null;
         }
 
         // Renode's controller watches the bank's writes itself while PG is set; a watchpoint of
         // ours at the same addresses left it blind (no EOP). The ECC watchpoints are lifted
-        // while PG is set and put back at the first controller access after PG is cleared.
+        // while PG is set and put back 1 us after PG is cleared. They are installed only from a
+        // timer event: installed inside a store of the core, a read of the word in the same
+        // translated block crashed the emulator (tb_phys_invalidate).
         private readonly List<Tuple<ulong, BusHookDelegate>> eccHooks = new List<Tuple<ulong, BusHookDelegate>>();
-        private bool eccLifted;
+        private bool eccLifted, eccRefresh;
+        // spans in which a mark's watchpoints were not in (PG set until 1 us after it is cleared,
+        // and a flash.ecc until its first microsecond): reads of a marked word in them are not
+        // counted and show no error
+        public int EccSpans { get; private set; }
+        public ulong EccSpanInstr { get; private set; }
+        public ulong EccSpanInstrMax { get; private set; }
+        private ulong spanInstr0;
+        private bool spanOpen;
+        private void OpenSpan() { if(spanOpen) return; spanOpen = true; spanInstr0 = Instr(); }
+        private void CloseSpan()
+        {
+            if(!spanOpen) return;
+            spanOpen = false; EccSpans++;
+            ulong n = Instr() - spanInstr0;
+            EccSpanInstr += n;
+            if(n > EccSpanInstrMax) EccSpanInstrMax = n;
+        }
         private void InstallEcc(ulong w)
         {
             var bus = machine.SystemBus;
@@ -330,14 +358,50 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             foreach(var t in eccHooks) machine.SystemBus.RemoveWatchpointHook(t.Item1, t.Item2);
             eccHooks.Clear();
             eccLifted = true;
+            OpenSpan();
+        }
+        private LimitTimer eccTimer;
+        private void ScheduleEcc()
+        {
+            if(!eccLifted && !eccRefresh) return;
+            OpenSpan();
+            if(eccTimer == null)
+            {
+                eccTimer = new LimitTimer(machine.ClockSource, 1000000, this, "flash-ecc", 1UL << 40, direction: Direction.Descending,
+                                          enabled: false, workMode: WorkMode.OneShot, eventEnabled: true);
+                eccTimer.LimitReached += delegate { lock(sync) { eccTimer.Enabled = false; if((lastCr1 & PG) == 0) { if(eccRefresh) LiftEcc(); eccRefresh = false; RestoreEcc(); } } };
+            }
+            Arm(eccTimer, 1);
         }
         private void RestoreEcc()
         {
             if(!eccLifted) return;
             eccLifted = false;
             foreach(var w in eccWords.Keys) InstallEcc(w);
+            CloseSpan();
         }
-        public void AddEccText(string address, bool dbl) { AddEcc(Convert.ToInt64(address, 16), dbl); }
+        // an erase gives every word of the range a valid ECC again (a program after it keeps it)
+        private void ClearEcc(ulong addr, ulong size)
+        {
+            var gone = new List<ulong>();
+            foreach(var w in eccWords.Keys) if(w >= addr && w < addr + size) gone.Add(w);
+            if(gone.Count == 0) return;
+            bool lifted = eccLifted;
+            LiftEcc();
+            foreach(var w in gone) eccWords.Remove(w);
+            if(eccWords.Count == 0) { eccLifted = false; spanOpen = false; }
+            else if(!lifted) ScheduleEcc();
+        }
+        public string EccList()
+        {
+            lock(sync)
+            {
+                var s = new List<string>();
+                foreach(var kv in eccWords) s.Add("0x" + kv.Key.ToString("X8") + "=" + (kv.Value ? "double" : "single"));
+                return string.Join(",", s);
+            }
+        }
+        public void AddEccText(string address, bool dbl) { AddEcc(Convert.ToInt64(address, 16), dbl, true); }
         private void EccRead(ulong w)
         {
             lock(sync)
@@ -422,9 +486,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             lock(sync)
             {
-                if(erasing) { SetEraseResult(neverEnding ? "reset" : "reset", NowUs()); }
+                CloseProgram();
+                lastProg = 0;
+                if(erasing) { SetEraseResult("reset", NowUs()); }
                 SlowCore(false);
                 erasing = false; neverEnding = false; lastCr1 = LOCK; keyStep = 0; errFlags = 0; pendingEop = false; eopSeen = false;
+                ScheduleEcc();                    // a reset while PG was set: the marks count again
             }
             busy.Enabled = false; Unstall();
         }
@@ -477,7 +544,6 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         private uint BeforeWrite(uint value, long offset)
         {
-            if(offset != CR1 && eccLifted && (lastCr1 & PG) == 0) lock(sync) RestoreEcc();
             if(offset == 0x004)
             {
                 // KEYR1: the unlock sequence 0x45670123, 0xCDEF89AB clears LOCK
@@ -509,7 +575,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 if((lastCr1 & LOCK) != 0) return lastCr1;           // locked: the write is ignored
                 bool start = (value & START) != 0 && (value & (SER | BER)) != 0;
                 lastCr1 = value;
-                if((value & PG) != 0) LiftEcc();
+                if((value & PG) != 0) LiftEcc(); else ScheduleEcc();
                 if(start)
                 {
                     bool bank = (value & BER) != 0;
@@ -528,7 +594,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         private uint AfterRead(uint value, long offset)
         {
-            if(offset == CR1) { lock(sync) { lastCr1 = value; if((value & PG) == 0) RestoreEcc(); } return value; }
+            if(offset == CR1) { lock(sync) { lastCr1 = value; if((value & PG) == 0) ScheduleEcc(); } return value; }
             if(offset == 0x054) { lock(sync) return eccFa; }        // FLASH_ECC_FA1R
             if(offset == SR1)
             {
@@ -623,6 +689,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             else
             {
                 Fill(eraseAddr, eraseSize);
+                ClearEcc(eraseAddr, eraseSize);
                 for(ulong i = 0; i < eraseSize; i++) shadow[(int)(eraseAddr - FlashBase + i)] = 0xFF;
                 SetEraseResult("ok", NowUs());
             }

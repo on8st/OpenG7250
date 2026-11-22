@@ -64,7 +64,16 @@ static void wr16(uint16_t a, uint8_t bsb, uint16_t v) { uint8_t b[2] = { (uint8_
  *   FR        RCC_RSR, then RMVF                    -> RSR
  *   FM        0x2401E700 and 0x2401FFFC, then a marker is written to both -> the two old words
  *   FX        software reset (no reply)
- * The code runs from flash: an erase stalls it until the erase ends. */
+ *   FQ n      program words n and n + 1 back to back -> SR1, first word of n + 1
+ *   FD n      clear the error flags, read the n-th word -> SR1, word
+ *   FC        erase sector 7 with interrupts masked, polling from RAM: the length by the DWT cycle
+ *             counter, TIM5 (32 bits, 1 MHz) and TIM12 (16 bits, 1 MHz, unwrapped in the loop)
+ *             -> SR1, cycles, TIM5 us, TIM12 us, worst |cycles / 64 - TIM5| us, polls
+ *   FV        the figures of an FC that a reset ended (RAM is kept) -> as FC
+ *   FG n      program word n + 1, then read word n at once, and again some us later
+ *             -> SR1 after the first read, SR1 after the second
+ *   FS        word 9 and SR1 as the very first code of this start read them -> word, SR1
+ * Except FC the code runs from flash: an erase stalls it until the erase ends. */
 #define FLASHC 0x52002000u
 #define F_KEYR REG(FLASHC + 0x004)
 #define F_CR   REG(FLASHC + 0x00C)
@@ -82,9 +91,108 @@ static uint32_t flash_wait(void)
     return F_SR;
 }
 
+#define KEEP(i) W32(0x2401F000u + 4u * (i))
+#define T5(o)  REG(0x40000C00u + (o))
+#define T12(o) REG(0x40001800u + (o))
+#define CYCCNT REG(0xE0001004u)
+
+/* the first code of a start: a read of word 9 of sector 7 (a torn word of a power cut) */
+void early_hook(void)
+{
+    KEEP(8) = W32(S7 + 32u * 9u);
+    KEEP(9) = F_SR;
+}
+
+static void timers_on(void)
+{
+    RCC_APB1LENR |= (1u << 3) | (1u << 6);              /* TIM5EN, TIM12EN */
+    T5(0x00) = 0; T12(0x00) = 0;
+    T5(0x28) = 63; T5(0x2C) = 0xFFFFFFFFu; T5(0x14) = 1; T5(0x10) = 0;
+    T12(0x28) = 63; T12(0x2C) = 0xFFFFu; T12(0x14) = 1; T12(0x10) = 0;
+    T5(0x00) = 1; T12(0x00) = 1;
+    REG(0xE000EDFCu) |= 1u << 24;                       /* DEMCR TRCENA */
+    REG(0xE0001FB0u) = 0xC5ACCE55u;                     /* DWT_LAR */
+    REG(0xE0001000u) |= 1u;
+}
+
+/* runs from RAM (.data): no fetch from the bank during the erase */
+__attribute__((section(".data.ramfunc"), noinline, long_call, used))
+static void erase_masked(void)
+{
+    uint32_t c0, t0, l12, u12 = 0, worst = 0, n = 0;
+    __asm volatile ("cpsid i");
+    F_CR = (1u << 2) | (3u << 4) | (7u << 8);
+    c0 = CYCCNT; t0 = T5(0x24); l12 = T12(0x24);
+    F_CR |= 1u << 7;
+    do
+    {
+        uint32_t c = CYCCNT - c0, t = T5(0x24) - t0, m = T12(0x24);
+        uint32_t us = c / 64u, d = us > t ? us - t : t - us;
+        u12 += (m - l12) & 0xFFFFu; l12 = m;
+        if(d > worst) worst = d;
+        n++;
+        KEEP(1) = c; KEEP(2) = t; KEEP(3) = u12; KEEP(4) = worst; KEEP(5) = n;
+    } while(F_SR & 7u);
+    KEEP(0) = F_SR;
+    F_CR = 0;
+    __asm volatile ("cpsie i");
+}
+
 static uint16_t command(uint8_t *d, uint16_t len)
 {
     uint32_t a = 0, b = 0;
+    if(d[1] == 'C' || d[1] == 'V')
+    {
+        if(d[1] == 'C')
+        {
+            if(F_CR & 1u) { F_KEYR = 0x45670123u; F_KEYR = 0xCDEF89ABu; }
+            F_CCR = F_ERRS | (1u << 16);
+            KEEP(0) = 0xFFFFFFFFu;
+            timers_on();
+            erase_masked();
+        }
+        for(int i = 0; i < 6; i++) put_be(&d[2 + 4 * i], KEEP(i));
+        return 26;
+    }
+    if(d[1] == 'S') { a = KEEP(8); b = KEEP(9); }
+    if(d[1] == 'G' && len >= 3)
+    {
+        uint32_t t = S7 + 32u * (d[2] + 1u);
+        volatile uint32_t x;
+        if(F_CR & 1u) { F_KEYR = 0x45670123u; F_KEYR = 0xCDEF89ABu; }
+        F_CCR = F_ERRS | (3u << 25) | (1u << 16);
+        F_CR = (1u << 1) | (3u << 4);
+        for(uint32_t i = 0; i < 8; i++) W32(t + 4u * i) = 0xA5000000u + ((d[2] + 1u) << 8) + i;
+        flash_wait();
+        F_CR = 0;
+        F_CCR = F_ERRS | (3u << 25) | (1u << 16);
+        x = W32(S7 + 32u * d[2]);
+        a = F_SR;
+        for(volatile uint32_t k = 0; k < 2000; k++) {}
+        F_CCR = F_ERRS | (3u << 25);
+        x = W32(S7 + 32u * d[2]);
+        (void)x;
+        b = F_SR;
+    }
+    if(d[1] == 'D' && len >= 3)
+    {
+        F_CCR = F_ERRS | (3u << 25);      /* SNECCERR and DBECCERR too */
+        b = W32(S7 + 32u * d[2]); a = F_SR;
+    }
+    if(d[1] == 'Q' && len >= 3)
+    {
+        if(F_CR & 1u) { F_KEYR = 0x45670123u; F_KEYR = 0xCDEF89ABu; }
+        F_CCR = F_ERRS | (1u << 16);
+        for(uint32_t k = d[2]; k < d[2] + 2u; k++)
+        {
+            uint32_t t = S7 + 32u * k;
+            F_CR = (1u << 1) | (3u << 4);
+            for(uint32_t i = 0; i < 8; i++) W32(t + 4u * i) = 0xA5000000u + (k << 8) + i;
+            a = flash_wait(); b = W32(t);
+            F_CCR = 1u << 16;
+            F_CR = 0;
+        }
+    }
     if(d[1] == 'E' || d[1] == 'P')
     {
         if(F_CR & 1u) { F_KEYR = 0x45670123u; F_KEYR = 0xCDEF89ABu; }

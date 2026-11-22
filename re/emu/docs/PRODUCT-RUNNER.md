@@ -191,11 +191,21 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   polls the emulated time to the target, so other calls are answered meanwhile.
 - Self-test T-EMU-20.
 
+## The emulator process
+
+The runner records an emulator process that ends unasked (any exit code) and the macOS crash
+reports of the emulator written in a test's or the run's time window (names only; result
+`emulator_crash_reports`, also in result_report.py, 0 included; `null`: the folder is not
+readable). A test with either is an error ("the emulator process died"), never a pass, fail or
+hang of the image.
+
 ## Format v1.8 (part 3): the flash controller fixtures
 
 `flash.log`, `flash.timing`, `flash.fault`, `flash.ecc`, `power.cut
 {after_flash_words | during_erase | at_address}`, `slot.corrupt`, `ch394.silent`;
-the endpoint carries `flash_timing {erase_us, program_us, t_erase_max_us, source}`.
+the endpoint carries `flash_timing {erase_us, program_us, t_erase_max_us, source}`,
+and `net.endpoint` answers the same whole endpoint (with `minor`, `usart1_timed` and
+`time_scale`; before, these were lost at the bench's first `net.endpoint`).
 What each does in the model: docs/FLASH-model.md "Format v1.8".
 - `flash.log` runs from power-on; `start` moves the read origin, entries of every boot
   carry `boot`; the server pulls the layer's log at reads and before a power cycle.

@@ -18,10 +18,15 @@ void MDMA_IRQHandler(void) WEAK;
 void EXTI15_10_IRQHandler(void) WEAK;
 void TIM2_IRQHandler(void) WEAK;
 void TIM5_IRQHandler(void) WEAK;
+void TIM12_IRQHandler(void) WEAK;
 void SysTick_Handler(void) WEAK;
+
+/* runs as the first code of the image, before .data and .bss are set (registers and fixed RAM only) */
+__attribute__((weak)) void early_hook(void) {}
 
 void reset_handler(void)
 {
+    early_hook();
     uint32_t *s = &_sidata, *d = &_sdata;
     while(d < &_edata) *d++ = *s++;
     for(d = &_sbss; d < &_ebss; ) *d++ = 0;
@@ -48,6 +53,7 @@ void (*const vectors[16 + 163])(void) = {
     [15] = SysTick_Handler,
     [16 + 28] = TIM2_IRQHandler,
     [16 + 50] = TIM5_IRQHandler,
+    [16 + 43] = TIM12_IRQHandler,
     [16 + 40] = EXTI15_10_IRQHandler,
     [16 + 122] = MDMA_IRQHandler,
 };

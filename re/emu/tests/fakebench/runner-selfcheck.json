@@ -244,6 +244,26 @@
    "target": "emulator",
    "scope": "v1.0",
    "timeout_s": 240
+  },
+  {
+   "id": "T-EMU-25",
+   "title": "flash.log entries end at a reset and a pause; an erase clears ECC marks; net.endpoint whole; net.log order; CYCCNT against the timers over masked erases",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 600
+  },
+  {
+   "id": "T-EMU-26",
+   "title": "ECC marks: program and read at once, the first read after a power cut",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 300
   }
  ]
 }

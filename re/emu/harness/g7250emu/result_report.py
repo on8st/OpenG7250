@@ -23,6 +23,12 @@ def report(run, lines=60, grep=None):
     out.append("SUMMARY: " + ", ".join("%s %d" % kv for kv in r["summary"].items()))
     for n in r.get("notes", []):
         out.append("RUN NOTE: " + n)
+    cr = r.get("emulator_crash_reports", "not recorded")
+    out.append("EMULATOR CRASH REPORTS in the run's window: %s" % (
+        "not readable" if cr is None else cr if isinstance(cr, str) else "%d%s" % (len(cr), " " + ", ".join(cr) if cr else "")))
+    sp = [(e["id"], e["emulator"]["ecc_spans_not_covered"]) for e in r["results"] if e.get("emulator", {}).get("ecc_spans_not_covered")]
+    out.append("NOT COVERED, reads of a marked (ECC) word while its watchpoint is not in (PG set until 1 us after, first us of flash.ecc): %s" % (
+        "no such span in this run" if not sp else "; ".join("%s: %d spans, at most %d instructions" % (i, s["spans"], s["max_instructions"]) for i, s in sp)))
     out.append("")
     out.append("PER TEST (id status reason):")
     nm = []

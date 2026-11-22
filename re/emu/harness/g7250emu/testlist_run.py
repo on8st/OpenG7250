@@ -162,6 +162,8 @@ class Boot:
         self.fixtures = benchnet.FixtureServer(lambda: self.agent, self.power_cycle, lambda: self.bridge)
         self.bridge.now_us = self.agent.now_us
         self.proc = None
+        self.dead_pids = set()
+        self.deaths, self.quit_signals = [], []    # (boot, exit code) of processes that ended unasked; by a signal at quit
         self.boots = 0
         self.log = os.path.join(out, "renode.log")
         self.flash = None
@@ -187,12 +189,22 @@ class Boot:
         env = dict(os.environ)
         # CH394 socket log of this boot (OPEN/CLOSE with port and emulated time)
         env["G7250_SOCKLOG"] = os.path.join(self.out, "sockets.jsonl" if self.boots == 1 else "sockets-boot%d.jsonl" % self.boots)
+        self.quitting = False
         self.proc = subprocess.Popen([self.pr.bootcore.RENODE, "--disable-xwt", "--console",
                                       "-e", "path add @%s" % self.pr.REPO, "-e", "include @%s" % resc],
                                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, text=True, env=env)
 
+    def process_died(self):
+        """Record an emulator process that ended although nobody asked it to."""
+        if self.proc and self.proc.poll() is not None and not getattr(self, "quitting", False) and self.proc.pid not in self.dead_pids:
+            self.dead_pids.add(self.proc.pid)
+            self.deaths.append((self.boots, self.proc.returncode))
+        return self.deaths
+
     def stop_emulator(self):
+        self.process_died()
+        self.quitting = True
         if self.proc and self.proc.poll() is None:
             try:
                 self.proc.stdin.write("quit\n")
@@ -200,6 +212,8 @@ class Boot:
                 self.proc.wait(timeout=15)
             except Exception:  # noqa: BLE001
                 self.proc.kill()
+        if self.proc and (self.proc.poll() or 0) < 0 and not any(b == self.boots for b, _ in self.deaths):
+            self.quit_signals.append((self.boots, self.proc.returncode))      # ended by a signal when told to quit
         self.agent.conn = None
         self.bridge.ch = None
 
@@ -284,6 +298,25 @@ class Boot:
         self.bridge.close()
 
 
+def crash_reports(t0, t1):
+    """macOS crash reports of the emulator (names only) written between two wall times."""
+    d = os.path.join(os.path.expanduser("~"), "Library", "Logs", "DiagnosticReports")
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return None
+    out = []
+    for n in names:
+        if n.startswith("renode-") and n.endswith(".ips"):
+            try:                             # the time in the name (local): the file's own date can change later
+                m = datetime.datetime.strptime(n[7:24], "%Y-%m-%d-%H%M%S").timestamp()
+            except ValueError:
+                continue
+            if t0 - 1.0 <= m <= t1 + 5.0:
+                out.append(n)
+    return sorted(out)
+
+
 def run_bench(tbdir, endpoint_path, test, agent, wall_cap):
     """Run one test in the bench; returns (entries, error, emulated_s, wall_s)."""
     t_emu0 = agent.now_us()
@@ -333,6 +366,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
     root = os.path.join(pr.OUT_ROOT, run_id)
     os.makedirs(root, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    run_t0 = time.time()
     offered = benchnet.FixtureServer.OFFERED
     defaults = spec.get("defaults", {})
     per_list = spec.get("boot") == "per-list"
@@ -357,6 +391,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         if not tbdir or not os.path.isdir(tbdir):
             results.append({"id": t["id"], "status": "error", "reason": "runner: no test-bench directory (testbench_dir)"})
             continue
+        test_t0 = time.time()
         tdir = os.path.join(root, t["id"]) if not per_list else os.path.join(root, "list")
         try:
             bt = shared if per_list and shared else Boot(pr, elf, tdir, boot, pwr_cr3, no_address, flash_erase_us, flash_preload,
@@ -379,20 +414,29 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             if not per_list:
                 bt.close()
             continue
-        ep["minor"] = FORMAT_MINOR
-        ep["usart1_timed"] = False                 # console.log: USART1 not timed at the baud rate
-        ep["flash_timing"] = dict(bt.fixtures.FLASH_TIMING)   # format v1.8: the erase durations in use and their source
+        extra = {"minor": FORMAT_MINOR,
+                 "usart1_timed": False,            # console.log: USART1 not timed at the baud rate
+                 "flash_timing": dict(bt.fixtures.FLASH_TIMING)}   # format v1.8: the erase durations in use and their source
         if os.environ.get("G7250_TIME_SCALE"):
-            ep["time_scale"] = float(os.environ["G7250_TIME_SCALE"])   # emulated / wall, for timed runs (the bench stretches its waits)
+            extra["time_scale"] = float(os.environ["G7250_TIME_SCALE"])   # emulated / wall, for timed runs (the bench stretches its waits)
+        bt.fixtures.endpoint_extra = extra         # net.endpoint answers the whole endpoint
+        ep.update(extra)
         ep_path = os.path.join(tdir, "endpoint.json")
         json.dump(ep, open(ep_path, "w"), indent=2)
         wall_cap = 30.0 * float(t.get("timeout_s", 30)) + 120.0
+        bt.fixtures.ecc_spans = {"spans": 0, "instructions": 0, "max_instructions": 0}
+        bt.deaths, n_quit = [], len(bt.quit_signals)
         entries, err, emu, wall = run_bench(tbdir, ep_path, t, bt.agent, wall_cap)
         # keep the emulator running a little after the bench ended, so a late answer to its
         # last request is still in the capture and the logs (G7250_GRACE_S, default 5 s wall)
         try:
             time.sleep(float(os.environ.get("G7250_GRACE_S", "5")))
         except ValueError:
+            pass
+        died = list(bt.process_died())
+        try:
+            bt.fixtures.ecc_span_pull()
+        except Exception:  # noqa: BLE001
             pass
         nm = pr.not_modelled(bt.log) if os.path.isfile(bt.log) else []
         flash_note = None
@@ -472,6 +516,17 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                 e["reason"] = "not modelled: MACRAW" + (" (bench: %s)" % e["reason"] if e.get("reason") else "")
             else:
                 e.setdefault("reason", "emulator coverage: not modelled: MACRAW")
+        sp = dict(bt.fixtures.ecc_spans)
+        if sp["spans"]:
+            e.setdefault("emulator", {})["ecc_spans_not_covered"] = sp
+        rep = crash_reports(test_t0, time.time())
+        if rep:
+            e.setdefault("emulator", {})["crash_reports"] = rep
+        if died or rep:
+            e["reason"] = ("runner: the emulator process died (%s%s); no verdict on the image; bench: %s %s"
+                           % (", ".join("boot %d, exit code %s" % x for x in died) or "no exit seen",
+                              "; crash reports " + ", ".join(rep) if rep else "", e.get("status"), e.get("reason") or ""))
+            e["status"] = "error"
         if nm and e.get("status") in ("fail", "error"):
             e["status"] = "error"
             e["reason"] = "not modelled: " + ", ".join(nm)
@@ -503,6 +558,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                             **({"flash_erase_us": flash_erase_us} if flash_erase_us else {}),
                             **({"dhcp_server_at_power_on": True} if dhcp_on else {}),
                             **({"flash_preload": ["0x%08X" % a for a, _ in flash_preload]} if flash_preload else {})),
+        "emulator_crash_reports": crash_reports(run_t0, time.time()),
         "started": started,
         "finished": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "results": results, "summary": summary,
@@ -512,6 +568,8 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
     json.dump(result, open(out_path, "w"), indent=2)
     for r in results:
         print("  %-7s %s %s" % (r.get("status", "?").upper(), r["id"], r.get("reason", "")))
+    cr = result["emulator_crash_reports"]
+    print("emulator crash reports in the run's window: %s" % ("not readable" if cr is None else "%d%s" % (len(cr), " " + ", ".join(cr) if cr else "")))
     print("boot: %s" % pr.BOOT_MODES[boot][1])
     print("PRODUCT RUN %s: %s -> %s" % (run_id, " ".join("%s=%d" % kv for kv in summary.items()),
                                         os.path.relpath(out_path, pr.REPO)))

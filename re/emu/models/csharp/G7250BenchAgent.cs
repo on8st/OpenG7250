@@ -972,7 +972,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(w.Length >= 2 && w[1] == "info")
             {
                 var parts = new List<string>();
-                foreach(var n in new[] { "Erases", "FetchesDuringErase", "FirstFetchPc", "RefreshesDuringLastErase", "WordsProgrammed", "EopReads", "WordsNotFound" })
+                foreach(var n in new[] { "Erases", "FetchesDuringErase", "FirstFetchPc", "RefreshesDuringLastErase", "WordsProgrammed", "EopReads", "WordsNotFound", "EccSpans", "EccSpanInstr", "EccSpanInstrMax" })
                     parts.Add("\"" + n + "\": " + Convert.ToString(t.GetProperty(n).GetValue(ft), CultureInfo.InvariantCulture));
                 foreach(var n in new[] { "PrimaskAtErase", "StopReason" })
                     parts.Add("\"" + n + "\": \"" + t.GetProperty(n).GetValue(ft) + "\"");
@@ -990,6 +990,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 var e = (string)t.GetMethod("Fault").Invoke(ft, new object[] { w[2], long.Parse(w[3], CultureInfo.InvariantCulture), w[4] == "-" ? "" : w[4], w[5] == "1" });
                 return e == null ? "ok" : "err " + e;
             }
+            if(w.Length >= 2 && w[1] == "ecclist") return "ok " + t.GetMethod("EccList").Invoke(ft, null);
             if(w.Length >= 4 && w[1] == "ecc")
             {
                 var e = (string)t.GetMethod("AddEcc").Invoke(ft, new object[] { Convert.ToInt64(w[2], 16), w[3] == "double" });

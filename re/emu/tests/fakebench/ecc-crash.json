@@ -1,0 +1,42 @@
+{
+ "format": "g7250-testlist",
+ "version": 1,
+ "minor": 2,
+ "defaults": {
+  "timeout_s": 20
+ },
+ "boot": "per-list",
+ "tests": [
+  {
+   "id": "T-EMU-22",
+   "title": "format v1.8 flash fixtures: flash.timing, flash.log, flash.ecc, slot.corrupt, ch394.silent",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 240
+  },
+  {
+   "id": "T-EMU-23",
+   "title": "format v1.8: flash.fault, watchdog reset of a never-ending erase, RCC_RSR, power.cut replaced, AXI SRAM at power-on",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 240
+  },
+  {
+   "id": "T-EMU-25",
+   "title": "flash.log entries end at a reset and a pause; an erase clears ECC marks; net.endpoint whole; net.log order; CYCCNT against the timers over masked erases",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 600
+  }
+ ],
+ "note": "In one emulator, in this order: the sequence that killed the emulator with the flash layer of 5960f2a (2 of 2 runs, tb_phys_invalidate): an ECC watchpoint installed inside a store of the core, the marked word read in the same translated block. The layer after it installs watchpoints only from a timer event."
+}
