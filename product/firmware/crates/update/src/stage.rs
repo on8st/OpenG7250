@@ -4,23 +4,30 @@
 //!
 //! The package carries one image: a sealed application image linked for the slot it is staged
 //! in (the other slot; `IDENTIFY` tag 23 tells the host which slot runs). Table M-4 byte 52
-//! names that slot; a package for the running slot gets 63 at `UPDATE_BEGIN` (0043). `UPDATE_VERIFY` checks the
-//! SHA-256 of the package header and then the image header (load address = the other slot,
-//! length, image CRC, version = the package's, vectors) in one pass over the staged bytes, so
-//! that an image linked for the wrong slot is refused before activation.
+//! names that slot; a package for the running slot gets 63 at `UPDATE_BEGIN` (0043). `UPDATE_VERIFY` checks, in
+//! order (0067): the SHA-256 of the received bytes, the image check ([`crate::image`], over the
+//! length the image record gives), and the record against the package header.
 //!
-//! Blocks are written in order (resumable: a block already received is answered without a write;
-//! a gap gets 54). A slot sector is erased when the first block in it arrives. Every program and
-//! erase passes [`FlashGuard`] as `Writer::Application { running }`: the running slot, the boot
+//! Blocks arrive in order the first time (a gap gets 54). A block sent again as a new request is
+//! written again, replacing what was received (0067): the same bytes need no write (except the
+//! first block of a sector, which starts the sector anew); other bytes need an erase, and the other blocks of that 128 KiB sector then count as not received. A slot
+//! sector is erased when the first block in it arrives, so a request does at most one erase
+//! (0069). Every program and erase passes [`FlashGuard`] as `Writer::Application { running }`: the running slot, the boot
 //! stage and sector 0 are out of reach.
 
-use g7250_layout::header::{self, Header};
-use g7250_layout::{FLASH_WORD, FlashGuard, Op, Range, SECTOR_SIZE, Slot, Writer, crc32};
+use crate::image;
+use g7250_layout::header;
+use g7250_layout::{FLASH_WORD, FlashGuard, Op, Range, SECTOR_SIZE, SLOT_A, SLOT_B, Slot, Writer};
 use g7250_store::{FlashIo, Store};
 use sha2::{Digest, Sha256};
 
 /// Block data size (Table M-1 `UPDATE_BLOCK`; `UPDATE_BEGIN` reply).
 pub const BLOCK: u32 = 512;
+/// Blocks in one 128 KiB flash sector, sectors and blocks in a slot.
+const PER_SECTOR: u32 = SECTOR_SIZE / BLOCK;
+const SECTORS: usize = (SLOT_A.len() / SECTOR_SIZE) as usize;
+const BLOCKS: usize = (SLOT_A.len() / BLOCK) as usize;
+const _: () = assert!(SLOT_A.len() == SLOT_B.len() && SLOT_A.len() % SECTOR_SIZE == 0);
 /// An update with no update command other than `UPDATE_STATUS` for this long is abandoned (A1.8).
 pub const ABANDON_MS: u64 = 10 * 60 * 1000;
 /// Target hardware id of the G7250 (Table M-4 bytes 6-7).
@@ -101,11 +108,16 @@ pub enum Phase {
 pub struct Stager {
     phase: Phase,
     offer: Option<Offer>,
-    received: u32,
+    /// The blocks received, one bit each.
+    received: [u32; BLOCKS / 32],
+    /// The block after the highest one received in this transfer: the next new one.
+    next: u32,
+    /// The slot sectors erased for this transfer.
+    prepared: [bool; SECTORS],
     count: u32,
     last_ms: u64,
     /// Why the last UPDATE_VERIFY failed, for the log (A1.7 "every update step"): "missing
-    /// blocks", "hash", "image" (the image and record checks; 0067 will name each).
+    /// blocks", "hash", a word of the image check, or "header" (0067).
     verify_failed: Option<&'static str>,
 }
 
@@ -117,7 +129,7 @@ impl Default for Stager {
 
 impl Stager {
     pub const fn new() -> Self {
-        Stager { phase: Phase::Idle, offer: None, received: 0, count: 0, last_ms: 0, verify_failed: None }
+        Stager { phase: Phase::Idle, offer: None, received: [0; BLOCKS / 32], next: 0, prepared: [false; SECTORS], count: 0, last_ms: 0, verify_failed: None }
     }
 
     pub fn phase(&self) -> Phase {
@@ -137,7 +149,23 @@ impl Stager {
             Phase::Verified | Phase::Activated => 2,
             Phase::Idle | Phase::Discarded => 0,
         };
-        (s, self.received, self.count)
+        (s, self.received(), self.count)
+    }
+
+    /// Blocks received.
+    fn received(&self) -> u32 {
+        self.received.iter().map(|w| w.count_ones()).sum()
+    }
+
+    fn has(&self, n: u32) -> bool {
+        self.received[(n / 32) as usize] & (1 << (n % 32)) != 0
+    }
+
+    /// Forget what was received: a new transfer, or none.
+    fn clear_blocks(&mut self) {
+        self.received = [0; BLOCKS / 32];
+        self.next = 0;
+        self.prepared = [false; SECTORS];
     }
 
     /// No update command other than `UPDATE_STATUS` for 10 min while in the update state (also
@@ -190,7 +218,7 @@ impl Stager {
         let resume = self.phase == Phase::Receiving && self.offer == Some(*o);
         if !resume {
             self.offer = Some(*o);
-            self.received = 0;
+            self.clear_blocks();
             self.count = count;
         }
         self.phase = Phase::Receiving;
@@ -200,41 +228,67 @@ impl Stager {
     /// `UPDATE_BLOCK` `n` with its data; `crc_ok` from the request. Returns blocks received.
     pub fn block<F: FlashIo>(&mut self, io: &mut F, run: &Running, n: u32, crc_ok: bool, data: &[u8], now: u64) -> Result<u32, Refusal> {
         // No transfer in progress: 54, before the CRC (53), nothing changes (0063).
-        if self.phase != Phase::Receiving {
+        if !matches!(self.phase, Phase::Receiving | Phase::Verified) {
             return Err(Refusal::OutOfOrder);
         }
         let o = self.offer.ok_or(Refusal::OutOfOrder)?;
         if !crc_ok {
             return Err(Refusal::BadCrc);
         }
-        if n >= self.count || n > self.received {
+        if n >= self.count || n > self.next {
             return Err(Refusal::OutOfOrder);
         }
         let expect = if n + 1 == self.count { o.length - n * BLOCK } else { BLOCK };
         if data.len() as u32 != expect {
             return Err(Refusal::Malformed);
         }
-        if n < self.received {
-            self.last_ms = now; // answered with 0
-            return Ok(self.received); // a repeat after a lost reply (resumable, U-3)
-        }
-        if self.write_block(io, run, n, data).is_err() {
+        if self.put_block(io, run, n, data).is_err() {
             self.phase = Phase::Discarded;
             return Err(Refusal::VerifyFailed);
         }
-        self.received += 1;
+        // An accepted block cancels a good verify (0067).
+        self.phase = Phase::Receiving;
         self.last_ms = now; // answered with 0
-        Ok(self.received)
+        Ok(self.received())
+    }
+
+    /// Block `n` into the slot, new or again (0067 "Blocks sent again").
+    fn put_block<F: FlashIo>(&mut self, io: &mut F, run: &Running, n: u32, data: &[u8]) -> Result<(), ()> {
+        let sector = (n / PER_SECTOR) as usize;
+        if self.has(n) {
+            let mut b = [0u8; BLOCK as usize];
+            let b = &mut b[..data.len()];
+            // The first block of a sector always starts the sector anew, so that every block
+            // sent again in order (0067: what a host does after a failed verify) replaces all:
+            // if it were skipped as unchanged, a later changed block would erase it.
+            if n % PER_SECTOR != 0 && io.read(run.slot.other().range().start + n * BLOCK, b).is_ok() && b == data {
+                return Ok(()); // the slot holds these bytes already
+            }
+            self.prepared[sector] = false;
+        }
+        if !self.prepared[sector] {
+            let first = n / PER_SECTOR * PER_SECTOR;
+            for k in first..first + PER_SECTOR {
+                self.received[(k / 32) as usize] &= !(1 << (k % 32));
+            }
+            self.erase(io, run, sector)?;
+            self.prepared[sector] = true;
+        }
+        self.write_block(io, run, n, data)?;
+        self.received[(n / 32) as usize] |= 1 << (n % 32);
+        self.next = self.next.max(n + 1);
+        Ok(())
+    }
+
+    fn erase<F: FlashIo>(&mut self, io: &mut F, run: &Running, sector: usize) -> Result<(), ()> {
+        let at = run.slot.other().range().start + sector as u32 * SECTOR_SIZE;
+        FlashGuard::check(Writer::Application { running: run.slot }, Op::Erase, at, SECTOR_SIZE).map_err(|_| ())?;
+        io.erase_sector(at).map_err(|_| ())
     }
 
     fn write_block<F: FlashIo>(&mut self, io: &mut F, run: &Running, n: u32, data: &[u8]) -> Result<(), ()> {
         let w = Writer::Application { running: run.slot };
-        let slot = run.slot.other().range();
-        let at = slot.start + n * BLOCK;
-        if (at - slot.start) % SECTOR_SIZE == 0 {
-            FlashGuard::check(w, Op::Erase, at, SECTOR_SIZE).map_err(|_| ())?;
-            io.erase_sector(at).map_err(|_| ())?;
-        }
+        let at = run.slot.other().range().start + n * BLOCK;
         let mut buf = [0xFFu8; BLOCK as usize];
         buf[..data.len()].copy_from_slice(data);
         let len = (data.len() as u32).div_ceil(FLASH_WORD) * FLASH_WORD;
@@ -242,37 +296,46 @@ impl Stager {
         io.program(at, &buf[..len as usize]).map_err(|_| ())
     }
 
-    /// `UPDATE_VERIFY` (U-4): SHA-256 over the staged image, compared with the package; then the
-    /// image header (as the boot stage will check it). Returns the computed hash.
+    /// `UPDATE_VERIFY` (U-4; 0067): (1) the SHA-256 of the received bytes, (2) the image check of
+    /// the staging slot, as at a start, (3) the image record against the package header; the
+    /// first that fails is named for the log. Returns the computed hash.
     pub fn verify<F: FlashIo>(&mut self, io: &mut F, run: &Running, now: u64) -> Result<[u8; 32], Refusal> {
         // No transfer in progress: 55, nothing changes (0063).
         if !matches!(self.phase, Phase::Receiving | Phase::Verified) {
+            self.verify_failed = None;
             return Err(Refusal::VerifyFailed);
         }
-        let o = match (self.phase, self.offer) {
-            (Phase::Receiving | Phase::Verified, Some(o)) if self.received == self.count => o,
-            _ => {
-                self.verify_failed = Some("missing blocks");
-                return Err(Refusal::VerifyFailed);
+        match self.checks(io, run) {
+            Ok(hash) => {
+                self.verify_failed = None;
+                self.phase = Phase::Verified;
+                self.last_ms = now; // answered with 0
+                Ok(hash)
             }
+            Err(word) => {
+                self.verify_failed = Some(word);
+                self.phase = Phase::Receiving; // the transfer goes on; ACTIVATE needs a good verify
+                Err(Refusal::VerifyFailed)
+            }
+        }
+    }
+
+    /// The three checks of a verify; the word of the first that fails.
+    fn checks<F: FlashIo>(&self, io: &mut F, run: &Running) -> Result<[u8; 32], &'static str> {
+        let o = match self.offer {
+            Some(o) if self.received() == self.count => o,
+            _ => return Err("missing blocks"),
         };
-        let slot = run.slot.other().range();
-        let Ok((hash, crc, head)) = scan(io, slot.start, o.length) else {
-            self.verify_failed = Some("unreadable");
-            return Err(Refusal::VerifyFailed);
-        };
+        let other = run.slot.other();
+        let hash = sha256(io, other.range().start, o.length).map_err(|_| image::Check::Unreadable.word())?;
         if hash != o.sha256 {
-            self.verify_failed = Some("hash");
-            return Err(Refusal::VerifyFailed);
+            return Err("hash");
         }
-        let ok = check_head(&head, crc, &o, slot, run.app_ram);
-        if !ok {
-            self.verify_failed = Some("image");
-            return Err(Refusal::VerifyFailed);
+        let h = image::check(io, header::Kind::Application, other.range(), run.app_ram, &mut || {}).map_err(|c| c.word())?;
+        let slot_ok = o.target_slot == 0 || o.target_slot == slot_code(other);
+        if h.length != o.length || h.fw_version != o.version || !slot_ok {
+            return Err("header");
         }
-        self.verify_failed = None;
-        self.phase = Phase::Verified;
-        self.last_ms = now; // answered with 0
         Ok(hash)
     }
 
@@ -312,7 +375,7 @@ impl Stager {
         if self.phase != Phase::Activated {
             self.phase = Phase::Discarded;
             self.offer = None;
-            self.received = 0;
+            self.clear_blocks();
             self.count = 0;
         }
         true
@@ -327,54 +390,16 @@ impl Stager {
     }
 }
 
-/// The first bytes of an image the checks need: vectors and the header.
-const HEAD: usize = header::HEADER_LEN + g7250_layout::HEADER_OFFSET as usize;
-
-/// One pass over the staged image: SHA-256, the image CRC (header CRC field as zero), the head.
-fn scan<F: FlashIo>(io: &mut F, start: u32, length: u32) -> Result<([u8; 32], u32, [u8; HEAD]), F::Error> {
-    let crc_at = g7250_layout::HEADER_OFFSET as usize + header::CRC_FIELD;
+/// SHA-256 of the received bytes.
+fn sha256<F: FlashIo>(io: &mut F, start: u32, length: u32) -> Result<[u8; 32], F::Error> {
     let mut sha = Sha256::new();
-    let mut crc = crc32::init();
-    let mut head = [0u8; HEAD];
     let mut buf = [0u8; BLOCK as usize];
-    let mut off = 0usize;
-    while off < length as usize {
-        let n = (length as usize - off).min(buf.len());
-        io.read(start + off as u32, &mut buf[..n])?;
+    let mut off = 0;
+    while off < length {
+        let n = (length - off).min(BLOCK) as usize;
+        io.read(start + off, &mut buf[..n])?;
         sha.update(&buf[..n]);
-        if off < HEAD {
-            let k = (HEAD - off).min(n);
-            head[off..off + k].copy_from_slice(&buf[..k]);
-        }
-        if off + n <= crc_at || off >= crc_at + 4 {
-            crc = crc32::update(crc, &buf[..n]);
-        } else {
-            for (i, b) in buf[..n].iter().enumerate() {
-                let v = if (crc_at..crc_at + 4).contains(&(off + i)) { 0 } else { *b };
-                crc = crc32::update(crc, &[v]);
-            }
-        }
-        off += n;
+        off += n as u32;
     }
-    Ok((sha.finalize().into(), crc32::finish(crc), head))
-}
-
-/// The checks of `header::validate`, on the head and the streamed CRC.
-fn check_head(head: &[u8; HEAD], crc: u32, o: &Offer, slot: Range, ram: Range) -> bool {
-    let Some(h) = Header::parse(&head[g7250_layout::HEADER_OFFSET as usize..]) else { return false };
-    let sp = u32::from_le_bytes([head[0], head[1], head[2], head[3]]);
-    let pc = u32::from_le_bytes([head[4], head[5], head[6], head[7]]);
-    h.magic == header::MAGIC
-        && h.header_version == header::HEADER_VERSION
-        && h.header_len as usize == header::HEADER_LEN
-        && h.hw_id == header::HW_ID_G7250_MAIN
-        && h.kind == header::Kind::Application as u8
-        && h.load_addr == slot.start
-        && h.length == o.length
-        && h.crc == crc
-        && h.fw_version == o.version
-        && sp > ram.start
-        && sp <= ram.end
-        && pc & 1 == 1
-        && slot.contains_span(pc & !1, 2)
+    Ok(sha.finalize().into())
 }

@@ -5,6 +5,7 @@
 //! - [`boot`]: the boot record as a record of the store, the boot stage's choice with the record
 //!   it writes before a start (trial attempt, rollback), and the application's records
 //!   (activation, confirmation, `ROLLBACK`).
+//! - [`image`]: the image check (0067), the same for `UPDATE_VERIFY` and for a start.
 //! - [`stage`]: the transfer into the other slot (the staging area): checks of `UPDATE_BEGIN`,
 //!   numbered blocks with a CRC each, the SHA-256 and image check of `UPDATE_VERIFY`, and the
 //!   activation.
@@ -19,6 +20,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod boot;
+pub mod image;
 pub mod stage;
 
 #[cfg(test)]

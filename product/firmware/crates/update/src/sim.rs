@@ -60,6 +60,11 @@ impl Sim {
         !self.bad[o..o + n].iter().any(|&b| b)
     }
 
+    /// Make the flash word at `addr` unreadable (a double ECC error).
+    pub fn tear(&mut self, addr: u32) {
+        self.bad[((addr - APPLICATION_AREA.start) / FLASH_WORD) as usize] = true;
+    }
+
     pub fn bytes(&self, start: u32, len: u32) -> &[u8] {
         let o = (start - APPLICATION_AREA.start) as usize;
         &self.mem[o..o + len as usize]

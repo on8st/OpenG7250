@@ -64,6 +64,13 @@ sh board/check-ramfunc.sh "$out/test/g7250-app-a-compact.elf"
 $tool seal app-a "$out/test/g7250-app-a-compact.elf"
 $tool merge "$out/test/g7250-compact.elf" "$out/g7250-boot.elf" "$out/test/g7250-app-a-compact.elf"
 
-(cd "$out" && shasum -a 256 g7250.elf g7250-boot.elf g7250-app-a.elf g7250-app-b.elf ./*.bin ./*.pkg test/g7250-compact.elf > SHA256SUMS)
+echo "== test packages (T-A1-88, 0067): never shipped"
+for slot in a b; do
+  for case in bad-hw bad-kind bad-entry; do
+    $tool test-package "app-$slot" "$out/g7250-app-$slot.bin" "$out/test/g7250-test-$case-$slot.pkg" "$case"
+  done
+done
+
+(cd "$out" && shasum -a 256 g7250.elf g7250-boot.elf g7250-app-a.elf g7250-app-b.elf ./*.bin ./*.pkg test/g7250-compact.elf test/*.pkg > SHA256SUMS)
 echo "== done"
 cat "$out/SHA256SUMS"

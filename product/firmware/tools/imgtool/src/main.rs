@@ -117,8 +117,52 @@ pub fn seal_elf(file: &mut Vec<u8>, kind: Kind, region: Range) -> Result<Vec<u8>
     Ok(flat.bytes)
 }
 
+/// A package file: the Table M-4 header, then the image (0071).
+pub fn package(image: &[u8], v: u32, region: Range) -> Vec<u8> {
+    use g7250_proto::mgmt::payload::{COMPONENT_MAIN, HARDWARE_ID_G7250, Package, Version};
+    use sha2::Digest;
+    let pkg = Package {
+        header_version: 1,
+        component: COMPONENT_MAIN,
+        hardware_id: HARDWARE_ID_G7250,
+        min_hw_revision: 0,
+        version: Version { major: (v >> 24) as u8, minor: (v >> 16) as u8, build: v as u16 },
+        length: image.len() as u32,
+        sha256: sha2::Sha256::digest(image).into(),
+        signature_len: 0,
+        target_slot: if region == SLOT_A { 1 } else { 2 },
+    };
+    let mut b = pkg.encode().to_vec();
+    b.extend_from_slice(image);
+    b
+}
+
+/// Break one item of the image check in a sealed image and seal it again, so that only that item
+/// fails. Returns what the check must then report.
+pub fn bad_image(image: &mut [u8], region: Range, case: &str) -> Option<header::Invalid> {
+    let h = g7250_layout::HEADER_OFFSET as usize;
+    let want = match case {
+        "bad-hw" => {
+            image[h + 20] ^= 1; // hw_id
+            header::Invalid::WrongHardware
+        }
+        "bad-kind" => {
+            image[h + 28] = Kind::BootStage as u8;
+            header::Invalid::WrongKind
+        }
+        "bad-entry" => {
+            let other = if region == SLOT_A { SLOT_B } else { SLOT_A };
+            image[4..8].copy_from_slice(&((other.start + 0x501) | 1).to_le_bytes()); // reset vector
+            header::Invalid::BadVector
+        }
+        _ => return None,
+    };
+    header::seal(image).ok()?;
+    Some(want)
+}
+
 fn run(args: &[String]) -> Result<(), String> {
-    let usage = "usage: g7250-imgtool <seal|check> <boot|app-a|app-b> <elf> [--bin <out>] | merge <out> <elf>... | package <app-a|app-b> <bin> <out>";
+    let usage = "usage: g7250-imgtool <seal|check> <boot|app-a|app-b> <elf> [--bin <out>] | merge <out> <elf>... | package <app-a|app-b> <bin> <out> | test-package <app-a|app-b> <bin> <out> <bad-hw|bad-kind|bad-entry>";
     if let [c, out, ins @ ..] = args {
         if c == "merge" {
             let files: Vec<Vec<u8>> =
@@ -155,24 +199,27 @@ fn run(args: &[String]) -> Result<(), String> {
                 return Err("a package carries an application image".into());
             }
             let hdr = header::validate(&file, kind, region, RAM).map_err(|e| format!("{path}: {e:?}"))?;
-            let image = &file[..hdr.length as usize];
-            use sha2::Digest;
-            let v = hdr.fw_version;
-            let pkg = g7250_proto::mgmt::payload::Package {
-                header_version: 1,
-                component: g7250_proto::mgmt::payload::COMPONENT_MAIN,
-                hardware_id: g7250_proto::mgmt::payload::HARDWARE_ID_G7250,
-                min_hw_revision: 0,
-                version: g7250_proto::mgmt::payload::Version { major: (v >> 24) as u8, minor: (v >> 16) as u8, build: v as u16 },
-                length: hdr.length,
-                sha256: sha2::Sha256::digest(image).into(),
-                signature_len: 0,
-                target_slot: if region == SLOT_A { 1 } else { 2 },
-            };
-            let mut b = pkg.encode().to_vec();
-            b.extend_from_slice(image);
+            let b = package(&file[..hdr.length as usize], hdr.fw_version, region);
             std::fs::write(out, &b).map_err(|e| format!("{out}: {e}"))?;
-            println!("{out}: package for slot {}, {} image bytes, version {:#010x}", pkg.target_slot, hdr.length, v);
+            println!("{out}: package, {} image bytes, version {:#010x}", hdr.length, hdr.fw_version);
+        }
+        "test-package" => {
+            // Test only, never shipped (T-A1-88; 0067): a package that UPDATE_BEGIN accepts and
+            // whose SHA-256 is right, with an image that fails one item of the image check.
+            let [_, _, _, out, case] = args else { return Err(usage.into()) };
+            if kind != Kind::Application {
+                return Err("a package carries an application image".into());
+            }
+            let hdr = header::validate(&file, kind, region, RAM).map_err(|e| format!("{path}: {e:?}"))?;
+            let mut image = file[..hdr.length as usize].to_vec();
+            let want = bad_image(&mut image, region, case).ok_or_else(|| format!("{case}: no such test case; {usage}"))?;
+            match header::validate(&image, kind, region, RAM) {
+                Err(e) if e == want => {}
+                r => return Err(format!("{out}: expected {want:?}, the image check gives {r:?}")),
+            }
+            let b = package(&image, hdr.fw_version, region);
+            std::fs::write(out, &b).map_err(|e| format!("{out}: {e}"))?;
+            println!("{out}: TEST package ({case}): the image check must fail with {want:?}");
         }
         "seal" => {
             let bytes = seal_elf(&mut file, kind, region)?;
@@ -196,6 +243,37 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("g7250-imgtool: {e}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use g7250_layout::header::{Header, Invalid};
+
+    #[test]
+    fn test_packages_fail_one_item_with_a_right_hash_t_a1_88() {
+        use sha2::Digest;
+        for (slot, region) in [(1u8, SLOT_A), (2, SLOT_B)] {
+            let mut good = vec![0x5Au8; 3000];
+            good[0..4].copy_from_slice(&0x2401_0000u32.to_le_bytes());
+            good[4..8].copy_from_slice(&(region.start + 0x501).to_le_bytes());
+            let h = header::to_bytes(&Header::unsealed(Kind::Application, region.start, header::version(0, 1, 1), true, "test"));
+            let o = g7250_layout::HEADER_OFFSET as usize;
+            good[o..o + h.len()].copy_from_slice(&h);
+            header::seal(&mut good).unwrap();
+            for (case, want) in [("bad-hw", Invalid::WrongHardware), ("bad-kind", Invalid::WrongKind), ("bad-entry", Invalid::BadVector)] {
+                let mut img = good.clone();
+                assert_eq!(bad_image(&mut img, region, case), Some(want));
+                assert_eq!(header::validate(&img, Kind::Application, region, RAM), Err(want), "{case}: that item and no other");
+                let b = package(&img, header::version(0, 1, 1), region);
+                assert_eq!(b.len(), 53 + img.len());
+                let p = g7250_proto::mgmt::payload::Package::decode(&b).unwrap();
+                assert_eq!((p.hardware_id, p.component, p.target_slot, p.length as usize), (0x00C8, 1, slot, img.len()));
+                assert_eq!(p.sha256, <[u8; 32]>::from(sha2::Sha256::digest(&b[53..])));
+            }
+            assert_eq!(bad_image(&mut good, region, "other"), None);
         }
     }
 }

@@ -441,7 +441,7 @@ fn a_failed_verify_records_its_check() {
         g3.block(&mut s, &run, k, true, d, 1).unwrap();
     }
     assert!(g3.verify(&mut s, &run, 2).is_err());
-    assert_eq!(g3.verify_failure(), Some("image"));
+    assert_eq!(g3.verify_failure(), Some("slot"));
     assert_eq!(g3.staged_version(), Some(V2));
 }
 
@@ -618,4 +618,152 @@ fn refused_commands_and_a_second_abort_never_delay_the_restart() {
     // a trial boot it gets 58 (0064 point 3.1).
     assert_eq!(Stager::new().rollback_allowed(&run), Ok(()));
     assert_eq!(Stager::new().rollback_allowed(&Running { trial: true, ..run }), Err(Refusal::UpdateInProgress));
+}
+
+/// `img` transferred whole into slot B with `o`; the stager and the flash after it.
+fn transferred(img: &[u8], o: Offer) -> (Sim, Stager) {
+    let (mut s, _) = installed(false);
+    let run = running(Slot::A, V1);
+    let mut g = Stager::new();
+    let n = g.begin(&o, &run, 0).unwrap();
+    for k in 0..n {
+        g.block(&mut s, &run, k, true, block_of(img, k), 1).unwrap();
+    }
+    (s, g)
+}
+
+fn block_of(img: &[u8], k: u32) -> &[u8] {
+    &img[(k * stage::BLOCK) as usize..((k + 1) * stage::BLOCK).min(img.len() as u32) as usize]
+}
+
+#[test]
+fn verify_names_the_first_failed_check_t_a1_88() {
+    // 0067: packages whose SHA-256 is right but whose image is not runnable.
+    let run = running(Slot::A, V1);
+    let o = HEADER_OFFSET as usize;
+    let good = image(Slot::B, V2, 3000, 7);
+    let sealed = |f: &dyn Fn(&mut Vec<u8>)| {
+        let mut v = good.clone();
+        f(&mut v);
+        header::seal(&mut v).unwrap();
+        v
+    };
+    let mut integrity = good.clone();
+    integrity[2000] ^= 1;
+    let mut appended = good.clone();
+    appended.extend_from_slice(&[0x5A; 32]);
+    let mut long = good.clone();
+    long[o + header::LENGTH_FIELD..o + header::LENGTH_FIELD + 4].copy_from_slice(&(Slot::B.range().len() + 1).to_le_bytes());
+    let cases: Vec<(Vec<u8>, u32, &str)> = vec![
+        (sealed(&|v| v[o..o + 4].copy_from_slice(b"NOPE")), V2, "no-record"),
+        (sealed(&|v| v[o + 20] ^= 1), V2, "hardware"),
+        (sealed(&|v| v[o + 28] = ImgKind::BootStage as u8), V2, "kind"),
+        (long, V2, "length"),
+        (image(Slot::A, V2, 3000, 7), V2, "slot"),
+        (integrity, V2, "integrity"),
+        (sealed(&|v| v[4..8].copy_from_slice(&(Slot::A.range().start + 0x501).to_le_bytes())), V2, "vectors"),
+        (sealed(&|v| v[0..4].copy_from_slice(&RAM.start.to_le_bytes())), V2, "vectors"),
+        (appended, V2, "header"),
+        (good.clone(), header::version(1, 0, 3), "header"),
+    ];
+    for (img, version, word) in cases {
+        let (mut s, mut g) = transferred(&img, offer(&img, version));
+        let before = s.mem.clone();
+        assert_eq!(g.verify(&mut s, &run, 2), Err(Refusal::VerifyFailed), "{word}");
+        assert_eq!(g.verify_failure(), Some(word));
+        assert_eq!(g.status().0, 1, "{word}: the transfer stays in progress");
+        let mut st = Store::open(&mut s, Writer::Application { running: Slot::A }).unwrap();
+        assert_eq!(g.activate(&mut st, &run, 3), Err(Refusal::VerifyFailed), "{word}");
+        drop(st);
+        assert_eq!(s.mem, before, "{word}: nothing written");
+        // The boot stage reaches the same result from the slot alone, except for the header
+        // check, which needs the package: there the image itself is good.
+        let r = image_word(&mut s, Slot::B);
+        assert_eq!(r, if word == "header" { None } else { Some(word) });
+    }
+    // Hash before everything else: a wrong hash of an image that also fails the image check.
+    let wrong = image(Slot::A, V2, 3000, 7);
+    let mut of = offer(&wrong, V2);
+    of.sha256[0] ^= 1;
+    let (mut s, mut g) = transferred(&wrong, of);
+    assert!(g.verify(&mut s, &run, 2).is_err());
+    assert_eq!(g.verify_failure(), Some("hash"));
+}
+
+/// The word of the image check for a slot, `None` if it passes.
+fn image_word(s: &mut Sim, slot: Slot) -> Option<&'static str> {
+    crate::image::check(s, ImgKind::Application, slot.range(), RAM, &mut || {}).err().map(|c| c.word())
+}
+
+#[test]
+fn the_image_check_is_judged_over_the_recorded_length() {
+    // A torn word inside the image: unreadable. The same beyond the recorded length: no matter.
+    let img = image(Slot::B, V2, 3000, 7);
+    let (mut s, _) = transferred(&img, offer(&img, V2));
+    let mut t = s.clone();
+    t.tear(Slot::B.range().start + 1024);
+    assert_eq!(image_word(&mut t, Slot::B), Some("unreadable"));
+    s.tear(Slot::B.range().start + 4096);
+    assert_eq!(image_word(&mut s, Slot::B), None);
+}
+
+#[test]
+fn a_block_after_a_good_verify_cancels_it() {
+    let run = running(Slot::A, V1);
+    let img = image(Slot::B, V2, 3000, 7);
+    let (mut s, mut g) = transferred(&img, offer(&img, V2));
+    assert!(g.verify(&mut s, &run, 2).is_ok());
+    // A refused block leaves the verify; an accepted one cancels it.
+    assert_eq!(g.block(&mut s, &run, 1, false, block_of(&img, 1), 3), Err(Refusal::BadCrc));
+    assert_eq!(g.status().0, 2);
+    assert_eq!(g.block(&mut s, &run, 1, true, block_of(&img, 1), 3), Ok(6));
+    assert_eq!(g.status(), (1, 6, 6));
+    {
+        let mut st = Store::open(&mut s, Writer::Application { running: Slot::A }).unwrap();
+        assert_eq!(g.activate(&mut st, &run, 4), Err(Refusal::VerifyFailed));
+    }
+    assert!(g.verify(&mut s, &run, 5).is_ok());
+    let mut st = Store::open(&mut s, Writer::Application { running: Slot::A }).unwrap();
+    assert_eq!(g.activate(&mut st, &run, 6), Ok(()));
+}
+
+#[test]
+fn blocks_sent_again_replace_what_was_received() {
+    // 0067 "Blocks sent again". Two sectors: 260 blocks, 256 of them in the first.
+    let run = running(Slot::A, V1);
+    let good = image(Slot::B, V2, 260 * 512, 7);
+    let mut bad = good.clone();
+    bad[600] ^= 1; // block 1
+    bad[258 * 512] ^= 1; // block 258, second sector
+    let (mut s, mut g) = transferred(&bad, offer(&good, V2));
+    assert!(g.verify(&mut s, &run, 2).is_err());
+    assert_eq!(g.verify_failure(), Some("hash"));
+    // The same bytes again: accepted, nothing to write, no block lost.
+    let steps = s.steps;
+    assert_eq!(g.block(&mut s, &run, 5, true, block_of(&good, 5), 3), Ok(260));
+    assert_eq!(s.steps, steps);
+    // Block 258 with other bytes: its sector is erased (one erase, 16 words), the other three
+    // blocks of it count as not received; the first sector keeps its 256.
+    assert_eq!(g.block(&mut s, &run, 258, true, block_of(&good, 258), 4), Ok(257));
+    assert_eq!(s.steps, steps + 1 + 16);
+    assert_eq!(g.status(), (1, 257, 260));
+    assert!(g.verify(&mut s, &run, 5).is_err());
+    assert_eq!(g.verify_failure(), Some("missing blocks"));
+    // Every block again, in order: the last data of each block is what is verified.
+    for k in 0..260 {
+        g.block(&mut s, &run, k, true, block_of(&good, k), 6).unwrap();
+    }
+    assert_eq!(g.status(), (1, 260, 260));
+    assert!(g.verify(&mut s, &run, 7).is_ok());
+    assert_eq!(s.bytes(Slot::B.range().start, good.len() as u32), &good[..]);
+    // A block the transfer has not reached stays out of order, also with holes before it.
+    let mut g = Stager::new();
+    g.begin(&offer(&good, V2), &run, 0).unwrap();
+    for k in 0..3 {
+        g.block(&mut s, &run, k, true, block_of(&good, k), 1).unwrap();
+    }
+    assert_eq!(g.block(&mut s, &run, 1, true, &[0x11; 512], 1), Ok(1));
+    assert_eq!(g.block(&mut s, &run, 4, true, block_of(&good, 4), 1), Err(Refusal::OutOfOrder));
+    assert_eq!(g.block(&mut s, &run, 3, true, block_of(&good, 3), 1), Ok(2));
+    assert_eq!(g.block(&mut s, &run, 0, true, block_of(&good, 0), 1), Ok(3));
 }
