@@ -114,8 +114,13 @@ Two firmware readings, relayed by the openg7250 session, 2026-11-22.
    - **"Complete generation"** (firmware finding, 2026-11-22). The live sector holds a complete
      generation when either (a) its generation has a readable commit word, or (b) it holds the
      store's first generation, which by the firmware's design carries no commit word, and at
-     least one record of it passes its check (a secret, a configuration item or a calibration
-     entry alike). An erased sector, or one holding only data it cannot place in a checked
+     least one record of it passes its check that is one of this closed list: the management
+     secret (A1.10), a configuration item (A1.6, C-1 to C-7), a calibration entry (A1.12). Other
+     records do not count: the boot counter (B10.2 item 5), the boot record (A1.8), the staging
+     mark (0067 point 4), the factory-reset mark, and any record a later version adds unless
+     it is added to this list. (b) is judged on what the sector held before this start wrote
+     anything to it, because the firmware writes the boot counter at every start before the
+     start check (correction after review, 2026-11-22). An erased sector, or one holding only data it cannot place in a checked
      record, never holds a complete generation, so the start check never erases the other
      sector on its behalf. The firmware's proposal (a commit, or a first generation that holds
      a secret) is too narrow: a first generation with only configuration or calibration, fallen
@@ -123,7 +128,9 @@ Two firmware readings, relayed by the openg7250 session, 2026-11-22.
      flash. Cases:
      - the only committed generation is in sector 6, its commit word becomes unreadable, and
        sector 7 is erased: sector 7 holds no complete generation, the start check does
-       nothing, and sector 6 is not erased (the store then reads as 0065 point 5 says);
+       nothing, and sector 6 is not erased (the store then reads as 0065 point 5 says). This
+       holds although the boot counter of this start lands in sector 7, and at every later
+       start until a record of the closed list is written there;
      - fall-back after the first `CHANGE_SECRET` to the first generation, which holds the
        first secret: (b) holds, and the failed newer generation is erased (point 1);
      - fall-back to a first generation holding only configuration or calibration: (b) holds as
