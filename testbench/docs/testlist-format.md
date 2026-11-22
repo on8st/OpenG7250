@@ -532,7 +532,12 @@ A test with target `emulator` is also run against the reference model. A test wi
      the image's start-up safe state (PB14 low) and `power.cycle` clear it; traced
      `{"kind": "dac_force", channel, value, t_us}` (T-A3-61).
    - Proposed: `flash.dump {address, len}` → `{hex}`: flash as it is now, at most 32768 bytes per
-     call (T-A1-39, T-A1-92: the bench looks for the 32 bytes of a secret it set itself); and
+     call (T-A1-39, T-A1-92: the bench looks for the 32 bytes of a secret it set itself);
+     `flash.fill {address, len, data?}`: these bytes of flash become `data` (hex) repeated over
+     `len`, or erased without `data`; aligned to 32 bytes, ECC consistent (an earlier
+     `flash.ecc` there is gone), a 32-byte word of only FF is an erased one, no `flash.log` entry,
+     kept across `power.cycle`, refused outside the store sectors (T-A1-92: foreign data, an
+     erased sector, the store put back from a dump); and
      `log.corrupt {seq}`: the kept log entry with that sequence number changed in RAM so that its
      check fails at the next start (T-A1-91; the layout is the firmware's, so an emulator needs its
      address from the firmware side). The reference model has `log.corrupt`, and

@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from . import core
-from . import t_a2, t_a3, t_atu, t_cw, t_flash, t_log, t_mgmt, t_store, t_update, t_p2, t_tx_locked  # noqa: F401  (register tests)
+from . import t_a2, t_a3, t_atu, t_cw, t_flash, t_log, t_mgmt, t_stale, t_store, t_update, t_p2, t_tx_locked  # noqa: F401  (register tests)
 
 HERE = Path(__file__).resolve().parent
 CATALOGUE = HERE.parent / "catalogue" / "catalogue.json"

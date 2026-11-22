@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "3e89b1d",
-  "sha256_of_inputs": "6ee3e4c068c03cb9fbfc8b55f33165a419d71b1d64532f4851d6ca3ae6cb8c5a"
+  "commit": "736f33d",
+  "sha256_of_inputs": "ad0d45deba2b6d49c6d13b3c9c9c4fca567b8becd6ac97f9446a27e0764662a9"
  },
  "his": {
   "commit": "069ea0b"
@@ -1928,7 +1928,7 @@
    "id": "T-A1-92",
    "origin": "spec",
    "part": "A-B",
-   "title": "On the emulator, after the reply to `CHANGE_SECRET` the flash dump shows the new secret only in the live store sector and the old secret only in the other, stale sector; after a `RESTART`, and after a power cycle, neither sector holds the old secret, and flash.log shows the stale sector erased before the management socket opens, with `store: stale secret erased` in the log; a non-live sector that holds only the live secret is not erased at start; after a `FACTORY_RESET` whose second erase was made to fail, the next start erases the sector with the old secret; a `SET_CONFIG` that needs a compaction before any restart erases the stale sector then; each reply within 15 s with one erase per request; with the new generation's commit word made unreadable before the restart, the store falls back, keeps the stale sector and logs it (A1.10 \"The old secret in flash\"; B2.3 \"Flash work\"; 0069).",
+   "title": "On the emulator, after the reply to `CHANGE_SECRET` the flash dump shows the new secret only in the live store sector and the old secret only in the other, stale sector; after a `RESTART`, and after a power cycle, neither sector holds the old secret, and flash.log shows the stale sector erased before the management socket opens, with `store: stale secret erased` in the log; a non-live sector that holds only the live secret is not erased at start; after a `FACTORY_RESET` whose second erase was made to fail, the next start erases the sector with the old secret; a `SET_CONFIG` that needs a compaction before any restart erases the stale sector then; each reply within 15 s with one erase per request; with the new generation's commit word made unreadable before the restart, the store falls back, keeps the stale sector and logs it; the sector with the failed newer generation is erased at that start, `store: stale secret erased` is logged, the old secret authenticates and the new one gets 33; a stale-sector erase cut by a power loss so that part of a record is left is completed at the next start, logged `store: non-live sector erased (unrecognised data)`, and no byte of the old secret remains; with neither sector holding a complete generation of this firmware's store (sectors filled with foreign data), the start check erases nothing and the first store write works; with the only committed generation in sector 6, its commit word made unreadable and sector 7 erased, the start check erases nothing and the flash dump shows sector 6 unchanged, although that start writes its boot counter into sector 7, and the same holds at a second start (sector 7 then holding boot counters only), and after a `SET_CONFIG` the next start erases sector 6; after a fall-back to a first generation that holds only configuration, the failed newer generation with its secret is erased (A1.10 \"The old secret in flash\"; B2.3 \"Flash work\"; 0069).",
    "reqs": [
     "A1",
     "A1.10",
@@ -1943,9 +1943,9 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "what the sectors hold needs flash.dump (proposed)"
+    "what the sectors hold needs flash.dump (proposed); the cases of the 0069 addendum need flash.ecc, power.cut and flash.fill (proposed)"
    ],
-   "timeout_s": 1800
+   "timeout_s": 2700
   },
   {
    "id": "T-A1-93",

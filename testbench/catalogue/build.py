@@ -254,7 +254,8 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-39": {"target": "emulator", "also": ["host"], "needs": [],
                 "notes": ["the flash part (0069) needs flash.log, flash.timing, flash.fault and flash.dump"]},
     "T-A1-92": {"target": "emulator", "also": [], "needs": ["flash.log"],
-                "notes": ["what the sectors hold needs flash.dump (proposed)"]},
+                "notes": ["what the sectors hold needs flash.dump (proposed); the cases of the 0069 addendum need flash.ecc, "
+                          "power.cut and flash.fill (proposed)"]},
     "T-A1-93": {"target": "host", "also": [], "needs": [],
                 "notes": ["g7250ctl's own test against the reference model (0070); not run by this bench"]},
     "T-A1-83": {"target": "emulator", "also": [], "needs": ["power.cut", "time.advance", "flash.log", "hw.trace"]},
@@ -416,7 +417,7 @@ TIMEOUTS: dict[str, int] = {
     "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 900, "T-A1-09": 900, "T-A1-84": 600, "T-A1-83": 900,
     "T-A1-88": 900, "T-A1-89": 900, "T-A1-90": 900, "T-A1-67": 300, "T-A1-80": 300,
     "T-A1-05": 120, "T-A1-33": 120, "T-A1-23": 120, "T-A1-59": 120, "T-A1-78": 120, "T-A1-79": 120, "T-A1-81": 120,
-    "T-B8-10": 120, "T-A1-91": 1500, "T-A1-39": 300, "T-A1-92": 1800,
+    "T-B8-10": 120, "T-A1-91": 1500, "T-A1-39": 300, "T-A1-92": 2700,
     "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-76": 120,
     # requests that may do flash work: each may take 15 s (0069), a factory reset 17 s more
     "T-A1-03": 90, "T-A1-04": 90, "T-A1-20": 90, "T-A1-22": 90, "T-A1-63": 240, "T-A1-64": 90, "T-A1-65": 120,

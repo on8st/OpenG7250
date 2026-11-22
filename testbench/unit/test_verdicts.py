@@ -68,8 +68,8 @@ class Verdicts(unittest.TestCase):
 
 class WholeWhereOffered(unittest.TestCase):
     def test_tuple(self):
-        from testbench import t_log, t_store, t_update
-        for fn in (t_update.t_a1_89, t_update.t_a1_90, t_log.t_a1_91, t_store.t_a1_92):
+        from testbench import t_log, t_stale, t_update
+        for fn in (t_update.t_a1_89, t_update.t_a1_90, t_log.t_a1_91, t_stale.t_a1_92):
             self.assertIsInstance(fn.whole, tuple)
 
         def noted(ctx):
