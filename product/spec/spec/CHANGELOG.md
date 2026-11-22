@@ -67,8 +67,10 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   survives the next start. A1.10; T-A1-92. The start check runs only with a live generation;
   the drill F1 checks that a second start erases nothing in sector 6 (P-SYS-5). "Complete
   generation": a readable commit word, or the first generation with at least one checked
-  record of a closed list (secret, configuration, calibration), judged before this start writes;
-  an erased sector never qualifies.
+  record of a closed list (secret, configuration, calibration); an erased sector never qualifies;
+  only the start check is limited (other start writes compact as A1.6 says); the erase of the
+  lost sector after the owner's first `SET_CONFIG` is an accepted consequence; a first generation
+  is recognised by having no commit word (a double fault accepted).
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 

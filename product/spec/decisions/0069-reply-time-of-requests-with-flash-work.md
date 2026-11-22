@@ -118,9 +118,10 @@ Two firmware readings, relayed by the openg7250 session, 2026-11-22.
      secret (A1.10), a configuration item (A1.6, C-1 to C-7), a calibration entry (A1.12). Other
      records do not count: the boot counter (B10.2 item 5), the boot record (A1.8), the staging
      mark (0067 point 4), the factory-reset mark, and any record a later version adds unless
-     it is added to this list. (b) is judged on what the sector held before this start wrote
-     anything to it, because the firmware writes the boot counter at every start before the
-     start check (correction after review, 2026-11-22). An erased sector, or one holding only data it cannot place in a checked
+     it is added to this list. Nothing a start writes before the start check (the boot
+     record, the boot counter, a compaction that finishes a factory reset) is a new record of
+     this list, so the boot counter of this start cannot make a sector count (correction
+     after review, 2026-11-22). An erased sector, or one holding only data it cannot place in a checked
      record, never holds a complete generation, so the start check never erases the other
      sector on its behalf. The firmware's proposal (a commit, or a first generation that holds
      a secret) is too narrow: a first generation with only configuration or calibration, fallen
@@ -135,6 +136,19 @@ Two firmware readings, relayed by the openg7250 session, 2026-11-22.
        first secret: (b) holds, and the failed newer generation is erased (point 1);
      - fall-back to a first generation holding only configuration or calibration: (b) holds as
        well, and the failed newer generation is erased.
+   - **Only the start check is limited** (firmware reading of its start order, 2026-11-22).
+     Other store writes at a start erase as A1.6 "Store writes" says: the boot counter or the
+     boot record compacts when the live sector is full, and finishing a factory reset compacts;
+     each erases the other sector first. These rules say only when the start check erases.
+   - **Accepted consequence.** In the first case above, the owner's first `SET_CONFIG` or
+     `SET_CALIBRATION` after it writes a record of the list into sector 7, and the next start
+     check erases sector 6. That is meant: sector 6's generation has not been in use since its
+     commit word became unreadable.
+   - **Assumption: a first generation is recognised by having no commit word.** A compaction
+     into a sector cut before its commit, with the other sector unreadable as well, looks the
+     same and may be partial. Treating it as complete needs two faults at once (a cut
+     compaction and an unreadable generation) and is accepted; no mark of a first generation
+     is required.
    - **Sector 6 and the vendor bootloader** (0061, P-SYS-5). One store sector is sector 6,
      where the vendor bootloader may stage ([HIS] HIS 15 rule 5). If it writes there at every
      start, every start would erase that sector, and the store would lose its spare sector.
