@@ -589,8 +589,14 @@ class FixtureServer:
                # format v1.8
                "gpio.force", "dac.force", "time.advance", "console.log",
                # format v1.8 with the flash controller model (docs/FLASH-model.md)
-               "flash.log", "flash.timing", "flash.fault", "flash.ecc", "slot.corrupt", "ch394.silent"]
+               "flash.log", "flash.timing", "flash.fault", "flash.ecc", "slot.corrupt", "ch394.silent",
+               # format v1.9
+               "flash.dump", "flash.fill", "reset.flags"] + (
+               # log.corrupt: only where the runner knows the ring (G7250_LOG_RING, not in the endpoint)
+               ["log.corrupt"] if os.environ.get("G7250_LOG_RING") else [])
 
+    STORE = (0x080C0000, 0x08100000)          # flash.fill: the store sectors
+    LOG_HEADER, LOG_ENTRY, LOG_ENTRIES = 48, 96, 64      # two header copies of 3 words, then 64 entries of 12 words
     SLOT_BASE = {1: 0x08040000, 2: 0x08080000}
     FLASH_TIMING = {"erase_us": None, "program_us": 0, "t_erase_max_us": 4000000,
                     "source": "ST DS13311 Rev 5 Table 48: sector erase by PSIZE, typical 2.0/1.8/1.1 s (x8/x16/x32), "
@@ -1059,7 +1065,7 @@ class FixtureServer:
             if not r or not r.startswith("ok"):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             self.ecc[a & ~31] = typ
-            return {"ok": True, "value": {"address": "0x%08X" % (a & ~31), "type": typ}}
+            return {"ok": True, "value": {"address": "0x%08X" % (a & ~31), "type": typ, "in_force": not r.endswith("pending")}}
         if op == "slot.corrupt":
             slot = args.get("slot")
             if slot not in self.SLOT_BASE:
@@ -1085,6 +1091,62 @@ class FixtureServer:
                 self.corrupt[slot] = (addr, x)
                 return {"ok": True, "value": {"slot": slot, "address": v["address"], "old": v["old"], "new": v["new"], "t_us": v["t_us"]}}
             return {"ok": True, "value": {"slot": slot, "address": v["address"], "restored": v["new"], "t_us": v["t_us"]}}
+        if op == "flash.dump":
+            a, n = args.get("address"), args.get("len")
+            a = int(a, 0) if isinstance(a, str) else a
+            if not isinstance(a, int) or not isinstance(n, int):
+                return {"ok": False, "error": "address and len (integers) needed"}
+            if getattr(self, "flash_preloaded", False):
+                return {"ok": False, "error": "refused: the runner was started with --flash-preload"}
+            if a < 0x08020000:
+                return {"ok": False, "error": "refused: below 0x08020000"}
+            if n < 1 or n > 32768 or a + n > 0x08100000:
+                return {"ok": False, "error": "len 1..32768 within the bank"}
+            r = agent.ask("ft dump 0x%08X %d" % (a, n), timeout=60) if agent else None
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"hex": r[3:]}}
+        if op == "flash.fill":
+            a, n, data = args.get("address"), args.get("len"), args.get("data")
+            a = int(a, 0) if isinstance(a, str) else a
+            if not isinstance(a, int) or not isinstance(n, int) or n < 32 or a % 32 or n % 32:
+                return {"ok": False, "error": "address and len (integers) aligned to 32 bytes needed"}
+            if not (self.STORE[0] <= a and a + n <= self.STORE[1]):
+                return {"ok": False, "error": "refused: outside the store sectors"}
+            try:
+                raw = bytes.fromhex(data) if data is not None else b""
+            except ValueError:
+                return {"ok": False, "error": "data must be hex"}
+            if data is not None and (not raw or n % len(raw)):
+                return {"ok": False, "error": "len must be a multiple of the data's length"}
+            r = agent.ask("ft fill 0x%08X %d %s" % (a, n, raw.hex() if raw else "-"), timeout=60) if agent else None
+            if not r or not r.startswith("ok"):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            self.ecc = {w: t for w, t in self.ecc.items() if not a <= w < a + n}
+            return {"ok": True, "value": {"address": "0x%08X" % a, "len": n}}
+        if op == "reset.flags":
+            fl = args.get("flags")
+            if not isinstance(fl, list) or not all(isinstance(x, str) for x in fl):
+                return {"ok": False, "error": "flags must be a list of names"}
+            r = agent.ask("resetflags %s" % ",".join(fl)) if agent else None
+            if not r or not r.startswith("ok"):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"rsr": r[3:]}}
+        if op == "log.corrupt" and os.environ.get("G7250_LOG_RING"):
+            seq = args.get("seq")
+            if not isinstance(seq, int) or seq < 0:
+                return {"ok": False, "error": "seq must be a non-negative integer"}
+            base = int(os.environ["G7250_LOG_RING"], 0)
+            ent = base + self.LOG_HEADER + (seq % self.LOG_ENTRIES) * self.LOG_ENTRY
+            r = agent.ask("peek 0x%08X" % ent) if agent else None
+            if not r or not r.startswith("ok 0x"):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            if int(r.split()[1], 16) != seq & 0xFFFFFFFF:
+                return {"ok": False, "error": "entry %d is not in the ring" % seq}
+            r = agent.ask("ramxor 0x%08X 1" % (ent + 16))       # a bit of the first text word
+            if not r or not r.startswith("ok"):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"seq": seq}}
         if op == "ch394.silent":
             n = args.get("boots", 1)
             if not isinstance(n, int) or n < 0:

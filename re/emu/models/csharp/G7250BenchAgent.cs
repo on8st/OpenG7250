@@ -990,11 +990,17 @@ namespace Antmicro.Renode.Peripherals.SPI
                 var e = (string)t.GetMethod("Fault").Invoke(ft, new object[] { w[2], long.Parse(w[3], CultureInfo.InvariantCulture), w[4] == "-" ? "" : w[4], w[5] == "1" });
                 return e == null ? "ok" : "err " + e;
             }
+            if(w.Length >= 4 && w[1] == "dump") return (string)t.GetMethod("Dump").Invoke(ft, new object[] { Convert.ToInt64(w[2], 16), int.Parse(w[3], CultureInfo.InvariantCulture) });
+            if(w.Length >= 5 && w[1] == "fill") return (string)t.GetMethod("FillWords").Invoke(ft, new object[] { Convert.ToInt64(w[2], 16), long.Parse(w[3], CultureInfo.InvariantCulture), w[4] });
             if(w.Length >= 2 && w[1] == "ecclist") return "ok " + t.GetMethod("EccList").Invoke(ft, null);
             if(w.Length >= 4 && w[1] == "ecc")
             {
                 var e = (string)t.GetMethod("AddEcc").Invoke(ft, new object[] { Convert.ToInt64(w[2], 16), w[3] == "double" });
-                return e == null ? "ok" : "err " + e;
+                if(e != null) return "err " + e;
+                // flash.ecc answers when the mark is in force: at the next clock step, not while PG is set
+                var wait = System.Diagnostics.Stopwatch.StartNew();
+                while((bool)t.GetProperty("EccPending").GetValue(ft) && wait.ElapsedMilliseconds < 3000) System.Threading.Thread.Sleep(1);
+                return (bool)t.GetProperty("EccPending").GetValue(ft) ? "ok pending" : "ok";
             }
             if(w.Length >= 4 && w[1] == "corrupt")
             {
@@ -1127,6 +1133,21 @@ namespace Antmicro.Renode.Peripherals.SPI
                     case "wdt": return WatchdogReset();
                     case "resets": return "resets " + resetCount;
                     case "keylog": return KeyLogCommand(w);
+                    case "resetflags":
+                    {
+                        IPeripheral wd;
+                        if(!machine.TryGetByName("sysbus.watchdog", out wd)) return "err no reset model";
+                        return (string)wd.GetType().GetMethod("NextFlags").Invoke(wd, new object[] { w.Length > 1 ? w[1] : "" });
+                    }
+                    case "ramxor":   // log.corrupt: one bit of a RAM byte (AXI SRAM only)
+                    {
+                        ulong ra = ulong.Parse(w[1].Replace("0x", ""), NumberStyles.HexNumber);
+                        int rx = int.Parse(w[2], CultureInfo.InvariantCulture);
+                        if(ra < 0x24000000UL || ra >= 0x24050000UL || rx < 1 || rx > 255) return "err address outside the AXI SRAM or mask";
+                        byte ro = machine.SystemBus.ReadByte(ra);
+                        machine.SystemBus.WriteByte(ra, (byte)(ro ^ rx));
+                        return "ok " + ro + " " + (ro ^ rx);
+                    }
                     case "peek":     // diagnostics: one 32-bit bus read
                         return "ok 0x" + machine.SystemBus.ReadDoubleWord(ulong.Parse(w[1].Replace("0x", ""), NumberStyles.HexNumber)).ToString("X8");
                     case "consolelog": return "ok " + ConsoleLogRead(w.Length > 1 ? int.Parse(w[1], CultureInfo.InvariantCulture) : 0);

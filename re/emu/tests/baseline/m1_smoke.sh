@@ -173,7 +173,7 @@ fi
 
 echo "[7] product runner self-check (g7250-testlist, network bridge, fixtures; stand-in bench)"
 if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
-  if G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
+  if G7250_LOG_RING=0x2401E700 G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
        tests/fakebench/runner-selfcheck.json --run-id smoke-runner >/dev/null 2>&1; then
     ok "runner self-check: all pass (host-only and missing-fixture tests skip)"
   else

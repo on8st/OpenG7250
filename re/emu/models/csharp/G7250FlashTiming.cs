@@ -29,6 +29,7 @@
 // (all-ones writes, FW, INCERR), the bus error of a double ECC error, read-while-write on bank 2.
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Logging;
 using Antmicro.Renode.Peripherals;
@@ -68,6 +69,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                                   direction: Direction.Descending, enabled: false,
                                   workMode: WorkMode.Periodic, eventEnabled: true);
             busy.LimitReached += Done;
+            eccTimer = new LimitTimer(machine.ClockSource, 1000000, this, "flash-ecc", 1UL << 40, direction: Direction.Descending,
+                                      enabled: false, workMode: WorkMode.OneShot, eventEnabled: true);
+            eccTimer.LimitReached += delegate { lock(sync) { eccTimer.Enabled = false; if((lastCr1 & PG) == 0) { if(eccRefresh) DropEccHooks(); eccRefresh = false; RestoreEcc(); } } };
             cut = new LimitTimer(machine.ClockSource, 1000000, this, "flash-cut", 1UL << 40,
                                  direction: Direction.Descending, enabled: false,
                                  workMode: WorkMode.Periodic, eventEnabled: true);
@@ -310,7 +314,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             // from the agent's thread: the hooks are installed at the next timer event
             // (in the start-up script the core does not run yet: at once, so the first read is covered)
             if(atStart) lock(sync) { if(!eccLifted) InstallEcc(w); }
-            else lock(sync) { eccRefresh = true; ScheduleEcc(); }
+            else
+            {
+                // from the agent's thread: the timer is armed outside the lock; the caller waits for EccPending
+                lock(sync) { eccRefresh = true; OpenSpan(); }
+                Arm(eccTimer, 1);
+            }
             return null;
         }
 
@@ -360,17 +369,19 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             eccLifted = true;
             OpenSpan();
         }
-        private LimitTimer eccTimer;
+        private void DropEccHooks()
+        {
+            foreach(var t in eccHooks) machine.SystemBus.RemoveWatchpointHook(t.Item1, t.Item2);
+            eccHooks.Clear();
+            eccLifted = true;
+        }
+        private readonly LimitTimer eccTimer;
+        // a mark set from outside is not in force yet (the next clock step installs it, not while PG is set)
+        public bool EccPending { get { lock(sync) return eccRefresh; } }
         private void ScheduleEcc()
         {
             if(!eccLifted && !eccRefresh) return;
             OpenSpan();
-            if(eccTimer == null)
-            {
-                eccTimer = new LimitTimer(machine.ClockSource, 1000000, this, "flash-ecc", 1UL << 40, direction: Direction.Descending,
-                                          enabled: false, workMode: WorkMode.OneShot, eventEnabled: true);
-                eccTimer.LimitReached += delegate { lock(sync) { eccTimer.Enabled = false; if((lastCr1 & PG) == 0) { if(eccRefresh) LiftEcc(); eccRefresh = false; RestoreEcc(); } } };
-            }
             Arm(eccTimer, 1);
         }
         private void RestoreEcc()
@@ -392,6 +403,49 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             if(eccWords.Count == 0) { eccLifted = false; spanOpen = false; }
             else if(!lifted) ScheduleEcc();
         }
+        // flash.dump: the bank as it is (no ECC event: a debugger's view); hex, or an error
+        public string Dump(long address, int len)
+        {
+            ulong a = (ulong)address;
+            if(len < 1 || len > 32768 || a < FlashBase + 0x20000 || a + (ulong)len > FlashEnd) return "err range";
+            byte[] d;
+            lock(sync) d = machine.SystemBus.ReadBytes(a, len);
+            var sb = new StringBuilder(2 * len + 3);
+            sb.Append("ok ");
+            foreach(var b in d) sb.Append(b.ToString("x2"));
+            return sb.ToString();
+        }
+
+        // flash.fill: bytes of the array set directly (a 32-byte word of only FF is an erased one),
+        // ECC consistent: marks in the range go. No flash.log entry; the shadow follows. Refused
+        // while the image erases or programs.
+        public string FillWords(long address, long len, string hex)
+        {
+            ulong a = (ulong)address;
+            if(len < 32 || (len & 31) != 0 || (a & 31) != 0 || a < FlashBase || a + (ulong)len > FlashEnd) return "err alignment or range";
+            byte[] unit;
+            if(hex == "-") unit = new byte[] { 0xFF };
+            else
+            {
+                if(hex.Length < 2 || (hex.Length & 1) != 0 || len % (hex.Length / 2) != 0) return "err data must divide len";
+                unit = new byte[hex.Length / 2];
+                for(int i = 0; i < unit.Length; i++) unit[i] = Convert.ToByte(hex.Substring(2 * i, 2), 16);
+            }
+            lock(sync)
+            {
+                if(erasing || (lastCr1 & PG) != 0) return "err a flash operation of the image runs";
+                EnsureShadow();
+                CloseProgram();
+                var d = new byte[len];
+                for(int i = 0; i < d.Length; i++) d[i] = unit[i % unit.Length];
+                machine.SystemBus.WriteBytes(d, a);
+                Array.Copy(d, 0, shadow, (int)(a - FlashBase), d.Length);
+                bool gone = false;
+                for(ulong w = a; w < a + (ulong)len; w += 32) gone |= eccWords.Remove(w);
+                if(gone) { eccRefresh = true; ScheduleEcc(); }
+            }
+            return "ok";
+        }
         public string EccList()
         {
             lock(sync)
@@ -406,7 +460,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         {
             lock(sync)
             {
-                bool dbl = eccWords[w];
+                bool dbl;
+                if(!eccWords.TryGetValue(w, out dbl)) return;       // taken away, its watchpoint not yet
                 uint f = dbl ? Flags["DBECCERR"] : Flags["SNECCERR"];
                 if((errFlags & f) != 0) return;
                 errFlags |= f;

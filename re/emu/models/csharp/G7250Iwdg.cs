@@ -64,6 +64,27 @@ namespace Antmicro.Renode.Peripherals.Timers
         public ulong Resets { get { return resets; } }
         public string LastResetCause { get; private set; } = "power";
 
+        // fixture reset.flags {flags}: RCC_RSR bits of the next reset, whatever its cause (RM0468 names)
+        public string NextFlags(string names)
+        {
+            uint v = 0;
+            foreach(var n in names.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                switch(n)
+                {
+                    case "software": v |= SFT1RSTF; break;
+                    case "watchdog": v |= IWDG1RSTF; break;
+                    case "pin": v |= PINRSTF; break;
+                    case "power-on": v |= PORRSTF; break;
+                    case "brown-out": v |= BORRSTF; break;
+                    case "window-watchdog": v |= 1u << 28; break;
+                    case "low-power": v |= 1u << 30; break;
+                    default: return "err unknown flag " + n;
+                }
+            lock(sync) nextFlags = v;
+            return "ok 0x" + v.ToString("X8");
+        }
+        private uint? nextFlags;
+
         // fixture reset.wdt: reset the MCU as a watchdog timeout would
         public void WatchdogReset() { Expire("wdt"); }
 
@@ -82,7 +103,9 @@ namespace Antmicro.Renode.Peripherals.Timers
                 if(hooked)
                 {
                     string cause = pendingCause ?? "software";
-                    rsr |= PINRSTF | (cause == "wdt" ? IWDG1RSTF : SFT1RSTF);
+                    // fixture reset.flags: the next reset shows exactly these flags
+                    rsr = nextFlags.HasValue ? nextFlags.Value : (rsr | PINRSTF | (cause == "wdt" ? IWDG1RSTF : SFT1RSTF));
+                    nextFlags = null;
                     LastResetCause = cause;
                     resets++;
                 }

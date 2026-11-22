@@ -29,7 +29,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import benchnet  # noqa: E402
 
-FORMAT_MINOR = 4
+FORMAT_MINOR = 9
+# in every result and run report; also in the entry of the tests that read a word with a double error
+BUS_FAULT_NOTE = ("not modelled: the bus fault of a double ECC read, flash and retained RAM (flash: only the flags "
+                  "DBECCERR and FLASH_ECC_FA1R are set and the data reads as stored; retained RAM: an ECC error is not "
+                  "modelled at all, no fault status is set and the value is returned). A pass does not show that an image "
+                  "survives the fault, and a run shows nothing about the branch for an unreadable retained word")
+BUS_FAULT_TESTS = {"T-A1-87"}
 
 # Not modelled with a known, limited reach: the image's own console or the log
 # shows it, and only the tests that judge that function are marked; every other
@@ -160,6 +166,7 @@ class Boot:
         self.bridge = benchnet.Bridge(os.path.join(out, "network.pcapng"))
         self.agent = benchnet.Agent(out)
         self.fixtures = benchnet.FixtureServer(lambda: self.agent, self.power_cycle, lambda: self.bridge)
+        self.fixtures.flash_preloaded = bool(self.flash_preload)      # flash.dump is refused then
         self.bridge.now_us = self.agent.now_us
         self.proc = None
         self.dead_pids = set()
@@ -371,7 +378,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
     defaults = spec.get("defaults", {})
     per_list = spec.get("boot") == "per-list"
     results = []
-    run_notes = set()
+    run_notes = {BUS_FAULT_NOTE}
     shared = None
 
     def skip(t, reason):
@@ -519,6 +526,14 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         sp = dict(bt.fixtures.ecc_spans)
         if sp["spans"]:
             e.setdefault("emulator", {})["ecc_spans_not_covered"] = sp
+        if nm and e.get("status") in ("fail", "error"):
+            e["status"] = "error"
+            e["reason"] = "not modelled: " + ", ".join(nm)
+        elif nm and e.get("status") == "pass":
+            e.setdefault("reason", "emulator coverage: not modelled: " + ", ".join(nm))
+        if t["id"] in BUS_FAULT_TESTS and e.get("status") in ("pass", "fail"):
+            e.setdefault("emulator", {}).setdefault("not_modelled", []).append(BUS_FAULT_NOTE)
+            e["reason"] = BUS_FAULT_NOTE + ("; bench: %s" % e["reason"] if e.get("reason") else "")
         rep = crash_reports(test_t0, time.time())
         if rep:
             e.setdefault("emulator", {})["crash_reports"] = rep
@@ -527,11 +542,6 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                            % (", ".join("boot %d, exit code %s" % x for x in died) or "no exit seen",
                               "; crash reports " + ", ".join(rep) if rep else "", e.get("status"), e.get("reason") or ""))
             e["status"] = "error"
-        if nm and e.get("status") in ("fail", "error"):
-            e["status"] = "error"
-            e["reason"] = "not modelled: " + ", ".join(nm)
-        elif nm and e.get("status") == "pass":
-            e.setdefault("reason", "emulator coverage: not modelled: " + ", ".join(nm))
         results.append(e)
     if shared:
         shared.close()

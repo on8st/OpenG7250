@@ -70,6 +70,8 @@ static void wr16(uint16_t a, uint8_t bsb, uint16_t v) { uint8_t b[2] = { (uint8_
  *             counter, TIM5 (32 bits, 1 MHz) and TIM12 (16 bits, 1 MHz, unwrapped in the loop)
  *             -> SR1, cycles, TIM5 us, TIM12 us, worst |cycles / 64 - TIM5| us, polls
  *   FV        the figures of an FC that a reset ended (RAM is kept) -> as FC
+ *   FL n      write a log ring entry n as the product's ring lays it out (ring at 0x2401E700) -> 0
+ *   FK n      read it back -> its word 0 (low), its first text word (low)
  *   FG n      program word n + 1, then read word n at once, and again some us later
  *             -> SR1 after the first read, SR1 after the second
  *   FS        word 9 and SR1 as the very first code of this start read them -> word, SR1
@@ -155,6 +157,17 @@ static uint16_t command(uint8_t *d, uint16_t len)
         return 26;
     }
     if(d[1] == 'S') { a = KEEP(8); b = KEEP(9); }
+    if((d[1] == 'L' || d[1] == 'K') && len >= 3)
+    {
+        uint32_t e = 0x2401E700u + 48u + (d[2] & 63u) * 96u;
+        if(d[1] == 'L')
+        {
+            W32(e) = d[2]; W32(e + 4u) = 1234u; W32(e + 8u) = 72u; W32(e + 12u) = 0;
+            for(uint32_t i = 0; i < 18; i++) W32(e + 16u + 4u * i) = 0x41424344u + i;
+            W32(e + 88u) = 0xC0DEC0DEu; W32(e + 92u) = 0;
+        }
+        a = W32(e); b = W32(e + 16u);
+    }
     if(d[1] == 'G' && len >= 3)
     {
         uint32_t t = S7 + 32u * (d[2] + 1u);

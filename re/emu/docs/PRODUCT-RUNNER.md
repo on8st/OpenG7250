@@ -191,6 +191,20 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   polls the emulated time to the target, so other calls are answered meanwhile.
 - Self-test T-EMU-20.
 
+## Format v1.9 fixtures
+
+`flash.dump`, `flash.fill` (docs/FLASH-model.md), and:
+- `reset.flags {flags: [...]}`: the next MCU reset (not a power cycle, which starts a new
+  emulator with the power-on flags) shows exactly these RCC_RSR flags: software, watchdog, pin,
+  power-on, brown-out, window-watchdog, low-power; `[]` for none. RAM is kept as over any reset;
+  the trace names the true cause.
+- `log.corrupt {seq}`: offered only where the runner was started with `G7250_LOG_RING=<address
+  of the kept ring>`; the address is not in the endpoint. Layout as the product's (docs of the
+  firmware side): little-endian 64-bit words, 48 bytes of header copies, then 64 entries of 96
+  bytes, entry at base + 48 + (seq mod 64) x 96; word 0 is seq (low) and uptime (high). One bit of
+  the first text word is flipped; an entry whose number is not there is refused. A change of the
+  firmware's layout makes the fixture wrong.
+
 ## The emulator process
 
 The runner records an emulator process that ends unasked (any exit code) and the macOS crash

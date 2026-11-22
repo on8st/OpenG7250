@@ -84,8 +84,9 @@ characteristics" (format v1.8 build).
   watches the bank's writes itself while PG is set, and a watchpoint of ours at the same
   addresses left it blind (no EOP, programming unseen): the ECC watchpoints are lifted
   while PG is set (no ECC detection during a program) and put back 1 us after PG is
-  cleared (a read of a marked word within that microsecond shows no error; an ECC word that
-  `flash.ecc` adds is in force at the same point). They are installed only from a timer event:
+  cleared (a read of a marked word within that microsecond shows no error; `flash.ecc` answers when its mark
+  is in force, at the next clock step, with `in_force` false if it is not after 3 s, for
+  instance while PG stays set). They are installed only from a timer event:
   inside a store of the core, a read of the word in the same translated block crashed the
   emulator (found by T-EMU-25; no crash in the fw-01a108d run). **Not covered: reads of a
   marked word while PG is set, or in the microsecond after it or after a `flash.ecc`** (a driver
@@ -122,6 +123,12 @@ characteristics" (format v1.8 build).
   translated block cost about 35 us of host time per poll loop): code fetched from the
   bank during an erase runs up to 10 us before it stalls. Erase entries carry `wall_s`,
   `fetch_stalls`, `sr1_reads` and `instructions`.
+- **flash.dump {address, len}** (v1.9): the bank as it is, hex, at most 32768 bytes; refused
+  below 0x08020000 and when the runner was started with `--flash-preload`; no ECC event.
+- **flash.fill {address, len, data?}** (v1.9): the store sectors (0x080C0000 to 0x080FFFFF)
+  only, 32-byte aligned; data repeated over len, 0xFF without data; ECC marks in the range go,
+  no flash.log entry, kept over power cycles; refused while the image erases or programs. The
+  layer's shadow follows, so the next program entry is the image's own.
 - **slot.corrupt**: one byte of slot 1 (0x08040000) or 2 (0x08080000) XORed in the array
   (no ECC error); `restore` XORs it back, also after power cycles.
 
@@ -134,7 +141,9 @@ Exercised by the self-test T-EMU-23 (net_test "F" commands): faults on erase and
 PGSERR on a write without PG (Renode lets that write reach the array), the
 256-bit write-buffer rules beyond Renode's (all-ones writes, FW, INCERR as
 Renode does them), the flash-word programming duration, the bus error of a
-double ECC error, option bytes programming (refused and logged), bank 2
+double ECC error (an experiment with Renode 1.17's precise bus fault call from a read watchpoint
+set CFSR and BFAR but took no exception, also with BUSFAULTENA set; nothing of it is used), ECC
+errors of the retained RAM, option bytes programming (refused and logged), bank 2
 (absent on the H72x 1 MiB parts).
 
 ## Store checks
