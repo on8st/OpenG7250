@@ -49,6 +49,8 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0071 (accepted 2026-11-22; g7250ctl Q6): the package file, Table M-4 header followed by the image;
   name, writer and host checks (Annex M "Package file"). Test T-A1-93 new. Released builds
   carry a version not used before; development builds are told apart by the image's SHA-256.
+- 0067 addendum (proposed; firmware question): a failed `UPDATE_VERIFY` names `missing-blocks`
+  or `unreadable` before `hash`. A1.8 "Log names".
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 
