@@ -321,11 +321,12 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
         # Renode's zero-filled memory
         'sysbus LoadBinary @%s 0x08000000' % erased_flash(out), 'sysbus LoadELF @%s' % elf]) + [
     ] + ['sysbus LoadBinary @%s 0x%08X' % (f, a) for a, f in (flash_preload if not flash_image else ())] + [
-    ] + ['sysbus.spi1.agent ForceIdrAtBoot "%s" %d' % (p_, l_) for p_, l_ in (boot_forces or [])] + list(boot_lines or []) + [
+    ] + ['sysbus.spi1.agent ForceIdrAtBoot "%s" %d' % (p_, l_) for p_, l_ in (boot_forces or [])] + list(boot_lines or []) + (
+        ['sysbus.flashtiming EraseMipsDivisor %d' % int(os.environ["G7250_ERASE_MIPS_DIV"])] if os.environ.get("G7250_ERASE_MIPS_DIV") else []) + [
         'sysbus.watchdog PowerOnBoot',
         'sysbus.spi1.agent ArmBootHook',
     ] + (['sysbus LogPeripheralAccess sysbus.flashController true', 'logLevel 0 sysbus.flashController']
-         if os.environ.get("G7250_LOG_FLASHCTRL") == "1" else []) + (['emulation SetGlobalAdvanceImmediately true'] if os.environ.get("G7250_ADVANCE_IMMEDIATELY") == "1" else []) + [
+         if os.environ.get("G7250_LOG_FLASHCTRL") == "1" else []) + (['sysbus LogAllPeripheralsAccess true', 'logLevel 0'] if os.environ.get("G7250_LOG_ALL") == "1" else []) + (['emulation SetGlobalAdvanceImmediately true'] if os.environ.get("G7250_ADVANCE_IMMEDIATELY") == "1" else []) + [
         'start',
     ]
     return "\n".join(lines) + "\n"

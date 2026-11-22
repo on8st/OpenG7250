@@ -31,7 +31,8 @@ characteristics" (format v1.8 build).
   with a duration state it as a stand-in.
 - An instruction fetch from the flash bank (0x08000000–0x080FFFFF) while the
   erase is busy stalls the core until the erase ends, as the bus does on the
-  single-bank H72x; timers, the watchdog and DMA keep running. Each such fetch
+  single-bank H72x (found by a PC sample every 10 us, see below); timers, the
+  watchdog and DMA keep running. Each such fetch
   is counted (`FetchesDuringErase`, `FirstFetchPc`).
 - At each erase start PRIMASK and the watchdog's refresh count are recorded;
   at the end the refreshes during the erase (store check ST-05).
@@ -80,14 +81,22 @@ characteristics" (format v1.8 build).
 - **power.cut {after_flash_words | during_erase | at_address}**: the layer stops the core
   at the k-th programmed word, at that fraction of the next erase, or at the programming of
   that word; the runner then power-cycles as for `power.cut {at_us}`.
-- **Speed device during an erase**: the product image polls SR1 from RAM while an
-  erase is busy (no stalled fetches), one C# bus access per poll, and the emulation
-  ran at about 0.13 of real time (a 1.1 s erase took 8.5 s wall, longer than the
-  bench's retransmissions). For the erase the core's MIPS is divided by
-  `EraseMipsDivisor` (10): each instruction takes ten times its emulated time, the
-  erase passes in about 1.8 s wall. The image's own work during an erase (its
-  watchdog refreshes, its network service) therefore runs ten times slower in
-  emulated time than on the radio. Erase entries carry `wall_s` and `fetch_stalls`.
+- **CPU speed during an erase**: as at all other times (one instruction per core
+  clock cycle, docs/CLOCKS-model.md). During an erase fw-e518331 runs its TX path
+  check from RAM: per SR1 poll some 270 instructions and 27 peripheral accesses (MODER,
+  OTYPER, ODR, IDR of six GPIO ports, the watchdog, DWT, SR1), each a C# model call, and
+  the emulation runs at about 0.22 of real time (a 1.1 s erase in 4.9 s wall). There is
+  no cheap path for these accesses in Renode. The bench's waits across an erase must be
+  in emulated time or allow for this.
+  `G7250_ERASE_MIPS_DIV=N` (opt-in, off by default) divides the core's MIPS by N during
+  an erase for speed; each test with an erase is then marked "not modelled: CPU speed
+  during flash work (MIPS/N)" (result reason and `emulator.not_modelled`) and every erase
+  entry carries `core_mips_divisor`: no result timed inside an erase counts as evidence.
+- **Fetch stalls**: an instruction fetch from the bank during an erase stalls the core
+  until the erase ends. The PC is sampled every 10 us of emulated time (a hook at every
+  translated block cost about 35 us of host time per poll loop): code fetched from the
+  bank during an erase runs up to 10 us before it stalls. Erase entries carry `wall_s`,
+  `fetch_stalls`, `sr1_reads` and `instructions`.
 - **slot.corrupt**: one byte of slot 1 (0x08040000) or 2 (0x08080000) XORed in the array
   (no ECC error); `restore` XORs it back, also after power cycles.
 

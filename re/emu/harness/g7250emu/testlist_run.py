@@ -395,6 +395,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         except ValueError:
             pass
         nm = pr.not_modelled(bt.log) if os.path.isfile(bt.log) else []
+        flash_note = None
         macraw = macraw_seen(bt.log)
         if macraw:
             run_notes.add(MACRAW_NOTE)
@@ -408,6 +409,11 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             with open(os.path.join(tdir, "flash-log.jsonl"), "w") as f:
                 for e in bt.fixtures.fl_entries:
                     f.write(json.dumps(e) + "\n")
+            div = int(os.environ.get("G7250_ERASE_MIPS_DIV") or 1)
+            if div > 1 and any(e.get("op") in ("erase", "bank_erase") for e in bt.fixtures.fl_entries):
+                flash_note = ("not modelled: CPU speed during flash work (MIPS/%d): the image's own work during an erase "
+                              "(TX path samples, watchdog feeds) ran %d times slower in emulated time; no result timed "
+                              "inside an erase counts as evidence" % (div, div))
         except Exception:  # noqa: BLE001
             pass
         if os.environ.get("G7250_DUMP_FLASH_END") == "1":      # diagnostics: the flash as the test left it
@@ -457,6 +463,9 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             em = e.setdefault("emulator", {})
             em["max_delivery_shift_us"] = max(b["max_shift_us"] for b in bursts)
             em["bursts"] = [b for b in bursts if b["count"] >= 3 or b["max_shift_us"] or b["dropped"]]
+        if flash_note:
+            e.setdefault("emulator", {}).setdefault("not_modelled", []).append(flash_note)
+            e["reason"] = flash_note + ("; bench: %s" % e["reason"] if e.get("reason") else "")
         if macraw and t["id"] in MACRAW_TESTS:
             if e.get("status") in ("fail", "error"):
                 e["status"] = "error"

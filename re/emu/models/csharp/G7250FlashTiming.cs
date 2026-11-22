@@ -362,16 +362,14 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 + (bank ? "" : ", \"sector\": " + Sector(eraseAddr) + ", \"address\": \"0x" + eraseAddr.ToString("X8") + "\", \"len\": " + eraseSize)
                 + ", \"t_end_us\": " + tEnd + ", \"result\": \"" + result + "\"" + eraseResultExtra + ", \"fpga_bus\": \"" + eraseFpga + "\""
                 + ", \"wall_s\": " + (DateTime.UtcNow - eraseWall0).TotalSeconds.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture)
-                + ", \"fetch_stalls\": " + FetchesDuringErase + "}";
+                + ", \"fetch_stalls\": " + FetchesDuringErase + ", \"sr1_reads\": " + sr1InErase + ", \"instructions\": " + (Instr() - instr0)
+                + (EraseMipsDivisor > 1 ? ", \"core_mips_divisor\": " + EraseMipsDivisor : "") + "}";
         }
         private string eraseFpga = "unknown";
 
-        // While an erase is busy the image polls SR1 (a C# bus access each time) and the
-        // emulation ran at about 0.13 of real time. The core's MIPS is divided by
-        // EraseMipsDivisor for the erase: each instruction then takes that much more
-        // emulated time, so the erase passes faster in wall time; the image's own work during
-        // an erase runs that much slower in emulated time (a speed device, docs/FLASH-model.md).
-        public int EraseMipsDivisor { get; set; } = 10;
+        // Diagnostics only (default 1, off): the core's MIPS divided by EraseMipsDivisor during
+        // an erase. The slow erases came from the per-block fetch hook, now a PC sample.
+        public int EraseMipsDivisor { get; set; } = 1;   // 1: off (diagnostics only)
         private readonly Dictionary<object, uint> savedMips = new Dictionary<object, uint>();
         private void SlowCore(bool on)
         {
@@ -394,6 +392,16 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             }
         }
         private DateTime eraseWall0;
+        private ulong sr1InErase, instr0;
+        private ulong Instr()
+        {
+            foreach(var cpu in machine.SystemBus.GetCPUs())
+            {
+                var p = cpu.GetType().GetProperty("ExecutedInstructions");
+                if(p != null) return Convert.ToUInt64(p.GetValue(cpu));
+            }
+            return 0;
+        }
         public ulong TornWord { get; private set; }
 
         // power.cut {at_address}: the cut lands on the programming of that flash word
@@ -522,7 +530,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 lock(sync)
                 {
                     value |= errFlags | (pendingEop ? EOP : 0u);
-                    if(erasing) return value | BSY | QW;
+                    if(erasing) { sr1InErase++; return value | BSY | QW; }
                     // a flash word programmed: the controller reports EOP; counted once
                     // until the image clears EOP through CCR1
                     if((value & EOP) != 0 && (lastCr1 & PG) != 0) EopReads++;
@@ -542,6 +550,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             eraseT0 = NowUs();
             eraseFpga = FpgaBus();
             eraseWall0 = DateTime.UtcNow;
+            sr1InErase = 0; instr0 = Instr();
             eraseResultExtra = "";
             bool fault = TakeFault("erase");
             eraseFaultFlag = fault ? faultFlag : null;
@@ -625,26 +634,43 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             this.Log(LogLevel.Info, "flash: erase done; fetches from flash during it: {0}; watchdog refreshes during it: {1}", FetchesDuringErase, RefreshesDuringLastErase);
         }
 
-        // an instruction fetch from the bank while the erase runs: stall until it ends
+        // an instruction fetch from the bank while the erase runs: stall until it ends. The PC
+        // is sampled every FetchSampleUs of emulated time (a hook at every translated block
+        // cost a C# call per block, about 35 us of host time per poll loop of the image): code
+        // fetched from the bank during an erase runs up to FetchSampleUs before it stalls.
+        public int FetchSampleUs { get; set; } = 10;
+        private LimitTimer fetchSampler;
         private void SetBlockHook(bool on)
         {
             if(on == blockHook) return;
             blockHook = on;
+            if(fetchSampler == null)
+            {
+                fetchSampler = new LimitTimer(machine.ClockSource, 1000000, this, "flash-fetch", (ulong)Math.Max(1, FetchSampleUs),
+                                              direction: Direction.Descending, enabled: false,
+                                              workMode: WorkMode.Periodic, eventEnabled: true);
+                fetchSampler.LimitReached += SampleFetch;
+            }
+            fetchSampler.Enabled = on;
+        }
+
+        private void SampleFetch()
+        {
+            if(!erasing || stalled) return;
             foreach(var cpu in machine.SystemBus.GetCPUs())
             {
-                var m = cpu.GetType().GetMethod("SetHookAtBlockBegin");
-                if(m == null) continue;
-                Action<ulong, uint> h = null;
-                if(on) h = (pc, size) =>
+                var pp = cpu.GetType().GetProperty("PC");
+                if(pp == null) continue;
+                object v = pp.GetValue(cpu);
+                var raw = v.GetType().GetProperty("RawValue");
+                ulong pc = raw != null ? Convert.ToUInt64(raw.GetValue(v)) : Convert.ToUInt64(v);
+                if(pc >= FlashBase && pc < FlashEnd)
                 {
-                    if(erasing && pc >= FlashBase && pc < FlashEnd)
-                    {
-                        if(FetchesDuringErase == 0) FirstFetchPc = pc;
-                        FetchesDuringErase++;
-                        if(!stalled) { stalled = true; cpu.IsHalted = true; }
-                    }
-                };
-                m.Invoke(cpu, new object[] { h });
+                    if(FetchesDuringErase == 0) FirstFetchPc = pc;
+                    FetchesDuringErase++;
+                    stalled = true;
+                    cpu.IsHalted = true;
+                }
             }
         }
 
