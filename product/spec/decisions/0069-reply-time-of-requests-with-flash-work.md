@@ -1,7 +1,8 @@
 # 0069 — Reply time of requests that do flash work
 
 - Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
-  addendum on the start check proposed 2026-11-22; proposed 2026-11-22; answers a spec gap found by the emulator's flash model
+  addendum on the start check accepted (ON8ST, 2026-11-22, as at `78aa233`); proposed
+  2026-11-22; answers a spec gap found by the emulator's flash model
   (relayed by the openg7250 session, 2026-11-22)
 - Date: 2026-11-22
 - Builds on: 0020 §24 (retransmission), §27 (stored reply), 0055 (flash work), 0063, 0065
@@ -86,7 +87,7 @@ window for every management request that may do flash work.
    store sector holds the old secret, and the reset comes within 17 s of the reply. T-A1-92
    (new): the old secret after `CHANGE_SECRET`.
 
-## Addendum: the start check after a fall-back, and torn records (proposed, 2026-11-22)
+## Addendum: the start check after a fall-back, and torn records (accepted by ON8ST, 2026-11-22)
 
 Two firmware readings, relayed by the openg7250 session, 2026-11-22.
 

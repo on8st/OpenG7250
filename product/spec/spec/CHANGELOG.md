@@ -9,6 +9,7 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0067, 0068, 0069, 0070 and 0071 accepted by ON8ST on 2026-11-22, as they stand at `f3c15c1`.
 - The 0067 addenda (log words; full store, status 64) and the 0068 addendum (build readings)
   accepted by ON8ST on 2026-11-22.
+- The 0069 addendum (start check) accepted by ON8ST on 2026-11-22, as it stands at `78aa233`.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
   "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
@@ -61,7 +62,7 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   every reset without power loss sets a flag, before P-SYS-9 is set; oldest entry failing means
   log lost; the `ROLLBACK` line is logged last before the reset; fallback line `boot: fallback
   to slot <s> (active slot refused, no trial)`. A1.7, A1.8, A3.5, P-SYS-2; T-A1-90, T-A1-91.
-- 0069 addendum (proposed; firmware readings): after a fall-back the start check erases the
+- 0069 addendum (accepted 2026-11-22; firmware readings): after a fall-back the start check erases the
   sector with the failed newer generation (meant); the start check also erases a non-live
   sector holding data it cannot place in a complete record, so no part of an old secret
   survives the next start. A1.10; T-A1-92. The start check runs only with a live generation;

@@ -798,7 +798,7 @@ A1.10 **Security on a LAN** (0008, Security):
   and log `store: stale secret erased`; it MUST also erase it, logged `store: non-live sector
   erased (unrecognised data)`, when it is not fully erased and holds any word the store cannot
   place in a complete, checked record (a torn record may hold part of a secret; 0069
-  addendum, proposed 2026-11-22); a non-live sector holding only complete records with no
+  addendum, accepted 2026-11-22); a non-live sector holding only complete records with no
   secret other than the live one is left. The start check is done only when the live sector
   holds a complete generation of this firmware's store: one with a readable commit word, or
   the store's first generation (which has no commit word) with at least one record that passes
