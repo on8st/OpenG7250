@@ -64,7 +64,13 @@ A1.3–A1.10 as the only protocol. Its reference implementation is a standalone 
 tool, `g7250ctl` (planned at `product/tools/g7250ctl/`, GPL-3.0-or-later): identify, show version
 and state, install an image (new firmware or an owner-supplied stock image, A1.8a), verify,
 activate, abort, rollback, return to stock (the streaming installation of A1.8a item 3), read
-logs, set the first secret. It MUST pass every A1 conformance test of Annex X3 against the reference model (0019).
+logs, set the first secret. It MUST drive every command of Table A1-2 against the reference model
+(0019), and the host-side behaviour it implements MUST be tested there: request ids and
+retransmission (A1.4, with the flash-work window of 0069), authentication and the
+`CHANGE_SECRET` mask (A1.10), the update sequence (A1.8: the package for the slot not running,
+every block again after a failed verify), and the package file checks (Annex M "Package file")
+(T-A1-93; 0070). The T-A1 tests of Annex X3 are tests of the radio; `g7250ctl` may be the host
+that runs them.
 AetherSDR's firmware page uses the same protocol and follows the CLI (annex Q-O4). The very first
 install, on a radio still running stock firmware, cannot use this protocol; it goes once through
 the vendor path on the controller (A1.8a item 9; 0028).
@@ -3724,6 +3730,16 @@ Table M-4 — Package header (A1.8), the payload of `UPDATE_BEGIN` after the fla
 | 50–51 | signature length, 0 in this version (A1.8, U-4) |
 | 52 | target slot: 0 either slot (or a foreign image), 1 slot A, 2 slot B (A1.8, slot-linked images; 0043) |
 
+**Package file** (0071). A package file is the 53 bytes of Table M-4 followed immediately by the
+image and nothing else; its length is 53 + bytes 14–17, no signature bytes follow (bytes 50–51
+are 0, U-4), and the SHA-256 of bytes 18–49 is over the image bytes. Name, for an image of this
+firmware: `g7250-<major>.<minor>.<build>-slot-<a|b>.g7pk` (a convention; a host reads the header).
+The firmware build writes them, one per slot (0043); for a foreign image the host builds the
+header at install time (A1.8a) and MAY save it in the same layout. A host MUST refuse a file
+whose length, magic, header version, signature length or image hash does not match, before it
+sends anything. It sends bytes 0–52 as the `UPDATE_BEGIN` payload after the flags byte and the
+image as the blocks, block *n* being image bytes 512 *n* to 512 *n* + 511.
+
 Table M-5 — Calibration entries (A1.12)
 
 | Field | Content |
@@ -3993,6 +4009,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-87 | A double ECC error in a record of the live store sector, and one in the newest commit word: the store opens without a fault or reset, uses the older record or the previous generation, logs it, and later writes skip the word; an item with no readable record takes its Table A1-4 value (emulator, if it models flash ECC; A1.6 "Store writes"; 0065). |
 | T-A1-91 | Each commanded reset (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`, the trial's 60 s limit, the abandonment after `UPDATE_ABORT`) leaves its `restart:` line as the last entry before the start entry; after a trial that resets before confirming, `boot: rollback to slot <s> (trial not confirmed)` follows the start entry; a watchdog reset keeps the entries before it, followed by `start after watchdog: log kept`; a power cycle gives `start after power-on: log lost` with sequence numbers from 0; a kept ring with one entry corrupted keeps the entries before it and drops it and those after (reference model or emulator; A1.7 "Kept over a reset"; 0068). |
 | T-A1-92 | On the emulator, after the reply to `CHANGE_SECRET` the flash dump shows the new secret only in the live store sector and the old secret only in the other, stale sector; after a `RESTART`, and after a power cycle, neither sector holds the old secret, and flash.log shows the stale sector erased before the management socket opens, with `store: stale secret erased` in the log; a non-live sector that holds only the live secret is not erased at start; after a `FACTORY_RESET` whose second erase was made to fail, the next start erases the sector with the old secret; a `SET_CONFIG` that needs a compaction before any restart erases the stale sector then; each reply within 15 s with one erase per request; with the new generation's commit word made unreadable before the restart, the store falls back, keeps the stale sector and logs it (A1.10 "The old secret in flash"; B2.3 "Flash work"; 0069). |
+| T-A1-93 | `g7250ctl` against the reference model: every command of Table A1-2 is sent; a lost reply is retransmitted with the same request id and payload every 500 ms, 5 times, and for a request that may do flash work for at least 16 s, while every new request gets a new id; each authenticated request uses one fresh challenge and `CHANGE_SECRET` sends the masked secret; an update picks the package for the slot not running (tag 23), after a failed verify sends every block again in order with new ids, and confirms the result with `IDENTIFY` after the reset; package files with a wrong length, magic, header version, signature length or hash are refused before `UPDATE_BEGIN` (reference model; A1.1a; Annex M "Package file"; 0070, 0071). |
 | T-A1-88 | Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header, one of them an intact image with 32 bytes appended (header length and hash adjusted), which the log names `header`, not `integrity`. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending every block again with new request ids, in order, replaces the received data and the next verify succeeds; a block sent again alone is accepted and written, and `UPDATE_STATUS` shows any blocks the radio counts as not received again (reference model or emulator; A1.8 "Image check", "`UPDATE_VERIFY`"; 0067). |
 | T-A1-89 | `IDENTIFY` tag 9 for the other slot: 1 after a good verify; 0 from the first erase of `UPDATE_BEGIN`, after `UPDATE_ABORT` and after a failed verify, also after a restart; 2 when one byte of a confirmed other image is changed and the radio restarts; `ROLLBACK` with the other slot at 0 or 2 gets 55 and changes nothing; after a trial that failed to confirm itself, tag 9 for that slot stays 1 and `ROLLBACK` to it is accepted and starts it as a trial (reference model or emulator; A1.8 "Integrity in `IDENTIFY`"; 0067). |
 | T-A1-90 | One byte of the staged image changed after a good verify and `UPDATE_ACTIVATE`: the boot stage does not start the trial slot, starts the previous image, logs `boot: slot B refused: integrity` (slot named by its letter) and the rollback, and tag 10 reports 2; one byte of the confirmed active image changed with a good other slot: the other slot starts without a trial and the change is logged; both slots changed: the boot stage holds the safe state and the radio does not answer (emulator; A1.8 "Boot-stage refusals"; 0067). |
