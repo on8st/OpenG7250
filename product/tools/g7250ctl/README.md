@@ -85,10 +85,23 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   most twice.
 - A failed `UPDATE_VERIFY` (55): every block is sent again, in order, with new request ids,
   and verified again (`--verify-retries`, default 1; 0067).
-- A status that ends the transfer: `UPDATE_ABORT`; the radio then stays in the update state
-  until a restart (`abort --restart`, or `restart`). If the radio stops answering, the
-  transfer is left as it is: `install --resume` within 10 min continues from the blocks
-  received (`UPDATE_STATUS`).
+- A status that ends the transfer: the tool reads `UPDATE_STATUS`, and sends `UPDATE_ABORT`
+  only if a transfer is in progress; the radio then stays in the update state until a
+  restart (`abort --restart`, or `restart`). A radio that restarted during the transfer has
+  none (it answers the retransmitted block with 33, because its challenge did not survive the
+  reset): nothing is aborted, and the install is started again. If the radio stops
+  answering, the transfer is left as it is: `install --resume` within 10 min continues from
+  the blocks received (`UPDATE_STATUS`).
+- `--resume` can compare only the block count, because `UPDATE_STATUS` gives no hash or
+  version. A transfer of another package with the same number of blocks is therefore
+  continued too, and then fails at the verify (55): every block is sent again, the verify
+  fails again, and the transfer is aborted. Resume only the install that broke off.
+- A request that ends in a reset (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`)
+  loses its stored reply in the reset (Table A1-4). After a lost reply, a 33 to a
+  retransmission or no reply at all is resolved with `IDENTIFY`, never with another request:
+  an uptime below the one read just before shows the reset, and after `UPDATE_ACTIVATE` and
+  `ROLLBACK` so does a changed running slot (tag 23), which is the only evidence when the
+  request came a moment after a start. Once verified, an install never sends `UPDATE_ABORT`.
 - After `UPDATE_ACTIVATE` the tool waits for the reset and reads the result back: the new
   version runs in the target slot, as a trial, until it has confirmed itself (0044), or the
   rollback is reported. `--no-wait` skips this.

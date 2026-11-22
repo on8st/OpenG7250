@@ -252,9 +252,9 @@ pub fn switch_level(client: &mut Client, to: SocketAddr, secret: &Secret, level:
 
 /// `RESTART` (A1.9) or `FACTORY_RESET` (A1.6a): the reset ends the write session, so no
 /// `END_WRITE_SESSION` follows. A refusal (59 RF present, 35, ...) is reported; then the
-/// session is ended if one may be held. Returns `Some(uptime before)` to wait from, or `None`
-/// if the reset has already been seen (a lost reply, [`resetting`]).
-pub fn reset(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command) -> Result<Option<u32>, Failure> {
+/// session is ended if one may be held. Returns `Some(before)` to wait from, or `None` if the
+/// reset has already been seen (a lost reply, [`resetting`]).
+pub fn reset(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command) -> Result<Option<Before>, Failure> {
     debug_assert!(matches!(cmd, Command::Restart | Command::FactoryReset));
     match resetting(client, to, secret, cmd, &[])? {
         Resetting::ResetSeen => Ok(None),
@@ -268,12 +268,32 @@ pub fn reset(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command)
     }
 }
 
+/// What `IDENTIFY` showed just before a request that ends in a reset: the evidence a later
+/// `IDENTIFY` is compared with to see that the reset happened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Before {
+    /// Tag 12 (ms). An uptime below it shows a restart.
+    pub uptime_ms: u32,
+    /// Tag 23, compared only when `slot_changes`: after `UPDATE_ACTIVATE` and `ROLLBACK` the
+    /// other slot runs, so a changed running slot also shows the reset. It is the only evidence
+    /// when the request came so soon after a start that the new uptime is not yet below the old.
+    pub running_slot: u8,
+    pub slot_changes: bool,
+}
+
+impl Before {
+    /// Whether `IDENTIFY` with this uptime and running slot shows the reset.
+    pub fn restarted(&self, uptime_ms: u32, running_slot: u8) -> bool {
+        uptime_ms < self.uptime_ms || (self.slot_changes && running_slot != self.running_slot)
+    }
+}
+
 /// The outcome of a request that ends in a commanded reset.
 #[derive(Debug)]
 pub enum Resetting {
-    /// The reply came (any status); with the uptime read just before the request, for
+    /// The reply came (any status); with what `IDENTIFY` showed just before the request, for
     /// [`wait_for_restart`].
-    Answered(Answer, u32),
+    Answered(Answer, Before),
     /// The reply was lost, but `IDENTIFY` shows the radio restarted: the request ran.
     ResetSeen,
 }
@@ -285,12 +305,13 @@ pub const RESET_PROBE: std::time::Duration = std::time::Duration::from_secs(30);
 /// `UPDATE_ACTIVATE`, `ROLLBACK`). Its stored reply does not survive the reset (Table A1-4), so
 /// if the reply is lost, a retransmission after the reset meets a spent challenge and gets 33,
 /// or gets no reply at all while the radio restarts. Either is ambiguous: the request may have
-/// run. The radio is then asked with `IDENTIFY` whether it restarted (uptime below the one
-/// read before the request). A 33 to the first send is a plain authentication failure.
+/// run. The radio is then asked with `IDENTIFY` whether it restarted ([`Before::restarted`]).
+/// A 33 to the first send is a plain authentication failure.
 pub fn resetting(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command, payload: &[u8]) -> Result<Resetting, Failure> {
     let before = {
         let a = reads::identify(client, to)?;
-        g7250_proto::mgmt::payload::Identify::decode(&a.payload).expect("checked by reads::identify").uptime_ms
+        let i = g7250_proto::mgmt::payload::Identify::decode(&a.payload).expect("checked by reads::identify");
+        Before { uptime_ms: i.uptime_ms, running_slot: i.running_slot, slot_changes: matches!(cmd, Command::UpdateActivate | Command::Rollback) }
     };
     let ambiguous = |r: &Result<Answer, Failure>| match r {
         Ok(a) => a.status_code == 33 && a.sends > 1,
@@ -304,15 +325,15 @@ pub fn resetting(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Comm
     r.map(|a| Resetting::Answered(a, before))
 }
 
-/// After a reset: wait until the radio answers `IDENTIFY` again with an uptime below `before`
-/// (it has restarted), within `limit`. Returns the new uptime in ms.
-pub fn wait_for_restart(client: &mut Client, to: SocketAddr, before_ms: u32, limit: std::time::Duration) -> Result<u32, Failure> {
+/// After a reset: wait until the radio answers `IDENTIFY` again showing the reset
+/// ([`Before::restarted`]), within `limit`. Returns the new uptime in ms.
+pub fn wait_for_restart(client: &mut Client, to: SocketAddr, before: Before, limit: std::time::Duration) -> Result<u32, Failure> {
     let end = std::time::Instant::now() + limit;
     loop {
         match reads::identify(client, to) {
             Ok(a) => {
                 let i = g7250_proto::mgmt::payload::Identify::decode(&a.payload).expect("checked by reads::identify");
-                if i.uptime_ms < before_ms {
+                if before.restarted(i.uptime_ms, i.running_slot) {
                     return Ok(i.uptime_ms);
                 }
             }

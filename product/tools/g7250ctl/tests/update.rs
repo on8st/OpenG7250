@@ -100,6 +100,12 @@ struct Radio {
     trial_rolls_back: bool,
     /// Lose the reply to UPDATE_ACTIVATE; the reset then discards the stored replies.
     drop_activate_reply: bool,
+    /// Restart while handling this block: the transfer, challenges and stored replies are
+    /// lost, and so is the reply (the block was not taken).
+    restart_on_block: Option<u32>,
+    /// The uptime a reset starts from (0 by default). Above the uptime before the request, it
+    /// models a request made a moment after a start: only the running slot shows the reset.
+    reset_uptime: u32,
     old: ([u8; 4], u8),
     seen: Vec<Seen>,
 }
@@ -184,6 +190,14 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
                 r.silent_from_block = None;
                 return None;
             }
+            if r.restart_on_block == Some(num) {
+                r.restart_on_block = None;
+                r.transfer = None;
+                r.challenges.clear();
+                stored.clear();
+                r.uptime = r.reset_uptime;
+                return None;
+            }
             let Some(t) = r.transfer.as_mut() else { return Some(reply_of(54, &[])) };
             let crc = u32::from_be_bytes(payload[4..8].try_into().unwrap());
             let data = &payload[8..];
@@ -194,7 +208,6 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
                 r.crc_on_block.remove(i);
                 reply_of(53, &[])
             } else if r.write_fail_on_block == Some(num) {
-                r.transfer = None;
                 reply_of(55, &[])
             } else if crc != crc32(data) || num as usize >= t.blocks.len() {
                 reply_of(53, &[])
@@ -234,7 +247,7 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
                 r.running = t.header[10..14].try_into().unwrap();
                 r.running_slot = 3 - r.running_slot;
                 r.update_state = 1;
-                r.uptime = 0;
+                r.uptime = r.reset_uptime;
                 if r.drop_activate_reply {
                     r.drop_activate_reply = false;
                     stored.clear();
@@ -270,7 +283,7 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
             r.running_slot = 3 - r.running_slot;
             r.running = [1, 0, 0, 1];
             r.update_state = 1;
-            r.uptime = 0;
+            r.uptime = r.reset_uptime;
             reply_of(0, &[])
         }
         _ => reply_of(16, &[]),
@@ -500,6 +513,54 @@ fn write_failure_on_a_block_aborts() {
     let f = update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |_| {}).unwrap_err();
     assert!(f.to_string().contains("status 55"), "{f}");
     assert!(cmds(&st).contains(&0x44));
+}
+
+#[test]
+fn a_radio_that_restarts_during_the_transfer_is_not_sent_an_abort() {
+    // The reply to block 2 is lost in the restart; the retransmission meets a spent challenge
+    // and gets 33. UPDATE_STATUS then shows no transfer, so no UPDATE_ABORT is sent.
+    let img = image(512 * 4);
+    let (addr, st) = start(Radio { restart_on_block: Some(2), ..radio(1) });
+    let mut ev = Vec::new();
+    let f = update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |e| ev.push(e)).unwrap_err();
+    assert!(matches!(&f, Failure::Status(a, _) if a.status_code == 33), "{f}");
+    let c = cmds(&st);
+    assert!(!c.contains(&0x44), "no abort: {c:x?}");
+    assert_eq!(c.last(), Some(&0x45), "UPDATE_STATUS decided it: {c:x?}");
+    assert!(ev.contains(&Event::NoTransfer { state: 0 }), "{ev:?}");
+    assert!(!st.lock().unwrap().aborted);
+}
+
+#[test]
+fn a_failure_with_a_transfer_in_progress_reads_update_status_then_aborts() {
+    let img = image(512 * 3);
+    let (addr, st) = start(Radio { write_fail_on_block: Some(1), ..radio(1) });
+    let mut ev = Vec::new();
+    update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |e| ev.push(e)).unwrap_err();
+    let c = cmds(&st);
+    let at = c.iter().position(|x| *x == 0x44).expect("aborted");
+    assert_eq!(c[at - 2..at], [0x45, 0x10], "UPDATE_STATUS, then the challenge for the abort: {c:x?}");
+    assert!(ev.contains(&Event::Aborted { restart_needed: true }), "{ev:?}");
+}
+
+#[test]
+fn an_activation_just_after_a_start_is_seen_by_the_running_slot() {
+    // The radio started a moment ago (uptime 0) and its reset starts from a higher uptime, so
+    // the uptime never falls below the one read before; the running slot changed.
+    let img = image(512 * 2);
+    let (addr, st) = start(Radio { uptime: 0, reset_uptime: 5_000, drop_activate_reply: true, ..radio(1) });
+    let t = std::time::Instant::now();
+    update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |_| {}).unwrap();
+    assert!(t.elapsed() < Duration::from_secs(10), "no wait for the 30 s probe: {:?}", t.elapsed());
+    let r = st.lock().unwrap();
+    assert_eq!((r.running_slot, r.update_state, r.aborted), (2, 0, false));
+}
+
+#[test]
+fn a_rollback_just_after_a_start_is_seen_by_the_running_slot() {
+    let (addr, st) = start(Radio { uptime: 0, reset_uptime: 5_000, ..radio(2) });
+    assert_eq!(update::rollback(&mut client(), addr, &Secret(SECRET), waits(), &mut |_| {}).unwrap(), 1);
+    assert_eq!(st.lock().unwrap().update_state, 0);
 }
 
 #[test]

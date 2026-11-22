@@ -135,13 +135,18 @@ pub enum Event {
     /// The radio stopped answering during the transfer; it is left as it is, so that
     /// `install --resume` can continue it within 10 min (A1.8).
     LeftForResume,
+    /// After a failure, `UPDATE_STATUS` showed no transfer in progress (state 0 idle, or the
+    /// installer): the radio restarted during the transfer, so nothing was aborted.
+    NoTransfer { state: u8 },
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
     /// Set the downgrade flag (A1.8, U-8): needed for an image older than the running one.
     pub downgrade: bool,
-    /// Continue a transfer that `UPDATE_STATUS` shows in progress for this package.
+    /// Continue a transfer that `UPDATE_STATUS` shows in progress for this package. Only the
+    /// block count can be compared (`UPDATE_STATUS` gives no hash): a transfer of another
+    /// package with the same count is continued too, and then fails at the verify (55).
     pub resume: bool,
     /// How many times a failed verify leads to sending every block again (0067).
     pub verify_retries: u32,
@@ -271,6 +276,22 @@ fn should_abort(f: &Failure) -> bool {
     !matches!(f, Failure::Transport(transport::Error::NoReply { .. }) | Failure::Transport(transport::Error::Io(_)))
 }
 
+/// After a failed transfer: `UPDATE_ABORT` only if `UPDATE_STATUS` shows a transfer in
+/// progress (receiving or verified). A radio that restarted during the transfer has none: it
+/// answers the retransmitted block with 33 (its challenge did not survive the reset), and an
+/// abort would only put it in the update state ("RESTART needed") for nothing.
+fn abort_in_progress(client: &mut Client, to: SocketAddr, secret: &Secret, ev: &mut dyn FnMut(Event)) {
+    match update_status(client, to) {
+        Ok(st) if matches!(st.state, 1 | 2) => {
+            if let Ok(restart_needed) = abort(client, to, secret) {
+                ev(Event::Aborted { restart_needed });
+            }
+        }
+        Ok(st) => ev(Event::NoTransfer { state: st.state }),
+        Err(_) => ev(Event::LeftForResume),
+    }
+}
+
 /// Install a package of this firmware: choose, transfer, verify, activate, and (with
 /// `opts.wait`) read the result back.
 pub fn install(
@@ -293,7 +314,7 @@ pub fn install(
     // run (its reply lost), and an abort would then hit the new image. The transfer stays
     // verified; `install --resume` verifies and activates again.
     let mut verified = false;
-    // The uptime before the activation, or None once the reset has been seen.
+    // What IDENTIFY showed before the activation, or None once the reset has been seen.
     let mut restart_from = None;
     if opts.resume {
         let st = update_status(client, to)?;
@@ -353,9 +374,7 @@ pub fn install(
         } else if verified {
             ev(Event::LeftForResume);
         } else if should_abort(&f) {
-            if let Ok(restart_needed) = abort(client, to, secret) {
-                ev(Event::Aborted { restart_needed });
-            }
+            abort_in_progress(client, to, secret, ev);
         } else {
             ev(Event::LeftForResume);
         }
@@ -376,13 +395,13 @@ pub fn install(
 pub fn confirm(
     client: &mut Client,
     to: SocketAddr,
-    uptime_before: Option<u32>,
+    before: Option<writes::Before>,
     slot: u8,
     version_want: Option<Version>,
     w: Waits,
     ev: &mut dyn FnMut(Event),
 ) -> Result<(), Failure> {
-    if let Some(before) = uptime_before {
+    if let Some(before) = before {
         writes::wait_for_restart(client, to, before, w.restart)?;
     }
     ev(Event::Restarted);

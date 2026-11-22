@@ -310,7 +310,7 @@ fn reset(json: bool, policy: g7250ctl::transport::Policy, addr: &str, s: &Secret
         return done(json, &format!("{what} accepted"));
     }
     let waited = match from {
-        Some(up) => writes::wait_for_restart(&mut c, to, up, Duration::from_secs(limit)),
+        Some(before) => writes::wait_for_restart(&mut c, to, before, Duration::from_secs(limit)),
         None => reads::identify(&mut c, to).map(|a| Identify::decode(&a.payload).map(|i| i.uptime_ms).unwrap_or(0)),
     };
     match waited {

@@ -31,6 +31,8 @@ pub enum UpdateCmd {
         #[arg(long)]
         downgrade: bool,
         /// Continue a transfer in progress for this package (UPDATE_STATUS), after a break.
+        /// Only the block count is compared: another package of the same count is continued
+        /// too, and then fails at the verify.
         #[arg(long)]
         resume: bool,
         /// After a failed verify, send every block again this many times (0067).
@@ -126,6 +128,7 @@ fn progress(json: bool) -> impl FnMut(Event) {
                 "update aborted{}",
                 if restart_needed { "; the radio needs a restart (g7250ctl restart) before RX works again" } else { "" }
             ),
+            Event::NoTransfer { state } => eprintln!("the radio has no transfer in progress (UPDATE_STATUS state {state}; it restarted?): nothing aborted, start the install again"),
             Event::LeftForResume => eprintln!("the transfer is left as it is (no abort): `install --resume` within 10 min continues it"),
         }
     }

@@ -291,9 +291,10 @@ fn restart_is_allowed_while_another_host_writes_and_sends_no_session_end() {
     let other: SocketAddr = "127.0.0.1:9".parse().unwrap();
     let (addr, st) = start(State { secret: Some(OLD), holder: Some(other), uptime: 50_000, ..Default::default() });
     let mut c = client();
-    writes::reset(&mut c, addr, &secret(OLD), g7250_proto::mgmt::Command::Restart).unwrap();
+    let before = writes::reset(&mut c, addr, &secret(OLD), g7250_proto::mgmt::Command::Restart).unwrap().expect("answered");
     assert_eq!(cmds(&st), vec![0x01, 0x10, 0x24], "IDENTIFY for the uptime, then the signed RESTART");
-    let up = writes::wait_for_restart(&mut c, addr, 50_000, std::time::Duration::from_secs(2)).unwrap();
+    assert_eq!((before.uptime_ms, before.slot_changes), (50_100, false), "a RESTART keeps the slot: only the uptime counts");
+    let up = writes::wait_for_restart(&mut c, addr, before, std::time::Duration::from_secs(2)).unwrap();
     assert!(up < 50_000);
 }
 
