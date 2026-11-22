@@ -42,6 +42,10 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0069: `CHANGE_SECRET` writes the new secret by a compaction before its reply; the stale
   sector with the old secret is erased by the next compaction or by a start check (the
   non-live sector erased once, logged, if it holds a secret other than the live one). A1.10 "The old secret in flash"; T-A1-92 new.
+- 0070 (proposed; g7250ctl Q5): A1.1a says what `g7250ctl` must do against the reference model
+  (every command, and its host-side behaviour tested) instead of passing the radio's tests.
+- 0071 (proposed; g7250ctl Q6): the package file, Table M-4 header followed by the image;
+  name, writer and host checks (Annex M "Package file"). Test T-A1-93 new.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 
