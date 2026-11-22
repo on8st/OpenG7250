@@ -89,13 +89,18 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0057 | Link-local used unprobed (visible) if MACRAW fails; start-up bound 17 s | accepted (2026-11-21) |
 | 0058 | GET_STATS `hp_rx`: High Priority packets read from port 1027 | accepted (2026-11-21) |
 | 0059 | Unasked capability record may come in up to three parts | accepted (2026-11-21) |
-| 0060 | DDC0 frame values (P-RX-2) from the unit's factory calibration, confirmed by measurement on the radio (T-B6-28); gate unchanged until then | proposed |
-| 0061 | The store is in flash sectors 6 and 7, used in turn; sector 6 checked in F1; addendum: own images too large for their slot get 61, updates touch the store only as store writes | accepted (2026-11-21); addendum proposed |
-| 0062 | Flash layout (slots A, B and the store) reported in `IDENTIFY` tag 25; layout stays firmware design | proposed |
-| 0063 | Update codes: no transfer in progress gives 54 (block) or 55 (verify, activate); unreadable package header 17, unsupported component 56 | proposed |
-| 0064 | Torn boot-record writes; `ROLLBACK` needs a confirmed image and a good other slot (else 55), starts it as a trial | proposed |
-| 0065 | Flash work: no watchdog or pin change up to `t_erase_max`; failure is 55 and `INTERNAL_ERROR`; store survives power loss; ECC errors are torn records | proposed |
-| 0066 | TX path check (`TX_PATH_NOT_BLOCKED`): MCU configuration and the level at the pin, every 5 ms, fault after 10 ms of mismatch | proposed |
+| 0060 | DDC0 frame values (P-RX-2) from the unit's factory calibration, confirmed by measurement on the radio (T-B6-28); gate unchanged until then | accepted (2026-11-21) |
+| 0061 | The store is in flash sectors 6 and 7, used in turn; sector 6 checked in F1; addendum: own images too large for their slot get 61, updates touch the store only as store writes | accepted (2026-11-21), addendum too |
+| 0062 | Flash layout (slots A, B and the store) reported in `IDENTIFY` tag 25; layout stays firmware design | accepted (2026-11-21) |
+| 0063 | Update codes: no transfer in progress gives 54 (block) or 55 (verify, activate); unreadable package header 17, unsupported component 56 | accepted (2026-11-21) |
+| 0064 | Torn boot-record writes; `ROLLBACK` needs a confirmed image and a good other slot (else 55), starts it as a trial | accepted (2026-11-21) |
+| 0065 | Flash work: no watchdog or pin change up to `t_erase_max`; failure is 55 and `INTERNAL_ERROR`; store survives power loss; ECC errors are torn records | accepted (2026-11-21) |
+| 0066 | TX path check (`TX_PATH_NOT_BLOCKED`): MCU configuration and the level at the pin, every 5 ms, fault after 10 ms of mismatch | accepted (2026-11-21) |
+| 0067 | Image check: `UPDATE_VERIFY` checks hash, image check and record against header (55); boot-stage refusals; `IDENTIFY` tag 9 none, good, bad and when judged | proposed (2026-11-21) |
+| 0068 | Log kept over a reset without power loss; reason logged before every commanded reset; start entry `start after <cause>: log kept` or `log lost`; survival is part of P-SYS-9 | proposed (2026-11-22) |
+| 0069 | Reply time of requests with flash work: one sector erase per request, reply within 15 s, host retransmits for 16 s | proposed (2026-11-22) |
+| 0070 | g7250ctl: drives every Table A1-2 command against the reference model; host-side behaviour tested (T-A1-93) | proposed (2026-11-22) |
+| 0071 | Package file: Table M-4 header followed by the image, `.g7pk`, written by the firmware build | proposed (2026-11-22) |
 
 All numbers 0001–0059 are now in use.
 

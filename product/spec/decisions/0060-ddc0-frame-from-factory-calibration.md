@@ -1,7 +1,7 @@
 # 0060 — DDC0 frame values from the unit's factory calibration, confirmed on the radio
 
-- Status: proposed (to the repository owner, ON8ST); written on ON8ST's choice of route (b)
-  confirmed by (a), relayed by the openg7250 session, 2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); written on ON8ST's
+  choice of route (b) confirmed by (a)
 - Date: 2026-11-21
 - Builds on: 0035 (Annex P, freeze rule), 0039 (calibration set, A1.12), 0042 (DDC0 gate,
   point 5 left this open); [HIS] HIS 15 rule 3, HIS 80, HIS 90 (`5292ba8`).
@@ -25,7 +25,7 @@ Routes:
   than needed;
 - (b) confirmed by (a): ON8ST's choice.
 
-## Decision (proposed)
+## Decision
 
 1. **Route.** P-RX-2 is set from the unit's factory calibration in principle, and counts as
    set only after the confirmation of point 3 on that unit. If the confirmation fails, route
@@ -81,8 +81,8 @@ Routes:
       offered rate.
    5. **Stability.** The results repeat after a power cycle.
    The results are logged with the calibration set's source and date (A1.12 item 2) and given
-   to the HIS for its HIS 90 record. Figures in items 2–4 are proposed and may be tightened
-   once the first radio has been measured.
+   to the HIS for its HIS 90 record. Figures in items 2–4 may be tightened once the first radio
+   has been measured.
 4. **Until confirmed, nothing changes.** The freeze rule (Annex P) and the DDC0 gate (0042)
    stay as they are: P-RX-2 not set, record `streams` bit 0 = 0, a DDC0 enable gets
    `STREAM_STATUS` reason 2, record `tx` bit 4 = 0, and no configuration frame is written

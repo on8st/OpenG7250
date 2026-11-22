@@ -1,7 +1,7 @@
 # 0062 — The flash layout is reported in IDENTIFY (tag 25)
 
-- Status: proposed (to the repository owner, ON8ST); answers testbench finding SF-27,
-  2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers testbench
+  finding SF-27, 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0028 Decision 3 (slot layout is firmware design), 0043 (slot-linked images,
   tag 23), 0061 and its addendum (store in sectors 6 and 7; slot size and status 61);
@@ -19,7 +19,7 @@ Options:
 - (b) fix the layout in the spec (slot A from 0x08040000 and slot B from 0x08080000, 256 KiB
   each, store in sectors 6 and 7).
 
-## Decision (proposed)
+## Decision
 
 1. Option (a), as the testbench advised. `IDENTIFY` tag 25, length 6, in 128 KiB sectors
    ([HIS] HIS 15): slot A first sector (u8), number of sectors (u8); slot B the same; the

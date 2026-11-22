@@ -2,7 +2,60 @@
 
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`)
 
-All dates 2026-11-19. Decision numbers refer to `decisions/`.
+All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
+
+## After 1.0 (2026-11-21)
+
+- 0067 (proposed; testbench finding SF-31): what an image of this firmware must be. A1.8
+  "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
+  every word readable; layout the firmware's), "`UPDATE_VERIFY`" (hash, then image check,
+  then record–header agreement, each 55), "Boot-stage refusals", "Integrity in `IDENTIFY`"
+  (tag 9: none, good, bad, and when each is judged) and "Packages that are not a runnable
+  image". A1.5 integrity bullet, Table A1-3 status 55, Table M-2 tag 9. Tests T-A1-88,
+  T-A1-89, T-A1-90.
+- 0067, testbench points before acceptance: Context states the contract only, with no pointer
+  into firmware documents; "Blocks sent again" (a block sent again with a new request id
+  replaces the received data); slots named `A` or `B` in log lines, with the check names;
+  `ROLLBACK` to a slot whose trial failed is accepted (tag 9 = 1) and starts a trial.
+- Annex P, P-SYS-9: the persist block is stated as a firmware-chosen range of AXI SRAM
+  (currently 0x2401FF80–0x2401FFFF, as [HIS] `069ea0b` names it), without a pointer into the
+  firmware documents; its radio check is the spec's own test T-A3-60.
+- 0067 (bench question on T-A1-88): the image check is judged over the length the image record
+  gives; an intact image with bytes appended is refused with `header`, not `integrity`.
+- 0068 (proposed; bench question on T-A1-34, firmware input): the log ring is kept over a reset
+  without power loss, each entry with a check word, sequence numbers continuing; the reason
+  is logged before every commanded reset; a start entry `start after <cause>: log kept|lost`
+  and the boot-stage lines follow each start. Survival through the stage before the boot
+  stage is part of P-SYS-9; P-SYS-2 keeps the reset cause only. A1.7, P-SYS-2, P-SYS-9;
+  T-A1-34 rewritten, T-A1-91 new.
+- 0068, firmware questions: the boot stage writes the start entry and its own lines; the cause
+  is named from the reset flags (order watchdog, software, power-on, brown-out, pin; `unknown`
+  only with no flag), read once and cleared; tag 17 values; P-SYS-2 is only whether the flags
+  are trustworthy on this radio.
+- 0069 (proposed; emulator flash-model finding): a request does at most one sector erase and
+  programs at most one sector; its reply comes within `t_flash_reply` = 15 s; a host keeps
+  retransmitting such requests every 500 ms for at least 16 s. A1.4, B2.3; T-B5-22 and
+  T-A1-85 extended.
+- 0069, firmware question: a request that ends in a commanded reset may do up to two sector
+  erases after its reply and before the reset (reset within 17 s of the reply); `FACTORY_RESET`
+  erases the old secret from both store sectors this way.
+- 0069: `CHANGE_SECRET` writes the new secret by a compaction before its reply; the stale
+  sector with the old secret is erased by the next compaction or by a start check (the
+  non-live sector erased once, logged, if it holds a secret other than the live one). A1.10 "The old secret in flash"; T-A1-92 new.
+- 0070 (proposed; g7250ctl Q5): A1.1a says what `g7250ctl` must do against the reference model
+  (every command, and its host-side behaviour tested) instead of passing the radio's tests.
+- 0071 (proposed; g7250ctl Q6): the package file, Table M-4 header followed by the image;
+  name, writer and host checks (Annex M "Package file"). Test T-A1-93 new.
+- Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
+  a row may cite another test; a second definition is still a finding (542 ids, as before).
+
+## 1.0 — version 1.0, 2026-11-21 (tag `spec-v1.0`)
+
+- Accepted by ON8ST on 2026-11-21. Contains every change listed under "After rc7" below;
+  decisions 0001–0066 are all accepted.
+- Headers of `network-interface.md`, part C and the AetherSDR annex set to version 1.0.
+- What still needs the radio is listed in Annex P (Table P-1) with a safe placeholder per
+  value; the radio checks are in HIS 90 and in T-B6-28.
 
 ## After rc7 (2026-11-20)
 
@@ -77,6 +130,9 @@ All dates 2026-11-19. Decision numbers refer to `decisions/`.
   within 20 ms after the end.
 - P-SYS-9: the persist block's range is named as the firmware's design (now 128 bytes at
   0x2401FF80); radio check over the whole block.
+- 2026-11-21: ON8ST accepted 0060 and the 0061 addendum.
+- 2026-11-21: ON8ST accepted 0062–0066 with their addenda; every decision 0001–0066 is
+  accepted. `t_erase_max` from [STM32H72x] (DS13311 Rev 5, Table 48): at most 4 s.
 
 ## rc7 — release candidate 7 (tag `spec-rc7`)
 

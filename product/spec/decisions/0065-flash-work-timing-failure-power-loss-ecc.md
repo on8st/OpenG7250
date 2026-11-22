@@ -1,7 +1,7 @@
 # 0065 — Flash work: erase timing, failure, power loss and ECC errors
 
-- Status: proposed (to the repository owner, ON8ST); answers testbench run-sheet gaps 5–9 (tb
-  1b93429), 2026-11-21
+- Status: accepted (ON8ST, 2026-11-21, relayed by the openg7250 session); answers testbench
+  run-sheet gaps 5–9 (tb 1b93429), 2026-11-21
 - Date: 2026-11-21
 - Builds on: 0007 (watchdog, fault classes), 0022 §16 (A3.10), 0055 (flash work), 0061 (store
   in sectors 6 and 7); [HIS] HIS 10, HIS 80, HIS 85; [STM32H72x].
@@ -14,11 +14,15 @@ FPGA bus during an erase. The firmware already implements a two-sector, append-o
 with torn-record and ECC handling (`product/firmware/docs/memory-layout.md`); the spec now
 states what is required, so that the tests can check it.
 
-## Decision (proposed)
+## Decision
 
 1. **Erase time** (gap 5). `t_erase_max` is the maximum 128 KiB sector erase time in the
-   datasheet of the MCU fitted ([STM32H72x]); the spec names it but does not repeat the
-   value. During flash work up to `t_erase_max`:
+   datasheet of the MCU fitted, for the program/erase parallelism the firmware sets
+   ([STM32H72x] section 6.3.13, Table 48, maximum guaranteed by characterization): 4 s at x8,
+   3.6 s at x16, 2.2 s at x32 (no x64 row for a sector erase), so at most 4 s. The same table
+   gives a word (266 bits) programming time of at most 580 µs at x8 (after 10 000 erase
+   operations), 360 µs at x16, 260 µs at x32 and 200 µs at x64. Values added on ON8ST's go of
+   2026-11-21. During flash work up to `t_erase_max`:
    - the processor watchdog does not expire;
    - the RF control pins keep their A3.6 levels;
    - the radio goes on as before afterwards.
