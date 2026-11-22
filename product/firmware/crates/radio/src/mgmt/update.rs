@@ -16,6 +16,12 @@ pub trait Updater {
     fn block(&mut self, number: u32, crc_ok: bool, data: &[u8], now: u64) -> Result<u32, Status>;
     /// `UPDATE_VERIFY`: the computed SHA-256.
     fn verify(&mut self, now: u64) -> Result<[u8; 32], Status>;
+    /// For the log after UPDATE_VERIFY (A1.7 "every update step"): the staging slot (1 A, 2 B)
+    /// and the staged version after a good verify; after a failed one, the failed check
+    /// ("missing blocks", "unreadable", "hash", "image").
+    fn verify_note(&self) -> (u8, u32, Option<&'static str>) {
+        (0, 0, None)
+    }
     /// `UPDATE_ACTIVATE`: the boot record names the staged image as the trial (U-5).
     fn activate(&mut self, now: u64) -> Result<(), Status>;
     /// `UPDATE_ABORT`; false if it had no effect (a second abort: 0063 addendum).

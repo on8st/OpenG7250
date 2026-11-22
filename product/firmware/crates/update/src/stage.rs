@@ -104,6 +104,9 @@ pub struct Stager {
     received: u32,
     count: u32,
     last_ms: u64,
+    /// Why the last UPDATE_VERIFY failed, for the log (A1.7 "every update step"): "missing
+    /// blocks", "hash", "image" (the image and record checks; 0067 will name each).
+    verify_failed: Option<&'static str>,
 }
 
 impl Default for Stager {
@@ -114,7 +117,7 @@ impl Default for Stager {
 
 impl Stager {
     pub const fn new() -> Self {
-        Stager { phase: Phase::Idle, offer: None, received: 0, count: 0, last_ms: 0 }
+        Stager { phase: Phase::Idle, offer: None, received: 0, count: 0, last_ms: 0, verify_failed: None }
     }
 
     pub fn phase(&self) -> Phase {
@@ -248,20 +251,39 @@ impl Stager {
         }
         let o = match (self.phase, self.offer) {
             (Phase::Receiving | Phase::Verified, Some(o)) if self.received == self.count => o,
-            _ => return Err(Refusal::VerifyFailed),
+            _ => {
+                self.verify_failed = Some("missing blocks");
+                return Err(Refusal::VerifyFailed);
+            }
         };
         let slot = run.slot.other().range();
-        let (hash, crc, head) = scan(io, slot.start, o.length).map_err(|_| Refusal::VerifyFailed)?;
+        let Ok((hash, crc, head)) = scan(io, slot.start, o.length) else {
+            self.verify_failed = Some("unreadable");
+            return Err(Refusal::VerifyFailed);
+        };
         if hash != o.sha256 {
+            self.verify_failed = Some("hash");
             return Err(Refusal::VerifyFailed);
         }
         let ok = check_head(&head, crc, &o, slot, run.app_ram);
         if !ok {
+            self.verify_failed = Some("image");
             return Err(Refusal::VerifyFailed);
         }
+        self.verify_failed = None;
         self.phase = Phase::Verified;
         self.last_ms = now; // answered with 0
         Ok(hash)
+    }
+
+    /// Why the last verify of a transfer failed (`None` after a good one): for the log.
+    pub fn verify_failure(&self) -> Option<&'static str> {
+        self.verify_failed
+    }
+
+    /// The staged image's version (from the package header), for the log.
+    pub fn staged_version(&self) -> Option<u32> {
+        self.offer.map(|o| o.version)
     }
 
     /// `UPDATE_ACTIVATE` (U-5): only after a good verify. Writes the boot record (one record,

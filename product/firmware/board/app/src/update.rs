@@ -142,6 +142,11 @@ impl Updater for Port<'_> {
         self.u.stager.verify(&mut io, &self.u.run, now).map_err(status)
     }
 
+    fn verify_note(&self) -> (u8, u32, Option<&'static str>) {
+        let slot = g7250_update::stage::slot_code(self.u.run.slot.other());
+        (slot, self.u.stager.staged_version().unwrap_or(0), self.u.stager.verify_failure())
+    }
+
     fn activate(&mut self, now: u64) -> Result<(), Status> {
         let Some(s) = self.store.as_deref_mut() else { return Err(Status::VerificationFailed) };
         self.u.stager.activate(s, &self.u.run, now).map_err(status)

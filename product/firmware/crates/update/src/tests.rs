@@ -408,6 +408,43 @@ fn after_the_blocks_the_staging_slot_holds_the_image_t_a1_83_84() {
     }
 }
 
+#[test]
+fn a_failed_verify_records_its_check() {
+    // For the log (A1.7): missing blocks, then a wrong hash, then an image that is not runnable.
+    let (mut s, _) = installed(false);
+    let run = running(Slot::A, V1);
+    let b = image(Slot::B, V2, 2148, 9);
+    let mut g = Stager::new();
+    let n = g.begin(&offer(&b, V2), &run, 0).unwrap();
+    assert!(g.verify(&mut s, &run, 1).is_err());
+    assert_eq!(g.verify_failure(), Some("missing blocks"));
+    for k in 0..n {
+        let d = &b[(k * stage::BLOCK) as usize..((k + 1) * stage::BLOCK).min(b.len() as u32) as usize];
+        g.block(&mut s, &run, k, true, d, 1).unwrap();
+    }
+    let mut g2 = Stager::new();
+    let mut bad = offer(&b, V2);
+    bad.sha256[0] ^= 1;
+    g2.begin(&bad, &run, 0).unwrap();
+    for k in 0..n {
+        let d = &b[(k * stage::BLOCK) as usize..((k + 1) * stage::BLOCK).min(b.len() as u32) as usize];
+        let _ = g2.block(&mut s, &run, k, true, d, 1);
+    }
+    assert!(g2.verify(&mut s, &run, 2).is_err());
+    assert_eq!(g2.verify_failure(), Some("hash"));
+    // An image linked for slot A staged in B: the hash holds, the image check fails.
+    let wrong = image(Slot::A, V2, 2148, 9);
+    let mut g3 = Stager::new();
+    g3.begin(&offer(&wrong, V2), &run, 0).unwrap();
+    for k in 0..n {
+        let d = &wrong[(k * stage::BLOCK) as usize..((k + 1) * stage::BLOCK).min(wrong.len() as u32) as usize];
+        g3.block(&mut s, &run, k, true, d, 1).unwrap();
+    }
+    assert!(g3.verify(&mut s, &run, 2).is_err());
+    assert_eq!(g3.verify_failure(), Some("image"));
+    assert_eq!(g3.staged_version(), Some(V2));
+}
+
 fn staging_slot_holds(len: usize) {
     let (mut s, _) = installed(false);
     let run = running(Slot::A, V1);
@@ -424,6 +461,7 @@ fn staging_slot_holds(len: usize) {
     }
     assert!(s.mem[base + b.len()..base + Slot::B.range().len() as usize].iter().all(|&x| x == 0xFF), "len {len}: the rest erased");
     assert!(g.verify(&mut s, &run, 2).is_ok(), "len {len}");
+    assert_eq!(g.verify_failure(), None);
 }
 
 #[test]

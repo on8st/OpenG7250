@@ -53,6 +53,9 @@ impl Updater for Model {
         self.verified = true;
         Ok([0x5A; 32])
     }
+    fn verify_note(&self) -> (u8, u32, Option<&'static str>) {
+        (2, 0x0001_0002, (!self.verified).then_some("missing blocks"))
+    }
     fn activate(&mut self, _: u64) -> Result<(), Status> {
         if !self.verified {
             return Err(Status::VerificationFailed);
@@ -494,6 +497,25 @@ fn a_store_write_that_fails_turns_the_reply_into_55_also_for_a_repeat() {
     let n = s.fail_reply(HOST, Status::VerificationFailed, &mut out).unwrap();
     let r = mgmt::parse_reply(&out[..n]).unwrap();
     assert_eq!((r.status, r.payload.len(), r.header.request_id), (Some(Status::VerificationFailed), 0, 11));
+}
+
+#[test]
+fn update_verify_is_logged_good_and_failed() {
+    // A1.7 "every update step": a failed verify names its check, a good one the slot and version.
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::UpdateBegin, &package(1300, 2), 0).0, Status::Ok);
+    assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::UpdateVerify, &[], 1000).0, Status::VerificationFailed);
+    for n in 0..3u32 {
+        let len = if n == 2 { 276 } else { 512 };
+        authed(&mut w, &mut s, HOST, 30 + 10 * n, Command::UpdateBlock, &block(n, &vec![n as u8; len]), 2000 + n as u64);
+    }
+    assert_eq!(authed(&mut w, &mut s, HOST, 70, Command::UpdateVerify, &[], 3000).0, Status::Ok);
+    let log = w.call(&mut s, HOST, &req(80, Command::ReadLog, &[0, 0, 0, 0]), 4000).unwrap().2;
+    let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
+    assert!(e.iter().any(|t| t == "update verify failed: missing blocks"), "{e:?}");
+    assert!(e.iter().any(|t| t == "update verified: slot B 0.1.2"), "{e:?}");
 }
 
 #[test]

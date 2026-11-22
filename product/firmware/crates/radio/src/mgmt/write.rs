@@ -304,12 +304,23 @@ impl Server {
                 if !payload.is_empty() {
                     return (Status::Malformed, 0);
                 }
-                match ctx.update.verify(now) {
+                let r = ctx.update.verify(now);
+                // Every update step is logged (A1.7): a good verify with the slot and version,
+                // a failed one with the check that failed.
+                let (slot, v, failed) = ctx.update.verify_note();
+                let slot = if slot == 1 { 'A' } else { 'B' };
+                match r {
                     Ok(h) => {
+                        self.log.push(now, format_args!("update verified: slot {slot} {}.{}.{}", v >> 24, (v >> 16) & 0xFF, v & 0xFFFF));
                         p[..32].copy_from_slice(&h);
                         (Status::Ok, 32)
                     }
-                    Err(s) => (s, 0),
+                    Err(s) => {
+                        if s == Status::VerificationFailed {
+                            self.log.push(now, format_args!("update verify failed: {}", failed.unwrap_or("no transfer")));
+                        }
+                        (s, 0)
+                    }
                 }
             }
             Command::UpdateActivate => {
