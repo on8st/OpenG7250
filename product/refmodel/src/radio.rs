@@ -338,6 +338,10 @@ pub struct Radio {
     /// model fixture flash.delay: the flash work of the next requests takes this long (ns or us as
     /// `now`), for this many requests (0069)
     pub flash_delay: (u64, u32),
+    /// model fixture store.full: the next update request finds no room in the store (0067 addendum)
+    pub store_full: bool,
+    /// model fixture reset.flags: the reset flags of the next start (0068 addendum)
+    pub next_flags: Option<Vec<String>>,
     pub hw: Hw,
     pub scheduled: Vec<(u64, Tx)>,
     pub old_owner_notice: Option<(Host, u16, u64, u64, Vec<u8>)>, // host, dest port, until, last, packet
@@ -460,6 +464,8 @@ impl Radio {
             log_corrupt: None,
             reset_cause: 1,
             flash_delay: (0, 0),
+            store_full: false,
+            next_flags: None,
             hw: Hw::default(),
             scheduled: Vec::new(),
             old_owner_notice: None,
@@ -524,7 +530,7 @@ impl Radio {
                 self.fw.running = self.fw.other();
                 self.fw.rolled_back = true;
                 lines.push(format!("boot: slot {} refused: integrity", name(run)));
-                lines.push(format!("boot: slot {} started without a trial (rolled back)", name(self.fw.running)));
+                lines.push(format!("boot: fallback to slot {} (active slot refused, no trial)", name(self.fw.running)));
             } else {
                 // neither slot passes: the safe state, no network (not modelled further; T-A1-90
                 // runs on an emulator)
@@ -1766,7 +1772,13 @@ impl Radio {
         let boot_lines = self.boot_choice();
         // the ring (A1.7 "Kept over a reset"; 0068): lost with the power; an entry that fails its
         // check and all after it are dropped, and the numbers continue from the last one kept
-        if cause == "power-on" {
+        let flags = self.next_flags.take().unwrap_or_else(|| vec![cause.to_string()]);
+        let has = |f: &str| flags.iter().any(|x| x == f);
+        let cause = ["watchdog", "software", "power-on", "brown-out", "pin"].into_iter().find(|c| has(c)).unwrap_or("unknown");
+        // a power loss for the log and the counters (0068 addendum): power-on or brown-out among the
+        // flags, whatever is named, or no flag at all
+        let power_lost = has("power-on") || has("brown-out") || flags.is_empty();
+        if power_lost {
             self.log.clear();
             self.log_corrupt = None;
             self.log_seq = 0;
@@ -1774,11 +1786,13 @@ impl Radio {
             self.log.retain(|e| e.0 < n);
             self.log_seq = self.log.last().map_or(0, |e| e.0 + 1);
         }
-        let kept = cause != "power-on" && !self.log.is_empty();
+        let kept = !power_lost && !self.log.is_empty();
         self.reset_cause = match cause {
             "power-on" => 1,
             "software" => 2,
             "watchdog" => 3,
+            "brown-out" => 4,
+            "pin" => 5,
             _ => 0,
         };
         self.keyer.reset();

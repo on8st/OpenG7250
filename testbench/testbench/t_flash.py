@@ -213,6 +213,12 @@ def flash_work(ctx, s: bytes, t_max: int):
             new = flog(ctx, n)
             n += len(new)
             rows.append((step, st, round(getattr(u.c, "reply_s", 0.0), 2), len([e for e in new if is_erase(e)])))
+            if st == 64:  # room made in the store (its one erase): the block again as a new request
+                r = u.req("UPDATE_BLOCK", block_payload(k, img[512 * k:512 * k + 512]))
+                st = r["status"] if r else None
+                new = flog(ctx, n)
+                n += len(new)
+                rows.append((step + " again", st, round(getattr(u.c, "reply_s", 0.0), 2), len([e for e in new if is_erase(e)])))
             if st != 0:
                 break
         u.c.timed = False

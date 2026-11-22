@@ -941,6 +941,90 @@ def t_a1_88(ctx: Ctx):
                 st, _ = u.blocks(gimg, bs)
                 r = u.req("UPDATE_VERIFY")
             ctx.eq("the last data per block verifies: UPDATE_VERIFY 0", r["status"] if r else None, 0)
+    missing_block(ctx, s, 884)
+    store_full(ctx, s, 885)
+
+
+def named(texts: list[str], word: str) -> bool:
+    import re
+    return any(re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", x) for x in texts)
+
+
+def missing_block(ctx, s: bytes, seed: int):
+    """T-A1-88 (0067 addendum): the last block not sent: 55 with missing-blocks in the log, not hash;
+    sending it lets the verify succeed."""
+    from .update import block_payload
+    with updating(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        img, hdr, _ = good_package(ctx, other, ver, seed)
+        r = u.begin(hdr)
+        if not ctx.eq("missing block: UPDATE_BEGIN accepted", r["status"] if r else None, 0):
+            return
+        n = (len(img) + 511) // 512
+        st, _ = u.blocks(img[:512 * (n - 1)])
+        if not ctx.eq("missing block: every block but the last accepted", st, 0):
+            return
+        n0 = last_log_seq(u)
+        r = u.req("UPDATE_VERIFY")
+        ctx.eq("missing block: UPDATE_VERIFY 55", r["status"] if r else None, 55)
+        texts = logs_since(u, n0)
+        ctx.check("missing block: the log names missing-blocks, not hash", named(texts, "missing-blocks") and not named(texts, "hash"),
+                  f"{texts[-3:]}")
+        ctx.eq("missing block: the transfer stays open (UPDATE_STATUS receiving, blocks received)",
+               [(u.status() or {}).get(k) for k in ("state", "received")], [1, n - 1])
+        r = u.req("UPDATE_BLOCK", block_payload(n - 1, img[512 * (n - 1):]))
+        ctx.eq("missing block: the last block sent: accepted", r["status"] if r else None, 0)
+        r = u.req("UPDATE_VERIFY")
+        ctx.eq("missing block: UPDATE_VERIFY 0", r["status"] if r else None, 0)
+
+
+def judge_64(ctx, u: Updater, k: int, payload: bytes, n0: int, before: dict | None):
+    """What follows a 64 on block k: the log line, the transfer and its count unchanged, and a new
+    request with the same block taken."""
+    ctx.check("store full: the log shows 'store: room made (update)'", any("store: room made (update)" in x for x in logs_since(u, n0)),
+              f"{logs_since(u, n0)[-3:]}")
+    st = u.status() or {}
+    ctx.eq("store full: the transfer still receiving, the same blocks received", (st.get("state"), st.get("received")),
+           ((before or {}).get("state"), (before or {}).get("received")))
+    r = u.req("UPDATE_BLOCK", payload)
+    ctx.eq(f"store full: block {k} sent again with a new request id: taken", r["status"] if r else None, 0)
+    ctx.eq("store full: one block more received", (u.status() or {}).get("received"), (before or {}).get("received", -9) + 1)
+
+
+def store_full(ctx, s: bytes, seed: int):
+    """T-A1-88 (0067 addendum, full store): an UPDATE_BLOCK gets 64; a verify with the store full
+    succeeds."""
+    from .update import block_payload
+    if "store.full" not in ctx.endpoint.get("fixtures", []):
+        ctx.notes.append("store full not run: no store.full (the next update request finds no room in the store; only the firmware "
+                         "knows its store's fill level); a 64 in any other transfer is followed as the host rule says")
+        return
+    with updating(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        img, hdr, _ = good_package(ctx, other, ver, seed)
+        r = u.begin(hdr)
+        if not ctx.eq("store full: UPDATE_BEGIN accepted", r["status"] if r else None, 0):
+            return
+        n = (len(img) + 511) // 512
+        st, _ = u.blocks(img[:1024])
+        before, n0 = u.status(), last_log_seq(u)
+        ctx.fixture("store.full")
+        payload = block_payload(2, img[1024:1536])
+        data = u.post("UPDATE_BLOCK", payload)
+        r = u.collect(data, "UPDATE_BLOCK 2") if data else None
+        if not ctx.eq("store full: UPDATE_BLOCK 64", r["status"] if r else None, 64):
+            return
+        r = u.collect(data, "UPDATE_BLOCK 2 repeated")
+        ctx.eq("store full: a repeat with the same id gets 64 again", r["status"] if r else None, 64)
+        judge_64(ctx, u, 2, payload, n0, before)
+        st, _ = u.blocks(img, start=3)
+        ctx.eq("store full: the rest of the blocks", st, 0)
+        ctx.fixture("store.full")
+        n0 = last_log_seq(u)
+        r = u.req("UPDATE_VERIFY")
+        ctx.eq("store full: UPDATE_VERIFY succeeds", r["status"] if r else None, 0)
+        ctx.check("store full: the verify made room ('store: room made (update)' logged)",
+                  any("store: room made (update)" in x for x in logs_since(u, n0)), f"{logs_since(u, n0)[-3:]}")
 
 
 def corrupt(ctx, slot: int, release: bool = False, length: int | None = None):
@@ -1083,8 +1167,9 @@ def t_a1_90(ctx: Ctx):
             ctx.eq("the active slot refused: the other slot starts without a trial (tag 23, tag 10 = 2)",
                    (t.get(23, b"")[:1], t.get(10)), (bytes([a[0]]), b"\x02"))
             texts = logs_since(u, n0)
-            want = f"boot: slot {'AB'[a[1] - 1]} refused: integrity"
-            ctx.check(f"the change logged: '{want}'", any(want in x for x in texts), f"{texts[-3:]}")
+            want = [f"boot: slot {'AB'[a[1] - 1]} refused: integrity",
+                    f"boot: fallback to slot {'AB'[a[0] - 1]} (active slot refused, no trial)"]
+            ctx.check(f"logged one after the other: {want}", any(texts[i:i + 2] == want for i in range(len(texts))), f"{texts[-5:]}")
     finally:
         corrupt(ctx, a[1], release=True)
     # 3: both slots changed: safe state, no answer (an emulator; the model does not model it)

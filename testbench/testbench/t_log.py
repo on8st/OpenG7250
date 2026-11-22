@@ -99,6 +99,17 @@ def t_a1_34(ctx: Ctx):
     ctx.check("RX works afterwards (a session gets status packets)", rx_works(ctx), "no status packet")
 
 
+def lost(ctx, label: str, cause: str):
+    """The log of a start that counts as a power loss, or whose ring failed as a whole."""
+    from .p2 import Host, value
+    log = entries(ctx)
+    ctx.eq(f"{label}: the first entry", log[0][::2] if log else None, (0, f"{START}{cause}: log lost"))
+    ctx.eq(f"{label}: numbers in sequence from 0", [e[0] for e in log], list(range(len(log))))
+    if cause == "unknown" or label.startswith("power-on"):
+        with Host(ctx.net) as h:
+            ctx.eq(f"{label}: TRIP_COUNT from 0", value(h.write([(0x0214, 0)], timeout=0.3), 0x0214), 0)
+
+
 def newest(ctx) -> int:
     return max([e[0] for e in entries(ctx)], default=-1)
 
@@ -149,7 +160,21 @@ def t_a1_91(ctx: Ctx):
                   bool(got) and any(e[0] == bad and e[2] == f"{START}software: log kept" for e in got),
                   f"{[e for e in got if e[0] >= bad][:3]}")
     else:
-        ctx.notes.append("corrupted entry not run: no log.corrupt (one entry of the ring changed in RAM; the layout is the firmware's)")
+        ctx.notes.append("corrupted entries not run: no log.corrupt (one entry of the ring changed in RAM; the layout is the firmware's)")
+        # the oldest entry corrupted: nothing is kept, which is a ring that fails as a whole
+        ctx.fixture("log.corrupt", seq=entries(ctx)[0][0])
+        with updating(ctx, s):
+            pass
+        lost(ctx, "the oldest entry corrupted", "software")
+    # a start with no reset flag, or with power-on beside software: a power loss, whatever is named
+    if "reset.flags" in fx:
+        for label, flags, cause in (("no reset flag", [], "unknown"), ("power-on beside software", ["software", "power-on"], "software")):
+            ctx.fixture("reset.flags", flags=flags)
+            with updating(ctx, s):
+                pass
+            lost(ctx, label, cause)
+    else:
+        ctx.notes.append("a start with no reset flag, and power-on beside software, not run: no reset.flags")
     # FACTORY_RESET is judged in T-A1-39; a power cycle empties the log
     if "power.cycle" in fx:
         ctx.fixture("power.cycle")

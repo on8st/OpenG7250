@@ -190,6 +190,7 @@ pub mod mgmt {
         pub const OLDER_IMAGE: u16 = 52;
         pub const BAD_CRC: u16 = 53;
         pub const OUT_OF_ORDER: u16 = 54;
+        pub const ROOM_MADE: u16 = 64; // 0067 addendum
         pub const VERIFY_FAILED: u16 = 55;
         pub const RUNNING_SLOT: u16 = 63;
     }

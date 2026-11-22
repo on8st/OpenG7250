@@ -110,7 +110,7 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay"];
+    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay", "store.full", "reset.flags"];
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -370,6 +370,17 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 return err("log.corrupt: no such entry");
             }
             r.log_corrupt = Some(n as u32);
+            ok(J::Null)
+        }
+        "store.full" => {
+            // model only: the next UPDATE_BLOCK or UPDATE_VERIFY finds no room in the store
+            r.store_full = true;
+            ok(J::Null)
+        }
+        "reset.flags" => {
+            // model only: the reset flags of the next start, e.g. [] or ["software", "power-on"]
+            let Some(J::Arr(a)) = args.get("flags") else { return err("reset.flags: flags missing") };
+            r.next_flags = Some(a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect());
             ok(J::Null)
         }
         "flash.delay" => {

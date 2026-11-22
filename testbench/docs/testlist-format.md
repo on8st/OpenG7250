@@ -536,7 +536,10 @@ A test with target `emulator` is also run against the reference model. A test wi
      `log.corrupt {seq}`: the kept log entry with that sequence number changed in RAM so that its
      check fails at the next start (T-A1-91; the layout is the firmware's, so an emulator needs its
      address from the firmware side). The reference model has `log.corrupt`, and
-     `flash.delay {us, count}`: the flash work of the next `count` requests takes `us` (T-B5-22).
+     `flash.delay {us, count}`: the flash work of the next `count` requests takes `us` (T-B5-22),
+     `store.full {}`: the next `UPDATE_BLOCK` or `UPDATE_VERIFY` finds no room in the store
+     (T-A1-88), and `reset.flags {flags: [...]}`: the reset flags of the next start, e.g. `[]` or
+     `["software", "power-on"]` (T-A1-91). `reset.flags` is proposed for the emulator too.
    - `slot.corrupt {slot: 1|2, offset: n, xor?: 0x01}` → `{slot, address, old, new, t_us}`: the
      byte at `offset` from the slot start (0x08040000, 0x08080000) XORed (default one bit) with
      its ECC kept consistent (it reads as changed data, no ECC error); `{slot, restore: true}`

@@ -478,7 +478,15 @@ impl Mgmt {
             RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY => (st::NOT_SUPPORTED, vec![], None),
             UPDATE_BEGIN => self.update_begin(r, payload, out),
             UPDATE_BLOCK => {
-                let res = self.update_block(payload);
+                let before = if r.store_full { self.upd.clone() } else { None };
+                let mut res = self.update_block(payload);
+                if res.0 == st::OK && r.store_full {
+                    // no room in the store: made (its one erase), nothing of the block taken
+                    r.store_full = false;
+                    self.upd = before;
+                    r.logf("store: room made (update)");
+                    res = (st::ROOM_MADE, vec![], None);
+                }
                 if res.0 == st::OK {
                     // an accepted block after a good verify cancels it: the slot holds no image
                     // to start until the next good verify (0067 items 2, 4)
@@ -506,6 +514,10 @@ impl Mgmt {
                     };
                     match res {
                         Ok(()) => {
+                            if r.store_full {
+                                r.store_full = false;
+                                r.logf("store: room made (update)"); // a verify never fails for room
+                            }
                             u.verified = true;
                             r.fw.slots[(u.slot - 1) as usize] =
                                 Some(Image { version: u.version, len: u.len, sha: u.sha, good: false, integ: 1, corrupt: false });
@@ -519,7 +531,11 @@ impl Mgmt {
                         }
                     }
                 }
-                _ => (st::VERIFY_FAILED, vec![], None),
+                Some(_) => {
+                    r.logf("update: verify failed: missing-blocks");
+                    (st::VERIFY_FAILED, vec![], None)
+                }
+                None => (st::VERIFY_FAILED, vec![], None),
             },
             UPDATE_ACTIVATE => match self.upd.as_ref() {
                 Some(u) if u.verified => (st::OK, vec![0], Some("ACTIVATE")), // permanent 0: a trial boot follows
@@ -541,9 +557,6 @@ impl Mgmt {
                     }
                 }
                 if r.fw.other_image().map_or(false, |i| i.integ == 1) {
-                    let ver = |i: Option<&Image>| i.map_or("0.0.0".to_string(), |i| format!("{}.{}.{}", i.version.0, i.version.1, i.version.2));
-                    r.logf(&format!("rollback commanded: slot {} {} to slot {} {}", slot_name(r.fw.running),
-                                    ver(r.fw.running_image()), slot_name(r.fw.other()), ver(r.fw.other_image())));
                     (st::OK, vec![], Some("ROLLBACK"))
                 } else {
                     (st::VERIFY_FAILED, vec![], None)
@@ -561,7 +574,7 @@ impl Mgmt {
         // A1.8 "What restarts the timer" (0063 addendum): only an update command answered with 0
         // (or 1); not UPDATE_STATUS, not a second UPDATE_ABORT, not a refused command, not a
         // repeat answered from the stored reply (that one returned above)
-        if is_update(cmd) && (status == st::OK || status == st::IN_PROGRESS) && !(cmd == UPDATE_ABORT && !had_upd) {
+        if is_update(cmd) && (status == st::OK || status == st::IN_PROGRESS || status == st::ROOM_MADE) && !(cmd == UPDATE_ABORT && !had_upd) {
             self.last_update = Some(now);
         }
         self.send(r, rx, status, &reply_payload, true, cmd, out);
@@ -590,7 +603,10 @@ impl Mgmt {
                 // returns to the image that carried out the ROLLBACK
                 let net_down = r.fw.sim_net_down;
                 r.fw.sim_net_down = false;
-                r.reset("software", None); // 0064's line is the last entry
+                let ver = |i: Option<&Image>| i.map_or("0.0.0".to_string(), |i| format!("{}.{}.{}", i.version.0, i.version.1, i.version.2));
+                let why = format!("rollback commanded: slot {} {} to slot {} {}", slot_name(r.fw.running),
+                                  ver(r.fw.running_image()), slot_name(r.fw.other()), ver(r.fw.other_image()));
+                r.reset("software", Some(&why)); // 0064's line, the last entry before the reset
                 r.fw.trial_net_down = net_down;
                 r.fw.running = r.fw.other();
                 r.fw.rolled_back = false;

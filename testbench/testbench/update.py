@@ -154,8 +154,12 @@ class Updater:
         for i in range(start, n):
             data = img[i * block:(i + 1) * block]
             crc = (zlib.crc32(data) ^ 1) & 0xFFFFFFFF if i == bad_crc else None
-            r = self.req("UPDATE_BLOCK", block_payload(i, data, crc))
-            st = r["status"] if r else None
+            for _ in range(4):
+                r = self.req("UPDATE_BLOCK", block_payload(i, data, crc))
+                st = r["status"] if r else None
+                if st != 64:  # 64: room made in the store, nothing taken: again as a new request (0067 addendum)
+                    break
+                self.room_made = getattr(self, "room_made", 0) + 1
             if st != 0:
                 return st, i
         return 0, n
