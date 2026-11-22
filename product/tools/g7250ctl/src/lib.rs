@@ -29,6 +29,9 @@ pub mod exit {
     pub const NO_REPLY: u8 = 3;
     /// A reply that could not be read, or a local error.
     pub const ERROR: u8 = 4;
+    /// The request was sent and may have taken effect, but the result could not be confirmed
+    /// (`install-stock`: the activation reply was lost and the radio went silent).
+    pub const NOT_CONFIRMED: u8 = 5;
 }
 
 /// Resolve `host` or `host:port` to an IPv4 socket address, with `default_port` when the port is

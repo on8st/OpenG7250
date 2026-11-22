@@ -47,6 +47,9 @@ struct Radio {
     /// Status 53 to this block, this many times.
     crc_fail: Option<(u32, u32)>,
     drop_activate_reply: bool,
+    /// The activation ran with its reply lost: the next request (the retransmission) meets the
+    /// spent challenge and gets 33, then the stock firmware runs and nothing answers.
+    switching: bool,
     restarted_into_this_firmware: bool,
     seen: Vec<(u16, Vec<u8>)>,
 }
@@ -62,6 +65,11 @@ fn tlv(p: &mut Vec<u8>, t: u8, v: &[u8]) {
 fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Option<Vec<u8>> {
     if r.activated {
         return None; // the stock firmware does not speak this channel
+    }
+    if r.switching {
+        r.switching = false;
+        r.activated = true;
+        return Some(reply(id_of(d), cmd_of(d), 33, &[]));
     }
     let id = id_of(d);
     let cmd = u16::from_be_bytes(cmd_of(d));
@@ -159,10 +167,11 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
             } else if !r.verified {
                 reply_of(55, &[])
             } else {
-                r.activated = true;
                 if r.drop_activate_reply {
+                    r.switching = true;
                     return None;
                 }
+                r.activated = true;
                 reply_of(0, &[1])
             }
         }
@@ -330,4 +339,66 @@ fn a_lost_activation_reply_and_a_silent_radio_mean_the_stock_firmware_runs() {
     let o = stock::install_stock(&mut client(), addr, &Secret(SECRET), &package(&img), opts(), &mut |_| {}, &mut left).unwrap();
     assert_eq!(o, StockOutcome::ActivatedUnconfirmed);
     assert!(!cmds(&st).contains(&0x44));
+}
+
+// The binary: exit codes and confirmations (cli_stock.rs).
+
+fn files(tag: &str, img: &[u8]) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let dir = std::env::temp_dir().join(format!("g7250ctl-stock-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let secret = dir.join("secret");
+    std::fs::write(&secret, "3c".repeat(32)).unwrap();
+    let image = dir.join("stock.bin");
+    std::fs::write(&image, img).unwrap();
+    (secret, image, stock::hex(&Sha256::digest(img)))
+}
+
+fn run_binary(addr: SocketAddr, args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_g7250ctl"))
+        .args(["--interval", "30", args[0], &addr.to_string()])
+        .args(&args[1..])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn binary_a_lost_activation_reply_with_silence_exits_5_not_confirmed() {
+    let img = image(900);
+    let (secret, image, sha) = files("exit5", &img);
+    let (addr, st) = start(Radio { drop_activate_reply: true, ..open_gate() });
+    let out = run_binary(addr, &["install-stock", image.to_str().unwrap(), "--sha256", &sha, "--yes", "--secret-file", secret.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(g7250ctl::exit::NOT_CONFIRMED as i32), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("most likely started"));
+    assert!(st.lock().unwrap().activated);
+}
+
+#[test]
+fn binary_resume_before_the_first_erase_asks_for_confirmation() {
+    // State 3: the installer has erased nothing yet. Without a terminal and without --yes the
+    // question cannot be asked, so nothing is sent but UPDATE_STATUS.
+    let img = image(512 * 3);
+    let (secret, image, sha) = files("resume3", &img);
+    let p = package(&img);
+    let (addr, st) = start(Radio { state: 3, header: p.header_bytes().to_vec(), blocks: vec![None; 3], ..open_gate() });
+    let out = run_binary(addr, &["install-stock", image.to_str().unwrap(), "--sha256", &sha, "--resume", "--secret-file", secret.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(g7250ctl::exit::USAGE as i32), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--yes"));
+    assert_eq!(cmds(&st), vec![0x45]);
+}
+
+#[test]
+fn binary_resume_while_writing_does_not_ask() {
+    let img = image(512 * 3);
+    let (secret, image, sha) = files("resume4", &img);
+    let p = package(&img);
+    let mut blocks = vec![None; 3];
+    blocks[0] = Some(img[..512].to_vec());
+    let (addr, st) = start(Radio { state: 4, sectors: 1, header: p.header_bytes().to_vec(), blocks, ..open_gate() });
+    let out = run_binary(addr, &["install-stock", image.to_str().unwrap(), "--sha256", &sha, "--resume", "--secret-file", secret.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(g7250ctl::exit::OK as i32), "{}", String::from_utf8_lossy(&out.stderr));
+    let c = cmds(&st);
+    assert_eq!(c.iter().filter(|x| **x == 0x41).count(), 2, "blocks 1 and 2 only: {c:x?}");
+    assert!(st.lock().unwrap().activated);
 }

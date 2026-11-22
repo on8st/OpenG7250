@@ -134,6 +134,7 @@ g7250ctl install 127.0.0.1:22251 a.g7pk b.g7pk --secret-file radio.secret
 | 2 | bad command line |
 | 3 | no reply, or no radio found |
 | 4 | a reply that does not decode, or a local error |
+| 5 | not confirmed: the request was sent and may have taken effect, but the result could not be read back (`install-stock`: the activation reply was lost and the radio went silent, which is also what a pulled cable or a hung radio looks like) |
 
 `--json` prints JSON on stdout for every command; errors go to stderr.
 - AetherSDR's firmware page follows on the same protocol (`product/spec/spec/annex-aethersdr.md`,
@@ -175,7 +176,9 @@ for Linux, macOS and Windows.
 - `install-stock <addr> <image> --sha256 <hash>` takes the stock image as the vendor supplies it
   and the SHA-256 the owner has for it. Before anything is sent it checks that the file has that
   hash and fits the application area (sectors 1 to 7, 917504 bytes), and asks for confirmation
-  (`--yes` skips it). It builds the package header itself (Table M-4: component 1, hardware
+  (`--yes` skips it). `--resume` asks too while the installer has not erased anything yet
+  (`UPDATE_STATUS` state 3), because the point of no return is still ahead; once it is writing
+  (state 4) it does not. It builds the package header itself (Table M-4: component 1, hardware
   0x00C8, version 0, slot 0) and sends `UPDATE_BEGIN` with the "foreign image" flag; the reply
   must say one-way. `--save-package <file>` also writes header and image as a package file.
 - Status 56 to `UPDATE_BEGIN`: the gate is closed (until the drill F1 has shown the vendor path,
@@ -183,7 +186,8 @@ for Linux, macOS and Windows.
 - The blocks, the verify (55: every block again, `--verify-retries`) and `UPDATE_ACTIVATE`
   with the flag repeated; the reply says "permanent" (item 5). Nothing is read back after it,
   because the stock firmware does not speak this channel; a lost activation reply followed
-  by 10 s of silence is reported as "the stock firmware has most likely started".
+  by 10 s of silence is reported as "the stock firmware has most likely started", with exit
+  code 5 (not confirmed), because a pulled cable or a hung radio looks the same.
 - A failure before the first erase (`UPDATE_STATUS` state 3): `UPDATE_ABORT`, and the radio
   restarts into this firmware with its secret and configuration. After the first erase (state 4)
   there is no way back: the tool never aborts (that would get 60), and the installer waits for

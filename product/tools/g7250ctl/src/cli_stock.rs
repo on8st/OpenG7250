@@ -48,7 +48,10 @@ pub enum StockCmd {
         sha256: String,
         #[command(flatten)]
         secret: SecretArg,
-        /// Do not ask for confirmation.
+        /// Do not ask for confirmation. It skips the only question before a one-way step: once
+        /// the installer erases the first sector there is no return to this firmware, and the
+        /// management secret is erased. With --resume it is asked only while the installer has
+        /// not yet erased anything.
         #[arg(long)]
         yes: bool,
         /// Continue an installation the installer shows in progress, after a break.
@@ -108,7 +111,16 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &StockCmd) -> O
                 f.write_all(file.header_bytes()).and_then(|_| f.write_all(file.image())).map_err(|e| (exit::ERROR, format!("{}: {e}", out.display())))?;
             }
             let s = secret.load()?;
-            if !yes && !resume {
+            let (mut c, to) = open(policy, addr)?;
+            // The point of no return is the first erase: ask before it, also on a resume while
+            // the installer is still in state 3; not once it is writing (state 4).
+            let ahead = if *resume {
+                let st = g7250ctl::update::update_status(&mut c, to).map_err(fail)?;
+                st.state != stock::STATE_INSTALLER_WRITING
+            } else {
+                true
+            };
+            if !yes && ahead {
                 confirm(&format!(
                     "Install the stock image {name} ({} bytes, SHA-256 {}) on {addr}.\n\
                      This is one-way: once the installer erases the first sector there is no return to this firmware,\n\
@@ -118,7 +130,6 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &StockCmd) -> O
                     stock::hex(&want)
                 ))?;
             }
-            let (mut c, to) = open(policy, addr)?;
             let opts = StockOptions { resume: *resume, verify_retries: *verify_retries };
             let mut left = None;
             match stock::install_stock(&mut c, to, &s, &file, opts, &mut progress(json), &mut left) {
@@ -134,7 +145,8 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &StockCmd) -> O
                     } else {
                         println!("{what}");
                     }
-                    Ok(exit::OK)
+                    // Silence is also a pulled cable or a hung radio: not confirmed.
+                    Ok(if o == StockOutcome::Activated { exit::OK } else { exit::NOT_CONFIRMED })
                 }
                 Err(f) => {
                     let (code, text) = fail(f);

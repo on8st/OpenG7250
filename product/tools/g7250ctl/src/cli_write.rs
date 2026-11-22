@@ -88,7 +88,8 @@ pub enum WriteCmd {
         addr: String,
         #[command(flatten)]
         secret: SecretArg,
-        /// Do not ask for confirmation.
+        /// Do not ask for confirmation. It skips the only question before the reset: the
+        /// network goes to DHCP and the secret is cleared, which cannot be undone.
         #[arg(long)]
         yes: bool,
         /// Wait until the radio answers again (at the same address only if DHCP gives it).
