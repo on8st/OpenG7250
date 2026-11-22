@@ -33,6 +33,17 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(self.case(core.Skip("x"), True), "skip")
         self.assertEqual(self.case(None), "fail")
 
+    def test_whole_claim(self):
+        from testbench import t_flash
+        for fn in (t_flash.t_a1_83, t_flash.t_a1_86):
+            self.assertTrue(fn.whole)
+
+        def fn(ctx):
+            ctx.check("one part", True, "detail")
+            raise core.PartSkip("the other part")
+        fn.whole = True
+        self.assertEqual(run(fn)["status"], "skip")
+
     def test_flash_rules(self):
         bad = dict(op="erase", address="0x08000000", len=131072)
 
@@ -111,26 +122,89 @@ class Reread(unittest.TestCase):
             self.assertNotIn(no, ctx.notes[0])
 
 
+START = "start after software: log "
+LOG0 = [(4, 0, "start after power-on: log lost"), (5, 900, "an entry")]
+AFTER = LOG0 + [(6, 31000, "restart: factory-reset"), (7, 0, START + "kept")]
+
+
 class ResetDone(unittest.TestCase):
     """An answer between the FACTORY_RESET reply and the reset does not count as the new start."""
 
-    def wait(self, starts, up0=30.0):
+    def wait(self, answers, up0=30.0):
+        """`answers`: (log, uptime) per poll, the last one repeated; radio time goes on 4 s per poll."""
         class Clock:
-            t = 100.0
+            emu, t = False, 100.0
 
             def now(self):
-                self.t += 0.5
+                self.t += 4.0
                 return self.t
-        clock, ctx, it = Clock(), core.Ctx(dict(radio=dict(ip="127.0.0.1"))), iter(starts)
+        clock, ctx, n = Clock(), core.Ctx(dict(radio=dict(ip="127.0.0.1"))), [0]
+
+        def read(c):
+            n[0] += 1
+            return answers[min(n[0], len(answers)) - 1][0]
         with mock.patch.object(t_store, "wait_reachable", lambda *a, **k: 0.0), mock.patch.object(t_store, "Mgmt", mock.MagicMock()), \
-                mock.patch.object(t_store, "start_of", lambda c: (clock, next(it, 70.0), 1.0)), mock.patch.object(t_store.time, "sleep"):
-            return t_store.reset_done(ctx, "FACTORY_RESET", (clock, 70.0, up0)), [c["ok"] for c in ctx.checks]
+                mock.patch.object(t_store, "read_log", read), mock.patch.object(t_store.time, "sleep"), \
+                mock.patch.object(t_store, "uptime", lambda c: answers[min(n[0], len(answers)) - 1][1]):
+            why = t_store.reset_done(ctx, "FACTORY_RESET", (clock, LOG0, up0))
+        return why, n[0], [c["ok"] for c in ctx.checks]
 
-    def test_waits_for_the_new_start(self):
-        self.assertEqual(self.wait([70.1, None, 70.0, 112.0]), (112.0, []))
+    def test_uptime_stands_still_during_erases(self):
+        # two stretched erases of 4 s: the uptime runs 8 s late, the image has not restarted
+        why, n, checks = self.wait([(LOG0, 30.0), (LOG0, 30.0), (LOG0 + [(6, 30000, "restart: factory-reset")], 30.1), (AFTER, 1.0)])
+        self.assertEqual((n, checks), (4, []))
+        self.assertIn("start entry", why)
 
-    def test_no_reset_fails(self):
-        self.assertEqual(self.wait([]), (None, [False]))
+    def test_young_image_late_uptime(self):
+        why, n, checks = self.wait([(LOG0, 1.0)], up0=1.0)  # 1 s old before the request, and it never restarts
+        self.assertEqual((why, checks), ("", [False]))
+
+    def test_new_start_older_than_before(self):
+        # the new image is reached later than the old one's uptime: only the start entry tells
+        self.assertIn("start entry", self.wait([(AFTER, 6.0)], up0=2.0)[0])
+
+    def test_log_lost(self):
+        new = [(0, 0, START + "lost")]
+        self.assertIn("start entry", self.wait([(new, 6.0)], up0=2.0)[0])
+        self.assertIn("dropped", self.wait([([], 1.0)])[0])
+
+    def test_no_answer_is_no_evidence(self):
+        why, n, checks = self.wait([([], None), (AFTER, None)])
+        self.assertEqual((n, checks), (2, []))
+
+    def test_the_log_before_is_read_whole(self):
+        with mock.patch.object(mgmt, "req_retransmit", lambda *a, **k: None):
+            c = mock.MagicMock(why="no reply")
+            self.assertEqual(mgmt.read_log(c), [])
+            with self.assertRaises(core.Missing):
+                mgmt.read_log(c, complete=True)
+
+
+class ResetTime(unittest.TestCase):
+    """What the 17 s check rests on."""
+
+    def took(self, emu, boot):
+        class Clock:
+            t, last = 100.0, 0
+
+            def now(self):
+                self.t += 1.0
+                self.last = int(self.t * 1e6)
+                return self.t
+        u = mock.MagicMock()
+        u.c.clock = Clock()
+        u.c.clock.emu = emu
+        u.req.return_value = dict(status=0)
+        with mock.patch.object(t_store, "state_before", lambda c: None), mock.patch.object(t_store, "reset_done", lambda *a: "seen"), \
+                mock.patch.object(t_store, "Mgmt", mock.MagicMock()), mock.patch.object(t_store, "uptime", lambda c: 0.25), \
+                mock.patch("testbench.t_a3.boot_t_us", lambda ctx: boot):
+            return t_store.factory_reset(core.Ctx(dict(radio=dict(ip="127.0.0.1"))), u)
+
+    def test_basis(self):
+        self.assertEqual(self.took(True, 105_000_000), (0, 3.0, "the boot event of hw.trace"))  # the reply at 102 s
+        st, took, basis = self.took(True, 50_000_000)  # only the boot event of an earlier start
+        self.assertEqual((took, basis), (0.75, t_store.UPTIME_BASIS))
+        self.assertIs(self.took(False, 0)[2], t_store.UPTIME_BASIS)
 
 
 if __name__ == "__main__":

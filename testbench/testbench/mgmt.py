@@ -324,12 +324,16 @@ def stats(c: "Mgmt") -> dict[str, int] | None:
     return parse_stats(r["payload"]) if r and r.get("status") == 0 else None
 
 
-def read_log(c: "Mgmt", first: int = 0) -> list[tuple[int, int, str]]:
-    """Every log entry from sequence `first` on, page by page (L-3)."""
+def read_log(c: "Mgmt", first: int = 0, complete: bool = False) -> list[tuple[int, int, str]]:
+    """Every log entry from sequence `first` on, page by page (L-3). `complete`: a page without an
+    answer fails the test instead of ending the list."""
     out: list = []
     while True:
         r = req_retransmit(c, "READ_LOG", first.to_bytes(4, "big"))
         if not r or r.get("status") != 0:
+            if complete:
+                from .core import Missing
+                raise Missing(f"READ_LOG: {'status ' + str(r.get('status')) if r else c.why}")
             return out
         page = parse_log(r["payload"])
         if not page:

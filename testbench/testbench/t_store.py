@@ -60,49 +60,73 @@ def first_secret(ctx, new: bytes):
     return r["status"] if r else None
 
 
-def start_of(c: Mgmt):
-    """(the radio's clock, when the running image started on it, its uptime) or (clock, None, None)."""
+def uptime(c: Mgmt) -> float | None:
     r = req_retransmit(c, "IDENTIFY")
-    now = c.clock.now()
     up = tlv(r["payload"]).get(16, b"") if r and r["status"] == 0 else b""
-    if len(up) != 4:
-        return c.clock, None, None
-    up = struct.unpack(">I", up)[0] / 1000
-    return c.clock, now - up, up
+    return struct.unpack(">I", up)[0] / 1000 if len(up) == 4 else None
 
 
-def reset_done(ctx, what: str, before) -> float | None:
+def state_before(c: Mgmt):
+    """What reset_done() compares with, read before the request: (clock, whole log, uptime)."""
+    return c.clock, read_log(c, complete=True), uptime(c)
+
+
+def new_start(log0: list, up0: float | None, log: list, up: float | None) -> str:
+    """Why this answer comes from an image that started after `log0` and `up0` were read, or "". No
+    sum of uptime and elapsed time: whether uptime counts flash work is open, so it may run late."""
+    old = {e[0]: e for e in log0}
+    for e in log:  # a start entry that was not there (also where the numbers began again: log lost)
+        if e[2].startswith("start after ") and old.get(e[0]) != e:
+            return f"a new start entry in READ_LOG ({e[0]} '{e[2]}')"
+    if up is not None and up0 is not None and up < up0:
+        return f"uptime dropped from {up0} to {up} s"
+    return ""
+
+
+def reset_done(ctx, what: str, before) -> str:
     """Wait for the reset after a FACTORY_RESET reply: it comes up to 17 s after the reply (0069),
-    and until then the radio may still answer, so an answer counts only from an image that started
-    since `before` (start_of() before the request). The start of that image on the radio's clock."""
-    clock, start0, up0 = before
+    and until then the radio may still answer, so an answer counts only with evidence of a start
+    since `before` (state_before() before the request). The evidence, or "" (the test fails)."""
+    clock, log0, up0 = before
     t0 = clock.now()
-    wait_reachable(ctx, what, limit_s=20 + 17)  # a host allows 17 s more than after a RESTART
-    if start0 is None:
-        return None
     while True:
+        wait_reachable(ctx, what, limit_s=20 + 17)  # a host allows 17 s more than after a RESTART
         with Mgmt(ctx.net) as c:
-            c.clock = clock
-            _, start, _ = start_of(c)
-        if start is not None and start - start0 > up0 / 2:
-            return start
+            c.clock, c.pace = clock, 18  # read over and over: under the cap of A1.10 S4
+            why = new_start(log0, up0, read_log(c), uptime(c))
+        if why:
+            return why
         if clock.now() - t0 > 20 + 17:
             ctx.check(f"{what}: the radio restarted within 17 s of the reply and 20 s to be reachable", False,
-                      "IDENTIFY still answers from the image that ran before" if start is not None else "no IDENTIFY answer")
-            return None
+                      "it answers, with no new start entry in READ_LOG and no drop of uptime")
+            return ""
         time.sleep(0.2)
-        wait_reachable(ctx, what, limit_s=20 + 17)
 
 
 def factory_reset(ctx, u: Updater):
-    """FACTORY_RESET; its status and the radio seconds from the reply to the start of the image that
-    runs after the reset, or None where not known."""
-    before = start_of(u.c)
+    """FACTORY_RESET; its status, the radio seconds from the reply to the reset or to the start of
+    the image after it (None where not known), and what that time rests on."""
+    from .t_a3 import boot_t_us
+    before = state_before(u.c)
+    clock = u.c.clock
+    clock.now()
+    us0 = clock.last if clock.emu else None
     r = u.req("FACTORY_RESET")
     st = r["status"] if r else None
-    t0 = u.c.clock.now()
-    start = reset_done(ctx, "FACTORY_RESET", before)
-    return st, None if start is None else start - t0
+    t0 = clock.now()
+    reply_us = clock.last if clock.emu else None
+    if not reset_done(ctx, "FACTORY_RESET", before):
+        return st, None, "no restart seen"
+    boot = boot_t_us(ctx)
+    if us0 is not None and reply_us is not None and boot > us0:
+        return st, max(0.0, (boot - reply_us) / 1e6), "the boot event of hw.trace"
+    with Mgmt(ctx.net) as c:
+        c.clock = clock
+        up = uptime(c)
+    return st, None if up is None else clock.now() - t0 - up, UPTIME_BASIS
+
+
+UPTIME_BASIS = "the uptime of IDENTIFY, which may run late by flash work (open with the spec session); start-up included"
 
 
 def sectors(u: Updater) -> list[int]:
@@ -157,7 +181,7 @@ def t_a1_39(ctx: Ctx):
         if flash:
             secs = sectors(u)
             flog_start(ctx)
-        st, took = factory_reset(ctx, u)
+        st, _, _ = factory_reset(ctx, u)
         ctx.eq("FACTORY_RESET: 0", st, 0)
     new = os.urandom(32)
     with updating(ctx, b"", restart_at_end=False) as u:
@@ -213,11 +237,13 @@ def erased_reset(ctx, s: bytes):
             if not known:
                 ctx.notes.append("what is in flash not judged: " + ("the secret in force is not found as 32 bytes in a row"
                                                                     if has(ctx, "flash.dump") else "no flash.dump"))
-            st, took = factory_reset(ctx, u)
+            st, took, basis = factory_reset(ctx, u)
             ctx.eq("FACTORY_RESET with stretched erases: 0", st, 0)
-            # `took` counts the boot stage too (the uptime starts after it); the bound is on the reset
-            ctx.check("the reset within 17 s of the reply (radio time, at most 1 s of start-up included)",
-                      took is not None and took <= 18.0, f"{took if took is None else round(took, 2)} s")
+            # from the uptime `took` counts the boot stage too (1 s allowed); the bound is on the reset
+            ctx.check("the reset within 17 s of the reply (radio time)", took is not None and took <= (18.0 if basis is UPTIME_BASIS else 17.0),
+                      f"{took if took is None else round(took, 2)} s, from {basis}")
+            if basis is UPTIME_BASIS:
+                ctx.notes.append(f"the 17 s check rests on {basis}")
             if known:
                 ctx.eq("neither store sector holds the old secret", where(ctx, secs, s), [])
         second = os.urandom(32)
@@ -229,7 +255,7 @@ def erased_reset(ctx, s: bytes):
         return
     with updating(ctx, second, restart_at_end=False) as u:
         ctx.fixture("flash.fault", op="erase", after=1, flag="PGSERR")  # the second erase of the request
-        st, _ = factory_reset(ctx, u)
+        st, _, _ = factory_reset(ctx, u)
         ctx.eq("FACTORY_RESET whose second erase fails: 0 (it fails after the reply)", st, 0)
         texts = [e[2] for e in read_log(u.c)]
         i = [k for k, x in enumerate(texts) if x.startswith("restart: factory-reset")]

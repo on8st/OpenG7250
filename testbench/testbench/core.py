@@ -13,11 +13,13 @@ from typing import Callable
 REGISTRY: dict[str, Callable] = {}
 
 
-def test(*ids: str, trace_pins: list | None = None, trace_since: str = "start"):
+def test(*ids: str, trace_pins: list | None = None, trace_since: str = "start", whole: bool = False):
     """Register a test function for one or more catalogue ids. `trace_pins`: extra pins the
     hw.trace of this test watches; `trace_since`: "start" (judge pins from the trace start
-    snapshot on) or "boot" (from the boot event + 20 us on, A3.6; 0045)."""
+    snapshot on) or "boot" (from the boot event + 20 us on, A3.6; 0045). `whole`: the claim needs
+    every part, so a part that cannot run (PartSkip) leaves no pass."""
     def deco(fn):
+        fn.whole = whole
         fn.trace_pins = trace_pins
         fn.trace_since = trace_since
         for i in ids:
@@ -257,7 +259,7 @@ def run_one(tid: str, ctx: Ctx) -> dict:
             flash_rules()
         except (Skip, RunnerFault) as e2:
             ctx.notes.append(f"run-wide flash rules not judged: {e2}")
-        judged("pass" if own else "skip", f"part not run: {e}" if own else str(e))
+        judged("pass" if own and not getattr(fn, "whole", False) else "skip", f"part not run: {e}" if own else str(e))
     except Skip as e:
         judged("skip", str(e))
     except Blocked as e:

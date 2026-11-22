@@ -258,8 +258,8 @@ def _t_a1_63(ctx, c, h, s, saved):
         st = arm_once(ctx, h)
         ctx.eq("with bit 4 = 1 the arm is accepted (T-B10-41)", None if st is None else st & 0xF, 1)
         h.stop()
-        from .t_store import reset_done, start_of
-        before = start_of(c)
+        from .t_store import reset_done, state_before
+        before = state_before(c)
         r = c.authed("FACTORY_RESET", s)
         ctx.eq("FACTORY_RESET: 0", r["status"] if r else None, 0)
         reset_done(ctx, "FACTORY_RESET", before)
@@ -695,8 +695,9 @@ def t_b5_21(ctx):
         h.keepalive()
         pushes: list = []
         t = threading.Thread(target=lambda: pushes.extend(h.recv(1.0, PORT_REG)))
-        from .t_store import reset_done, start_of
-        before = start_of(c)
+        from .t_store import reset_done, state_before
+        before = state_before(c)
+        h.keepalive()  # the log was read meanwhile
         t.start()
         r = c.authed("FACTORY_RESET", s)
         t_reply = time.monotonic()
@@ -704,8 +705,10 @@ def t_b5_21(ctx):
         ctx.eq("armed: FACTORY_RESET answered 0", r["status"] if r else None, 0)
         disarm = [tt for _, d, tt in pushes if (value(parse_regs(d), TX_ARM_STATE) if value(parse_regs(d), TX_ARM_STATE) is not None else 1) & 0xF == 0]
         ctx.check("FACTORY_RESET disarmed before its reply (A1.9; no flash work while armed)",
-                  bool(disarm) and disarm[0] <= t_reply,
-                  f"disarm push {format(disarm[0] - t_reply, '+.3f') + ' s' if disarm else 'not seen'} relative to the reply")
+                  # two sockets read by two threads: the bench cannot order arrivals closer than this
+                  bool(disarm) and disarm[0] <= t_reply + 0.005,
+                  f"disarm push {format((disarm[0] - t_reply) * 1000, '+.2f') + ' ms' if disarm else 'not seen'} relative to the reply "
+                  "(5 ms: the bench's resolution between two sockets)")
     # after the factory reset: the network back to its default, the secret cleared, the window open
     reset_done(ctx, "FACTORY_RESET", before)
     with m(ctx) as c, Host(ctx.net) as h:

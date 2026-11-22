@@ -441,7 +441,7 @@ def planned_cuts_seen(missing: list[str]):
         raise RunnerFault("power.cut: no flash.log entry of the planned cut: " + "; ".join(missing))
 
 
-@test("T-A1-86")
+@test("T-A1-86", whole=True)
 def t_a1_86(ctx: Ctx):
     """A1.6 "Store writes" (0065): a power loss after each word of a store write, and during the
     erase of the other store sector in a compaction. Each cut is judged by its own flash.log entry."""
@@ -582,7 +582,7 @@ def t_a1_87(ctx: Ctx):
     ctx.notes.append("'logged once per start' and 'an item with no readable record takes its Table A1-4 value' not judged yet")
 
 
-@test("T-A1-83")
+@test("T-A1-83", whole=True)
 def t_a1_83(ctx: Ctx):
     """A1.8 "Torn boot-record writes" (0064). Each cut is judged by its own flash.log entry."""
     need(ctx, "power.cut", "time.advance", "flash.log")
