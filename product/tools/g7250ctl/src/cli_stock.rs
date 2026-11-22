@@ -11,6 +11,7 @@ use g7250_proto::mgmt::Command;
 use g7250ctl::reads::Failure;
 use g7250ctl::render::Json;
 use g7250ctl::stock::{self, StockLeft, StockOptions, StockOutcome};
+use g7250ctl::update::Event;
 use g7250ctl::exit;
 
 use crate::cli_update::progress;
@@ -132,7 +133,15 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &StockCmd) -> O
             }
             let opts = StockOptions { resume: *resume, verify_retries: *verify_retries };
             let mut left = None;
-            match stock::install_stock(&mut c, to, &s, &file, opts, &mut progress(json), &mut left) {
+            // The activation and the abort before the first erase are told below, in their stock
+            // wording; the update texts for them name the new image and a restart command.
+            let mut shown = progress(json);
+            let mut ev = |e: Event| {
+                if !matches!(e, Event::Activated | Event::Aborted { .. }) {
+                    shown(e)
+                }
+            };
+            match stock::install_stock(&mut c, to, &s, &file, opts, &mut ev, &mut left) {
                 Ok(o) => {
                     let what = match o {
                         StockOutcome::Activated => "activated (permanent): the radio resets into the stock firmware",

@@ -371,7 +371,25 @@ fn binary_a_lost_activation_reply_with_silence_exits_5_not_confirmed() {
     let out = run_binary(addr, &["install-stock", image.to_str().unwrap(), "--sha256", &sha, "--yes", "--secret-file", secret.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(g7250ctl::exit::NOT_CONFIRMED as i32), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("most likely started"));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("activated"), "no activation is claimed: {}", String::from_utf8_lossy(&out.stderr));
     assert!(st.lock().unwrap().activated);
+}
+
+#[test]
+fn binary_abort_before_the_first_erase_names_the_installer_restart() {
+    // Found on the reference model: the installer restarts the radio itself, so `abort` must
+    // not ask for a restart, and `--restart` sends none.
+    let img = image(512 * 3);
+    let (secret, _image, _sha) = files("abort3", &img);
+    let p = package(&img);
+    let (addr, st) = start(Radio { state: 3, header: p.header_bytes().to_vec(), blocks: vec![None; 3], ..open_gate() });
+    let out = run_binary(addr, &["abort", "--restart", "--secret-file", secret.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(g7250ctl::exit::OK as i32), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("restarts into this firmware") && !text.contains("g7250ctl restart"), "{text}");
+    assert!(st.lock().unwrap().restarted_into_this_firmware);
+    let c = cmds(&st);
+    assert_eq!((c.first(), c.contains(&0x44), c.contains(&0x24)),(Some(&0x45), true, false), "{c:x?}");
 }
 
 #[test]
