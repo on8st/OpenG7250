@@ -2,8 +2,8 @@
 
 - Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
 - Status: version 1.0 (tag `spec-v1.0`). Applies decisions 0001–0066, all accepted by ON8ST
-  (`product-handover.md`); after 1.0 also 0067 (proposed), listed under "After 1.0" in
-  `spec/CHANGELOG.md`. Complete for milestones M1–M5 except for the values that need the
+  (`product-handover.md`); after 1.0 also 0067–0071, accepted by ON8ST on 2026-11-22,
+  listed under "After 1.0" in `spec/CHANGELOG.md` (not yet a version). Complete for milestones M1–M5 except for the values that need the
   radio, which are named in Annex P with a safe placeholder each; level 2 (part C) waits for
   gate G6 (0011).
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`).
@@ -486,7 +486,10 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   below included, a slot is named by its letter, `A` or `B` (tag 23 reports 1 and 2);
   `<check>` is one of `unreadable`, `no-record`, `hardware`, `kind`, `length`, `slot`,
   `integrity`, `vectors` (the image check, in order), and a failed `UPDATE_VERIFY` may also
-  name `hash` or `header`; a version is written `major.minor.build`.
+  name `hash` or `header`; a version is written `major.minor.build`. A failed `UPDATE_VERIFY`
+  names, before any of these, `missing-blocks` when a block has not been received (A1.8
+  "Blocks sent again") and `unreadable` when a received word cannot be read for the hash
+  (0067 addendum, proposed 2026-11-22).
 - **Integrity in `IDENTIFY`** (0067; Table M-2 tag 9), per slot: 1 good, the slot passed the
   image check when last judged and its staging, if any, ended with a good `UPDATE_VERIFY`;
   0 none, the slot is erased, has no image record, or its staging has not ended with a good
