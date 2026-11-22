@@ -266,7 +266,7 @@ async fn main(spawner: Spawner) {
         // A trial not confirmed 60 s after its start: commanded reset, the boot stage starts the
         // previous image (A1.8 U-6; 0044). Here, not in the network task, so that it also holds
         // when the network never comes up. Nothing is keyed in this build (no RF to wait for).
-        if update::trial_pending() && Instant::now().as_millis() >= update::TRIAL_LIMIT_MS {
+        if update::trial_pending() && g7250_update::trial::expired(Instant::now().as_millis()) {
             println!("app: FAULT trial image not confirmed 60 s after start; restarting into the previous image");
             safe::reassert();
             commanded_reset(Reason::TrialUnconfirmed);

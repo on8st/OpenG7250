@@ -9,6 +9,7 @@
 //! - [`stage`]: the transfer into the other slot (the staging area): checks of `UPDATE_BEGIN`,
 //!   numbered blocks with a CRC each, the SHA-256 and image check of `UPDATE_VERIFY`, and the
 //!   activation.
+//! - [`trial`]: when a trial may confirm itself, and when its time is over.
 //!
 //! Power-loss safety (U-5, U-6). The running image is never written: the stager writes only the
 //! other slot, through [`FlashGuard`](g7250_layout::FlashGuard) as `Writer::Application`. The
@@ -22,6 +23,7 @@
 pub mod boot;
 pub mod image;
 pub mod stage;
+pub mod trial;
 
 #[cfg(test)]
 mod sim;

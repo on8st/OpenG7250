@@ -4,10 +4,10 @@
 //! boot record in the store, the trial boot's self-confirmation (U-6).
 //!
 //! Self-confirmation (A1.8; 0044): a trial image confirms itself once it has run at least
-//! [`CONFIRM_AFTER_MS`] with the network up (CH394 initialised, management socket open: the main
+//! [`trial::CONFIRM_AFTER_MS`] with the network up (CH394 initialised, management socket open: the main
 //! loop only runs then), the main loop running (the check is in it), the watchdog serviced (the
 //! watchdog task refreshed it within the last second) and no class 2 fault ([`class2_fault`]). No
-//! host is needed. If it has not confirmed [`TRIAL_LIMIT_MS`] (60 s) after its start, the main
+//! host is needed. If it has not begun to confirm itself [`trial::LIMIT_MS`] (60 s) after its start, the main
 //! task (not the network loop, so that a network that never comes up cannot stop it) makes a
 //! commanded reset; the boot stage finds the attempt used and starts the previous image. A reset
 //! for any other reason before the confirmation (crash, watchdog, power loss) does the same: the
@@ -41,7 +41,7 @@ pub fn trial_pending() -> bool {
 /// The criterion of 0044 at `now_ms`, checked from the main loop, which runs from
 /// `network_up_ms` on (CH394 initialised, management socket open).
 pub fn may_confirm(now_ms: u64, network_up_ms: u64) -> bool {
-    now_ms.saturating_sub(network_up_ms) >= CONFIRM_AFTER_MS
+    trial::may_start(now_ms, network_up_ms)
         && watchdog_serviced(now_ms)
         && !class2_fault()
         && g7250_board::safe::holds()
@@ -57,11 +57,7 @@ use g7250_radio::mgmt::Updater;
 use g7250_update::boot::{self, UpdateState};
 use g7250_update::image;
 use g7250_update::stage::{Offer, Refusal, Running, Stager};
-
-/// Run time after which a trial image confirms itself.
-pub const CONFIRM_AFTER_MS: u64 = 10_000;
-/// A trial must confirm itself within 60 s of its start (U-6).
-pub const TRIAL_LIMIT_MS: u64 = 60_000;
+use g7250_update::trial;
 
 /// Room the store keeps free at UPDATE_BEGIN for staging marks (one flash word each).
 const MARK_ROOM: u32 = 4096;
