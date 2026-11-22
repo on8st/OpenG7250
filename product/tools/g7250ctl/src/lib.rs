@@ -11,6 +11,7 @@ pub mod reads;
 pub mod render;
 pub mod secret;
 pub mod transport;
+pub mod update;
 pub mod writes;
 
 use std::net::{SocketAddr, ToSocketAddrs};

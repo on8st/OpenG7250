@@ -3,9 +3,10 @@
 Command-line tool for managing the firmware of a G7250 running the new firmware (G7250-P2),
 from the computer, without the controller and without AetherSDR.
 
-- Status: **milestones M1 to M3**: `discover` (management broadcast and P2), `info`, `stats`;
+- Status: **milestones M1 to M4**: `discover` (management broadcast and P2), `info`, `stats`;
   `logs`, `config get`, `calibration get`; the authenticated commands (secrets, `config set`,
-  `restart`, `factory-reset`, `switch-level`, `clear-log`, `calibration set`/`clear`). Unit
+  `restart`, `factory-reset`, `switch-level`, `clear-log`, `calibration set`/`clear`); the
+  firmware update (`install`, `status`, `abort`, `rollback`, `package`). Unit
   tests against a local socket; the run against the reference model is next.
 - Protocol: the management protocol of `product/spec/spec/network-interface.md` part A
   (A1.1a, A1.3–A1.10, A1.8, A1.8a), UDP 7251. This tool is its reference implementation; any gap
@@ -68,6 +69,29 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   `factory-reset --wait` wait until the radio answers with a lower uptime (30 s; 47 s after a
   factory reset, 0069).
 
+## Firmware update (A1.8; Annex M "Package file")
+
+- `install <addr> <package>…` checks every package file first (length, magic, header
+  version, signature length, image SHA-256; 0071) and sends nothing if one fails. It reads
+  the running slot (`IDENTIFY` tag 23) and sends the package linked for the other slot (or
+  one for either slot); a release ships one per slot (0043).
+- Block *n* is image bytes 512 *n* … 512 *n* + 511, each block its own authenticated
+  request. Status 64 (store full, nothing taken): the same block is sent again as a new
+  request; a second 64 in a row for one block ends the install. Status 53: sent again, at
+  most twice.
+- A failed `UPDATE_VERIFY` (55): every block is sent again, in order, with new request ids,
+  and verified again (`--verify-retries`, default 1; 0067).
+- A status that ends the transfer: `UPDATE_ABORT`; the radio then stays in the update state
+  until a restart (`abort --restart`, or `restart`). If the radio stops answering, the
+  transfer is left as it is: `install --resume` within 10 min continues from the blocks
+  received (`UPDATE_STATUS`).
+- After `UPDATE_ACTIVATE` the tool waits for the reset and reads the result back: the new
+  version runs in the target slot, as a trial, until it has confirmed itself (0044), or the
+  rollback is reported. `--no-wait` skips this.
+- `--downgrade` sets the downgrade flag for an older image (U-8). `rollback` starts the
+  image in the other slot (0064) and waits the same way. `package <file>` checks a file
+  and shows its header without sending anything.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -102,10 +126,11 @@ for Linux, macOS and Windows.
 | `calibration set <addr> --source s [--date d] --entry ID=HEX…`, `calibration clear <addr>` | replace or remove the calibration set, read back (done, M3) | A1.12 |
 | `restart <addr> [--wait]`, `factory-reset <addr> [--yes] [--wait]` | commanded reset; factory reset of Table A1-4 (done, M3) | A1.9, A1.6a |
 | `switch-level <addr> <1\|2>`, `clear-log <addr>` | (done, M3) | A1.6 C-2, A1.7 |
-| `install <addr> <package-A> <package-B>` | read the running slot (`IDENTIFY` tag 23), send the package linked for the other slot, verify, activate; trial boot follows | A1.8 (0043) |
-| `status <addr>` | progress of an update or installation | A1.8 |
-| `abort <addr>` | abandon an update (not possible once a stock installation has started) | A1.8, A1.8a item 3 |
-| `rollback <addr>` | return to the image in the other slot | A1.8 |
+| `install <addr> <package>… [--downgrade] [--resume] [--no-wait]` | read the running slot (`IDENTIFY` tag 23), send the package linked for the other slot, verify, activate; watch the trial boot until it confirms itself (done, M4) | A1.8 (0043, 0067, 0071) |
+| `status <addr>` | progress of an update or installation (done, M4) | A1.8 |
+| `abort <addr> [--restart]` | abandon an update (not possible once a stock installation has started) (done, M4) | A1.8, A1.8a item 3 |
+| `rollback <addr> [--no-wait]` | return to the image in the other slot (done, M4) | A1.8 (0064) |
+| `package <file>` | check a package file and show its header; sends nothing (done, M4) | Annex M "Package file" |
 | `install-stock <addr> <image> --sha256 <hash>` | return to the stock firmware: one-way streaming installation of an owner-supplied stock image | A1.8a item 3 |
 | `logs <addr> [--from seq] [--follow] [--poll s]` | read the log in pages to its end; `--follow` keeps reading, across a restart of the radio (log kept: the sequence continues; log lost: from 0 again, 0068); a gap left by the ring is reported (done, M2) | A1.7 |
 | `config get <addr>` | every configuration item of Table M-3 (done, M2) | A1.6 |

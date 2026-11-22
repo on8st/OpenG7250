@@ -2,6 +2,7 @@
 // Copyright (C) 2026 ON8ST
 //! `g7250ctl` command line. See README.md.
 
+mod cli_update;
 mod cli_write;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -89,6 +90,8 @@ enum Cmd {
     },
     #[command(flatten)]
     Write(cli_write::WriteCmd),
+    #[command(flatten)]
+    Update(cli_update::UpdateCmd),
 }
 
 #[derive(Subcommand)]
@@ -195,6 +198,7 @@ fn run(cli: &Cli, policy: Policy) -> Outcome {
         Cmd::Calibration { op: CalibrationOp::Set(a) } => cli_write::calibration_set(cli.json, policy, a),
         Cmd::Calibration { op: CalibrationOp::Clear { addr, secret } } => cli_write::calibration_clear(cli.json, policy, addr, secret),
         Cmd::Write(w) => cli_write::run(cli.json, policy, w),
+        Cmd::Update(u) => cli_update::run(cli.json, policy, u),
         Cmd::Calibration { op: CalibrationOp::Get { addr } } => {
             let (mut c, to) = open(policy, addr)?;
             let cal = reads::get_calibration(&mut c, to).map_err(fail)?;

@@ -27,7 +27,7 @@ pub struct SecretArg {
 }
 
 impl SecretArg {
-    fn load(&self) -> Result<Secret, (u8, String)> {
+    pub fn load(&self) -> Result<Secret, (u8, String)> {
         Secret::load(self.secret_file.as_deref()).map_err(|e| (exit::USAGE, e))
     }
 }

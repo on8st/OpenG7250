@@ -12,6 +12,10 @@ use g7250_proto::mgmt::Status;
 /// Meaning of a status code (Table A1-3).
 pub fn status_text(code: u16) -> &'static str {
     use Status::*;
+    if code == 64 {
+        // 0067 addendum; not yet in the protocol crate's Status.
+        return "nothing taken: room made in the store, send the block again";
+    }
     match Status::from_u16(code) {
         Some(Ok) => "OK",
         Some(InProgress) => "accepted, in progress",
