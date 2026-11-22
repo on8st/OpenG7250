@@ -13,5 +13,6 @@ pub mod discovery;
 pub mod discovery_host;
 pub mod ipv4ll;
 pub mod mgmt;
+pub mod mgmt_host;
 pub mod netcfg;
 pub mod ratelimit;
