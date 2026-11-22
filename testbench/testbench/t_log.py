@@ -159,13 +159,13 @@ def t_a1_91(ctx: Ctx):
         ctx.check("it and those after it dropped, the numbers going on from the last one kept",
                   bool(got) and any(e[0] == bad and e[2] == f"{START}software: log kept" for e in got),
                   f"{[e for e in got if e[0] >= bad][:3]}")
-    else:
-        ctx.notes.append("corrupted entries not run: no log.corrupt (one entry of the ring changed in RAM; the layout is the firmware's)")
         # the oldest entry corrupted: nothing is kept, which is a ring that fails as a whole
         ctx.fixture("log.corrupt", seq=entries(ctx)[0][0])
         with updating(ctx, s):
             pass
         lost(ctx, "the oldest entry corrupted", "software")
+    else:
+        ctx.notes.append("corrupted entries not run: no log.corrupt (one entry of the ring changed in RAM; the layout is the firmware's)")
     # a start with no reset flag, or with power-on beside software: a power loss, whatever is named
     if "reset.flags" in fx:
         for label, flags, cause in (("no reset flag", [], "unknown"), ("power-on beside software", ["software", "power-on"], "software")):
