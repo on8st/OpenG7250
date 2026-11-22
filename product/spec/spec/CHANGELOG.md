@@ -13,7 +13,7 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0072 (C-3 limits that may be lost) accepted in principle by ON8ST on 2026-11-22 and held
   for the point with Table M-3 (ending the lost state before the calibration set holds S2 and
   T3); the number is reserved, and none of its text is in the spec yet.
-- 0073, 0074, 0075, 0076 accepted by ON8ST on 2026-11-22.
+- 0073, 0074, 0075, 0076, 0077 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
   "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
@@ -102,6 +102,12 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   200 power cuts in store writes, the bus fault of 0075. The drill runs only with its own go
   from ON8ST. Open: whether a second program of a flash word gives a double ECC error, to be
   settled from RM0468 (not read). Annex P; T-A1-87, T-A3-62.
+- 0077 (accepted 2026-11-22; installer and testbench questions on A1.8a item 3): the write session
+  continues in the installer and `END_WRITE_SESSION` is answered there; the idle time does not
+  run during the holder's own request (in the installer and in this firmware; the one exception
+  to 0073); power lost with every sector written may leave an unchecked stock image; from the
+  first erase `IDENTIFY` reports no secret and no window, and `SET_FIRST_SECRET` gets 36.
+  A1.8a item 3, A1.10, B2.3; T-A1-60, T-A1-15 extended.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 

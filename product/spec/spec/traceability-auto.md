@@ -73,9 +73,10 @@
 | 0069 | 0069 — Reply time of requests that do flash work | 1 | 5 | network-interface: A1 Management channel; network-interface: Annex P — Pending hardware parameters; network-interface: B2 Transport; network-interface: Management channel, ownership, safety (A1–A3); network-interface: Session, ownership, watchdog (B5) |  |
 | 0070 | 0070 — What g7250ctl must pass against the reference model | 1 | 2 | network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0071 | 0071 — The package file | 1 | 3 | network-interface: (top); network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
-| 0072 | 0072 — C-3 limits that may be lost (number reserved) | 0 | 0 |  |  |
+| 0072 | 0072 — C-3 limits that may be lost (number reserved) | 0 | 1 | network-interface: (top) |  |
 | 0073 | 0073 — Time over flash work | 5 | 5 | network-interface: (top); network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Management channel, ownership, safety (A1–A3); network-interface: Session, ownership, watchdog (B5) |  |
 | 0074 | 0074 — Management details from the g7250ctl runs | 10 | 5 | network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: B10 Transmit (milestone M4); network-interface: B11 Error handling and robustness; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0075 | 0075 — Unexpected stop of the firmware | 5 | 4 | network-interface: A1 Management channel; network-interface: A3 Safety behaviour visible on the network; network-interface: Annex P — Pending hardware parameters; network-interface: Management channel, ownership, safety (A1–A3) |  |
-| 0076 | 0076 — Radio drill F3: torn store words, the unreadable word, and kept RAM | 3 | 3 | network-interface: (top); network-interface: Annex P — Pending hardware parameters; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0076 | 0076 — Radio drill F3: torn store words, the unreadable word, and kept RAM | 3 | 2 | network-interface: Annex P — Pending hardware parameters; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0077 | 0077 — The streaming installer: write session, power loss, identification | 4 | 4 | network-interface: (top); network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Management channel, ownership, safety (A1–A3) |  |
 

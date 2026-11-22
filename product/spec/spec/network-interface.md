@@ -2,8 +2,8 @@
 
 - Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
 - Status: version 1.0 (tag `spec-v1.0`). Applies decisions 0001–0066, all accepted by ON8ST
-  (`product-handover.md`); after 1.0 also 0067–0071 and 0073–0076, accepted by ON8ST on 2026-11-22,
-  listed under "After 1.0" in `spec/CHANGELOG.md` (not yet a version). Complete for milestones M1–M5 except for the values that need the
+  (`product-handover.md`); after 1.0 also 0067–0071 and 0073–0077, accepted by ON8ST on 2026-11-22,
+  listed under "After 1.0" in `spec/CHANGELOG.md` (not yet a version); 0072 is accepted in principle and held, its text not yet applied. Complete for milestones M1–M5 except for the values that need the
   radio, which are named in Annex P with a safe placeholder each; level 2 (part C) waits for
   gate G6 (0011).
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`).
@@ -656,9 +656,19 @@ behaviour are not specified here (0025, "Clean room").
      ignores the local PTT and KEY inputs (0030), and MUST service the independent watchdog if it
      runs (its start mode is pending hardware, P-SYS-7). It answers only `IDENTIFY` (with the
      installer state and the sectors written), `GET_CHALLENGE`, `UPDATE_BLOCK`, `UPDATE_STATUS`,
-     `UPDATE_VERIFY`, `UPDATE_ACTIVATE` and `UPDATE_ABORT`, and a repeat of the accepted
-     `UPDATE_BEGIN`, which it answers from the stored reply (A1.4); every other management
-     command gets status 58. Discovery, the P2 ports and TCI are closed.
+     `UPDATE_VERIFY`, `UPDATE_ACTIVATE`, `UPDATE_ABORT` and `END_WRITE_SESSION` (0077), and a
+     repeat of the accepted `UPDATE_BEGIN`, which it answers from the stored reply (A1.4); every
+     other management command gets status 58. Discovery, the P2 ports and TCI are closed.
+     The write session of A1.10 continues in the installer: it is held by the host whose
+     foreign `UPDATE_BEGIN` was accepted, ends after 60 s idle as A1.10 says, and
+     `END_WRITE_SESSION` is answered as A1.10 says. Another host may then continue the transfer
+     with an authenticated request. Before the first erase the session also ends with the
+     restart (0077). From the first sector erase on, `IDENTIFY` reports no secret set (tag 11 =
+     0, item 7) and no first-secret window (tag 12); the installer opens none, so
+     `SET_FIRST_SECRET` gets 36 (Table A1-3 order: 36 before 58; before the first erase too,
+     with the secret still set), and the rest of the transfer is authenticated with the secret
+     the installer keeps in RAM (item 7). The installer state (tag 10) tells a host this apart
+     from factory state (0077).
    - **Before the first erase.** `UPDATE_ABORT` before the first sector erase restarts the main
      unit into this firmware, with its secret and configuration unchanged; it is logged. Its reply
      has restart needed = 0 (Table M-1; 0074). The
@@ -678,9 +688,10 @@ behaviour are not specified here (0025, "Clean room").
      `UPDATE_ABORT` is answered with status 60 (the reply says the transfer must be completed or
      the recovery path used). If the transfer breaks off after the first erase, the installer
      keeps waiting for blocks and never restarts by itself (the 10-minute rule of A1.8 no
-     longer applies); if power is lost, the
-     main unit has no valid application and the recovery path is the vendor path through the
-     controller (U-9; 0028 Decision 2), which the gate above has shown to work.
+     longer applies); if power is lost, the main unit may have no valid application, or, with every
+     sector written, a stock image that was not checked by `UPDATE_VERIFY` and that the vendor
+     bootloader may start; in either case the way to a checked image is the vendor path through
+     the controller (U-9; 0028 Decision 2), which the gate above has shown to work (0077).
    - Before the first erase, the reply to `UPDATE_BEGIN` MUST state that the installation is
      one-way and that a broken transfer needs the vendor path through the controller.
 4. **No vendor recovery mode** (0028 Decision 2; replaces 0024 Decision 4). No software entry
@@ -892,7 +903,10 @@ A1.10 **Security on a LAN** (0008, Security):
   authenticated request from the holder whose HMAC verifies refreshes the 60 s idle timer;
   reads (`GET_STATS`, `IDENTIFY` and the other unauthenticated commands), `GET_CHALLENGE`,
   any unauthenticated request and any request that fails authentication MUST NOT refresh it,
-  from the holder or from any other host (0022 §75). A repeated authenticated request that is
+  from the holder or from any other host (0022 §75). While a request from the holder is being
+  executed, from its receipt until its reply is sent, the idle time does not run; it runs again
+  from the reply. In the installer (A1.8a item 3) and in this firmware alike, a holder waiting
+  for a reply delayed by flash work therefore never loses the session (0077). A repeated authenticated request that is
   answered from the stored reply (A1.4) is not executed and MUST NOT refresh it either: only
   the first execution of the request counts (0022 §86 item 7). A change of the radio's address
   or netmask (C-1) ends the write session and discards every challenge and stored reply; it is
@@ -2150,8 +2164,8 @@ holds may be lost, and a P2 session may end by its watchdog (B5.6) and be restar
   not. The time of the flash work of one request, of a start's own store writes and of the
   trial self-confirmation MUST be counted to within 1 ms in total, whatever number of erase and
   program operations it holds. These limits are: the trial limit of 60 s (A1.8), the
-  first-secret window of 300 s (A1.10), the 10-minute abandonment (A1.8, A1.8a), the 60 s
-  write-session idle time (A1.10) and the stored-reply time (A1.4). Each MUST NOT act before
+  first-secret window of 300 s (A1.10), the 10-minute abandonment (A1.8, A1.8a), the 60 s write-session idle time (A1.10), which does not run during the holder's own request
+  (0077), and the stored-reply time (A1.4). Each MUST NOT act before
   it falls due and MUST act within 100 ms after it falls due. One that falls due during flash
   work MUST act within 100 ms after that work ends, before any management request received
   during the work is handled; such a request is judged by the state when it is handled, so a
@@ -4163,7 +4177,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-12 | Requests from outside the subnet are not answered, except identification. |
 | T-A1-13 | Wrong magic is dropped; a short or length-mismatched request gets status 17; an unknown major version gets status 18; an unknown command gets status 16. |
 | T-A1-14 | A repeated request (same request id, command and payload) gets the stored reply and is not executed twice; a request with the same id but another command or payload is executed and gets its own reply (A1.4). |
-| T-A1-15 | A second host gets status 35 for writes while a write session is held; the session ends after 60 s idle; `GET_STATS`, `IDENTIFY`, `GET_CHALLENGE`, other unauthenticated requests and a request with a wrong HMAC from the holder every 30 s do not keep it open, an authenticated, verified request from the holder does (A1.10). Host A's authenticated `SET_CONFIG` with an invalid configuration gets 48; a write from host B within 60 s gets 35; after A's `END_WRITE_SESSION`, B's write is accepted. `END_WRITE_SESSION` with no session held gets 0 and a write from another host straight after it is accepted; from a non-holder it gets 35 and the holder's session stays (0074). |
+| T-A1-15 | A second host gets status 35 for writes while a write session is held; the session ends after 60 s idle; `GET_STATS`, `IDENTIFY`, `GET_CHALLENGE`, other unauthenticated requests and a request with a wrong HMAC from the holder every 30 s do not keep it open, an authenticated, verified request from the holder does (A1.10). Host A's authenticated `SET_CONFIG` with an invalid configuration gets 48; a write from host B within 60 s gets 35; after A's `END_WRITE_SESSION`, B's write is accepted. `END_WRITE_SESSION` with no session held gets 0 and a write from another host straight after it is accepted; from a non-holder it gets 35 and the holder's session stays (0074). With a `SET_CONFIG` whose compaction is stretched to `t_flash_reply`, sent by the holder 50 s after its last request, the session does not lapse before the reply, and a write from host B straight after the reply gets 35 (emulator; 0077). |
 | T-A1-16 | The first-secret window closes 300 s after network up; a restart inside the window reopens it for 300 s. With the erase of host A's `SET_FIRST_SECRET`, received 2 s before the window ends, hung until it fails (55): a `SET_FIRST_SECRET` from host B received during that work, and A's retry after the 55, both get 36 (emulator, every erase stretched to `t_erase_max`; B2.3 "time over flash work"; 0073). |
 | T-A1-17 | A region change (C-6) is refused with status 57 while a P2 session runs; the factory default is region 0, the ranges of Table A3-0 (0039). |
 | T-A1-18 | With a non-empty TCI allow-list, a TCI connection from an address outside it is refused and logged; the management port stays reachable. |
@@ -4208,7 +4222,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-57 | With the controller disconnected, and with a controller that does not respond, discovery, RX IQ on level 1 and the management channel work; identification reports the controller state (reference model; part A scope, A1.5 I-6; 0023). |
 | T-A1-58 | With the controller disconnected, an image of this firmware (staged in the other slot) and then a synthetic opaque stock image with the "foreign image" flag (streaming installer) are installed through the same management commands (`UPDATE_BEGIN`, `UPDATE_BLOCK`, `UPDATE_VERIFY`, `UPDATE_ACTIVATE`) and the same commanded-reset order; both succeed and no step waits for, or sends anything to, the controller (reference model; A1.8a "Installation paths"; 0025 R2, 0028). |
 | T-A1-59 | For an image of this firmware and for a foreign image alike, a block with a wrong CRC-32 gets status 53, an image whose SHA-256 differs from the header gets status 55 at `UPDATE_VERIFY`, and an image for other hardware gets status 51 before anything is written or erased (reference model; A1.8, A1.8a; 0025 R3). |
-| T-A1-60 | During a streaming installation (A1.8a item 3): `UPDATE_STATUS` reports the sectors written; `IDENTIFY` reports the installer state; any other management command than those listed gets 58, and discovery, P2 and TCI get no answer; the TX-side state of A3.6 is unchanged and toggling the local PTT and KEY inputs keys nothing; `UPDATE_ABORT` before the first erase restarts into this firmware with its secret and configuration unchanged, after it gets status 60; a transfer that stops for more than 10 min does not restart the main unit and resumes when blocks arrive again; sector 0 and the option bytes are never written, and no sector is written before all its blocks arrived with a good CRC (reference model; 0028). |
+| T-A1-60 | During a streaming installation (A1.8a item 3): `UPDATE_STATUS` reports the sectors written; `IDENTIFY` reports the installer state; any other management command than those listed gets 58, and discovery, P2 and TCI get no answer; the TX-side state of A3.6 is unchanged and toggling the local PTT and KEY inputs keys nothing; `UPDATE_ABORT` before the first erase restarts into this firmware with its secret and configuration unchanged, after it gets status 60; a transfer that stops for more than 10 min does not restart the main unit and resumes when blocks arrive again; sector 0 and the option bytes are never written, and no sector is written before all its blocks arrived with a good CRC (reference model; 0028). After the first erase: `IDENTIFY` tag 11 = 0 and tag 12 not open; `SET_FIRST_SECRET` gets 36, also before the first erase; a command outside item 3's list with no earlier code gets 58 (for example `GET_CONFIG`); the next `UPDATE_BLOCK` is still accepted with the old secret. Host A holds the session; host B's `UPDATE_BLOCK` gets 35; after A's `END_WRITE_SESSION` (0), and in a second run after 60 s with no request from A, B's blocks are accepted and B completes the transfer. With every sector erase stretched to `t_erase_max`, A sends the block that completes a sector 50 s after the previous reply, and the next block 50 s after that block's late reply; the session holds across both, and B gets 35 throughout (emulator; A1.8a item 3, A1.10; 0077). |
 | T-A1-61 | Before the F1 gate (P-SYS-5) is set, a foreign `UPDATE_BEGIN` that passes every other check gets status 56 and changes nothing (also an oversized one: 56 precedes 61); after it is set (reference model) the same request is accepted (A1.8a item 3, "Gate"; 0028). |
 | T-A1-62 | During a streaming installation, before the first sector erase, 10 min without an update command other than `UPDATE_STATUS` restart the main unit into this firmware with secret and configuration unchanged; a repeat of the accepted `UPDATE_BEGIN` is answered from the stored reply; `IDENTIFY` reports update state "installer" with the sectors written (reference model; A1.4, A1.5 I-3, A1.8a item 3). `UPDATE_ABORT` before the first erase: 0 with restart needed 0, then the restart into this firmware without a `RESTART` (0074). |
 | T-A1-63 | `SET_CALIBRATION` while a P2 session runs gets 57, while armed 50, during an update 58; with an unknown parameter id 48 and nothing changes; a complete set sets record `tx` bit 4 from the next session on and `IDENTIFY` tags 20 and 21 report it; `FACTORY_RESET` keeps the set; `CLEAR_CALIBRATION` clears bit 4 from the next session on (reference model; A1.12; 0039). |
