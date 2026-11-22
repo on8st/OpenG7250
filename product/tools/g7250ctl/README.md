@@ -3,9 +3,10 @@
 Command-line tool for managing the firmware of a G7250 running the new firmware (G7250-P2),
 from the computer, without the controller and without AetherSDR.
 
-- Status: **milestones M1 and M2**: `discover` (management broadcast and P2), `info`, `stats`;
-  `logs`, `config get`, `calibration get`. Unit tests against a local socket; the run against
-  the reference model is next.
+- Status: **milestones M1 to M3**: `discover` (management broadcast and P2), `info`, `stats`;
+  `logs`, `config get`, `calibration get`; the authenticated commands (secrets, `config set`,
+  `restart`, `factory-reset`, `switch-level`, `clear-log`, `calibration set`/`clear`). Unit
+  tests against a local socket; the run against the reference model is next.
 - Protocol: the management protocol of `product/spec/spec/network-interface.md` part A
   (A1.1a, A1.3–A1.10, A1.8, A1.8a), UDP 7251. This tool is its reference implementation; any gap
   found while building it is fixed in the spec first (decision 0026).
@@ -40,6 +41,33 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   is taken; of several copies the first is used.
 - `--interval` and `--retries` change the timing for tests; the 16 s flash-work window stays.
 
+## Secrets and authenticated commands (A1.10)
+
+- The secret (32 bytes, 64 hex digits) comes from `--secret-file <file>` or the environment
+  variable `G7250_SECRET`, never from the command line. The tool never prints or logs it.
+- `set-secret --generate <file>` and `change-secret --generate <file>` write a new random
+  secret to a new file (an existing file is never overwritten; mode 0600 on Unix) before
+  sending it.
+- `SET_FIRST_SECRET` carries the secret in the clear (spec A1.10, known risk): set it on a
+  network you trust. `CHANGE_SECRET` sends it masked; afterwards the tool sends
+  `END_WRITE_SESSION` signed with the new secret, which checks the change.
+- Every authenticated request gets its own `GET_CHALLENGE`, from the same socket (the radio
+  keeps one challenge per address and port). A retransmission is the identical signed
+  datagram. Status 33 is reported, never retried with a new challenge, because the request
+  may have been executed.
+- The write session belongs to this run's address and port, so every write ends it with
+  `END_WRITE_SESSION`; `restart` and `factory-reset` end it by the reset. `end-session` is
+  for a session left by another tool on the same address and port; otherwise the radio
+  ends it after 60 s idle, and `restart` is accepted from any host in the meantime.
+- Replies are not authenticated, so writes are read back: `config set` with `GET_CONFIG`,
+  `calibration set`/`clear` with `GET_CALIBRATION`, `set-secret` with `IDENTIFY` (secret set).
+- `config set` with a network change: the radio applies it after the reply (A1.6), so the
+  read-back goes to the new static address, else to the old one (a fallback, C-4, is
+  reported); after a change to DHCP use `discover`.
+- `factory-reset` asks for confirmation unless `--yes`. `restart --wait` and
+  `factory-reset --wait` wait until the radio answers with a lower uptime (30 s; 47 s after a
+  factory reset, 0069).
+
 ## Exit codes
 
 | Code | Meaning |
@@ -67,7 +95,13 @@ for Linux, macOS and Windows.
 | `info <addr>` | model, MAC, firmware versions (running slot, other slot, boot stage), update state, owner, every tag of Table M-2 (done, M1) | A1.5 |
 | `stats <addr>` | the `GET_STATS` counters (done, M1) | A1.7, B11 |
 | `p2 caps <addr>` | the capability record (planned, M6) | B4 |
-| `set-secret <addr>` | set the first management secret, in the window after a factory reset | A1.10 |
+| `set-secret <addr> [--generate file]` | set the first management secret, in the window after the first start or a factory reset (done, M3) | A1.10 |
+| `change-secret <addr> --new-secret-file f \| --generate f` | change the secret, masked (done, M3) | A1.10 |
+| `end-session <addr>` | release the write session (done, M3) | A1.10 |
+| `config set <addr> [items]` | change configuration items of Table M-3, read back (done, M3) | A1.6 |
+| `calibration set <addr> --source s [--date d] --entry ID=HEX…`, `calibration clear <addr>` | replace or remove the calibration set, read back (done, M3) | A1.12 |
+| `restart <addr> [--wait]`, `factory-reset <addr> [--yes] [--wait]` | commanded reset; factory reset of Table A1-4 (done, M3) | A1.9, A1.6a |
+| `switch-level <addr> <1\|2>`, `clear-log <addr>` | (done, M3) | A1.6 C-2, A1.7 |
 | `install <addr> <package-A> <package-B>` | read the running slot (`IDENTIFY` tag 23), send the package linked for the other slot, verify, activate; trial boot follows | A1.8 (0043) |
 | `status <addr>` | progress of an update or installation | A1.8 |
 | `abort <addr>` | abandon an update (not possible once a stock installation has started) | A1.8, A1.8a item 3 |

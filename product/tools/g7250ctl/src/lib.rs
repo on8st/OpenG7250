@@ -5,10 +5,13 @@
 //! with the firmware (`g7250-proto`); this crate holds the host side: transport and
 //! retransmission, discovery, and output.
 
+pub mod args;
 pub mod discover;
 pub mod reads;
 pub mod render;
+pub mod secret;
 pub mod transport;
+pub mod writes;
 
 use std::net::{SocketAddr, ToSocketAddrs};
 

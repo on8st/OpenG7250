@@ -2,6 +2,8 @@
 // Copyright (C) 2026 ON8ST
 //! `g7250ctl` command line. See README.md.
 
+mod cli_write;
+
 use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -75,16 +77,18 @@ enum Cmd {
         #[arg(long, default_value_t = 1.0, value_name = "S")]
         poll: f64,
     },
-    /// Read the configuration (GET_CONFIG; A1.6, Table M-3).
+    /// Read or change the configuration (GET_CONFIG, SET_CONFIG; A1.6, Table M-3).
     Config {
         #[command(subcommand)]
         op: ConfigOp,
     },
-    /// Read the calibration set (GET_CALIBRATION; A1.12).
+    /// Read, set or clear the calibration set (A1.12).
     Calibration {
         #[command(subcommand)]
         op: CalibrationOp,
     },
+    #[command(flatten)]
+    Write(cli_write::WriteCmd),
 }
 
 #[derive(Subcommand)]
@@ -94,6 +98,8 @@ enum ConfigOp {
         /// Radio address, `host` or `host:port` (port 7251 by default).
         addr: String,
     },
+    /// Change the items given, validated as a whole by the radio; read back afterwards.
+    Set(cli_write::ConfigSetArgs),
 }
 
 #[derive(Subcommand)]
@@ -102,6 +108,15 @@ enum CalibrationOp {
     Get {
         /// Radio address, `host` or `host:port` (port 7251 by default).
         addr: String,
+    },
+    /// Replace the calibration set as a whole (SET_CALIBRATION); read back afterwards.
+    Set(cli_write::CalibrationSetArgs),
+    /// Remove the calibration set (CLEAR_CALIBRATION).
+    Clear {
+        /// Radio address, `host` or `host:port` (port 7251 by default).
+        addr: String,
+        #[command(flatten)]
+        secret: cli_write::SecretArg,
     },
 }
 
@@ -118,9 +133,9 @@ fn main() -> ExitCode {
     ExitCode::from(code)
 }
 
-type Outcome = Result<u8, (u8, String)>;
+pub(crate) type Outcome = Result<u8, (u8, String)>;
 
-fn fail(f: Failure) -> (u8, String) {
+pub(crate) fn fail(f: Failure) -> (u8, String) {
     (f.exit_code(), f.to_string())
 }
 
@@ -131,7 +146,7 @@ fn client(policy: Policy) -> Result<Client, (u8, String)> {
 }
 
 /// A client and the resolved radio address.
-fn open(policy: Policy, addr: &str) -> Result<(Client, SocketAddr), (u8, String)> {
+pub(crate) fn open(policy: Policy, addr: &str) -> Result<(Client, SocketAddr), (u8, String)> {
     let to = resolve(addr, mgmt::PORT).map_err(|e| (exit::USAGE, e))?;
     Ok((client(policy)?, to))
 }
@@ -176,6 +191,10 @@ fn run(cli: &Cli, policy: Policy) -> Outcome {
             }
             Ok(exit::OK)
         }
+        Cmd::Config { op: ConfigOp::Set(a) } => cli_write::config_set(cli.json, policy, a),
+        Cmd::Calibration { op: CalibrationOp::Set(a) } => cli_write::calibration_set(cli.json, policy, a),
+        Cmd::Calibration { op: CalibrationOp::Clear { addr, secret } } => cli_write::calibration_clear(cli.json, policy, addr, secret),
+        Cmd::Write(w) => cli_write::run(cli.json, policy, w),
         Cmd::Calibration { op: CalibrationOp::Get { addr } } => {
             let (mut c, to) = open(policy, addr)?;
             let cal = reads::get_calibration(&mut c, to).map_err(fail)?;

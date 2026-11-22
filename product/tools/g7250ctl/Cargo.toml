@@ -15,7 +15,14 @@ publish = false
 [dependencies]
 # The protocol crate shared with the firmware (0037 item 2).
 g7250-proto = { path = "../../firmware/crates/proto" }
+# The OS random source, for a generated secret (set-secret --generate).
+getrandom = "0.3"
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "derive"] }
+
+[dev-dependencies]
+# The tests check HMAC trailers and the CHANGE_SECRET mask with their own computation.
+hmac = "0.13.0"
+sha2 = "0.11.1"
 
 [profile.release]
 lto = true
