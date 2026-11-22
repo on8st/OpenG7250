@@ -211,8 +211,15 @@ test is listed as such. Checked without an emulator by tests/baseline/slow_calls
   of the kept ring>`; the address is not in the endpoint. Layout as the product's (docs of the
   firmware side): little-endian 64-bit words, 48 bytes of header copies, then 64 entries of 96
   bytes, entry at base + 48 + (seq mod 64) x 96; word 0 is seq (low) and uptime (high). One bit of
-  the first text word is flipped; an entry whose number is not there is refused. A change of the
-  firmware's layout makes the fixture wrong.
+  the first text word is flipped at the next MCU reset (after the old run's last write, before the
+  new run's first read), once; an entry the image overwrote before it is not changed, and a power
+  cycle drops it. An entry whose number is not there at the call is refused. A change of the
+  firmware's layout makes the fixture wrong. (8a2a100 changed the RAM at once, while the image
+  ran: the log.corrupt checks of T-A1-91 in the runs on that build do not count.)
+- Every `flash.ecc`, `flash.fill` and `log.corrupt` call with its answer is in the test folder's
+  fixture-log.jsonl. A test's entry gives the `flash.ecc` calls of that test
+  (`emulator.flash_ecc`), and its reason names each one that was not in force when answered.
+- The runner refuses a run folder that is already used (it would append to the old logs).
 
 ## The emulator process
 

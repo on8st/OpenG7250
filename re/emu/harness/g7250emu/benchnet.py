@@ -632,6 +632,8 @@ class FixtureServer:
         self.slow_calls = []                  # fixture calls over SLOW_CALL_S
         self.calls_open = {}                  # calls not answered yet (a hang stays visible)
         self.local = threading.local()        # .parts: seconds of the power cycle this thread's call made
+        self.fx_records = []
+        self.fill_after = None
         self.fl_next = 0
         self.fl_origin = 0
         self.fl_on = True
@@ -679,6 +681,7 @@ class FixtureServer:
                         v["load_1min"] = round(os.getloadavg()[0], 1)
                         v["agent_requests_over_1s"] = list(agent.slow_asks[n:]) if agent else []
                         self.slow_calls.append(v)
+                self.record(req.get("op"), req.get("args") or {}, rep)
             except Exception as e:  # noqa: BLE001
                 rep = {"ok": False, "error": "bad request: %s" % e}
             f.write(json.dumps(rep) + "\n")
@@ -692,6 +695,14 @@ class FixtureServer:
                 out.append({"op": op, "boot": boot, "t_wall": t, "wait_s": round(time.time() - t, 3), "not_answered": True,
                             "load_1min": round(os.getloadavg()[0], 1)})
         return out
+
+    def record(self, op, args, rep):
+        """flash.ecc, flash.fill and log.corrupt calls and their answers (fixture-log.jsonl)."""
+        if op in ("flash.ecc", "flash.fill", "log.corrupt"):
+            v = {"op": op, "boot": self.boot_no, "t_wall": time.time(), "args": args, "answer": rep}
+            if op == "flash.fill":
+                v["after"] = self.fill_after         # number of flash.log entries before it
+            self.fx_records.append(v)
 
     def _sock_count(self, agent):
         r = agent.ask("socklog 1000000000", timeout=30, internal=True) if agent else None
@@ -1155,6 +1166,8 @@ class FixtureServer:
                 return {"ok": False, "error": "data must be hex"}
             if data is not None and (not raw or n % len(raw)):
                 return {"ok": False, "error": "len must be a multiple of the data's length"}
+            self.flash_pull()
+            self.fill_after = len(self.fl_entries)
             r = agent.ask("ft fill 0x%08X %d %s" % (a, n, raw.hex() if raw else "-"), timeout=60) if agent else None
             if not r or not r.startswith("ok"):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
@@ -1179,7 +1192,7 @@ class FixtureServer:
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             if int(r.split()[1], 16) != seq & 0xFFFFFFFF:
                 return {"ok": False, "error": "entry %d is not in the ring" % seq}
-            r = agent.ask("ramxor 0x%08X 1" % (ent + 16))       # a bit of the first text word
+            r = agent.ask("ramxor 0x%08X %d 0x%08X 1" % (ent, seq, ent + 16))       # a bit of the first text word, at the next reset
             if not r or not r.startswith("ok"):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"seq": seq}}

@@ -35,7 +35,7 @@ BUS_FAULT_NOTE = ("not modelled: the bus fault of a double ECC read, flash and r
                   "DBECCERR and FLASH_ECC_FA1R are set and the data reads as stored; retained RAM: an ECC error is not "
                   "modelled at all, no fault status is set and the value is returned). A pass does not show that an image "
                   "survives the fault, and a run shows nothing about the branch for an unreadable retained word")
-BUS_FAULT_TESTS = {"T-A1-87"}
+BUS_FAULT_TESTS = {"T-A1-87", "T-A1-92"}
 
 # Not modelled with a known, limited reach: the image's own console or the log
 # shows it, and only the tests that judge that function are marked; every other
@@ -377,6 +377,8 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
     spec = json.load(open(tests_path))
     tbdir = testbench_dir(pr.REPO)
     root = os.path.join(pr.OUT_ROOT, run_id)
+    if os.path.isdir(root) and os.listdir(root):
+        sys.exit("run folder already used: %s (give another --run-id)" % root)
     os.makedirs(root, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     run_t0 = time.time()
@@ -467,6 +469,9 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             with open(os.path.join(tdir, "flash-log.jsonl"), "w") as f:
                 for e in bt.fixtures.fl_entries:
                     f.write(json.dumps(e) + "\n")
+            with open(os.path.join(tdir, "fixture-log.jsonl"), "w") as f:
+                for x in bt.fixtures.fx_records:
+                    f.write(json.dumps(x) + "\n")
             div = int(os.environ.get("G7250_ERASE_MIPS_DIV") or 1)
             if div > 1 and any(e.get("op") in ("erase", "bank_erase") for e in bt.fixtures.fl_entries):
                 flash_note = ("not modelled: CPU speed during flash work (MIPS/%d): the image's own work during an erase "
@@ -538,6 +543,13 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                 x["op"], x["wait_s"], " (not answered)" if x.get("not_answered") else "",
                 " (start of the emulator %.1f s, quit %.1f s)" % (x["parts"]["start_s"], x["parts"]["quit_s"]) if x.get("parts") else "") for x in slow)
             e["reason"] = txt + ("; " + e["reason"] if e.get("reason") else "")
+        fx = [x for x in bt.fixtures.fx_records if x["t_wall"] >= test_t0]
+        ecc = [x for x in fx if x["op"] == "flash.ecc" and x["answer"].get("ok")]
+        if ecc:
+            no = [x["answer"]["value"]["address"] for x in ecc if not x["answer"]["value"].get("in_force")]
+            e.setdefault("emulator", {})["flash_ecc"] = {"calls": len(ecc), "not_in_force": no}
+            if no:
+                e["reason"] = "flash.ecc not in force when answered: %s%s" % (", ".join(no), "; " + e["reason"] if e.get("reason") else "")
         sp = dict(bt.fixtures.ecc_spans)
         if sp["spans"]:
             e.setdefault("emulator", {})["ecc_spans_not_covered"] = sp

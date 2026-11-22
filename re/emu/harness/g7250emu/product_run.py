@@ -412,6 +412,8 @@ def main():
     run_s = float(spec.get("run_s", 5))
     run_id = args.run_id or datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = os.path.join(OUT_ROOT, run_id)
+    if os.path.isdir(out) and os.listdir(out):
+        sys.exit("run folder already used: %s (give another --run-id)" % out)
     os.makedirs(out, exist_ok=True)
     for f in ("renode.log", "console.txt", "usart2.bin"):
         open(os.path.join(out, f), "w").close()

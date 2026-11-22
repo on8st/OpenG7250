@@ -22,6 +22,7 @@
 // Not modelled: hardware start by option byte, freeze in debug/stop/standby,
 // LSI accuracy, IWDG2 (dual core), the window early-warning of WWDG.
 using System;
+using System.Collections.Generic;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Logging;
 using Antmicro.Renode.Peripherals;
@@ -85,6 +86,15 @@ namespace Antmicro.Renode.Peripherals.Timers
         }
         private uint? nextFlags;
 
+        // fixture log.corrupt: one RAM byte XORed at the next MCU reset (after the old run's last write, before the
+        // new run's first read), only if the word at `guard` still holds `want` then; a power cycle drops it
+        public string NextXor(ulong guard, uint want, ulong address, byte mask)
+        {
+            lock(sync) nextXor.Add(Tuple.Create(guard, want, address, mask));
+            return "ok";
+        }
+        private readonly List<Tuple<ulong, uint, ulong, byte>> nextXor = new List<Tuple<ulong, uint, ulong, byte>>();
+
         // fixture reset.wdt: reset the MCU as a watchdog timeout would
         public void WatchdogReset() { Expire("wdt"); }
 
@@ -106,6 +116,13 @@ namespace Antmicro.Renode.Peripherals.Timers
                     // fixture reset.flags: the next reset shows exactly these flags
                     rsr = nextFlags.HasValue ? nextFlags.Value : (rsr | PINRSTF | (cause == "wdt" ? IWDG1RSTF : SFT1RSTF));
                     nextFlags = null;
+                    foreach(var x in nextXor)
+                    {
+                        if(machine.SystemBus.ReadDoubleWord(x.Item1) == x.Item2)
+                            machine.SystemBus.WriteByte(x.Item3, (byte)(machine.SystemBus.ReadByte(x.Item3) ^ x.Item4));
+                        else this.Log(LogLevel.Warning, "log.corrupt: entry {0} is not in the ring at the reset, nothing changed", x.Item2);
+                    }
+                    nextXor.Clear();
                     LastResetCause = cause;
                     resets++;
                 }

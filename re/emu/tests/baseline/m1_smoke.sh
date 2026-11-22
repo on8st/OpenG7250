@@ -158,6 +158,9 @@ echo "[5] m1_run.py refuses an absent image-map (exit 2)"
 ( G7250_IMAGE_MAP="$OUT/no_such_image_map_dir" python3 harness/g7250emu/m1_run.py >/dev/null 2>&1 )
 [ $? -eq 2 ] && ok "clean refusal" || bad "expected exit 2"
 
+# the runner refuses a used run folder: the smoke runs' own folders of the last regression go first
+for d in .private/product-runs/smoke-*; do [ -d "$d" ] && rm -rf "$d"; done
+
 echo "[6] bench self-tests on the generic models (firmware-tests/bench, product_run --selftest)"
 if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
   make -s -C firmware-tests/bench >/dev/null 2>&1 || bad "bench build"

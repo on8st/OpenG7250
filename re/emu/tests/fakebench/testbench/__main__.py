@@ -817,15 +817,37 @@ def run_test(tid, ep):
         cmd(b"FX", wait=1.0)
         own = words(cmd(b"FR", again=True, wait=60.0))
         out.append(check("the reset after it has its own cause again", own and own[0] == (1 << 24 | 1 << 22), str(own)))
-        # log.corrupt: on the ring the image wrote
+        # log.corrupt: on the ring the image wrote, at the next MCU reset, once; dropped by a power cycle
+        def again():
+            cmd(b"FX", wait=1.0)
+            cmd(b"FR", again=True, wait=60.0)
         offered = "log.corrupt" in ep.get("fixtures", [])
         n0 = words(cmd(b"FL\x03"))
         lc = ctl.op("log.corrupt", seq=3)
         n1 = words(cmd(b"FK\x03"))
         no = ctl.op("log.corrupt", seq=4)
-        out.append(check("log.corrupt (offered with the runner's ring setting): one text bit of the entry changed, its number kept; an entry not there refused; the address not in the endpoint",
-                         offered and n0 == (3, 0x41424344) and lc.get("ok") and n1 == (3, 0x41424345) and no.get("ok") is False
-                         and "2401e700" not in json.dumps(ep).lower(), str((offered, n0, lc, n1, no))[:200]))
+        again()
+        n2 = words(cmd(b"FK\x03"))
+        again()
+        n3 = words(cmd(b"FK\x03"))
+        E0, E1 = (3, 0x41424344), (3, 0x41424345)
+        out.append(check("log.corrupt (offered with the runner's ring setting): nothing changes while the image runs; after the next reset one text bit of the entry is changed, its number kept; not again at the reset after it; an entry not there refused; the address not in the endpoint",
+                         offered and (n0, n1, n2, n3) == (E0, E0, E1, E1) and lc.get("ok") and no.get("ok") is False
+                         and "2401e700" not in json.dumps(ep).lower(), str((offered, n0, lc, n1, n2, n3, no))[:300]))
+        cmd(b"FL\x03")
+        lo = ctl.op("log.corrupt", seq=3)
+        w0 = words(cmd(b"FL\x43"))
+        again()
+        w1 = words(cmd(b"FK\x03"))
+        out.append(check("log.corrupt: an entry the image overwrote before the reset is not changed", lo.get("ok") and w0 == w1 == (67, 0x41424344), str((lo, w0, w1))))
+        cmd(b"FL\x03")
+        lp = ctl.op("log.corrupt", seq=3)
+        pw = ctl.op("power.cycle")
+        cmd(b"FR", again=True, wait=90.0)
+        cmd(b"FL\x03")
+        again()
+        p1 = words(cmd(b"FK\x03"))
+        out.append(check("log.corrupt: a power cycle drops it", lp.get("ok") and pw.get("ok") and p1 == E0, str((lp, pw, p1))))
         # a cut armed before a reset hits the first erase after it, and flash.log names its sector
         ctl.op("flash.log", action="start")
         ctl.op("power.cut", during_erase=0.5)

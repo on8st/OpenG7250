@@ -1139,14 +1139,16 @@ namespace Antmicro.Renode.Peripherals.SPI
                         if(!machine.TryGetByName("sysbus.watchdog", out wd)) return "err no reset model";
                         return (string)wd.GetType().GetMethod("NextFlags").Invoke(wd, new object[] { w.Length > 1 ? w[1] : "" });
                     }
-                    case "ramxor":   // log.corrupt: one bit of a RAM byte (AXI SRAM only)
+                    case "ramxor":   // log.corrupt: at the next reset, XOR a RAM byte if the guard word still holds its value (AXI SRAM only)
                     {
-                        ulong ra = ulong.Parse(w[1].Replace("0x", ""), NumberStyles.HexNumber);
-                        int rx = int.Parse(w[2], CultureInfo.InvariantCulture);
-                        if(ra < 0x24000000UL || ra >= 0x24050000UL || rx < 1 || rx > 255) return "err address outside the AXI SRAM or mask";
-                        byte ro = machine.SystemBus.ReadByte(ra);
-                        machine.SystemBus.WriteByte(ra, (byte)(ro ^ rx));
-                        return "ok " + ro + " " + (ro ^ rx);
+                        ulong rg = ulong.Parse(w[1].Replace("0x", ""), NumberStyles.HexNumber);
+                        uint rw = uint.Parse(w[2], CultureInfo.InvariantCulture);
+                        ulong ra = ulong.Parse(w[3].Replace("0x", ""), NumberStyles.HexNumber);
+                        int rx = int.Parse(w[4], CultureInfo.InvariantCulture);
+                        if(ra < 0x24000000UL || ra >= 0x24050000UL || rg < 0x24000000UL || rg >= 0x24050000UL || rx < 1 || rx > 255) return "err address outside the AXI SRAM or mask";
+                        IPeripheral wd;
+                        if(!machine.TryGetByName("sysbus.watchdog", out wd)) return "err no watchdog model";
+                        return (string)wd.GetType().GetMethod("NextXor").Invoke(wd, new object[] { rg, rw, ra, (byte)rx });
                     }
                     case "peek":     // diagnostics: one 32-bit bus read
                         return "ok 0x" + machine.SystemBus.ReadDoubleWord(ulong.Parse(w[1].Replace("0x", ""), NumberStyles.HexNumber)).ToString("X8");

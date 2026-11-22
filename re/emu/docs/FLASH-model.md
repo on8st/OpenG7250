@@ -103,7 +103,10 @@ characteristics" (format v1.8 build).
   replaces one still armed (any form).
 - **Evidence rule**: `harness/g7250emu/flash_dump_check.py <run dir>` compares the flash
   dump of each boot with flash.log; a cut or ECC result is reported only with it (a build
-  before d605292 missed programmed words and placed cuts on the wrong word).
+  before d605292 missed programmed words and placed cuts on the wrong word). flash.fill calls
+  (fixture-log.jsonl) are replayed in their order: a filled word that nothing touched after it
+  must hold the fill's data. A run without fixture-log.jsonl and with fills (builds before it)
+  stays DIFFERENT.
 - **CPU speed during an erase**: as at all other times (one instruction per core
   clock cycle, docs/CLOCKS-model.md). During an erase fw-e518331 runs its TX path
   check from RAM: per SR1 poll some 270 instructions and 27 peripheral accesses (MODER,
