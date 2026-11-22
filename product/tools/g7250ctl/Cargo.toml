@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# g7250ctl: host tool for the management channel of a G7250 with the new firmware (0026, 0037).
+# Its own workspace: the firmware workspace pins the thumbv7em toolchain; this builds for hosts.
+[workspace]
+
+[package]
+name = "g7250ctl"
+description = "Manage a Xiegu G7250 running the OpenG7250 firmware over its management channel (UDP 7251)"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+authors = ["ON8ST"]
+publish = false
+
+[dependencies]
+# The protocol crate shared with the firmware (0037 item 2).
+g7250-proto = { path = "../../firmware/crates/proto" }
+clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "derive"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
