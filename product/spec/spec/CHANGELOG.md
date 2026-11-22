@@ -13,7 +13,7 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0072 (C-3 limits that may be lost) accepted in principle by ON8ST on 2026-11-22 and held
   for the point with Table M-3 (ending the lost state before the calibration set holds S2 and
   T3); the number is reserved, and none of its text is in the spec yet.
-- 0073 accepted by ON8ST on 2026-11-22.
+- 0073, 0074 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
   "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
@@ -83,6 +83,14 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   due in, before queued management requests; a confirmation write started before 60 s counts;
   the P2 watchdog is not on the list. B2.3 "time over flash work", A1.8, A1.10; T-B5-22,
   T-A1-16 extended, T-A1-94 new.
+- 0074 (accepted 2026-11-22; g7250ctl runs M1 to M4): `UPDATE_ABORT` with no update state gets 0,
+  restart needed 0 (also in the installer before its first erase); write failure clarified;
+  `GET_CONFIG` leaves out tags 9 and 10 before S2 and T3; `GET_CALIBRATION` with no set is
+  37 bytes; Table M-6 names the 45 counters `GET_STATS` lists first, every place that requires
+  a count names its counter (B10.7 and B11.1: one total, the source or reason in the log);
+  `READ_LOG` flag bit 1; opening and ending the write session; an address change ends it; host
+  rule for requests that end in a reset. A1.4, A1.7, A1.8, A1.8a, A1.10, Tables M-1, M-3, M-6;
+  T-A1-15, T-A1-62, T-A1-80, T-A1-85, T-A1-93 extended, T-A1-95 to T-A1-98 new.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 

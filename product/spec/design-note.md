@@ -277,8 +277,8 @@ upstream through the RFC (0038).
 - **Sources still to read.** The TCI 2.1 PDF and its terms of use (before part C), the
   Radioddity product page, the HDSDR network tutorial and the Temporarily Offline video
   (`sources.md`).
-- **Decisions.** 0001–0071 and 0073 are accepted (0033–0035 and 0037–0066 on 2026-11-21,
-  0067–0071 and 0073 on 2026-11-22, after version 1.0: image check, log kept over a reset,
-  reply time with flash work, g7250ctl conformance, package file, time over flash work); 0072
+- **Decisions.** 0001–0071 and 0073–0074 are accepted (0033–0035 and 0037–0066 on 2026-11-21,
+  0067–0071 and 0073–0074 on 2026-11-22, after version 1.0: image check, log kept over a reset,
+  reply time with flash work, g7250ctl conformance, package file, time over flash work, management details from the g7250ctl runs); 0072
   (C-3 limits that may be lost) is accepted in principle and held (`product-handover.md`). What remains for the product are the values of Annex P, which
   need the radio.
