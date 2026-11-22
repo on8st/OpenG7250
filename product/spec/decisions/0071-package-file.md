@@ -21,6 +21,12 @@ read.
 2. **Name.** `g7250-<major>.<minor>.<build>-slot-<a|b>.g7pk` for an image of this firmware,
    version and slot as in bytes 10–13 and 52 (lower-case slot letter). A release ships one
    file per slot (0043). The name is a convention; a host reads the header, not the name.
+   **Telling builds apart** (firmware remark, 2026-11-22): every build that is released (handed
+   to anyone outside development, the bench and the first radio included) MUST carry a
+   version not used by any earlier released build, raising at least the build field (bytes
+   12–13), so that name, `IDENTIFY` and the log tell released builds apart. Development builds
+   MAY repeat a version; they are told apart by the SHA-256 of the image (header bytes 18–49,
+   and the checksum list the build writes), never by the name.
 3. **Writer.** The firmware build writes the package files (its packaging tool is the
    firmware's choice). A foreign image (A1.8a) has no package file from the build: the host
    builds its header from the owner-supplied image and SHA-256 at install time; `g7250ctl`

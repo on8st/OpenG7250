@@ -3734,6 +3734,9 @@ Table M-4 — Package header (A1.8), the payload of `UPDATE_BEGIN` after the fla
 image and nothing else; its length is 53 + bytes 14–17, no signature bytes follow (bytes 50–51
 are 0, U-4), and the SHA-256 of bytes 18–49 is over the image bytes. Name, for an image of this
 firmware: `g7250-<major>.<minor>.<build>-slot-<a|b>.g7pk` (a convention; a host reads the header).
+Every released build MUST carry a version no earlier released build used (at least the build
+field raised), so name, `IDENTIFY` and the log tell released builds apart; development builds
+MAY repeat one and are told apart by the image's SHA-256 (bytes 18–49).
 The firmware build writes them, one per slot (0043); for a foreign image the host builds the
 header at install time (A1.8a) and MAY save it in the same layout. A host MUST refuse a file
 whose length, magic, header version, signature length or image hash does not match, before it
