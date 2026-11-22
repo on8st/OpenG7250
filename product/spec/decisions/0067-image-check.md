@@ -134,6 +134,7 @@ can stop before its check 1 (the hash) can run. It names, in this order and befo
 
 The order of a failed verify's checks is therefore: `missing-blocks`, `unreadable`, `hash`, the
 rest of the image check (`no-record` to `vectors`), `header`. Each still gives status 55.
+Test: T-A1-88 (a verify with one block not sent).
 
 ## Alternatives considered
 
