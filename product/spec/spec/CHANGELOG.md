@@ -13,7 +13,7 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0072 (C-3 limits that may be lost) accepted in principle by ON8ST on 2026-11-22 and held
   for the point with Table M-3 (ending the lost state before the calibration set holds S2 and
   T3); the number is reserved, and none of its text is in the spec yet.
-- 0073, 0074, 0075 accepted by ON8ST on 2026-11-22.
+- 0073, 0074, 0075, 0076 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
   "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
@@ -97,6 +97,11 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   from when the flash answers again. At the next start, a software reset without a reason line
   of A1.7 counts as an unexpected stop (`WDT_RESET_AT_START`, class 1). In force before the
   first build that can arm TX. A3.6, A3.5, A1.7; HIS-21; T-A3-62 new.
+- 0076 (accepted as text 2026-11-22; emulator finding): radio drill F3 and P-SYS-10, whether the
+  store reads a double-ECC word without a fault or reset on the radio. Kept RAM at power-on,
+  200 power cuts in store writes, the bus fault of 0075. The drill runs only with its own go
+  from ON8ST. Open: whether a second program of a flash word gives a double ECC error, to be
+  settled from RM0468 (not read). Annex P; T-A1-87, T-A3-62.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 

@@ -105,8 +105,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0073 | Time over flash work: uptime and the listed limits count flash work; a limit due during it acts within 100 ms after it, before queued management requests | accepted (2026-11-22) |
 | 0074 | Management details from the g7250ctl runs: `UPDATE_ABORT` with no update state, `GET_STATS` counters of Table M-6, `READ_LOG` bit 1, write-session opening and end, address change, host rule after a reset | accepted (2026-11-22) |
 | 0075 | Unexpected stop of the firmware: RF control pins safe within 20 µs, log line, reset within 10 ms; a software reset without a reason line counts as `WDT_RESET_AT_START` | accepted (2026-11-22) |
+| 0076 | Radio drill F3 (P-SYS-10): power cuts in store writes, the unreadable word, kept RAM, one bus fault; the drill needs its own go; the RM0468 fixed case is open | accepted as text (2026-11-22); the drill needs its own go from ON8ST |
 
-All numbers 0001–0075 are now in use (0072 reserved, its text held).
+All numbers 0001–0076 are now in use (0072 reserved, its text held).
 
 ## Open questions for ON8ST
 
