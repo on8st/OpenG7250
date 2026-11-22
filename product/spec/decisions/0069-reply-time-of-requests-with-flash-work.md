@@ -105,8 +105,22 @@ Two firmware readings, relayed by the openg7250 session, 2026-11-22.
    in a complete, checked record, unless the sector is fully erased; a non-live sector that
    holds only complete records with no secret other than the live one is left as before.
    Such an erase is logged `store: non-live sector erased (unrecognised data)`.
+   - **Only with a live generation** (openg7250, 2026-11-22). This erase, and the start check
+     as a whole, is done only when the live sector holds a complete generation of this
+     firmware's store. With none in either sector (the first start after the install, or both
+     sectors holding data that is not this firmware's) the start check does nothing: the store
+     starts from the Table A1-4 values and its first write erases the sector it writes into,
+     as before.
+   - **Sector 6 and the vendor bootloader** (0061, P-SYS-5). One store sector is sector 6,
+     where the vendor bootloader may stage ([HIS] HIS 15 rule 5). If it writes there at every
+     start, every start would erase that sector, and the store would lose its spare sector.
+     The drill F1 therefore counts this erase: after the install and one store write, a
+     `RESTART` and a power cycle MUST each start with no `store: non-live sector erased
+     (unrecognised data)` line. If such a line appears, the store location of 0061 is decided
+     again before any further install.
 
-Test: T-A1-92 (a fall-back after a `CHANGE_SECRET`; a stale-sector erase cut by a power loss).
+Tests: T-A1-92 (a fall-back after a `CHANGE_SECRET`; a stale-sector erase cut by a power loss;
+no erase without a live generation); the drill F1 (P-SYS-5).
 
 ## Alternatives considered
 
