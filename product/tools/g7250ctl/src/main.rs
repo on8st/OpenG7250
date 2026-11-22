@@ -58,6 +58,15 @@ enum Cmd {
         #[arg(long, default_value_t = discovery::PORT, value_name = "PORT")]
         p2_port: u16,
     },
+    /// Show the P2 capability record (B4): CAP_REQUEST to the register port, read-only; it
+    /// starts no session (B4.5).
+    Caps {
+        /// Radio address, `host` or `host:port` (register port 7250 by default).
+        addr: String,
+        /// Also list every register.
+        #[arg(long)]
+        raw: bool,
+    },
     /// Show identification: model, MAC, firmware versions, update state, owner (A1.5).
     Info {
         /// Radio address, `host` or `host:port` (port 7251 by default).
@@ -163,6 +172,21 @@ pub(crate) fn open(policy: Policy, addr: &str) -> Result<(Client, SocketAddr), (
 fn run(cli: &Cli, policy: Policy) -> Outcome {
     match &cli.cmd {
         Cmd::Discover { wait, broadcast, port, p2, p2_port } => discover_cmd(cli.json, policy, *wait, broadcast, *port, *p2, *p2_port),
+        Cmd::Caps { addr, raw } => {
+            let to = resolve(addr, g7250_proto::caprec_host::REGISTER_PORT).map_err(|e| (exit::USAGE, e))?;
+            let sock = g7250ctl::caps::socket().map_err(|e| (exit::ERROR, format!("cannot open a UDP socket: {e}")))?;
+            let mut skipped = g7250ctl::caps::Skipped::default();
+            let r = g7250ctl::caps::request(&sock, to, g7250ctl::caps::INTERVAL, g7250ctl::caps::TRIES, &mut skipped).map_err(|e| {
+                let code = if matches!(e, g7250ctl::caps::CapsError::NoAnswer { .. }) { exit::NO_REPLY } else { exit::ERROR };
+                (code, e.to_string())
+            })?;
+            if cli.json {
+                println!("{}", g7250ctl::caps::json(&r));
+            } else {
+                print!("{}", g7250ctl::caps::human(&r, *raw));
+            }
+            Ok(exit::OK)
+        }
         Cmd::Info { addr } => {
             let (mut c, to) = open(policy, addr)?;
             let a = reads::identify(&mut c, to).map_err(fail)?;

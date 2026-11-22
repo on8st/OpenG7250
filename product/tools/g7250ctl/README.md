@@ -3,12 +3,13 @@
 Command-line tool for managing the firmware of a G7250 running the new firmware (G7250-P2),
 from the computer, without the controller and without AetherSDR.
 
-- Status: **milestones M1 to M5**: `discover` (management broadcast and P2), `info`, `stats`;
+- Status: **milestones M1 to M6**: `discover` (management broadcast and P2), `info`, `stats`;
   `logs`, `config get`, `calibration get`; the authenticated commands (secrets, `config set`,
   `restart`, `factory-reset`, `switch-level`, `clear-log`, `calibration set`/`clear`); the
   firmware update (`install`, `status`, `abort`, `rollback`, `package`); the return to stock
-  (`return-to-stock`, `vendor-recovery`, `install-stock`). Unit tests against a local socket;
-  M1 to M4 were run against the reference model.
+  (`return-to-stock`, `vendor-recovery`, `install-stock`); the P2 capability record (`caps`).
+  Unit tests against a local socket; M1 to M6 were run against the reference model (M5 with
+  the F1 gate closed).
 - Protocol: the management protocol of `product/spec/spec/network-interface.md` part A
   (A1.1a, A1.3–A1.10, A1.8, A1.8a), UDP 7251. This tool is its reference implementation; any gap
   found while building it is fixed in the spec first (decision 0026).
@@ -152,7 +153,7 @@ for Linux, macOS and Windows.
 | `discover [--wait s] [--broadcast addr]… [--p2]` | find G7250s on the local network: `IDENTIFY` to 255.255.255.255:7251 and any `--broadcast` address; `--p2` uses P2 discovery on port 1024 and lists any P2 radio (done, M1) | A1.5, B3.2 |
 | `info <addr>` | model, MAC, firmware versions (running slot, other slot, boot stage), update state, owner, every tag of Table M-2 (done, M1) | A1.5 |
 | `stats <addr>` | the `GET_STATS` counters (done, M1) | A1.7, B11 |
-| `p2 caps <addr>` | the capability record (planned, M6) | B4 |
+| `caps <addr> [--raw]` | the P2 capability record: `CAP_REQUEST` to the register port 7250, read-only, starts no session (done, M6) | B4, B8.1 |
 | `set-secret <addr> [--generate file]` | set the first management secret, in the window after the first start or a factory reset (done, M3) | A1.10 |
 | `change-secret <addr> --new-secret-file f \| --generate f` | change the secret, masked (done, M3) | A1.10 |
 | `end-session <addr>` | release the write session (done, M3) | A1.10 |
@@ -170,6 +171,23 @@ for Linux, macOS and Windows.
 | `logs <addr> [--from seq] [--follow] [--poll s]` | read the log in pages to its end; `--follow` keeps reading, across a restart of the radio (log kept: the sequence continues; log lost: from 0 again, 0068); a gap left by the ring is reported (done, M2) | A1.7 |
 | `config get <addr>` | every configuration item of Table M-3 (done, M2) | A1.6 |
 | `calibration get <addr>` | the calibration set: id, date, source, Table M-5 entries (values in hex until Table P-1 fixes their encodings) (done, M2) | A1.12 |
+
+## Capability record (B4)
+
+- `caps <addr>` writes 1 to `CAP_REQUEST` (0x0100) on the radio's register port (7250, or
+  `host:port`) from a local port that is never 7250, because the radio drops packets from
+  that port (B8.5). The request does not start or take over a session (B4.5).
+- Only the answer counts: a packet from the radio's address and register port with the echo of
+  the request and every register up to `cap_length`, each once (B4.4 item 1). A packet without
+  the echo (a register push, or a part of the unasked record of a session) is skipped. An answer
+  that lacks registers or repeats one is reported as incomplete and is never shown as a record.
+- No answer after 1 s: the request is sent again, at most once per second; after 5 the tool
+  reports it (B4.4 item 4, exit 3).
+- Every field of Table B4-1 (record version 1.1) is shown with its raw register. A field
+  beyond `cap_length` is "absent" (B4.10 rule 2); bits and values the spec leaves open are
+  shown raw as "not defined"; the registers of a later minor version are listed raw. An unknown
+  major version is not read: the tool says the firmware is newer than itself (rule 4). `--raw`
+  lists every register; `--json` gives every field's raw value and the registers.
 
 ## Return to stock (A1.8a)
 
