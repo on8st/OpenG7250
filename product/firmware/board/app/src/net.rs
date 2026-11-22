@@ -1037,6 +1037,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                     p2.sync_faults(&mut chip, Instant::now().as_millis());
                     if let Some(n) = reply {
                         let _ = chip.udp_send(SOCK_MGMT, d.src_ip, d.src_port, &mtx[..n]);
+                        // The repeat window counts from the reply, after the flash work (0069).
+                        server.reply_sent((d.src_ip, d.src_port), Instant::now().as_millis());
                     }
                     // A SET_CONFIG or FACTORY_RESET may have changed the region (A1.6 C-6).
                     p2.key.set_region(crate::mgmt_init::region_from_config(&mgmt.config));

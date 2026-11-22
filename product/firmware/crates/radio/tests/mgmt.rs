@@ -519,6 +519,30 @@ fn update_verify_is_logged_good_and_failed() {
 }
 
 #[test]
+fn a_retransmission_read_after_slow_flash_work_is_a_repeat() {
+    // 0069 point 3 (A1.4): a request whose flash work takes 9 s; its retransmission, read only
+    // after the reply (it waited in the socket buffer), is answered from the stored reply and
+    // not executed again, because the repeat window counts from the reply.
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let ch = w.call(&mut s, HOST, &req(1, Command::GetChallenge, &[]), 0).unwrap().2;
+    let ch: [u8; 16] = ch.try_into().unwrap();
+    let mut b = [0u8; 1000];
+    let n = mgmt::build_request(&mut b, 2, Command::SetCalibration, &[0, 0, 0, 1, 0], Some((w.secret.as_ref().unwrap(), &ch))).unwrap();
+    let first = w.call(&mut s, HOST, &b[..n], 10).unwrap();
+    assert_eq!(first.1, Status::Ok);
+    assert_eq!(s.take_effects().len(), 1, "executed once");
+    // The store write took 9 s; the reply goes out then.
+    s.reply_sent(HOST, 9_010);
+    // The retransmission sent during the work, read at 12 s: a repeat.
+    let again = w.call(&mut s, HOST, &b[..n], 12_000).unwrap();
+    assert_eq!((again.0, again.1, &again.2), (first.0, first.1, &first.2), "the stored reply");
+    assert!(s.take_effects().is_empty(), "not executed again");
+    // Without the reply stamp it would have been more than 5 s after the receipt: a new request.
+}
+
+#[test]
 fn rollback_is_logged_with_slots_and_versions() {
     // T-A1-84 (0064 point 3.3): reply 0, the log line, then a commanded reset; 58 during a
     // trial boot.

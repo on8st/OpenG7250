@@ -389,6 +389,19 @@ impl Server {
         Some(len)
     }
 
+    /// The reply just built for `src` was sent at `now_ms` (after any flash work of its request,
+    /// in the request or after it): the stored reply's time becomes that, so that the A1.4
+    /// repeat window counts from the reply. Retransmissions sent during the flash work wait in
+    /// the socket buffer and are read only after the reply; they are then repeats, answered
+    /// from the stored reply, never executed again (0069 point 3).
+    pub fn reply_sent(&mut self, src: Addr, now_ms: u64) {
+        if let Some(i) = self.repeat.iter().enumerate().filter_map(|(i, s)| s.filter(|s| s.addr == src).map(|s| (i, s.at_ms))).max_by_key(|x| x.1).map(|x| x.0) {
+            if let Some(s) = self.repeat[i].as_mut() {
+                s.at_ms = s.at_ms.max(now_ms);
+            }
+        }
+    }
+
     /// The reply just built for `src` (the newest in the repeat cache) becomes `status` with no
     /// payload, in `out` and in the cache, so that a repeat gets the same: a store write that
     /// failed after the command was accepted (B2.3 "flash work that fails": 55, the old values
