@@ -690,6 +690,10 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     server.stats.tx_check_first_us = first as u64;
     server.log.push(Instant::now().as_millis(), format_args!("TX path check first at {} us after the boot stage start", first));
     println!("net: TX path check first at {} us after the boot stage start", first);
+    for n in &mgmt.store_notes {
+        println!("net: {}", n);
+        server.log.push(Instant::now().as_millis(), format_args!("{n}"));
+    }
     // Unreadable store words (double ECC error, 0065 point 5; T-A1-87): logged once per start,
     // with each item that then had no readable record. No fault, no reset.
     if mgmt.store_unreadable > 0 {

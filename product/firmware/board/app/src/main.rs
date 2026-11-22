@@ -300,6 +300,8 @@ pub fn safe_reset(mgmt: &mut mgmt_init::MgmtInit, reason: Reason) -> ! {
     if reason == Reason::FactoryReset {
         if let Err(e) = mgmt_init::factory_reset_store(mgmt) {
             println!("app: FAULT factory reset of the store failed ({})", e);
+            let up = Instant::now().as_millis() as u32;
+            g7250_board::logmem::last(|r| r.log(up, format_args!("store: factory reset not finished; the next start finishes it")));
         }
     }
     commanded_reset(reason)

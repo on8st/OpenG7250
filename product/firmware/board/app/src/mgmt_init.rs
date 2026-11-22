@@ -27,6 +27,8 @@ pub struct MgmtInit {
     /// for the net loop to log once (0065 point 5; T-A1-87).
     pub store_unreadable: u32,
     pub fell_back: (bool, bool, bool),
+    /// What the store did at this start, for the log.
+    pub store_notes: heapless::Vec<&'static str, 4>,
 }
 
 fn version_of(v: u32) -> Version {
@@ -61,6 +63,17 @@ fn factory_config() -> Config {
 impl MgmtInit {
     pub fn new(mut store: Option<NvStore>, tx_arm_state: u32, slot: Slot, cause: g7250_safety::reset::Cause) -> Self {
         let mut buf = [0u8; g7250_store::MAX_PAYLOAD];
+        let mut store_notes: heapless::Vec<&'static str, 4> = heapless::Vec::new();
+        // A factory reset that did not end (a failed erase, a power loss): finished now, before
+        // anything is read from the store and before the management socket opens (0069).
+        if let Some(s) = store.as_mut() {
+            if s.fell_back() {
+                let _ = store_notes.push("store: newest generation not readable; the previous one is kept in use");
+            }
+            if s.wipe_pending().unwrap_or(false) {
+                let _ = store_notes.push(if s.finish_wipe(factory_items).is_ok() { "store: factory reset finished" } else { "store: factory reset not finished; erase failed" });
+            }
+        }
         let store_unreadable = store.as_ref().map_or(0, |s| s.unreadable_at_open());
         let mut get = |k: Kind, buf: &mut [u8]| store.as_mut().and_then(|s| s.get(k, buf).ok().flatten()).map(|(_, n)| n);
 
@@ -69,6 +82,14 @@ impl MgmtInit {
             _ => None,
         };
         let mut fell_back = (false, false, secret.is_none());
+        // The start check (A1.10 "The old secret in flash"; 0069): another secret than the live
+        // one in the sector that is not live.
+        if let Some(s) = store.as_mut() {
+            if s.stale_holds_other(Kind::Secret, secret.as_ref().map(|s: &[u8; 32]| &s[..])).unwrap_or(false) {
+                let _ = store_notes.push(if s.erase_stale().is_ok() { "store: stale secret erased" } else { "store: stale secret not erased; erase failed" });
+            }
+        }
+        let mut get = |k: Kind, buf: &mut [u8]| store.as_mut().and_then(|s| s.get(k, buf).ok().flatten()).map(|(_, n)| n);
 
         let mut config = heapless::Vec::new();
         match get(Kind::Config, &mut buf) {
@@ -133,7 +154,7 @@ impl MgmtInit {
         let mut identify = identify;
         identify.update_state = update.state as u8;
         identify.running_slot = g7250_update::stage::slot_code(slot);
-        MgmtInit { store, secret, config, calibration, identify, update, store_unreadable, fell_back }
+        MgmtInit { store, secret, config, calibration, identify, update, store_unreadable, fell_back, store_notes }
     }
 }
 
@@ -150,7 +171,10 @@ pub fn apply_stored(m: &mut MgmtInit, e: g7250_radio::mgmt::Effect) -> Result<Op
     match e {
         Effect::SetSecret(s) => {
             let st = m.store.as_mut().ok_or("no store")?;
-            st.put(Kind::Secret, 1, &s).map_err(|_| "secret")?;
+            // A new secret over an old one: by a compaction, so that the old one is in a sector that
+            // is no longer live; the next start, or the next compaction, erases it (0069).
+            let r = if m.secret.is_some() { st.replace(Kind::Secret, 1, &s) } else { st.put(Kind::Secret, 1, &s) };
+            r.map_err(|_| "secret")?;
             m.secret = Some(s);
             m.identify.secret_set = true;
             Ok(None)
@@ -208,8 +232,10 @@ pub fn region_from_config(cfg: &[u8]) -> u8 {
 /// left in the other sector. Calibration set and boot counter are kept.
 pub fn factory_reset_store(m: &mut MgmtInit) -> Result<(), &'static str> {
     let st = m.store.as_mut().ok_or("no store")?;
-    let drop = |k: Kind| k == Kind::Secret || k == Kind::Config;
-    st.compact_without(drop).map_err(|_| "factory reset")?;
-    st.compact_without(drop).map_err(|_| "factory reset")?;
-    Ok(())
+    st.wipe(factory_items).map_err(|_| "factory reset")
+}
+
+/// The store items a factory reset drops (Table A1-4).
+fn factory_items(k: Kind) -> bool {
+    k == Kind::Secret || k == Kind::Config
 }

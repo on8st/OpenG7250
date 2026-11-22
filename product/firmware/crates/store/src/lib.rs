@@ -60,11 +60,13 @@ pub enum Kind {
     Commit = 6,
     /// The slot whose staging has not ended with a good `UPDATE_VERIFY` (A1.8; 0067).
     Staging = 7,
+    /// A factory reset was begun (A1.6a): the next start finishes it (0069).
+    Wipe = 8,
 }
 
 impl Kind {
     /// The kinds that carry data (copied by a compaction).
-    pub const DATA: [Kind; 6] = [Kind::BootRecord, Kind::BootCounter, Kind::Config, Kind::Calibration, Kind::Secret, Kind::Staging];
+    pub const DATA: [Kind; 7] = [Kind::BootRecord, Kind::BootCounter, Kind::Config, Kind::Calibration, Kind::Secret, Kind::Staging, Kind::Wipe];
     fn from_u8(v: u8) -> Option<Kind> {
         Self::DATA.iter().copied().chain([Kind::Commit]).find(|k| *k as u8 == v)
     }
@@ -150,14 +152,16 @@ pub struct Store<F> {
     unreadable: u32,
     /// The count after the scans of open: logged once per start (0065 point 5).
     unreadable_at_open: u32,
+    fell_back: bool,
 }
 
 impl<F: FlashIo> Store<F> {
     /// Scan both sectors and pick the live one. `writer` is who writes: the application or the
     /// boot stage.
     pub fn open(io: F, writer: Writer) -> Result<Self, Error<F::Error>> {
-        let mut s = Store { io, writer, live: 1, generation: 0, end: STORE_SECTORS[1].start, seq: 0, unreadable: 0, unreadable_at_open: 0 };
+        let mut s = Store { io, writer, live: 1, generation: 0, end: STORE_SECTORS[1].start, seq: 0, unreadable: 0, unreadable_at_open: 0, fell_back: false };
         let a = s.scan(STORE_SECTORS[0])?;
+        let unreadable_a = s.unreadable;
         let b = s.scan(STORE_SECTORS[1])?;
         let (live, scan) = match (a.generation, b.generation) {
             (Some(x), Some(y)) => {
@@ -173,6 +177,8 @@ impl<F: FlashIo> Store<F> {
             // (records only in sector 7). Sector 7 is live as generation 0.
             (None, None) => (1, b),
         };
+        let (other, bad) = if live == 0 { (b, s.unreadable - unreadable_a) } else { (a, unreadable_a) };
+        s.fell_back = other.any && other.generation.is_none() && other.seq > scan.seq && bad > 0;
         s.live = live;
         s.generation = scan.generation.unwrap_or(0);
         s.end = scan.end;
@@ -385,31 +391,100 @@ impl<F: FlashIo> Store<F> {
         self.compact_keep(|_| true)
     }
 
-    fn compact_keep(&mut self, keep: impl Fn(Kind) -> bool) -> Result<(), Error<F::Error>> {
-        // (0) Copy the newest record of every kind kept to RAM.
-        let mut saved: [(u8, u16, [u8; MAX_PAYLOAD]); Kind::DATA.len()] = [(0, 0, [0; MAX_PAYLOAD]); Kind::DATA.len()];
-        let mut have = [false; Kind::DATA.len()];
-        for (i, k) in Kind::DATA.iter().enumerate() {
-            if !keep(*k) {
-                continue;
-            }
-            let mut b = [0u8; MAX_PAYLOAD];
-            if let Some((v, n)) = self.get(*k, &mut b)? {
-                saved[i] = (v, n as u16, b);
-                have[i] = true;
-            }
+    /// Write a record by a compaction into the other sector, which never holds an older record
+    /// of its kind then; the sector with the old one is no longer live (the secret: A1.10 "The
+    /// old secret in flash"; 0069).
+    pub fn replace(&mut self, kind: Kind, version: u8, payload: &[u8]) -> Result<(), Error<F::Error>> {
+        if payload.len() > MAX_PAYLOAD || kind == Kind::Commit {
+            return Err(Error::TooLarge);
         }
+        self.compact_with(|_| true, Some((kind, version, payload)))
+    }
+
+    /// Remove the kinds for which `drop` is true from both sectors (a factory reset, A1.6a): two
+    /// compactions. A mark in the live sector, written first (no erase) and left out of the first
+    /// compaction, lets the next start finish what a failed erase or a power loss left undone.
+    pub fn wipe(&mut self, drop: impl Fn(Kind) -> bool) -> Result<(), Error<F::Error>> {
+        if self.free() >= FLASH_WORD {
+            self.put(Kind::Wipe, 1, &[1])?;
+        }
+        self.finish_wipe(&drop)?;
+        self.compact_keep(|k| !drop(k))
+    }
+
+    /// A wipe was begun and its first compaction did not end.
+    pub fn wipe_pending(&mut self) -> Result<bool, Error<F::Error>> {
+        Ok(self.newest(Kind::Wipe)?.is_some())
+    }
+
+    /// The first compaction of a wipe. The other sector still holds what it dropped; the start
+    /// check erases it ([`Self::stale_holds_other`], [`Self::erase_stale`]).
+    pub fn finish_wipe(&mut self, drop: impl Fn(Kind) -> bool) -> Result<(), Error<F::Error>> {
+        self.compact_keep(|k| k != Kind::Wipe && !drop(k))
+    }
+
+    /// The sector that is not live holds a record of `kind` other than `live` (any, if the live
+    /// sector has none). A record that does not check (torn, a half erased sector) counts as
+    /// another one: some of its bytes may still be there.
+    pub fn stale_holds_other(&mut self, kind: Kind, live: Option<&[u8]>) -> Result<bool, Error<F::Error>> {
+        let r = STORE_SECTORS[1 - self.live];
+        let mut addr = r.start;
+        while addr + FLASH_WORD <= r.end {
+            if let Some(h) = self.read_header(addr)? {
+                match self.check(r, addr, &h)? {
+                    Some(f) => {
+                        if f.kind == kind {
+                            let mut b = [0u8; 64];
+                            let n = f.len as usize;
+                            if n > b.len() || self.io.read(addr + HEADER as u32, &mut b[..n]).is_err() || live != Some(&b[..n]) {
+                                return Ok(true);
+                            }
+                        }
+                        addr += padded(f.len as usize);
+                        continue;
+                    }
+                    None if u32::from_le_bytes([h[0], h[1], h[2], h[3]]) == MAGIC && h[4] == kind as u8 => return Ok(true),
+                    None => {}
+                }
+            }
+            addr += FLASH_WORD;
+        }
+        Ok(false)
+    }
+
+    /// Erase the sector that is not live. Always safe: the live sector holds a complete
+    /// generation.
+    pub fn erase_stale(&mut self) -> Result<(), Error<F::Error>> {
+        let r = STORE_SECTORS[1 - self.live];
+        self.guard(Op::Erase, r.start, r.len())?;
+        self.io.erase_sector(r.start).map_err(Error::Io)
+    }
+
+    /// At open the sector with the newest records had no readable commit and unreadable words:
+    /// the previous generation is used (0065 point 5).
+    pub fn fell_back(&self) -> bool {
+        self.fell_back
+    }
+
+    fn compact_keep(&mut self, keep: impl Fn(Kind) -> bool) -> Result<(), Error<F::Error>> {
+        self.compact_with(keep, None)
+    }
+
+    fn compact_with(&mut self, keep: impl Fn(Kind) -> bool, new: Option<(Kind, u8, &[u8])>) -> Result<(), Error<F::Error>> {
         // (1) Erase the other sector. The live sector is not touched.
         let target = 1 - self.live;
+        self.erase_stale()?;
         let r = STORE_SECTORS[target];
-        self.guard(Op::Erase, r.start, r.len())?;
-        self.io.erase_sector(r.start).map_err(Error::Io)?;
-        // (2) Copy.
+        // (2) Copy the newest record of every kind kept from the live sector, or write the new one.
         let mut at = r.start;
-        for (i, k) in Kind::DATA.iter().enumerate() {
-            if have[i] {
-                let (v, n, b) = saved[i];
-                at = self.write_at(r, at, *k, v, &b[..n as usize])?;
+        for k in Kind::DATA {
+            if let Some((_, v, p)) = new.filter(|n| n.0 == k) {
+                at = self.write_at(r, at, k, v, p)?;
+            } else if keep(k) {
+                let mut b = [0u8; MAX_PAYLOAD];
+                if let Some((v, n)) = self.get(k, &mut b)? {
+                    at = self.write_at(r, at, k, v, &b[..n])?;
+                }
             }
         }
         // (3) Commit with the next generation; (4) switch.
@@ -874,5 +949,169 @@ mod tests {
         assert_eq!(s.put(Kind::Commit, 1, &[0u8; 4]), Err(Error::TooLarge));
         let mut s = Store::open(s.release(), Writer::BootStage).unwrap();
         s.put(Kind::BootRecord, 1, &[0u8; 16]).unwrap();
+    }
+
+    /// The payload bytes appear anywhere in a sector.
+    fn holds(io: &Sim, sector: usize, what: &[u8]) -> bool {
+        let o = (STORE_SECTORS[sector].start - STORE.start) as usize;
+        io.mem[o..o + SECTOR_SIZE as usize].windows(what.len()).any(|w| w == what)
+    }
+
+    const OLD: [u8; 32] = [0x91; 32];
+    const NEW: [u8; 32] = [0x37; 32];
+
+    /// A store with the old secret, some other records and a compaction behind it.
+    fn with_secret() -> Sim {
+        let mut s = Store::open(Sim::new(), APP).unwrap();
+        s.put(Kind::Config, 1, b"config v1").unwrap();
+        s.put(Kind::Secret, 1, &OLD).unwrap();
+        s.put(Kind::BootCounter, 1, &7u32.to_le_bytes()).unwrap();
+        s.release()
+    }
+
+    /// The start check as the application does it; whether it erased.
+    fn start_check(s: &mut Store<Sim>) -> bool {
+        let live = get(s, Kind::Secret);
+        let stale = s.stale_holds_other(Kind::Secret, live.as_deref()).unwrap();
+        if stale {
+            s.erase_stale().unwrap();
+        }
+        stale
+    }
+
+    #[test]
+    fn the_old_secret_is_gone_after_the_next_start_t_a1_92() {
+        let mut s = Store::open(with_secret(), APP).unwrap();
+        let e = s.io.erases;
+        s.replace(Kind::Secret, 1, &NEW).unwrap();
+        assert_eq!(s.io.erases, e + 1, "one erase before the reply");
+        let (live, stale) = (s.live_sector(), 1 - s.live_sector());
+        assert!(holds(&s.io, live, &NEW) && !holds(&s.io, live, &OLD));
+        assert!(holds(&s.io, stale, &OLD) && !holds(&s.io, stale, &NEW));
+        // The next start.
+        let mut s = Store::open(s.release(), APP).unwrap();
+        assert_eq!(get(&mut s, Kind::Secret).unwrap(), NEW);
+        assert_eq!(get(&mut s, Kind::Config).unwrap(), b"config v1");
+        assert!(start_check(&mut s));
+        assert!(!holds(&s.io, 0, &OLD) && !holds(&s.io, 1, &OLD));
+        // The one after: nothing to do. A compaction then leaves the same secret in both sectors;
+        // the start check leaves that.
+        let mut s = Store::open(s.release(), APP).unwrap();
+        assert!(!start_check(&mut s));
+        s.compact().unwrap();
+        s.compact().unwrap();
+        let mut s = Store::open(s.release(), APP).unwrap();
+        assert!(holds(&s.io, 0, &NEW) && holds(&s.io, 1, &NEW));
+        assert!(!start_check(&mut s), "only the live secret");
+        assert_eq!(get(&mut s, Kind::Secret).unwrap(), NEW);
+        // Or the next compaction before any start erases it.
+        let mut s = Store::open(with_secret(), APP).unwrap();
+        s.replace(Kind::Secret, 1, &NEW).unwrap();
+        s.compact().unwrap();
+        assert!(!holds(&s.io, 0, &OLD) && !holds(&s.io, 1, &OLD));
+    }
+
+    #[test]
+    fn power_loss_at_every_word_of_a_secret_change_leaves_one_of_the_two() {
+        for ecc in [false, true] {
+            let mut base = with_secret();
+            base.ecc_on_cut = ecc;
+            let mut p = Store::open(base.clone(), APP).unwrap();
+            p.replace(Kind::Secret, 1, &NEW).unwrap();
+            let words = p.io.programs - base.programs;
+            for cut in 0..=words + 1 {
+                let mut io = base.clone();
+                if cut == words + 1 {
+                    io.erase_cut = true;
+                } else {
+                    io.budget = Some(cut);
+                }
+                let mut s = Store::open(io, APP).unwrap();
+                let done = s.replace(Kind::Secret, 1, &NEW).is_ok();
+                let mut s = Store::open(s.release().power_on(), APP).unwrap();
+                assert_eq!(get(&mut s, Kind::Secret).unwrap(), if done { NEW } else { OLD }, "ecc {ecc} cut {cut}");
+                assert_eq!(get(&mut s, Kind::Config).unwrap(), b"config v1");
+                start_check(&mut s);
+                let mut s = Store::open(s.release(), APP).unwrap();
+                assert_eq!(get(&mut s, Kind::Secret).unwrap(), if done { NEW } else { OLD });
+                let gone: &[u8] = if done { &OLD } else { &NEW };
+                assert!(!holds(&s.io, 0, gone) && !holds(&s.io, 1, gone), "ecc {ecc} cut {cut}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_store_that_fell_back_keeps_its_generation_t_a1_92() {
+        let mut s = Store::open(with_secret(), APP).unwrap();
+        s.replace(Kind::Secret, 1, &NEW).unwrap();
+        assert!(!s.fell_back());
+        let commit = s.end - padded(4);
+        let mut io = s.release();
+        io.bad[((commit - STORE.start) / FLASH_WORD) as usize] = true;
+        let mut s = Store::open(io, APP).unwrap();
+        assert!(s.fell_back());
+        assert_eq!(get(&mut s, Kind::Secret).unwrap(), OLD, "the stale generation is the live one");
+        // What the check erases is the other sector, never the generation in use.
+        assert!(start_check(&mut s));
+        let mut s = Store::open(s.release(), APP).unwrap();
+        assert!(!s.fell_back());
+        assert_eq!(get(&mut s, Kind::Secret).unwrap(), OLD);
+        // An old unreadable word in the sector that is not live is no fall-back.
+        let mut s = Store::open(with_secret(), APP).unwrap();
+        s.compact().unwrap();
+        s.compact().unwrap();
+        let mut io = s.release();
+        let o = (STORE_SECTORS[0].start - STORE.start) as usize / 32;
+        for w in o..o + 12 {
+            io.bad[w] = true;
+        }
+        assert!(!Store::open(io, APP).unwrap().fell_back());
+    }
+
+    #[test]
+    fn a_factory_reset_is_finished_at_the_next_start_0069() {
+        let drop = |k: Kind| k == Kind::Secret || k == Kind::Config;
+        let mut p = Store::open(with_secret(), APP).unwrap();
+        let (e, w) = (p.io.erases, p.io.programs);
+        p.wipe(drop).unwrap();
+        assert_eq!(p.io.erases - e, 2, "at most two erases after the reply");
+        let words = p.io.programs - w;
+        assert!(!p.wipe_pending().unwrap());
+        assert!(!holds(&p.io, 0, &OLD) && !holds(&p.io, 1, &OLD));
+        for ecc in [false, true] {
+            // A cut at every word, and at the first and at the second erase.
+            for cut in 0..=words + 2 {
+                let mut base = with_secret();
+                base.ecc_on_cut = ecc;
+                let mut s = Store::open(base, APP).unwrap();
+                match cut.checked_sub(words + 1) {
+                    None => s.io.budget = Some(cut),
+                    Some(0) => s.io.erase_cut = true,
+                    Some(_) => {
+                        s.put(Kind::Wipe, 1, &[1]).unwrap();
+                        s.finish_wipe(drop).unwrap();
+                        s.io.erase_cut = true;
+                    }
+                }
+                let begun = if cut == words + 2 { s.compact_keep(|k| !drop(k)).is_err() } else { s.wipe(drop).is_ok() || cut > 0 };
+                assert!(begun || cut == 0);
+                // The next start.
+                let mut s = Store::open(s.release().power_on(), APP).unwrap();
+                if s.wipe_pending().unwrap() {
+                    s.finish_wipe(drop).unwrap();
+                }
+                start_check(&mut s);
+                assert!(!s.wipe_pending().unwrap());
+                assert_eq!(get(&mut s, Kind::BootCounter).unwrap(), 7u32.to_le_bytes(), "kept");
+                let gone = !holds(&s.io, 0, &OLD) && !holds(&s.io, 1, &OLD);
+                if cut > 0 {
+                    assert!(gone, "ecc {ecc} cut {cut}");
+                    assert_eq!((get(&mut s, Kind::Secret), get(&mut s, Kind::Config)), (None, None));
+                } else {
+                    // Cut before the mark was written: the reset did not begin.
+                    assert_eq!(get(&mut s, Kind::Secret).unwrap(), OLD);
+                }
+            }
+        }
     }
 }
