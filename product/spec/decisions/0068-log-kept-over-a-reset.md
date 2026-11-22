@@ -3,7 +3,8 @@
 - Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
   proposed 2026-11-22; answers a testbench question on T-A1-34, with the firmware's
   input and two firmware questions on the start entry folded in (relayed by the openg7250
-  session, 2026-11-22); addendum on readings for the firmware build proposed 2026-11-22
+  session, 2026-11-22); addendum on readings for the firmware build accepted
+  (ON8ST, 2026-11-22, as at `1728f5d`)
 - Date: 2026-11-22
 - Builds on: 0008 (L-1 to L-3), 0022 §27 (counters), §40 (commanded reset), 0035 (P-SYS-2),
   0050 (P-SYS-9), 0055 (flash work), 0063 (abandonment), 0064 (`ROLLBACK`), 0067 (log names,
@@ -88,7 +89,7 @@ wear.
    the entries before it kept, a power cycle (`start after power-on: log lost`, sequence at 0)
    and a kept ring with one entry corrupted.
 
-## Addendum: readings for the firmware build (proposed, 2026-11-22)
+## Addendum: readings for the firmware build (accepted by ON8ST, 2026-11-22)
 
 Firmware questions on its 0068 build, relayed by the openg7250 session, 2026-11-22.
 

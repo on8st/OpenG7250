@@ -1,7 +1,7 @@
 # 0069 — Reply time of requests that do flash work
 
 - Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
-  proposed 2026-11-22; answers a spec gap found by the emulator's flash model
+  addendum on the start check proposed 2026-11-22; proposed 2026-11-22; answers a spec gap found by the emulator's flash model
   (relayed by the openg7250 session, 2026-11-22)
 - Date: 2026-11-22
 - Builds on: 0020 §24 (retransmission), §27 (stored reply), 0055 (flash work), 0063, 0065
@@ -85,6 +85,28 @@ window for every management request that may do flash work.
    that does not end gets its 55 reply within 15 s. T-A1-39: after a `FACTORY_RESET` neither
    store sector holds the old secret, and the reset comes within 17 s of the reply. T-A1-92
    (new): the old secret after `CHANGE_SECRET`.
+
+## Addendum: the start check after a fall-back, and torn records (proposed, 2026-11-22)
+
+Two firmware readings, relayed by the openg7250 session, 2026-11-22.
+
+1. **After a fall-back** (newest commit word unreadable, 0065 point 5). The live generation
+   is then the older one, and the other sector holds the failed newer generation, with the
+   newer secret if the failed write was a `CHANGE_SECRET`. That sector is erased by the start
+   check, as its wording says: this is meant. The failed generation cannot be used again (its
+   commit word is unreadable and is never programmed again, 0065), no host can read it for
+   diagnosis, and keeping it would keep a secret that is not in use readable in flash. The
+   start logs the fall-back line and `store: stale secret erased`. The radio is then back on
+   the older secret: a request authenticated with the newer one gets 33, and the log tells
+   the owner why.
+2. **Torn records** (a stale-sector erase or a compaction cut by a power loss). The rule "not
+   readable from flash after the next start" covers part of a secret too. The start check
+   therefore MUST erase the non-live sector also when it holds any word the store cannot place
+   in a complete, checked record, unless the sector is fully erased; a non-live sector that
+   holds only complete records with no secret other than the live one is left as before.
+   Such an erase is logged `store: non-live sector erased (unrecognised data)`.
+
+Test: T-A1-92 (a fall-back after a `CHANGE_SECRET`; a stale-sector erase cut by a power loss).
 
 ## Alternatives considered
 

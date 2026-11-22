@@ -1,7 +1,8 @@
 # 0067 — What an image of this firmware must be: the image check, VERIFY and IDENTIFY tag 9
 
 - Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
-  addenda on two log words and on a full store proposed 2026-11-22; proposed 2026-11-21; answers testbench finding SF-31
+  addenda on two log words and on a full store accepted (ON8ST, 2026-11-22, as at `494dfed`,
+  `e6d128e`, `155bc1a` and `4678695`); proposed 2026-11-21; answers testbench finding SF-31
 - Date: 2026-11-21
 - Builds on: 0008 (U-4, U-5, U-6), 0028 (boot stage), 0043 (slot-linked images), 0044
   (self-confirmation), 0061 (slot size), 0064 (`ROLLBACK`), 0065 (ECC errors).
@@ -122,7 +123,7 @@ Context reworded to the contract alone (a), blocks sent again (b), slot names in
    `ROLLBACK` to a slot with tag 9 = 0 or 2 gets 55 (0064; T-A1-89); to a slot whose trial
    failed it is accepted and starts a trial (T-A1-89).
 
-## Addendum: two more log words for a failed verify (proposed, 2026-11-22)
+## Addendum: two more log words for a failed verify (accepted by ON8ST, 2026-11-22)
 
 Firmware question, relayed by the openg7250 session, 2026-11-22. A failed `UPDATE_VERIFY`
 can stop before its check 1 (the hash) can run. It names, in this order and before `hash`:
@@ -137,7 +138,7 @@ rest of the image check (`no-record` to `vectors`), `header`. Each still gives s
 Test: T-A1-88 (a verify with the last block not sent: the log names `missing-blocks`, not
 `hash`).
 
-## Addendum: no room in the store during a transfer (proposed, 2026-11-22)
+## Addendum: no room in the store during a transfer (accepted by ON8ST, 2026-11-22)
 
 Firmware question, relayed by the openg7250 session, 2026-11-22. The mark "staging not ended
 with a good verify" (point 4) is kept in the store; a long transfer can find the store full.

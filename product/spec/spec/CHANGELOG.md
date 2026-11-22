@@ -7,6 +7,8 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 ## After 1.0 (2026-11-21 and 2026-11-22; not a version)
 
 - 0067, 0068, 0069, 0070 and 0071 accepted by ON8ST on 2026-11-22, as they stand at `f3c15c1`.
+- The 0067 addenda (log words; full store, status 64) and the 0068 addendum (build readings)
+  accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
   "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
@@ -49,16 +51,20 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0071 (accepted 2026-11-22; g7250ctl Q6): the package file, Table M-4 header followed by the image;
   name, writer and host checks (Annex M "Package file"). Test T-A1-93 new. Released builds
   carry a version not used before; development builds are told apart by the image's SHA-256.
-- 0067 addendum (proposed; firmware question): a failed `UPDATE_VERIFY` names `missing-blocks`
+- 0067 addendum (accepted 2026-11-22; firmware question): a failed `UPDATE_VERIFY` names `missing-blocks`
   or `unreadable` before `hash`. A1.8 "Log names"; T-A1-88 has a `missing-blocks` case.
-- 0067 addendum (proposed; firmware question): a full store during a transfer. New status 64
+- 0067 addendum (accepted 2026-11-22; firmware question): a full store during a transfer. New status 64
   (room made, nothing taken, send the block again with a new request id); the transfer goes on;
   55 still discards it; a verify makes room and completes. Table A1-3, A1.8; T-A1-88.
-- 0068 addendum (proposed; firmware build readings): power loss means a power-on or
+- 0068 addendum (accepted 2026-11-22; firmware build readings): power loss means a power-on or
   brown-out flag, or no flag at all, for the log and the counters; P-SYS-2's check shows that
   every reset without power loss sets a flag, before P-SYS-9 is set; oldest entry failing means
   log lost; the `ROLLBACK` line is logged last before the reset; fallback line `boot: fallback
   to slot <s> (active slot refused, no trial)`. A1.7, A1.8, A3.5, P-SYS-2; T-A1-90, T-A1-91.
+- 0069 addendum (proposed; firmware readings): after a fall-back the start check erases the
+  sector with the failed newer generation (meant); the start check also erases a non-live
+  sector holding data it cannot place in a complete record, so no part of an old secret
+  survives the next start. A1.10; T-A1-92.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 
