@@ -184,8 +184,28 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
 - `time.advance {us}` -> `{t_us}`: Renode's advance-immediately mode (idle time
   skipped to the next timer event) until emulated now + us. The gain depends on
   how much the image idles: fw-d01f507 with no traffic, 2.7 times real time.
-  The bench sends nothing during it but net.inject.
+  The bench sends nothing during it but net.inject. The trace pin sampler pauses
+  during an advance (one sample at its end), and at its end the time source's
+  host stopwatches move forward by the time gained, so the emulation goes on at
+  real time instead of stalling until host time catches up. The fixture server
+  polls the emulated time to the target, so other calls are answered meanwhile.
 - Self-test T-EMU-20.
+
+## Format v1.8 (part 3): the flash controller fixtures
+
+`flash.log`, `flash.timing`, `flash.fault`, `flash.ecc`, `power.cut
+{after_flash_words | during_erase | at_address}`, `slot.corrupt`, `ch394.silent`;
+the endpoint carries `flash_timing {erase_us, program_us, t_erase_max_us, source}`.
+What each does in the model: docs/FLASH-model.md "Format v1.8".
+- `flash.log` runs from power-on; `start` moves the read origin, entries of every boot
+  carry `boot`; the server pulls the layer's log at reads and before a power cycle.
+- What a new emulator must keep (power cycle): the flash dump, the ECC words (and the
+  torn word of a cut), the `flash.timing` erase duration and the rest of `ch394.silent`
+  go into its start-up script.
+- `ch394.silent {boots}`: for the next `boots` MCU boots (a reset of any kind) the CH394
+  gives no answer: MISO reads 0xFF (HYPOTHESIS: the level of an absent chip is not in the
+  HIS), writes and arriving datagrams are ignored.
+- Self-test T-EMU-22.
 
 ## Fixtures (format section 4)
 

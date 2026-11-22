@@ -333,6 +333,41 @@ def run_test(tid, ep):
                       any(e.get("boot", 1) > first[0].get("boot", 1) for e in ents) if first else False, json.dumps(ents[-2:])),
                 check("at_power_on force in the new boot's start-up script", f.get("ok") and 'ForceIdrAtBoot "PF4" 1' in script, str(f)),
                 check("endpoint usart1_timed false", ep.get("usart1_timed") is False)]
+    if tid == "T-EMU-22":
+        # format v1.8 flash fixtures without flash work by the image: flash.timing, flash.log,
+        # flash.ecc, slot.corrupt (the erased state 0xFF outside the image), ch394.silent
+        ft = ep.get("flash_timing") or {}
+        tm = ctl.op("flash.timing", erase_us=ft.get("t_erase_max_us"))
+        fl0 = ctl.op("flash.log", action="start")
+        ec = ctl.op("flash.ecc", address=0x080C0040, type="double")
+        sc = ctl.op("slot.corrupt", slot=2, offset=0x1000)
+        sr = ctl.op("slot.corrupt", slot=2, restore=True)
+        sc1 = ctl.op("slot.corrupt", slot=2, offset=0x1000, xor=0x80)
+        fl = ctl.op("flash.log", action="read")
+        ents = (fl.get("value") or {}).get("entries", [])
+        si = ctl.op("ch394.silent", boots=1)
+        pc = ctl.op("power.cycle")
+        d1, _ = echo(ep, 0, c, b"silent?", wait=8.0)
+        pc2 = ctl.op("power.cycle")
+        d2, _ = echo(ep, 0, c, b"after-silent", wait=60.0)
+        fl2 = ctl.op("flash.log", action="read")
+        sc2 = ctl.op("slot.corrupt", slot=2, restore=True)
+        resc = os.path.join(os.path.dirname(os.path.abspath(EP_PATH)), "run.resc")
+        script = open(resc).read() if os.path.isfile(resc) else ""
+        v = sc.get("value") or {}
+        return [check("endpoint flash_timing with t_erase_max_us and source", ft.get("t_erase_max_us") == 4000000 and bool(ft.get("source")), json.dumps(ft)),
+                check("flash.timing erase_us accepted", tm.get("ok") and (tm.get("value") or {}).get("erase_us") == 4000000, str(tm)),
+                check("flash.ecc accepted", ec.get("ok"), str(ec)),
+                check("slot.corrupt: erased byte 0xFF XOR 1 = 0xFE at 0x08081000", sc.get("ok") and v.get("old") == 255 and v.get("new") == 254
+                      and v.get("address") == "0x08081000", str(sc)),
+                check("slot.corrupt restore", sr.get("ok") and (sr.get("value") or {}).get("restored") == 255, str(sr)),
+                check("flash.log has the corrupt entries", sum(1 for e in ents if e.get("op") == "corrupt") >= 2 and all("boot" in e for e in ents), json.dumps(ents[:3])),
+                check("ch394.silent: no answer in the next boot", si.get("ok") and pc.get("ok") and d1 is None, repr(d1)),
+                check("the boot after it answers", pc2.get("ok") and d2 == b"after-silent", repr(d2)),
+                check("kept over the power cycles: ECC word and erase time in the start-up script",
+                      'AddEccText "0x080C0040" true' in script and "SetEraseUs 4000000" in script, script[-400:]),
+                check("the corrupted byte survives power cycles and is restored", sc2.get("ok") and (sc2.get("value") or {}).get("restored") == 255, str(sc2)),
+                check("flash.log read after the cycles", fl2.get("ok"), str(fl2)[:200])]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

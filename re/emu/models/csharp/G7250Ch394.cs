@@ -168,6 +168,18 @@ namespace Antmicro.Renode.Peripherals.SPI
         public ulong DatagramsReceived { get { return received; } }
         public ulong DatagramsDropped { get { return dropped; } }
 
+        // ch394.silent (format v1.8): the chip gives no answer (MISO reads 0xFF, writes and
+        // arriving datagrams ignored, INT# high) for the next SilentBoots MCU boots
+        public int SilentBoots { get; set; }
+        public bool SilentNow { get; set; }
+
+        // an MCU reset of any kind (from the bench agent): the next boot is silent or not
+        public void McuBoot()
+        {
+            if(SilentBoots > 0) { SilentBoots--; SilentNow = true; } else SilentNow = false;
+            this.Log(LogLevel.Info, "ch394: MCU boot, silent {0}, silent boots left {1}", SilentNow, SilentBoots);
+        }
+
         public void Reset()
         {
             lock(sync)
@@ -210,6 +222,7 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         public byte Transmit(byte data)
         {
+            if(SilentNow) return 0xFF;
             byte outb = 0;
             bool cmd = false; int cmdSock = 0; bool regWrite = false;
             lock(sync)
@@ -459,6 +472,7 @@ namespace Antmicro.Renode.Peripherals.SPI
 
         private void Arrive(byte[] p, double captureWall = 0)
         {
+            if(SilentNow) return;
             double wall = captureWall > 0 ? captureWall : (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
             if(machine == null) { Deliver(p, 0, wall); return; }
             double host = hostClock.Elapsed.TotalMilliseconds * 1000.0;

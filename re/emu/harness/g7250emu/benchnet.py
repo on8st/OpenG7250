@@ -587,7 +587,15 @@ class FixtureServer:
                # format v1.7: datagrams placed at exact emulated offsets; waits in emulated time
                "net.inject", "time.wait", "sock.log",
                # format v1.8
-               "gpio.force", "dac.force", "time.advance", "console.log"]
+               "gpio.force", "dac.force", "time.advance", "console.log",
+               # format v1.8 with the flash controller model (docs/FLASH-model.md)
+               "flash.log", "flash.timing", "flash.fault", "flash.ecc", "slot.corrupt", "ch394.silent"]
+
+    SLOT_BASE = {1: 0x08040000, 2: 0x08080000}
+    FLASH_TIMING = {"erase_us": None, "program_us": 0, "t_erase_max_us": 4000000,
+                    "source": "ST DS13311 Rev 5 Table 48: sector erase by PSIZE, typical 2.0/1.8/1.1 s (x8/x16/x32), "
+                              "maximum 4/3.6/2.2 s; x64 not listed: typical as x32, maximum the longest listed (4 s, x8); "
+                              "word programming time not modelled (0)"}
 
     def __init__(self, agent_getter, on_power_cycle, bridge_getter=None):
         self.bridge_getter = bridge_getter
@@ -604,6 +612,16 @@ class FixtureServer:
         self.sock_on = False
         self.sock_entries = []
         self.sock_next = 0
+        # flash.log across power cycles; what a new emulator must carry over
+        self.fl_entries = []
+        self.fl_next = 0
+        self.fl_origin = 0
+        self.fl_on = True
+        self.fl_open = None
+        self.erase_us = None                  # flash.timing erase_us in force
+        self.ecc = {}                         # word address -> "double"|"single", kept like the flash
+        self.corrupt = {}                     # slot -> (address, xor)
+        self.silent_left = 0                  # ch394.silent boots still to come at a power cycle
         self.ctrl_state = "absent"
         self.trace_pins = []
         self.stop = False
@@ -653,7 +671,56 @@ class FixtureServer:
                 return
             self.sock_next = v["next"]
 
+    def flash_pull(self):
+        """Append the flash layer's new flash.log entries; also before a power cycle. A torn
+        word of a cut is kept as a double ECC error for the boots after it."""
+        agent = self.agent_getter()
+        if not agent:
+            return
+        # an erase still running is re-read until it has its result
+        if getattr(self, "fl_open", None) is not None:
+            c_idx, local = self.fl_open
+            del self.fl_entries[local:]
+            self.fl_next = c_idx
+            self.fl_open = None
+        for _ in range(100):
+            r = agent.ask("ft log %d" % self.fl_next, timeout=30, internal=True)
+            if not r or not r.startswith("ok "):
+                return
+            v = json.loads(r[3:])
+            for i, e in enumerate(v.get("entries", [])):
+                e["boot"] = self.boot_no
+                if e.get("result") == "running" and self.fl_open is None:
+                    self.fl_open = (v["from"] + i, len(self.fl_entries))
+                self.fl_entries.append(e)
+                if e.get("result") == "cut" and e.get("torn"):
+                    self.ecc[int(e["torn"], 16)] = "double"
+            if v.get("next", 0) <= self.fl_next:
+                return
+            self.fl_next = v["next"]
+
+    def before_power_cycle(self):
+        self.flash_pull()
+        agent = self.agent_getter()
+        r = agent.ask("ch394silent ?", timeout=10, internal=True) if agent else None
+        self.silent_left = int(r.split()[1]) if r and r.startswith("ok ") else 0
+
+    def boot_lines(self):
+        """Monitor lines for a new emulator (power cycle): what the flash and the fixtures keep."""
+        out = []
+        if self.erase_us is not None:
+            out.append("sysbus.flashtiming SetEraseUs %d" % self.erase_us)
+        for a, t in sorted(self.ecc.items()):
+            out.append('sysbus.flashtiming AddEccText "0x%08X" %s' % (a, "true" if t == "double" else "false"))
+        if self.silent_left > 0:
+            out.append("sysbus.spi6.ch394 SilentNow true")
+            out.append("sysbus.spi6.ch394 SilentBoots %d" % (self.silent_left - 1))
+            self.silent_left = 0
+        return out
+
     def sock_new_boot(self, boot):
+        self.fl_next = 0
+        self.fl_open = None
         self.boot_no = boot
         self.sock_next = 0                    # the new emulator's log starts empty
         self.con_next = 0
@@ -911,6 +978,109 @@ class FixtureServer:
                 if n is not None and n > n0:
                     break
                 time.sleep(0.02)
+            return {"ok": True}
+        if op == "flash.log":
+            action = args.get("action")
+            if action not in ("start", "read", "stop"):
+                return {"ok": False, "error": "action must be start|read|stop"}
+            self.flash_pull()
+            if action == "start":
+                self.fl_on = True
+                self.fl_origin = len(self.fl_entries)
+                return {"ok": True, "value": {"t_us": agent.now_us() if agent else None}}
+            ents = self.fl_entries[self.fl_origin:] if self.fl_on or action == "stop" else []
+            if action == "stop":
+                self.fl_on = False
+            frm = max(0, int(args.get("from", 0)))
+            page = ents[frm:frm + 5000]
+            return {"ok": True, "value": {"t_us": agent.now_us() if agent else None, "count": len(ents), "dropped": 0,
+                                          "from": frm, "next": frm + len(page), "entries": page}}
+        if op == "flash.timing":
+            if not agent:
+                return {"ok": False, "error": "emulator not ready"}
+            pu = args.get("program_us")
+            if pu not in (None, 0):
+                return {"ok": False, "error": "program_us: the word programming time is not modelled (0 only)"}
+            eu = args.get("erase_us")
+            if eu is not None and (not isinstance(eu, int) or eu < 0):
+                return {"ok": False, "error": "erase_us must be a non-negative integer or null"}
+            r = agent.ask("ft erase-us %d" % (eu if eu is not None else -1))
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            self.erase_us = eu
+            return {"ok": True, "value": {"erase_us": eu, "program_us": 0, "source": self.FLASH_TIMING["source"]
+                                          if eu is None else "set by the bench (flash.timing); the datasheet maximum is %d us"
+                                          % self.FLASH_TIMING["t_erase_max_us"]}}
+        if op == "flash.fault":
+            fop = args.get("op")
+            after = int(args.get("after") or 0)
+            flag = args.get("flag") or "-"
+            r = agent.ask("ft fault %s %d %s %d" % (fop, after, flag, 1 if args.get("never_end") else 0)) if agent else None
+            if not r or not r.startswith("ok"):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True}
+        if op == "flash.ecc":
+            a = args.get("address")
+            a = int(a, 0) if isinstance(a, str) else a
+            typ = args.get("type", "double")
+            if not isinstance(a, int) or typ not in ("double", "single"):
+                return {"ok": False, "error": "address (integer) and type double|single needed"}
+            r = agent.ask("ft ecc 0x%08X %s" % (a, typ)) if agent else None
+            if not r or not r.startswith("ok"):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            self.ecc[a & ~31] = typ
+            return {"ok": True, "value": {"address": "0x%08X" % (a & ~31), "type": typ}}
+        if op == "slot.corrupt":
+            slot = args.get("slot")
+            if slot not in self.SLOT_BASE:
+                return {"ok": False, "error": "slot must be 1 or 2"}
+            if args.get("restore"):
+                if slot not in self.corrupt:
+                    return {"ok": False, "error": "slot %d: nothing to restore" % slot}
+                addr, x = self.corrupt.pop(slot)
+                kind = "slot_restore"
+            else:
+                off = args.get("offset")
+                if not isinstance(off, int) or off < 0 or off >= 0x40000:
+                    return {"ok": False, "error": "offset must be an integer within the slot"}
+                addr, x = self.SLOT_BASE[slot] + off, int(args.get("xor", 1)) & 0xFF
+                if x == 0:
+                    return {"ok": False, "error": "xor 0 changes nothing"}
+                kind = "slot_corrupt"
+            r = agent.ask("ft corrupt 0x%08X %d %s %d" % (addr, x, kind, slot)) if agent else None
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            v = json.loads(r[3:])
+            if kind == "slot_corrupt":
+                self.corrupt[slot] = (addr, x)
+                return {"ok": True, "value": {"slot": slot, "address": v["address"], "old": v["old"], "new": v["new"], "t_us": v["t_us"]}}
+            return {"ok": True, "value": {"slot": slot, "address": v["address"], "restored": v["new"], "t_us": v["t_us"]}}
+        if op == "ch394.silent":
+            n = args.get("boots", 1)
+            if not isinstance(n, int) or n < 0:
+                return {"ok": False, "error": "boots must be a non-negative integer"}
+            r = agent.ask("ch394silent %d" % n) if agent else None
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"boots": n}}
+        if op == "power.cut" and any(k in args for k in ("after_flash_words", "during_erase", "at_address")):
+            if "after_flash_words" in args:
+                k = args["after_flash_words"]
+                if not isinstance(k, int) or k < 1:
+                    return {"ok": False, "error": "after_flash_words must be a positive integer"}
+                cmd = "ft cut-words-notify %d" % k
+            elif "during_erase" in args:
+                f = args["during_erase"]
+                if not isinstance(f, (int, float)) or not 0 <= f <= 1:
+                    return {"ok": False, "error": "during_erase must be within 0..1"}
+                cmd = "ft cut-erase-notify %s" % repr(float(f))
+            else:
+                a = args["at_address"]
+                a = int(a, 0) if isinstance(a, str) else a
+                cmd = "ft cut-address-notify 0x%08X" % a
+            r = agent.ask(cmd) if agent else None
+            if not r or not r.startswith("ok"):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True}
         if op == "power.cut":
             at = args.get("at_us")

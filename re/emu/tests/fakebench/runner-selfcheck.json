@@ -224,6 +224,16 @@
     "gpio.force",
     "power.cycle"
    ]
+  },
+  {
+   "id": "T-EMU-22",
+   "title": "format v1.8 flash fixtures: flash.timing, flash.log, flash.ecc, slot.corrupt, ch394.silent",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 240
   }
  ]
 }

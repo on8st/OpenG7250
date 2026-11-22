@@ -4,8 +4,8 @@ Renode 1.17's `STM32H7_FlashController` (flash interface at 0x52002000) plus
 `models/csharp/G7250FlashTiming.cs`, a layer through bus hooks on that
 controller, loaded by `product_run.py` (per-boot repl with the erase
 duration). Sources: ST RM0468 (public), flash chapter; the durations shall come
-from the STM32H725/735 datasheet (DS13311, "Flash memory characteristics"),
-which is **not yet available here**: the durations are parameters.
+from the STM32H725/735 datasheet, ST DS13311 Rev 5, Table 48 "Flash memory
+characteristics" (format v1.8 build).
 
 ## Self-test against RM0468 (`firmware-tests/bench/flash_test.c`)
 
@@ -44,12 +44,60 @@ which is **not yet available here**: the durations are parameters.
   the core can be stopped after the k-th word (store check ST-04). This needs
   the image to clear EOP after each word.
 
+## Format v1.8 (bench fixtures; docs/PRODUCT-RUNNER.md)
+
+- **Erase durations by PSIZE** (CR1 bits 5:4 at START), DS13311 Rev 5 Table 48: sector
+  erase typical 2.0 / 1.8 / 1.1 s for x8 / x16 / x32, maximum 4 / 3.6 / 2.2 s; bank erase
+  typical 13 / 8 / 6 / 5 s, maximum 26 / 16 / 12 / 10 s. x64 has no sector figure: typical
+  as x32 (1.1 s), maximum the longest listed (4 s, x8), named so in the source text.
+  `flash.timing {erase_us}` sets a fixed duration (T-B5-22 uses `t_erase_max_us`, 4 s).
+  `--flash-erase-us` still overrides the sector erase. Word programming time: not modelled (0).
+- **The erase is the layer's**: START is not passed to Renode's controller; at the end the
+  range is written 0xFF (the erased state) and SR1.EOP set until CCR1 clears it. A new board's
+  flash outside the image is 0xFF too (the runner loads a 0xFF bank before the ELF).
+- **flash.log**: `erase` / `bank_erase` (t_us, t_end_us, result ok | cut with fraction_done |
+  error:FLAG | busy (never ends) | reset), `program` (one entry per run of back-to-back
+  32-byte words in one sector, found by comparing the bank with its last state at each EOP;
+  a cut gives result cut, words_written and `torn`), `option_write` (always refused: an
+  OPTSTART is not carried out), `ecc`, `corrupt`. Every erase and program carries `fpga_bus`:
+  `open` when STB (PE9, his/80) is an output driven low at its start, else `idle`.
+- **flash.fault {op, after, flag, never_end}**: the next matching operation (after `after`
+  more) sets the RM0468 SR1 flag (WRPERR PGSERR STRBERR INCERR RDPERR RDSERR SNECCERR
+  DBECCERR CRCRDERR; CCR1 clears it). An erase with a flag leaves the sector as it was; a
+  program with a flag leaves the word as it was; `never_end` keeps BSY and QW set until a
+  reset (fetches from the bank stall meanwhile).
+- **flash.ecc {address, type}** and torn words: reads of that 32-byte word (sysbus read
+  watchpoints) set SNECCERR or DBECCERR and FLASH_ECC_FA1R (the flash-word index), one
+  flash.log entry while the flag is set. The word cut by `power.cut {after_flash_words}` is
+  kept as a double ECC error (the bench's "a torn word then reads with a double error").
+  ECC words, the erase duration and `ch394.silent` carry over power cycles through the new
+  emulator's start-up script. **Not modelled: the bus error a double error gives on the
+  read**: the data reads as stored and only the flags show it. Renode's controller
+  watches the bank's writes itself while PG is set, and a watchpoint of ours at the same
+  addresses left it blind (no EOP, programming unseen): the ECC watchpoints are lifted
+  while PG is set (no ECC detection during a program) and put back at the first
+  controller access after PG is cleared.
+- **power.cut {after_flash_words | during_erase | at_address}**: the layer stops the core
+  at the k-th programmed word, at that fraction of the next erase, or at the programming of
+  that word; the runner then power-cycles as for `power.cut {at_us}`.
+- **Speed device during an erase**: the product image polls SR1 from RAM while an
+  erase is busy (no stalled fetches), one C# bus access per poll, and the emulation
+  ran at about 0.13 of real time (a 1.1 s erase took 8.5 s wall, longer than the
+  bench's retransmissions). For the erase the core's MIPS is divided by
+  `EraseMipsDivisor` (10): each instruction takes ten times its emulated time, the
+  erase passes in about 1.8 s wall. The image's own work during an erase (its
+  watchdog refreshes, its network service) therefore runs ten times slower in
+  emulated time than on the radio. Erase entries carry `wall_s` and `fetch_stalls`.
+- **slot.corrupt**: one byte of slot 1 (0x08040000) or 2 (0x08080000) XORed in the array
+  (no ECC error); `restore` XORs it back, also after power cycles.
+
 ## Not modelled
 
 PGSERR on a write without PG (Renode lets that write reach the array), the
-flash-word programming duration, ECC (no ECC errors on reading half-erased or
-half-programmed words: store check ST-06 cannot show an ECC fault), option
-bytes programming, bank 2 (absent on the H72x 1 MiB parts).
+256-bit write-buffer rules beyond Renode's (all-ones writes, FW, INCERR as
+Renode does them), the flash-word programming duration, the bus error of a
+double ECC error, option bytes programming (refused and logged), bank 2
+(absent on the H72x 1 MiB parts).
 
 ## Store checks
 

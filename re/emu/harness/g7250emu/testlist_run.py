@@ -182,7 +182,8 @@ class Boot:
                                                          pwr_cr3=self.pwr_cr3 if self.boots == 1 else None,
                                                          flash_erase_us=self.flash_erase_us,
                                                          flash_preload=self.flash_preload,
-                                                         boot_forces=list(getattr(getattr(self, "fixtures", None), "boot_forces", []))))
+                                                         boot_forces=list(getattr(getattr(self, "fixtures", None), "boot_forces", [])),
+                                                         boot_lines=(self.fixtures.boot_lines() if getattr(self, "fixtures", None) else [])))
         env = dict(os.environ)
         # CH394 socket log of this boot (OPEN/CLOSE with port and emulated time)
         env["G7250_SOCKLOG"] = os.path.join(self.out, "sockets.jsonl" if self.boots == 1 else "sockets-boot%d.jsonl" % self.boots)
@@ -240,6 +241,7 @@ class Boot:
             try:
                 self.fixtures.sock_pull()
                 self.fixtures.console_pull()
+                self.fixtures.before_power_cycle()
             except Exception:  # noqa: BLE001
                 pass
             dump = os.path.join(self.out, "flash-%d.bin" % self.boots)
@@ -379,6 +381,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             continue
         ep["minor"] = FORMAT_MINOR
         ep["usart1_timed"] = False                 # console.log: USART1 not timed at the baud rate
+        ep["flash_timing"] = dict(bt.fixtures.FLASH_TIMING)   # format v1.8: the erase durations in use and their source
         if os.environ.get("G7250_TIME_SCALE"):
             ep["time_scale"] = float(os.environ["G7250_TIME_SCALE"])   # emulated / wall, for timed runs (the bench stretches its waits)
         ep_path = os.path.join(tdir, "endpoint.json")
@@ -397,6 +400,14 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             run_notes.add(MACRAW_NOTE)
         try:
             bt.save_netlog()
+        except Exception:  # noqa: BLE001
+            pass
+        try:                                   # the flash layer's log of every boot (flash.log entries)
+            open(os.path.join(tdir, "flash-info.txt"), "w").write(str(bt.agent.ask("ft info", timeout=10, internal=True)) + "\n")
+            bt.fixtures.flash_pull()
+            with open(os.path.join(tdir, "flash-log.jsonl"), "w") as f:
+                for e in bt.fixtures.fl_entries:
+                    f.write(json.dumps(e) + "\n")
         except Exception:  # noqa: BLE001
             pass
         if os.environ.get("G7250_DUMP_FLASH_END") == "1":      # diagnostics: the flash as the test left it

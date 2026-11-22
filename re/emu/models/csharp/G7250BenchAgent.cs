@@ -904,6 +904,13 @@ namespace Antmicro.Renode.Peripherals.SPI
                     lock(sync) shadow[port] = v;
                 }
                 ArmBootHook();
+                // ch394.silent counts MCU boots: the CH394 learns of each reset here
+                IPeripheral ch;
+                if(machine.TryGetByName("sysbus.spi6.ch394", out ch))
+                {
+                    var m = ch.GetType().GetMethod("McuBoot");
+                    if(m != null) m.Invoke(ch, null);
+                }
             }
             catch(Exception e) { this.Log(LogLevel.Warning, "agent: boot hook after reset: {0}", e.Message); }
         }
@@ -935,6 +942,12 @@ namespace Antmicro.Renode.Peripherals.SPI
             return "ok " + (now + delta);
         }
 
+        // a power.cut placed by the flash layer (after a flash word, during an erase): as the timed cut
+        public void FlashCut(string why)
+        {
+            Send("cut " + NowUs());
+        }
+
         // the flash banks (0x08000000, 2 MiB) to a file: flash keeps its contents without power
         private string FlashDump(string path)
         {
@@ -959,7 +972,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(w.Length >= 2 && w[1] == "info")
             {
                 var parts = new List<string>();
-                foreach(var n in new[] { "Erases", "FetchesDuringErase", "FirstFetchPc", "RefreshesDuringLastErase", "WordsProgrammed" })
+                foreach(var n in new[] { "Erases", "FetchesDuringErase", "FirstFetchPc", "RefreshesDuringLastErase", "WordsProgrammed", "EopReads", "WordsNotFound" })
                     parts.Add("\"" + n + "\": " + Convert.ToString(t.GetProperty(n).GetValue(ft), CultureInfo.InvariantCulture));
                 foreach(var n in new[] { "PrimaskAtErase", "StopReason" })
                     parts.Add("\"" + n + "\": \"" + t.GetProperty(n).GetValue(ft) + "\"");
@@ -969,7 +982,31 @@ namespace Antmicro.Renode.Peripherals.SPI
             }
             if(w.Length >= 3 && w[1] == "cut-words") { t.GetMethod("CutAfterWords").Invoke(ft, new object[] { long.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok"; }
             if(w.Length >= 3 && w[1] == "cut-erase") { t.GetMethod("CutDuringErase").Invoke(ft, new object[] { double.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok"; }
-            return "err usage: ft info | cut-words K | cut-erase F";
+            if(w.Length >= 3 && w[1] == "log") return "ok " + (string)t.GetMethod("FlashLogRead").Invoke(ft, new object[] { int.Parse(w[2], CultureInfo.InvariantCulture) });
+            if(w.Length >= 3 && w[1] == "erase-us") { t.GetMethod("SetEraseUs").Invoke(ft, new object[] { long.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok " + (string)t.GetMethod("TimingJson").Invoke(ft, null); }
+            if(w.Length >= 2 && w[1] == "timing") return "ok " + (string)t.GetMethod("TimingJson").Invoke(ft, null);
+            if(w.Length >= 6 && w[1] == "fault")
+            {
+                var e = (string)t.GetMethod("Fault").Invoke(ft, new object[] { w[2], long.Parse(w[3], CultureInfo.InvariantCulture), w[4] == "-" ? "" : w[4], w[5] == "1" });
+                return e == null ? "ok" : "err " + e;
+            }
+            if(w.Length >= 4 && w[1] == "ecc")
+            {
+                var e = (string)t.GetMethod("AddEcc").Invoke(ft, new object[] { Convert.ToInt64(w[2], 16), w[3] == "double" });
+                return e == null ? "ok" : "err " + e;
+            }
+            if(w.Length >= 4 && w[1] == "corrupt")
+            {
+                var r = (string)t.GetMethod("Corrupt").Invoke(ft, new object[] { Convert.ToInt64(w[2], 16), int.Parse(w[3], CultureInfo.InvariantCulture), false });
+                if(r == null) return "err not changed";
+                // "ft corrupt ADDR XOR KIND SLOT": a hw.trace event {kind: slot_corrupt|slot_restore, slot, address}
+                if(w.Length >= 6) ExternalEvent("\"kind\": \"" + w[4] + "\", \"slot\": " + w[5] + ", \"address\": \"0x" + Convert.ToInt64(w[2], 16).ToString("X8") + "\"", false);
+                return "ok " + r;
+            }
+            if(w.Length >= 3 && w[1] == "cut-words-notify") { t.GetProperty("NotifyCut").SetValue(ft, true); t.GetMethod("CutAfterWords").Invoke(ft, new object[] { long.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok"; }
+            if(w.Length >= 3 && w[1] == "cut-erase-notify") { t.GetProperty("NotifyCut").SetValue(ft, true); t.GetMethod("CutDuringErase").Invoke(ft, new object[] { double.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok"; }
+            if(w.Length >= 3 && w[1] == "cut-address-notify") { t.GetProperty("NotifyCut").SetValue(ft, true); t.GetMethod("CutAtAddress").Invoke(ft, new object[] { Convert.ToInt64(w[2], 16) }); return "ok"; }
+            return "err usage: ft info | cut-words K | cut-erase F | log FROM | timing | erase-us US | fault OP AFTER FLAG NEVER | ecc ADDR TYPE | corrupt ADDR XOR [restore]";
         }
 
         private string WatchdogReset()
@@ -1078,6 +1115,14 @@ namespace Antmicro.Renode.Peripherals.SPI
                 {
                     case "time": return "time " + NowUs();
                     case "ft": return FlashTiming(w);
+                    case "ch394silent":
+                    {
+                        IPeripheral ch;
+                        if(!machine.TryGetByName("sysbus.spi6.ch394", out ch)) return "err no CH394";
+                        var pr = ch.GetType().GetProperty("SilentBoots");
+                        if(w.Length >= 2 && w[1] != "?") pr.SetValue(ch, int.Parse(w[1], CultureInfo.InvariantCulture));
+                        return "ok " + pr.GetValue(ch) + " " + ch.GetType().GetProperty("SilentNow").GetValue(ch);
+                    }
                     case "wdt": return WatchdogReset();
                     case "resets": return "resets " + resetCount;
                     case "keylog": return KeyLogCommand(w);
