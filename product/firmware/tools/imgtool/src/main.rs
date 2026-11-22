@@ -117,6 +117,11 @@ pub fn seal_elf(file: &mut Vec<u8>, kind: Kind, region: Range) -> Result<Vec<u8>
     Ok(flat.bytes)
 }
 
+/// The name of a package file (0071 point 2; a convention, hosts read the header).
+pub fn package_name(v: u32, region: Range) -> String {
+    format!("g7250-{}.{}.{}-slot-{}.g7pk", v >> 24, (v >> 16) & 0xFF, v & 0xFFFF, if region == SLOT_A { "a" } else { "b" })
+}
+
 /// A package file: the Table M-4 header, then the image (0071).
 pub fn package(image: &[u8], v: u32, region: Range) -> Vec<u8> {
     use g7250_proto::mgmt::payload::{COMPONENT_MAIN, HARDWARE_ID_G7250, Package, Version};
@@ -162,7 +167,7 @@ pub fn bad_image(image: &mut [u8], region: Range, case: &str) -> Option<header::
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let usage = "usage: g7250-imgtool <seal|check> <boot|app-a|app-b> <elf> [--bin <out>] | merge <out> <elf>... | package <app-a|app-b> <bin> <out> | test-package <app-a|app-b> <bin> <out> <bad-hw|bad-kind|bad-entry>";
+    let usage = "usage: g7250-imgtool <seal|check> <boot|app-a|app-b> <elf> [--bin <out>] | merge <out> <elf>... | package <app-a|app-b> <bin> <out-dir> | test-package <app-a|app-b> <bin> <out> <bad-hw|bad-kind|bad-entry>";
     if let [c, out, ins @ ..] = args {
         if c == "merge" {
             let files: Vec<Vec<u8>> =
@@ -194,12 +199,13 @@ fn run(args: &[String]) -> Result<(), String> {
         "package" => {
             // Update package (A1.8; 0043): the Table M-4 header (the UPDATE_BEGIN payload after
             // the flags byte, 53 bytes) followed by the sealed image of one slot.
-            let [_, _, _, out] = args else { return Err(usage.into()) };
+            let [_, _, _, dir] = args else { return Err(usage.into()) };
             if kind != Kind::Application {
                 return Err("a package carries an application image".into());
             }
             let hdr = header::validate(&file, kind, region, RAM).map_err(|e| format!("{path}: {e:?}"))?;
             let b = package(&file[..hdr.length as usize], hdr.fw_version, region);
+            let out = &format!("{dir}/{}", package_name(hdr.fw_version, region));
             std::fs::write(out, &b).map_err(|e| format!("{out}: {e}"))?;
             println!("{out}: package, {} image bytes, version {:#010x}", hdr.length, hdr.fw_version);
         }
@@ -275,5 +281,17 @@ mod tests {
             }
             assert_eq!(bad_image(&mut good, region, "other"), None);
         }
+    }
+
+    #[test]
+    fn package_file_0071() {
+        assert_eq!(package_name(header::version(0, 1, 1), SLOT_A), "g7250-0.1.1-slot-a.g7pk");
+        assert_eq!(package_name(header::version(1, 20, 300), SLOT_B), "g7250-1.20.300-slot-b.g7pk");
+        // The 53-byte header, then the image, nothing else.
+        let img = [0xA5u8; 1500];
+        let b = package(&img, header::version(0, 1, 1), SLOT_B);
+        assert_eq!(b.len(), 53 + u32::from_be_bytes(b[14..18].try_into().unwrap()) as usize);
+        assert_eq!((&b[..4], b[4], &b[50..53]), (&b"G7PK"[..], 1, &[0, 0, 2][..]));
+        assert_eq!(b[53..], img);
     }
 }

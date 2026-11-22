@@ -56,8 +56,12 @@ $tool check app-a "$out/g7250-app-a.elf"
 $tool check app-b "$out/g7250-app-b.elf"
 $tool merge "$out/g7250.elf" "$out/g7250-boot.elf" "$out/g7250-app-a.elf"
 # Update packages, one per slot (A1.8; 0043): Table M-4 header, then the sealed image.
-$tool package app-a "$out/g7250-app-a.bin" "$out/g7250-update-a.pkg"
-$tool package app-b "$out/g7250-app-b.bin" "$out/g7250-update-b.pkg"
+# Named g7250-<version>-slot-<a|b>.g7pk (0071); those of an earlier build, or name, go first.
+for old in "$out"/*.g7pk "$out"/g7250-update-a.pkg "$out"/g7250-update-b.pkg; do
+  if [ -e "$old" ]; then rm "$old"; fi
+done
+$tool package app-a "$out/g7250-app-a.bin" "$out"
+$tool package app-b "$out/g7250-app-b.bin" "$out"
 
 echo "== test build: compaction at every start (emulator only)"
 (cd board && cargo build --release -p g7250-app --features test-compact-at-start --target-dir target/test-compact)
@@ -74,6 +78,6 @@ for slot in a b; do
   done
 done
 
-(cd "$out" && shasum -a 256 g7250.elf g7250-boot.elf g7250-app-a.elf g7250-app-b.elf ./*.bin ./*.pkg test/g7250-compact.elf test/*.pkg > SHA256SUMS)
+(cd "$out" && shasum -a 256 g7250.elf g7250-boot.elf g7250-app-a.elf g7250-app-b.elf ./*.bin ./*.g7pk test/g7250-compact.elf test/*.pkg > SHA256SUMS)
 echo "== done"
 cat "$out/SHA256SUMS"

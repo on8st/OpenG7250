@@ -161,7 +161,7 @@ the console boot counter (monotonic, never back to 1) is the visible check.
 
 ## Update path (A1.8; 0043)
 
-Files: `out/g7250-update-a.pkg`, `out/g7250-update-b.pkg`: the Table M-4 header (53 bytes, the
+Files: `out/g7250-<version>-slot-a.g7pk`, `out/g7250-<version>-slot-b.g7pk` (0071): the Table M-4 header (53 bytes, the
 `UPDATE_BEGIN` payload after the flags byte) followed by the sealed image for that slot. The
 running image is in slot A (`IDENTIFY` tag 23 = 1), so the B package is the one to send; both
 have the running version (accepted: not older). Console lines: `boot: record active … trial …`,
