@@ -411,15 +411,17 @@ impl<F: FlashIo> Store<F> {
         self.compact_with(|_| true, Some((kind, version, payload)))
     }
 
-    /// Remove the kinds for which `drop` is true from both sectors (a factory reset, A1.6a): two
-    /// compactions. A mark in the live sector, written first (no erase) and left out of the first
-    /// compaction, lets the next start finish what a failed erase or a power loss left undone.
-    pub fn wipe(&mut self, drop: impl Fn(Kind) -> bool) -> Result<(), Error<F::Error>> {
+    /// A factory reset (A1.6a): remove the kinds for which `drop` is true from both sectors and
+    /// write `kind` new, as `remake` makes it from its live payload: two compactions, one erase
+    /// each. The first does both, so that a cut leaves the old items or the new ones. A mark in the
+    /// live sector, written first (no erase) and left out of the first compaction, lets the next
+    /// start finish what a failed erase or a power loss left undone.
+    pub fn wipe(&mut self, drop: impl Fn(Kind) -> bool, kind: Kind, remake: impl Fn(Option<&[u8]>, &mut [u8]) -> Option<usize>) -> Result<(), Error<F::Error>> {
         if self.free() >= FLASH_WORD {
             self.put(Kind::Wipe, 1, &[1])?;
         }
-        self.finish_wipe(&drop)?;
-        self.compact_keep(|k| !drop(k))
+        self.finish_wipe(drop, kind, remake)?;
+        self.compact()
     }
 
     /// A wipe was begun and its first compaction did not end.
@@ -429,8 +431,11 @@ impl<F: FlashIo> Store<F> {
 
     /// The first compaction of a wipe. The other sector still holds what it dropped; the start
     /// check erases it ([`Self::stale`], [`Self::erase_stale`]).
-    pub fn finish_wipe(&mut self, drop: impl Fn(Kind) -> bool) -> Result<(), Error<F::Error>> {
-        self.compact_keep(|k| k != Kind::Wipe && !drop(k))
+    pub fn finish_wipe(&mut self, drop: impl Fn(Kind) -> bool, kind: Kind, remake: impl Fn(Option<&[u8]>, &mut [u8]) -> Option<usize>) -> Result<(), Error<F::Error>> {
+        let (mut old, mut new) = ([0u8; MAX_PAYLOAD], [0u8; MAX_PAYLOAD]);
+        let n = self.get(kind, &mut old)?.map(|(_, n)| n);
+        let len = remake(n.map(|n| &old[..n]), &mut new);
+        self.compact_with(|k| k != Kind::Wipe && k != kind && !drop(k), len.map(|l| (kind, 1, &new[..l])))
     }
 
     /// The live sector holds a complete generation (A1.10; 0069 addendum): one with a readable
@@ -1108,48 +1113,188 @@ mod tests {
         assert!(!Store::open(io, APP).unwrap().fell_back());
     }
 
+    use g7250_proto::mgmt::payload::{Config, MAX_ALLOW, MAX_BANDS, MAX_CONFIG};
+
+    /// Every item of Table M-3 set to something that is not the factory value.
+    fn owner_config() -> Config {
+        let mut c = Config {
+            address_mode: Some(1),
+            address: Some([192, 168, 7, 20]),
+            netmask: Some([255, 255, 255, 0]),
+            gateway: Some([192, 168, 7, 1]),
+            default_level: Some(2),
+            region: Some(1),
+            max_tx_time_ms: Some(60_000),
+            swr_s2_x100: Some(210),
+            pa_temp_t3: Some(650),
+            allow_count: Some(MAX_ALLOW as u8),
+            allow: [([192, 168, 7, 0], 24); MAX_ALLOW],
+            ..Default::default()
+        };
+        for (i, b) in c.band_limit.iter_mut().enumerate() {
+            *b = (i != 5).then_some(100 + i as u16); // one band without a limit; 0 closes a band
+        }
+        c.band_limit[2] = Some(0);
+        c
+    }
+
+    fn encoded(c: &Config) -> std::vec::Vec<u8> {
+        let mut b = [0u8; MAX_CONFIG];
+        let n = c.encode(&mut b).unwrap();
+        b[..n].to_vec()
+    }
+
+    /// The configuration as a start uses it (mgmt_init.rs).
+    fn config_at_start(s: &mut Store<Sim>) -> Config {
+        Config::stored(get(s, Kind::Config).as_deref()).unwrap_or(Config::factory())
+    }
+
+    fn limits(c: &Config) -> (Option<u32>, [Option<u16>; MAX_BANDS], Option<u16>, Option<u16>) {
+        (c.max_tx_time_ms, c.band_limit, c.swr_s2_x100, c.pa_temp_t3)
+    }
+
+    /// A store before a factory reset: the owner's configuration, OLD as the secret.
+    fn owner_store() -> Sim {
+        let mut s = Store::open(Sim::new(), APP).unwrap();
+        s.put(Kind::Config, 1, &encoded(&owner_config())).unwrap();
+        s.put(Kind::Secret, 1, &OLD).unwrap();
+        s.put(Kind::BootCounter, 1, &7u32.to_le_bytes()).unwrap();
+        s.put(Kind::Calibration, 1, &[0x3C; 200]).unwrap();
+        s.release()
+    }
+
+    fn drops(k: Kind) -> bool {
+        k == Kind::Secret
+    }
+
+    fn reset(s: &mut Store<Sim>) -> Result<(), Error<SimErr>> {
+        s.wipe(drops, Kind::Config, Config::after_factory_reset)
+    }
+
+    /// The next start, as the application does it.
+    fn start(s: &mut Store<Sim>) {
+        if s.wipe_pending().unwrap() {
+            s.finish_wipe(drops, Kind::Config, Config::after_factory_reset).unwrap();
+        }
+        start_check(s);
+    }
+
+    /// After a factory reset: the factory values with the owner's C-3 limits; the rest kept.
+    fn check_reset(s: &mut Store<Sim>, owner: &Config) {
+        let c = config_at_start(s);
+        assert_eq!(limits(&c), limits(owner), "C-3 kept");
+        let f = Config::factory();
+        assert_eq!(Config { max_tx_time_ms: f.max_tx_time_ms, band_limit: f.band_limit, swr_s2_x100: f.swr_s2_x100, pa_temp_t3: f.pa_temp_t3, ..c }, f, "the rest factory");
+        assert_eq!(get(s, Kind::Secret), None);
+        assert_eq!(get(s, Kind::BootCounter).unwrap(), 7u32.to_le_bytes());
+        assert_eq!(get(s, Kind::Calibration).unwrap(), [0x3C; 200]);
+        assert!(!holds(&s.io, 0, &OLD) && !holds(&s.io, 1, &OLD));
+        assert!(!s.wipe_pending().unwrap());
+    }
+
     #[test]
-    fn a_factory_reset_is_finished_at_the_next_start_0069() {
-        let drop = |k: Kind| k == Kind::Secret || k == Kind::Config;
-        let mut p = Store::open(with_secret(), APP).unwrap();
-        let (e, w) = (p.io.erases, p.io.programs);
-        p.wipe(drop).unwrap();
-        assert_eq!(p.io.erases - e, 2, "at most two erases after the reply");
+    fn a_factory_reset_keeps_the_c3_limits_t_a1_39() {
+        let owner = owner_config();
+        let mut s = Store::open(owner_store(), APP).unwrap();
+        let e = s.io.erases;
+        reset(&mut s).unwrap();
+        assert_eq!(s.io.erases - e, 2, "at most two erases after the reply");
+        check_reset(&mut s, &owner);
+        let mut s = Store::open(s.release(), APP).unwrap();
+        assert!(!start_check(&mut s), "nothing left to do");
+        check_reset(&mut s, &owner);
+        // Again: the same.
+        reset(&mut s).unwrap();
+        let mut s = Store::open(s.release(), APP).unwrap();
+        check_reset(&mut s, &owner);
+        // Each C-3 item alone, the others at their factory values.
+        let one: [fn(&mut Config); 4] = [|c| c.max_tx_time_ms = Some(1), |c| c.band_limit[MAX_BANDS - 1] = Some(0), |c| c.swr_s2_x100 = Some(151), |c| c.pa_temp_t3 = Some(1)];
+        for set in one {
+            let mut c = Config::factory();
+            set(&mut c);
+            let mut s = Store::open(owner_store(), APP).unwrap();
+            s.put(Kind::Config, 1, &encoded(&c)).unwrap();
+            reset(&mut s).unwrap();
+            assert_eq!(config_at_start(&mut s), c);
+        }
+        // A record that does not decode, one that is too long, and none: the built-in limits.
+        for rec in [Some(std::vec![7u8, 9, 0]), Some(std::vec![0u8; MAX_CONFIG + 2]), None] {
+            let mut s = Store::open(Sim::new(), APP).unwrap();
+            s.put(Kind::Secret, 1, &OLD).unwrap();
+            if let Some(r) = &rec {
+                s.put(Kind::Config, 1, r).unwrap();
+            }
+            assert_eq!(config_at_start(&mut s), Config::factory());
+            reset(&mut s).unwrap();
+            assert_eq!(config_at_start(&mut s), Config::factory());
+            assert_eq!(get(&mut s, Kind::Secret), None);
+        }
+        // The fixed sizes hold the largest record.
+        assert!(encoded(&Config { band_limit: [Some(u16::MAX); MAX_BANDS], ..owner }).len() <= MAX_CONFIG);
+    }
+
+    #[test]
+    fn a_cut_factory_reset_never_loosens_a_limit_and_is_finished_0069() {
+        let owner = owner_config();
+        let mut p = Store::open(owner_store(), APP).unwrap();
+        let w = p.io.programs;
+        reset(&mut p).unwrap();
         let words = p.io.programs - w;
-        assert!(!p.wipe_pending().unwrap());
-        assert!(!holds(&p.io, 0, &OLD) && !holds(&p.io, 1, &OLD));
         for ecc in [false, true] {
             // A cut at every word, and at the first and at the second erase.
             for cut in 0..=words + 2 {
-                let mut base = with_secret();
+                let mut base = owner_store();
                 base.ecc_on_cut = ecc;
                 let mut s = Store::open(base, APP).unwrap();
                 match cut.checked_sub(words + 1) {
-                    None => s.io.budget = Some(cut),
-                    Some(0) => s.io.erase_cut = true,
+                    None => {
+                        s.io.budget = Some(cut);
+                        assert_eq!(reset(&mut s).is_ok(), cut == words);
+                    }
+                    Some(0) => {
+                        s.io.erase_cut = true;
+                        assert!(reset(&mut s).is_err());
+                    }
                     Some(_) => {
                         s.put(Kind::Wipe, 1, &[1]).unwrap();
-                        s.finish_wipe(drop).unwrap();
+                        s.finish_wipe(drops, Kind::Config, Config::after_factory_reset).unwrap();
                         s.io.erase_cut = true;
+                        assert!(s.compact().is_err());
                     }
                 }
-                let begun = if cut == words + 2 { s.compact_keep(|k| !drop(k)).is_err() } else { s.wipe(drop).is_ok() || cut > 0 };
-                assert!(begun || cut == 0);
-                // The next start.
-                let mut s = Store::open(s.release().power_on(), APP).unwrap();
-                if s.wipe_pending().unwrap() {
-                    s.finish_wipe(drop).unwrap();
-                }
-                start_check(&mut s);
-                assert!(!s.wipe_pending().unwrap());
-                assert_eq!(get(&mut s, Kind::BootCounter).unwrap(), 7u32.to_le_bytes(), "kept");
-                let gone = !holds(&s.io, 0, &OLD) && !holds(&s.io, 1, &OLD);
-                if cut > 0 {
-                    assert!(gone, "ecc {ecc} cut {cut}");
-                    assert_eq!((get(&mut s, Kind::Secret), get(&mut s, Kind::Config)), (None, None));
-                } else {
+                let cut_io = s.release().power_on();
+                // The limits hold at the next start, before and after it finishes the reset.
+                let mut s = Store::open(cut_io.clone(), APP).unwrap();
+                assert_eq!(limits(&config_at_start(&mut s)), limits(&owner), "ecc {ecc} cut {cut}");
+                let (pending, e, w) = (s.wipe_pending().unwrap(), s.io.erases, s.io.programs);
+                start(&mut s);
+                assert!(s.io.erases - e <= 2, "at most two erases");
+                let finish = s.io.programs - w;
+                let mut s = Store::open(s.release(), APP).unwrap();
+                if cut == 0 {
                     // Cut before the mark was written: the reset did not begin.
-                    assert_eq!(get(&mut s, Kind::Secret).unwrap(), OLD);
+                    assert!(!pending);
+                    assert_eq!((get(&mut s, Kind::Secret).unwrap(), config_at_start(&mut s)), (OLD.to_vec(), owner));
+                    continue;
+                }
+                check_reset(&mut s, &owner);
+                // The finish itself cut, at every word and at its erase: finished by the start after.
+                for again in 0..=finish {
+                    if !pending {
+                        break;
+                    }
+                    let mut s = Store::open(cut_io.clone(), APP).unwrap();
+                    if again == finish {
+                        s.io.erase_cut = true;
+                    } else {
+                        s.io.budget = Some(again);
+                    }
+                    assert!(s.finish_wipe(drops, Kind::Config, Config::after_factory_reset).is_err());
+                    let mut s = Store::open(s.release().power_on(), APP).unwrap();
+                    assert_eq!(limits(&config_at_start(&mut s)), limits(&owner), "ecc {ecc} cut {cut}/{again}");
+                    start(&mut s);
+                    let mut s = Store::open(s.release(), APP).unwrap();
+                    check_reset(&mut s, &owner);
                 }
             }
         }

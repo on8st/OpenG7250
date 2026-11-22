@@ -9,3 +9,7 @@ publish.workspace = true
 
 [dependencies]
 g7250-layout = { path = "../layout" }
+
+[dev-dependencies]
+# The factory reset is tested with the real configuration record (A1.6a, C-3).
+g7250-proto = { path = "../proto" }

@@ -129,6 +129,7 @@ name = "g7250-store"
 version = "0.1.0"
 dependencies = [
  "g7250-layout",
+ "g7250-proto",
 ]
 
 [[package]]

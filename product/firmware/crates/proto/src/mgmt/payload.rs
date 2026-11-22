@@ -189,7 +189,49 @@ pub struct Config {
     pub allow: [([u8; 4], u8); MAX_ALLOW],
 }
 
+/// Longest stored configuration; a longer one is not used (the radio keeps its copy in this size).
+pub const MAX_CONFIG: usize = 256;
+
 impl Config {
+    /// Factory configuration (Table A1-4; A1.6): DHCP with link-local fall-back, no static
+    /// address, default level 1, region 0 (Table A3-0), maximum continuous TX time 5 min (0007
+    /// Resolved 3), empty TCI allow-list. Not reported yet: per-band power limits (tag 8) and
+    /// S2/T3 (tags 9, 10: they need the calibration set).
+    pub fn factory() -> Config {
+        Config {
+            address_mode: Some(0),
+            address: Some([0; 4]),
+            netmask: Some([0; 4]),
+            gateway: Some([0; 4]),
+            default_level: Some(1),
+            region: Some(0),
+            max_tx_time_ms: Some(300_000),
+            allow_count: Some(0),
+            ..Default::default()
+        }
+    }
+
+    /// The stored record as a start uses it: `None` (then the factory values apply) if there is
+    /// none or it does not decode.
+    pub fn stored(p: Option<&[u8]>) -> Option<Config> {
+        p.filter(|p| p.len() <= MAX_CONFIG).and_then(|p| Config::decode(p).ok())
+    }
+
+    /// The record a factory reset writes over the stored one (Table A1-4): the factory values, with
+    /// the C-3 limits (tags 7 to 10) kept. With no usable record the built-in limits, as at a start.
+    pub fn after_factory_reset(stored: Option<&[u8]>, out: &mut [u8]) -> Option<usize> {
+        let f = Config::factory();
+        let c = Config::stored(stored).unwrap_or(f);
+        Config {
+            max_tx_time_ms: c.max_tx_time_ms.or(f.max_tx_time_ms),
+            band_limit: c.band_limit,
+            swr_s2_x100: c.swr_s2_x100,
+            pa_temp_t3: c.pa_temp_t3,
+            ..f
+        }
+        .encode(out)
+    }
+
     pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
         let mut w = tlv::Writer::new(out);
         if let Some(v) = self.address_mode {

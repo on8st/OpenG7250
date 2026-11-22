@@ -16,7 +16,7 @@ pub struct MgmtInit {
     pub store: Option<NvStore>,
     pub secret: Option<[u8; 32]>,
     /// `GET_CONFIG` reply payload (Table M-3).
-    pub config: heapless::Vec<u8, 256>,
+    pub config: heapless::Vec<u8, { m::payload::MAX_CONFIG }>,
     /// `GET_CALIBRATION` reply payload: set id (SHA-256 of the stored set), then the set.
     pub calibration: heapless::Vec<u8, 1100>,
     pub identify: Identify<'static>,
@@ -42,24 +42,6 @@ fn boot_stage_version() -> Version {
     g7250_update::image::check(&mut io, ImageKind::BootStage, BOOT_STAGE, RAM, &mut || {}).map_or(Version::default(), |h| version_of(h.fw_version))
 }
 
-/// Factory configuration (Table A1-4; A1.6): DHCP with link-local fall-back, no static
-/// address, default level 1, region 0 (Table A3-0), maximum continuous TX time 5 min (0007
-/// Resolved 3), empty TCI allow-list. Not reported yet: per-band power limits (tag 8) and S2/T3
-/// (tags 9, 10: they need the calibration set).
-fn factory_config() -> Config {
-    Config {
-        address_mode: Some(0),
-        address: Some([0; 4]),
-        netmask: Some([0; 4]),
-        gateway: Some([0; 4]),
-        default_level: Some(1),
-        region: Some(0),
-        max_tx_time_ms: Some(300_000),
-        allow_count: Some(0),
-        ..Default::default()
-    }
-}
-
 impl MgmtInit {
     pub fn new(mut store: Option<NvStore>, tx_arm_state: u32, slot: Slot, cause: g7250_safety::reset::Cause) -> Self {
         let mut buf = [0u8; g7250_store::MAX_PAYLOAD];
@@ -71,7 +53,7 @@ impl MgmtInit {
                 let _ = store_notes.push("store: newest generation not readable; the previous one is kept in use");
             }
             if s.wipe_pending().unwrap_or(false) {
-                let _ = store_notes.push(if s.finish_wipe(factory_items).is_ok() { "store: factory reset finished" } else { "store: factory reset not finished; erase failed" });
+                let _ = store_notes.push(if s.finish_wipe(factory_drops, Kind::Config, Config::after_factory_reset).is_ok() { "store: factory reset finished" } else { "store: factory reset not finished; erase failed" });
             }
         }
         let store_unreadable = store.as_ref().map_or(0, |s| s.unreadable_at_open());
@@ -98,13 +80,13 @@ impl MgmtInit {
 
         let mut config = heapless::Vec::new();
         match get(Kind::Config, &mut buf) {
-            Some(n) if n <= 256 && Config::decode(&buf[..n]).is_ok() => {
+            Some(n) if Config::stored(Some(&buf[..n])).is_some() => {
                 let _ = config.extend_from_slice(&buf[..n]);
             }
             _ => {
                 fell_back.0 = true;
-                let mut b = [0u8; 256];
-                if let Some(n) = factory_config().encode(&mut b) {
+                let mut b = [0u8; m::payload::MAX_CONFIG];
+                if let Some(n) = Config::factory().encode(&mut b) {
                     let _ = config.extend_from_slice(&b[..n]);
                 }
             }
@@ -232,15 +214,15 @@ pub fn region_from_config(cfg: &[u8]) -> u8 {
     Config::decode(cfg).ok().and_then(|c| c.region).unwrap_or(0)
 }
 
-/// Table A1-4 in the store: configuration (C-1, C-2, C-6, C-7) back to the factory values and the
-/// secret cleared, by leaving them out of a compaction; twice, so that no copy of the secret is
-/// left in the other sector. Calibration set and boot counter are kept.
+/// Table A1-4 in the store: configuration (C-1, C-2, C-6, C-7) back to the factory values with the
+/// C-3 limits kept, and the secret cleared, in one compaction; then a second one, so that no copy
+/// of the secret is left in the other sector. Calibration set and boot counter are kept.
 pub fn factory_reset_store(m: &mut MgmtInit) -> Result<(), &'static str> {
     let st = m.store.as_mut().ok_or("no store")?;
-    st.wipe(factory_items).map_err(|_| "factory reset")
+    st.wipe(factory_drops, Kind::Config, Config::after_factory_reset).map_err(|_| "factory reset")
 }
 
-/// The store items a factory reset drops (Table A1-4).
-fn factory_items(k: Kind) -> bool {
-    k == Kind::Secret || k == Kind::Config
+/// The store item a factory reset drops (Table A1-4; the configuration is written new).
+fn factory_drops(k: Kind) -> bool {
+    k == Kind::Secret
 }
