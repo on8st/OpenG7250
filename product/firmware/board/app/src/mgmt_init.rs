@@ -7,7 +7,7 @@ use g7250_layout::header::Kind as ImageKind;
 use g7250_layout::{BOOT_STAGE, Range, Slot};
 use g7250_proto::mgmt as m;
 use g7250_proto::mgmt::payload::{Config, Identify, Version};
-use g7250_store::{Kind, Store};
+use g7250_store::{Kind, Stale, Store};
 
 pub type NvStore = Store<crate::nv::BoardFlash>;
 
@@ -82,11 +82,16 @@ impl MgmtInit {
             _ => None,
         };
         let mut fell_back = (false, false, secret.is_none());
-        // The start check (A1.10 "The old secret in flash"; 0069): another secret than the live
-        // one in the sector that is not live.
+        // The start check (A1.10 "The old secret in flash"; 0069 and its addendum): another secret
+        // than the live one, or data that is no complete record, in the sector that is not live.
         if let Some(s) = store.as_mut() {
-            if s.stale_holds_other(Kind::Secret, secret.as_ref().map(|s: &[u8; 32]| &s[..])).unwrap_or(false) {
-                let _ = store_notes.push(if s.erase_stale().is_ok() { "store: stale secret erased" } else { "store: stale secret not erased; erase failed" });
+            let (done, failed) = match s.stale(Kind::Secret, secret.as_ref().map(|s: &[u8; 32]| &s[..])) {
+                Ok(Stale::Other) => ("store: stale secret erased", "store: stale secret not erased; erase failed"),
+                Ok(Stale::Unrecognised) => ("store: non-live sector erased (unrecognised data)", "store: non-live sector not erased (unrecognised data); erase failed"),
+                Ok(Stale::Nothing) | Err(_) => ("", ""),
+            };
+            if !done.is_empty() {
+                let _ = store_notes.push(if s.erase_stale().is_ok() { done } else { failed });
             }
         }
         let mut get = |k: Kind, buf: &mut [u8]| store.as_mut().and_then(|s| s.get(k, buf).ok().flatten()).map(|(_, n)| n);

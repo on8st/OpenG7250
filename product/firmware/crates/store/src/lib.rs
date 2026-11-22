@@ -139,6 +139,16 @@ struct SectorScan {
     any: bool,
 }
 
+/// What the sector that is not live holds that the start check must erase ([`Store::stale`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stale {
+    Nothing,
+    /// A record of the kind asked for, other than the live one.
+    Other,
+    /// Words that are not erased and in no complete, checked record.
+    Unrecognised,
+}
+
 pub struct Store<F> {
     io: F,
     writer: Writer,
@@ -418,7 +428,7 @@ impl<F: FlashIo> Store<F> {
     }
 
     /// The first compaction of a wipe. The other sector still holds what it dropped; the start
-    /// check erases it ([`Self::stale_holds_other`], [`Self::erase_stale`]).
+    /// check erases it ([`Self::stale`], [`Self::erase_stale`]).
     pub fn finish_wipe(&mut self, drop: impl Fn(Kind) -> bool) -> Result<(), Error<F::Error>> {
         self.compact_keep(|k| k != Kind::Wipe && !drop(k))
     }
@@ -441,42 +451,49 @@ impl<F: FlashIo> Store<F> {
         Ok(counts)
     }
 
-    /// The sector that is not live holds a record of `kind` other than `live` (any, if the live
-    /// sector has none). A record that does not check (torn, a half erased sector) counts as
-    /// another one: some of its bytes may still be there. Never without a complete generation in
-    /// the live sector ([`Self::live_complete`]): the other sector may then hold the only copy of
-    /// the store.
-    pub fn stale_holds_other(&mut self, kind: Kind, live: Option<&[u8]>) -> Result<bool, Error<F::Error>> {
+    /// The start check (A1.10 "The old secret in flash"; 0069 and its addendum): what the sector
+    /// that is not live holds that must go, judged over every word of it. A record of `kind` other
+    /// than `live` (any, if the live sector has none) comes first; then any word, not erased, that
+    /// is in no complete, checked record (torn, unreadable, foreign: some bytes of a secret may be
+    /// there). Never without a complete generation in the live sector ([`Self::live_complete`]):
+    /// the other sector may then hold the only copy of the store.
+    pub fn stale(&mut self, kind: Kind, live: Option<&[u8]>) -> Result<Stale, Error<F::Error>> {
         if !self.live_complete()? {
-            return Ok(false);
+            return Ok(Stale::Nothing);
         }
         let r = STORE_SECTORS[1 - self.live];
+        let mut out = Stale::Nothing;
         let mut addr = r.start;
         while addr + FLASH_WORD <= r.end {
-            if let Some(h) = self.read_header(addr)? {
-                match self.check(r, addr, &h)? {
-                    Some(f) => {
+            let mut w = [0u8; FLASH_WORD as usize];
+            match self.io.read(addr, &mut w) {
+                Ok(()) if w.iter().all(|&b| b == 0xFF) => {}
+                Ok(()) => {
+                    let mut h = [0u8; HEADER];
+                    h.copy_from_slice(&w[..HEADER]);
+                    if let Some(f) = self.check(r, addr, &h)? {
                         if f.kind == kind {
                             let mut b = [0u8; 64];
                             let n = f.len as usize;
                             if n > b.len() || self.io.read(addr + HEADER as u32, &mut b[..n]).is_err() || live != Some(&b[..n]) {
-                                return Ok(true);
+                                return Ok(Stale::Other);
                             }
                         }
                         addr += padded(f.len as usize);
                         continue;
                     }
-                    None if u32::from_le_bytes([h[0], h[1], h[2], h[3]]) == MAGIC && h[4] == kind as u8 => return Ok(true),
-                    None => {}
+                    out = Stale::Unrecognised;
                 }
+                Err(e) if F::unreadable(&e) => out = Stale::Unrecognised,
+                Err(e) => return Err(Error::Io(e)),
             }
             addr += FLASH_WORD;
         }
-        Ok(false)
+        Ok(out)
     }
 
     /// Erase the sector that is not live. For the start check only after
-    /// [`Self::stale_holds_other`]; otherwise the first step of a compaction.
+    /// [`Self::stale`]; otherwise the first step of a compaction.
     pub fn erase_stale(&mut self) -> Result<(), Error<F::Error>> {
         let r = STORE_SECTORS[1 - self.live];
         self.guard(Op::Erase, r.start, r.len())?;
@@ -995,11 +1012,11 @@ mod tests {
     /// The start check as the application does it; whether it erased.
     fn start_check(s: &mut Store<Sim>) -> bool {
         let live = get(s, Kind::Secret);
-        let stale = s.stale_holds_other(Kind::Secret, live.as_deref()).unwrap();
-        if stale {
+        let stale = s.stale(Kind::Secret, live.as_deref()).unwrap();
+        if stale != Stale::Nothing {
             s.erase_stale().unwrap();
         }
-        stale
+        stale != Stale::Nothing
     }
 
     #[test]
@@ -1206,5 +1223,93 @@ mod tests {
             assert_eq!(get(&mut s, k).unwrap(), OLD, "{k:?}");
             assert!(!start_check(&mut s));
         }
+    }
+
+    /// What the start check says, without erasing.
+    fn stale(s: &mut Store<Sim>) -> Stale {
+        let live = get(s, Kind::Secret);
+        s.stale(Kind::Secret, live.as_deref()).unwrap()
+    }
+
+    #[test]
+    fn unrecognised_data_in_the_other_sector_is_erased_at_start_0069() {
+        // Generation 1 in sector 6, sector 7 erased.
+        let mut s = Store::open(with_secret(), APP).unwrap();
+        s.compact().unwrap();
+        s.erase_stale().unwrap();
+        assert_eq!((s.live_sector(), stale(&mut s)), (0, Stale::Nothing), "fully erased");
+        let clean = s.release();
+        let n = (SECTOR_SIZE / FLASH_WORD) as usize;
+        // One word that is not erased, at the start, in the middle and at the end of the sector:
+        // foreign in its first or only in its second half, or unreadable.
+        for at in [n, n + 1, n + n / 2, 2 * n - 1] {
+            for what in 0..3 {
+                let mut io = clean.clone();
+                io.written[at] = true;
+                match what {
+                    0 => io.mem[at * 32] = 0xFE,
+                    1 => io.mem[at * 32 + 31] = 0x7F,
+                    _ => io.bad[at] = true,
+                }
+                let mut s = Store::open(io, APP).unwrap();
+                assert_eq!(stale(&mut s), Stale::Unrecognised, "word {at} {what}");
+                assert!(start_check(&mut s));
+                assert!(s.io.mem[n * 32..].iter().all(|&b| b == 0xFF) && !s.io.bad[at]);
+                let mut s = Store::open(s.release(), APP).unwrap();
+                assert_eq!(stale(&mut s), Stale::Nothing, "once");
+                assert_eq!(get(&mut s, Kind::Secret).unwrap(), OLD);
+            }
+        }
+        // Complete records with no other secret are left, and not judged by their number or kind.
+        let mut s = Store::open(with_secret(), APP).unwrap();
+        s.put(Kind::Calibration, 1, &[7u8; 333]).unwrap();
+        s.compact().unwrap();
+        assert_eq!(stale(&mut s), Stale::Nothing);
+        // A word after the complete records; and another secret comes first.
+        let mut t = Store::open(s.io.clone(), APP).unwrap();
+        t.io.mem[(2 * n - 1) * 32] = 0;
+        assert_eq!(stale(&mut t), Stale::Unrecognised);
+        t.put(Kind::Secret, 1, &NEW).unwrap();
+        assert_eq!(stale(&mut t), Stale::Other);
+    }
+
+    #[test]
+    fn no_byte_of_the_old_secret_is_left_after_a_cut_erase_t_a1_92() {
+        // The stale sector with the old secret, its erase cut at every word of the secret's
+        // record (the words before the cut erased; the one at the cut unreadable, or not).
+        let mut s = Store::open(with_secret(), APP).unwrap();
+        s.replace(Kind::Secret, 1, &NEW).unwrap();
+        let stale_at = STORE_SECTORS[1 - s.live_sector()].start;
+        let first = ((stale_at - STORE.start) / FLASH_WORD) as usize;
+        let base = s.release();
+        let found = (first..first + 16).filter(|w| base.mem[w * 32..w * 32 + 32].iter().any(|&b| b == OLD[0])).collect::<std::vec::Vec<_>>();
+        assert_eq!(found.len(), 2, "the record has two words");
+        // Another secret comes first, also after a word that is not recognised.
+        let mut io = base.clone();
+        io.mem[first * 32] ^= 1;
+        assert_eq!(stale(&mut Store::open(io, APP).unwrap()), Stale::Other);
+        let mut seen = [false; 2];
+        for cut in first..first + 16 {
+            for ecc in [false, true] {
+                let mut io = base.clone();
+                io.mem[first * 32..cut * 32].fill(0xFF);
+                io.written[first..cut].fill(false);
+                io.bad[cut] = ecc;
+                let mut s = Store::open(io, APP).unwrap();
+                assert_eq!(get(&mut s, Kind::Secret).unwrap(), NEW);
+                let v = stale(&mut s);
+                let whole = cut < found[0] || cut == found[0] && !ecc;
+                if whole {
+                    assert_eq!(v, Stale::Other, "cut {cut} ecc {ecc}");
+                } else if cut <= found[1] {
+                    assert_eq!(v, Stale::Unrecognised, "cut {cut} ecc {ecc}");
+                }
+                seen[whole as usize] = true;
+                start_check(&mut s);
+                assert!(!holds(&s.io, 0, &OLD[..8]) && !holds(&s.io, 1, &OLD[..8]), "cut {cut} ecc {ecc}");
+                assert_eq!(stale(&mut s), Stale::Nothing);
+            }
+        }
+        assert_eq!(seen, [true; 2]);
     }
 }
