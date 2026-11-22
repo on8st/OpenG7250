@@ -20,7 +20,7 @@
 //! a write goes to the slot that is not the newest valid one, header last, so a reset in the
 //! middle of a write leaves the other slot whole.
 
-use core::ptr::{addr_of_mut, read_volatile, write_volatile};
+use core::ptr::{addr_of_mut, write_volatile};
 use g7250_safety::counters::{Counters, SLOT_WORDS};
 
 /// Two slots. The AXI SRAM has a 64-bit ECC word: it is written in whole, aligned 64-bit words
@@ -78,10 +78,12 @@ pub fn write_handover(h: &Handover) {
 /// The application, at start: the boot stage's handover of this start, then cleared.
 pub fn take_handover() -> Option<Handover> {
     // SAFETY: as `write_handover`; the boot stage wrote the words before the jump.
-    let (w0, w1, w2) = unsafe { (read_volatile(handover_ptr()), read_volatile(handover_ptr().add(1)), read_volatile(handover_ptr().add(2))) };
+    let w = |k| unsafe { crate::kept::read_tolerant(handover_ptr().add(k)) };
+    let words = (w(0), w(1), w(2));
     unsafe {
         write_volatile(handover_ptr(), 0);
     }
+    let (Some(w0), Some(w1), Some(w2)) = words else { return None };
     if w0 as u32 != HANDOVER_MAGIC || w2 as u32 != !((w2 >> 32) as u32) {
         return None;
     }
@@ -102,9 +104,12 @@ fn slot(i: usize) -> *mut u64 {
 fn read(i: usize) -> [u64; SLOT_WORDS] {
     let mut w = [0u64; SLOT_WORDS];
     for (k, x) in w.iter_mut().enumerate() {
-        // SAFETY: `slot` points into the `.persist` block (8-aligned); volatile, as it outlives
-        // the program.
-        *x = unsafe { read_volatile(slot(i).add(k)) };
+        // SAFETY: `slot` points into the `.persist` block (8-aligned). A word that cannot be read
+        // makes the slot fail: zeros do not check.
+        match unsafe { crate::kept::read_tolerant(slot(i).add(k)) } {
+            Some(v) => *x = v,
+            None => return [0; SLOT_WORDS],
+        }
     }
     w
 }

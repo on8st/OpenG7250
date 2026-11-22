@@ -26,13 +26,14 @@ const MAGIC: u32 = 0x4737_4C47; // "G7LG"
 
 /// The memory of a ring.
 pub trait Words {
-    fn get(&self, i: usize) -> u64;
+    /// A word, or `None` if it cannot be read (never written since power-up, or an ECC error).
+    fn get(&self, i: usize) -> Option<u64>;
     fn set(&mut self, i: usize, v: u64);
 }
 
 impl Words for [u64; WORDS] {
-    fn get(&self, i: usize) -> u64 {
-        self[i]
+    fn get(&self, i: usize) -> Option<u64> {
+        Some(self[i])
     }
     fn set(&mut self, i: usize, v: u64) {
         self[i] = v;
@@ -93,7 +94,7 @@ impl<W: Words> Ring<W> {
     fn load(&mut self) -> bool {
         let mut best: Option<(u32, u32, u32)> = None;
         for k in 0..2 {
-            let h: [u64; HEADER] = core::array::from_fn(|i| self.w.get(k * HEADER + i));
+            let Some(h) = self.words::<HEADER>(k * HEADER) else { continue };
             let (first, next) = (h[1] as u32, (h[1] >> 32) as u32);
             if h[0] as u32 != MAGIC || h[2] != check(&h[..2]) || next.wrapping_sub(first) > ENTRIES {
                 continue;
@@ -125,6 +126,15 @@ impl<W: Words> Ring<W> {
         true
     }
 
+    /// `N` words from `at`, if every one can be read.
+    fn words<const N: usize>(&self, at: usize) -> Option<[u64; N]> {
+        let mut a = [0u64; N];
+        for (i, w) in a.iter_mut().enumerate() {
+            *w = self.w.get(at + i)?;
+        }
+        Some(a)
+    }
+
     /// Word index of entry `seq`.
     fn at(seq: u32) -> usize {
         2 * HEADER + (seq % ENTRIES) as usize * ENTRY
@@ -132,7 +142,7 @@ impl<W: Words> Ring<W> {
 
     fn read(&self, seq: u32) -> Option<Entry> {
         let at = Self::at(seq);
-        let e: [u64; ENTRY] = core::array::from_fn(|i| self.w.get(at + i));
+        let e = self.words::<ENTRY>(at)?;
         let len = e[1] as usize;
         if e[0] as u32 != seq || e[ENTRY - 1] != check(&e[..ENTRY - 1]) || len > TEXT {
             return None;
@@ -235,8 +245,8 @@ mod tests {
     use std::vec::Vec;
 
     impl Words for Box<[u64; WORDS]> {
-        fn get(&self, i: usize) -> u64 {
-            self[i]
+        fn get(&self, i: usize) -> Option<u64> {
+            Some(self[i])
         }
         fn set(&mut self, i: usize, v: u64) {
             self[i] = v;
@@ -250,14 +260,62 @@ mod tests {
         left: usize,
     }
     impl Words for Cut {
-        fn get(&self, i: usize) -> u64 {
-            self.m[i]
+        fn get(&self, i: usize) -> Option<u64> {
+            Some(self.m[i])
         }
         fn set(&mut self, i: usize, v: u64) {
             if self.left > 0 {
                 self.left -= 1;
                 self.m[i] = v;
             }
+        }
+    }
+
+    /// Memory with words that cannot be read until they are written.
+    struct Faulty {
+        m: Box<[u64; WORDS]>,
+        bad: Vec<bool>,
+    }
+    impl Words for Faulty {
+        fn get(&self, i: usize) -> Option<u64> {
+            (!self.bad[i]).then(|| self.m[i])
+        }
+        fn set(&mut self, i: usize, v: u64) {
+            self.bad[i] = false;
+            self.m[i] = v;
+        }
+    }
+
+    #[test]
+    fn unreadable_words_fail_their_check_and_the_start_goes_on() {
+        // Never written since power-up (the flags did not show the power loss): log lost, then
+        // an ordinary ring.
+        let (mut r, kept) = Ring::open(Faulty { m: fresh(), bad: vec![true; WORDS] }, false);
+        assert!(!kept);
+        r.log(1, format_args!("start after software: log lost"));
+        assert!(r.w.bad.iter().all(|b| !b), "every word written");
+        let (r, kept) = Ring::open(r.w, false);
+        assert!(kept);
+        assert_eq!(texts(&r).len(), 1);
+        // One word of a kept ring, at every place.
+        for i in 0..WORDS {
+            let n = 100;
+            let mut bad = vec![false; WORDS];
+            bad[i] = true;
+            let (r, kept) = Ring::open(Faulty { m: filled(n), bad }, false);
+            let (a, b) = r.range();
+            if i < 2 * HEADER {
+                assert!(kept && (a, b) == (n - ENTRIES, n), "a header copy: the other one holds ({i})");
+            } else {
+                // The entry in that place, and those after it, are dropped.
+                let slot = ((i - 2 * HEADER) / ENTRY) as u32;
+                let seq = (n - ENTRIES..n).find(|s| s % ENTRIES == slot).unwrap();
+                assert_eq!(kept, seq != n - ENTRIES, "{i}");
+                if kept {
+                    assert_eq!((a, b), (n - ENTRIES, seq));
+                }
+            }
+            assert!(r.w.bad.iter().all(|b| !b), "nothing unreadable is left behind ({i})");
         }
     }
 
