@@ -1,6 +1,7 @@
 # 0067 — What an image of this firmware must be: the image check, VERIFY and IDENTIFY tag 9
 
-- Status: proposed (2026-11-21); answers testbench finding SF-31
+- Status: accepted (ON8ST, 2026-11-22, relayed by the openg7250 session, as at `f3c15c1`);
+  addendum on two log words proposed 2026-11-22; proposed 2026-11-21; answers testbench finding SF-31
 - Date: 2026-11-21
 - Builds on: 0008 (U-4, U-5, U-6), 0028 (boot stage), 0043 (slot-linked images), 0044
   (self-confirmation), 0061 (slot size), 0064 (`ROLLBACK`), 0065 (ECC errors).
@@ -120,6 +121,21 @@ Context reworded to the contract alone (a), blocks sent again (b), slot names in
      fault); the previous image starts and the rollback is logged (T-A1-90).
    `ROLLBACK` to a slot with tag 9 = 0 or 2 gets 55 (0064; T-A1-89); to a slot whose trial
    failed it is accepted and starts a trial (T-A1-89).
+
+## Addendum: two more log words for a failed verify (proposed, 2026-11-22)
+
+Firmware question, relayed by the openg7250 session, 2026-11-22. A failed `UPDATE_VERIFY`
+can stop before its check 1 (the hash) can run. It names, in this order and before `hash`:
+
+- `missing-blocks`: a block of the image has not been received, or was counted as not received
+  again (point 2, "Blocks sent again"); the verify does not hash an incomplete image;
+- `unreadable`: a received word of the staging slot cannot be read (0065), so the hash cannot
+  be computed. This is the word item 1.1 of the image check already uses.
+
+The order of a failed verify's checks is therefore: `missing-blocks`, `unreadable`, `hash`, the
+rest of the image check (`no-record` to `vectors`), `header`. Each still gives status 55.
+Test: T-A1-88 (a verify with the last block not sent: the log names `missing-blocks`, not
+`hash`).
 
 ## Alternatives considered
 
