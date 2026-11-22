@@ -1,5 +1,6 @@
 """Verdicts of tests that end early, the host rule of 0069 in the plain request functions, and the
 endpoint read again. No network. GPL-3.0-or-later, (c) 2026 ON8ST."""
+import struct
 import unittest
 from unittest import mock
 
@@ -63,6 +64,72 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(call([], core.PartSkip("x")), "skip")
         self.assertEqual(call([], core.PartSkip("x"), True), "pass")
         self.assertEqual(call([bad], core.PartSkip("x"), True), "fail")  # judged also when a part is not run
+
+
+class WholeWhereOffered(unittest.TestCase):
+    def test_tuple(self):
+        from testbench import t_log, t_store, t_update
+        for fn in (t_update.t_a1_89, t_update.t_a1_90, t_log.t_a1_91, t_store.t_a1_92):
+            self.assertIsInstance(fn.whole, tuple)
+
+        def noted(ctx):
+            ctx.check("one part", True, "detail")
+            ctx.part("the other part not run")
+
+        def skipped(ctx):
+            ctx.check("one part", True, "detail")
+            raise core.PartSkip("the other part")
+        for fn in (noted, skipped):
+            fn.whole = ("x.y", "package_slot_a")
+            for fixtures, params, want in ((["x.y"], {}, "pass"), ([], dict(package_slot_a="p"), "pass"),
+                                           (["x.y"], dict(package_slot_a="p"), "skip")):
+                core.REGISTRY["T-UNIT-V"] = fn
+                try:
+                    res = core.run_one("T-UNIT-V", core.Ctx(dict(fixtures=fixtures), params))
+                finally:
+                    del core.REGISTRY["T-UNIT-V"]
+                self.assertEqual(res["status"], want)
+                self.assertIn("the other part", res["reason"])
+
+
+class PushBeforeReply(unittest.TestCase):
+    """T-B5-21: the disarm push leaves the radio before the reply (A1.9)."""
+    PUSH = (b"\0\0\0\x07" + b"\0" * 12, 10.0)
+
+    def judge(self, sends, netlog=True, t_reply=10.0, pushes=None):
+        from testbench.mgmt import build
+        from testbench.t_mgmt import push_before_reply
+        reply = lambda rid: (7251, 41000, build(0x22, b"", rid, typ=2)[:16])
+        push = lambda seq: (7250, 38000, struct.pack(">I", seq) + b"\0" * 12)
+        make = dict(push=push(7), other=push(6), reply=reply(99), earlier=reply(98))
+        entries = [dict(t_us=k, dir="from_radio", radio_port=p, peer=f"1.2.3.4:{h}", head=head.hex())
+                   for k, (p, h, head) in enumerate(make[x] for x in sends)]
+        ctx = core.Ctx({})
+        with mock.patch.object(core.Ctx, "fixture", lambda self, op, /, **a: dict(count=len(entries), dropped=0, entries=entries)):
+            push_before_reply(ctx, "claim", [self.PUSH] if pushes is None else pushes, 38000, 99, t_reply, 41000, netlog)
+        c = [c for c in ctx.checks if c["name"] == "claim"]
+        return (c[0]["ok"], c[0]["detail"]) if c else (None, "")
+
+    def test_net_log_order(self):
+        ok, detail = self.judge(["earlier", "other", "push", "reply"])
+        self.assertTrue(ok and "net.log" in detail, detail)
+        # the reply first, however close, is a fail, whatever the arrivals say
+        self.assertFalse(self.judge(["earlier", "other", "reply", "push"], t_reply=99.0)[0])
+        self.assertFalse(self.judge(["reply", "push", "reply"])[0])  # a repeat of the reply does not help
+
+    def test_missing_entry_is_the_runners(self):
+        for sends in (["push"], ["reply", "other"]):
+            with self.assertRaises(core.RunnerFault):
+                self.judge(sends)
+
+    def test_two_sockets(self):
+        for t_reply, want in ((10.0005, True), (9.9995, True), (9.998, False), (9.996, False)):
+            ok, detail = self.judge([], netlog=False, t_reply=t_reply)
+            self.assertEqual(ok, want)
+            self.assertIn("two sockets", detail)
+
+    def test_no_push(self):
+        self.assertIsNone(self.judge(["reply"], pushes=[])[0])
 
 
 class Net:

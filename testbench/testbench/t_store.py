@@ -297,19 +297,19 @@ def socket_open_us(ctx) -> float | None:
     return t[-1] if t else None
 
 
-@test("T-A1-92")
+@test("T-A1-92", whole=("flash.ecc", "flash.dump", "sock.log", "power.cycle"))
 def t_a1_92(ctx: Ctx):
     """A1.10 "The old secret in flash", B2.3 "Flash work" (0069). Emulator."""
     need(ctx, "flash.log")
     original = secret(ctx)
     dump = has(ctx, "flash.dump")
     if not dump:
-        ctx.notes.append("what the sectors hold not judged: no flash.dump {address, len} (proposed); judged on flash.log and the log")
+        ctx.part("what the sectors hold not judged: no flash.dump {address, len} (proposed); judged on flash.log and the log")
     with mg(ctx, original) as u:
         secs = sectors(u)
     known = dump and len(where(ctx, secs, original)) >= 1
     if dump and not known:
-        ctx.notes.append("what the sectors hold not judged: the secret in force is not found as 32 bytes in a row")
+        ctx.part("what the sectors hold not judged: the secret in force is not found as 32 bytes in a row")
     cur = original
 
     def change(label: str):
@@ -343,7 +343,7 @@ def t_a1_92(ctx: Ctx):
             ctx.check(f"{label}: before the management socket opens (sock.log)", er[0].get("t_end_us", 0) <= op,
                       f"erase ended at {er[0].get('t_end_us')} us, socket opened at {op} us")
         elif er:
-            ctx.notes.append(f"{label}: 'before the management socket opens' not judged: no sock.log entry")
+            ctx.part(f"{label}: 'before the management socket opens' not judged: no sock.log entry")
         from .t_log import entries as log_entries, last_start
         log = log_entries(ctx)
         k = last_start(log)
@@ -398,7 +398,7 @@ def t_a1_92(ctx: Ctx):
                     texts = [e[2] for e in read_log(u.c)]
                     ctx.check("fall-back: logged (text not fixed: an entry of the store)", any("store" in x for x in texts), f"{texts[-5:]}")
     else:
-        ctx.notes.append("fall-back part not run: no flash.ecc")
+        ctx.part("fall-back part not run: no flash.ecc")
     ctx.notes.append("the FACTORY_RESET whose second erase fails is judged in T-A1-39")
     if cur != original:  # leave the radio with the secret it had
         with mg(ctx, cur) as u:

@@ -1054,7 +1054,7 @@ def corrupt(ctx, slot: int, release: bool = False, length: int | None = None):
         ctx.check(f"slot.corrupt: the byte at {r.get('address')} changed", r["old"] != r["new"], f"old {r['old']}, new {r['new']}")
 
 
-@test("T-A1-89")
+@test("T-A1-89", whole=("slot.corrupt", "ch394.silent", "package_slot_a", "package_slot_b"))
 def t_a1_89(ctx: Ctx):
     """A1.8 "Integrity in IDENTIFY" (0067): tag 9 for the other slot."""
     need_clock(ctx)
@@ -1124,7 +1124,7 @@ def t_a1_89(ctx: Ctx):
         ctx.eq("with the network up it confirms itself", u.identify().get(10), b"\x00")
 
 
-@test("T-A1-90")
+@test("T-A1-90", whole=("slot.corrupt", "package_slot_a", "package_slot_b"))
 def t_a1_90(ctx: Ctx):
     """A1.8 "Boot-stage refusals" (0067)."""
     need_clock(ctx)
@@ -1175,7 +1175,7 @@ def t_a1_90(ctx: Ctx):
         corrupt(ctx, a[1], release=True)
     # 3: both slots changed: safe state, no answer (an emulator; the model does not model it)
     if "model" in ctx.endpoint:
-        ctx.notes.append("both slots changed: not run on the reference model (the safe state without network is not modelled)")
+        ctx.part("both slots changed: not run on the reference model (the safe state without network is not modelled)")
         return
     ctx.need("power.cycle")
     try:

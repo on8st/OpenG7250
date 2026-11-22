@@ -114,7 +114,7 @@ def newest(ctx) -> int:
     return max([e[0] for e in entries(ctx)], default=-1)
 
 
-@test("T-A1-91")
+@test("T-A1-91", whole=("log.corrupt", "reset.flags"))
 def t_a1_91(ctx: Ctx):
     """A1.7 "Kept over a reset", "The reason before a commanded reset", "The start entry" (0068)."""
     need_clock(ctx)
@@ -146,7 +146,7 @@ def t_a1_91(ctx: Ctx):
             r = req_retransmit(c, "IDENTIFY")
             ctx.eq("watchdog reset: IDENTIFY tag 17 = 3", tlv(r["payload"]).get(17) if r else None, b"\x03")
     else:
-        ctx.notes.append("watchdog part not run: no reset.wdt")
+        ctx.part("watchdog part not run: no reset.wdt")
     # one entry of the kept ring corrupted: it and those after it are dropped
     if "log.corrupt" in fx:
         log = entries(ctx)
@@ -165,7 +165,7 @@ def t_a1_91(ctx: Ctx):
             pass
         lost(ctx, "the oldest entry corrupted", "software")
     else:
-        ctx.notes.append("corrupted entries not run: no log.corrupt (one entry of the ring changed in RAM; the layout is the firmware's)")
+        ctx.part("corrupted entries not run: no log.corrupt (one entry of the ring changed in RAM; the layout is the firmware's)")
     # a start with no reset flag, or with power-on beside software: a power loss, whatever is named
     if "reset.flags" in fx:
         for label, flags, cause in (("no reset flag", [], "unknown"), ("power-on beside software", ["software", "power-on"], "software")):
@@ -174,7 +174,7 @@ def t_a1_91(ctx: Ctx):
                 pass
             lost(ctx, label, cause)
     else:
-        ctx.notes.append("a start with no reset flag, and power-on beside software, not run: no reset.flags")
+        ctx.part("a start with no reset flag, and power-on beside software, not run: no reset.flags")
     # FACTORY_RESET is judged in T-A1-39; a power cycle empties the log
     if "power.cycle" in fx:
         ctx.fixture("power.cycle")
@@ -213,7 +213,7 @@ def t_a1_91(ctx: Ctx):
             wait_reachable(ctx, "a watchdog reset in the trial")
             judge_run(ctx, "trial reset before confirming", entries(ctx), n0, None, cause="watchdog", boot=(back,))
         else:
-            ctx.notes.append("trial reset before confirming: the trial had confirmed itself before the reset; not judged")
+            ctx.part("trial reset before confirming: the trial had confirmed itself before the reset; not judged")
     else:
         advance(ctx, 11)
     # the trial's 60 s limit

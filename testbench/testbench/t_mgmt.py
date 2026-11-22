@@ -5,7 +5,7 @@ import os
 import struct
 import time
 
-from .core import Ctx, RadioClock, Skip, test
+from .core import Ctx, RadioClock, RunnerFault, Skip, test
 from .mgmt import CMD, Mgmt, build, identify, req_retransmit, tlv
 
 
@@ -650,6 +650,33 @@ def t_a1_74(ctx):
 
 
 # ---------------- flash work and transmit (B2.3 "Flash work"; 0055) ----------------
+TWO_SOCKETS_S = 0.001  # two sockets read by two threads: 0.04 ms at most measured on this bench
+
+
+def push_before_reply(ctx, name: str, pushes: list, push_port: int, rid: int, t_reply: float, reply_port: int, netlog: bool):
+    """A push (the first of `pushes`: datagram, arrival) leaves the radio before the management
+    reply to request `rid` (A1.9): by the order of the radio's sends in net.log, exactly; without
+    net.log by the arrivals at the two sockets. The result names which."""
+    if not ctx.check(f"{name}: the push received", bool(pushes), f"{len(pushes)} pushes"):
+        return
+    if not netlog:
+        dt = pushes[0][1] - t_reply
+        ctx.check(name, dt <= TWO_SOCKETS_S, f"push {dt * 1000:+.2f} ms relative to the reply; from the arrivals at two sockets, "
+                  f"tolerance {TWO_SOCKETS_S * 1000:.0f} ms (no net.log)")
+        return
+    from .t_a2 import netlog_read
+    sent = [e for e in netlog_read(ctx) if e.get("dir") == "from_radio"]
+    to = lambda e, radio, host: e.get("radio_port") == radio and str(e.get("peer", "")).endswith(f":{host}")
+    # head is the first 16 bytes: the P2 sequence number of a push; magic to command of a reply
+    seqs = {d[:4] for d, _ in pushes}
+    i = [k for k, e in enumerate(sent) if to(e, PORT_REG, push_port) and bytes.fromhex(e.get("head", ""))[:4] in seqs]
+    j = [k for k, e in enumerate(sent) if to(e, 7251, reply_port) and bytes.fromhex(e.get("head", ""))[8:12] == struct.pack(">I", rid)]
+    if not i or not j:
+        raise RunnerFault(f"net.log: no send entry of the {'push' if not i else 'reply'} the bench received ({name})")
+    ctx.check(name, i[0] < j[0], f"push sent at {sent[i[0]].get('t_us')} us, the reply at {sent[j[0]].get('t_us')} us; from the order of "
+              "the sends in net.log")
+
+
 @test("T-B5-21")
 def t_b5_21(ctx):
     """B2.3 "Flash work" (0055) in the order of Table A1-3 (36, 35, 58, 57, 50): while armed,
@@ -694,21 +721,31 @@ def t_b5_21(ctx):
         # FACTORY_RESET while armed: a commanded reset (A1.9): unkey and disarm, then the reply
         h.keepalive()
         pushes: list = []
-        t = threading.Thread(target=lambda: pushes.extend(h.recv(1.0, PORT_REG)))
+        answered = threading.Event()
+
+        def receive():
+            while not answered.is_set():  # the reply may take longer than 1 s on an emulator
+                pushes.extend(h.recv(0.1, PORT_REG))
+            pushes.extend(h.recv(0.3, PORT_REG))
+        t = threading.Thread(target=receive)
         from .t_store import reset_done, state_before
         before = state_before(c)
+        netlog = "net.log" in ctx.endpoint.get("fixtures", [])
+        if netlog:
+            ctx.fixture("net.log", action="start")
         h.keepalive()  # the log was read meanwhile
         t.start()
-        r = c.authed("FACTORY_RESET", s)
-        t_reply = time.monotonic()
-        t.join()
+        try:
+            r = c.authed("FACTORY_RESET", s)
+            t_reply = time.monotonic()
+        finally:
+            answered.set()
+            t.join()
         ctx.eq("armed: FACTORY_RESET answered 0", r["status"] if r else None, 0)
-        disarm = [tt for _, d, tt in pushes if (value(parse_regs(d), TX_ARM_STATE) if value(parse_regs(d), TX_ARM_STATE) is not None else 1) & 0xF == 0]
-        ctx.check("FACTORY_RESET disarmed before its reply (A1.9; no flash work while armed)",
-                  # two sockets read by two threads: the bench cannot order arrivals closer than this
-                  bool(disarm) and disarm[0] <= t_reply + 0.005,
-                  f"disarm push {format((disarm[0] - t_reply) * 1000, '+.2f') + ' ms' if disarm else 'not seen'} relative to the reply "
-                  "(5 ms: the bench's resolution between two sockets)")
+        disarm = [(d, tt) for _, d, tt in pushes if (v := value(parse_regs(d), TX_ARM_STATE)) is not None and v & 0xF == 0]
+        if r is not None:
+            push_before_reply(ctx, "FACTORY_RESET disarmed before its reply (A1.9; no flash work while armed)", disarm, h.port,
+                              r["id"], t_reply, c.port, netlog)
     # after the factory reset: the network back to its default, the secret cleared, the window open
     reset_done(ctx, "FACTORY_RESET", before)
     with m(ctx) as c, Host(ctx.net) as h:

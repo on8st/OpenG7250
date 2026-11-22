@@ -13,11 +13,12 @@ from typing import Callable
 REGISTRY: dict[str, Callable] = {}
 
 
-def test(*ids: str, trace_pins: list | None = None, trace_since: str = "start", whole: bool = False):
+def test(*ids: str, trace_pins: list | None = None, trace_since: str = "start", whole=False):
     """Register a test function for one or more catalogue ids. `trace_pins`: extra pins the
     hw.trace of this test watches; `trace_since`: "start" (judge pins from the trace start
     snapshot on) or "boot" (from the boot event + 20 us on, A3.6; 0045). `whole`: the claim needs
-    every part, so a part that cannot run (PartSkip) leaves no pass."""
+    every part, so a part that cannot run (PartSkip, Ctx.part) leaves no pass; a tuple: only where
+    the endpoint offers all these fixtures and the run gives these parameters."""
     def deco(fn):
         fn.whole = whole
         fn.trace_pins = trace_pins
@@ -71,6 +72,7 @@ class Ctx:
     params: dict = field(default_factory=dict)
     checks: list = field(default_factory=list)
     notes: list = field(default_factory=list)
+    parts: list = field(default_factory=list)  # parts of the claim that did not run
     trace_file: str | None = None  # v1.3: the live trace file of this test, from hw.trace start
     trace_pins: list | None = None  # extra pins a test watches (hw.trace start {pins})
     trace_since: str = "start"  # from when pin levels are judged: "start" or "boot" (+20 us)
@@ -101,6 +103,11 @@ class Ctx:
             detail = "ok" if ok else "condition not met"
         self.checks.append({"name": name, "ok": ok, "detail": detail})
         return ok
+
+    def part(self, why: str):
+        """A part of the claim that cannot run here: noted; no pass where the test is whole."""
+        self.parts.append(why)
+        self.notes.append(why)
 
     def at_least(self, name: str, n: int, k: int = 1, what: str = "packets") -> bool:
         return self.check(name, n >= k, f"{n} {what}")
@@ -219,6 +226,10 @@ def run_one(tid: str, ctx: Ctx) -> dict:
         for name, ok_, detail in check_flash(entries):
             ctx.check(name, ok_, detail)
 
+    def whole() -> bool:
+        w = getattr(fn, "whole", False)
+        return w if isinstance(w, bool) else all(x in ctx.endpoint.get("fixtures", []) or ctx.params.get(x) for x in w)
+
     def judged(otherwise: str, reason: str):
         """Failed checks fail the test; with none the result is `otherwise`."""
         bad = [c for c in ctx.checks if not c["ok"]]
@@ -245,7 +256,7 @@ def run_one(tid: str, ctx: Ctx) -> dict:
         own = len(ctx.checks)  # the run-wide flash rules alone are no verdict on the test's claim
         flash_rules()
         if own:
-            judged("pass", "")
+            judged("skip" if ctx.parts and whole() else "pass", "")
         else:
             judged("fail", "no checks recorded")
     except RunnerFault as e:
@@ -259,7 +270,7 @@ def run_one(tid: str, ctx: Ctx) -> dict:
             flash_rules()
         except (Skip, RunnerFault) as e2:
             ctx.notes.append(f"run-wide flash rules not judged: {e2}")
-        judged("pass" if own and not getattr(fn, "whole", False) else "skip", f"part not run: {e}" if own else str(e))
+        judged("pass" if own and not whole() else "skip", f"part not run: {e}" if own else str(e))
     except Skip as e:
         judged("skip", str(e))
     except Blocked as e:
