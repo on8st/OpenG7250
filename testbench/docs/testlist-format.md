@@ -550,7 +550,9 @@ A test with target `emulator` is also run against the reference model. A test wi
      kept across `power.cycle`, only within 0x080C0000 to 0x080FFFFF, refused outside (T-A1-92:
      foreign data, an erased sector, the store put back from a dump); and
      `log.corrupt {seq}`: the kept log entry with that sequence number changed in RAM so that its
-     check fails at the next start (T-A1-91; the layout is the firmware's, so an emulator offers it
+     check fails at the next start. It takes effect at the next MCU reset, between the last write
+     of the old run and the first read of the new one: the running image reads and continues its
+     ring unchanged until then (T-A1-91; the layout is the firmware's, so an emulator offers it
      only when its runner knows the ring). The emulator (emu/bench `8a2a100`, minor 9) has these
      three and `reset.flags`. The reference model has `log.corrupt`, and
      `flash.delay {us, count}`: the flash work of the next `count` requests takes `us` (T-B5-22),
