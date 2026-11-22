@@ -38,6 +38,19 @@ window for every management request that may do flash work.
      (0065), it is logged (kept over the reset, 0068) and the next start finishes it before the
      management socket opens. A host that waits for the radio after such a reset allows 17 s
      more than after a `RESTART`.
+   - **`CHANGE_SECRET`** (openg7250, 2026-11-22: the old secret MUST NOT stay readable in flash
+     longer than until the next start). `CHANGE_SECRET` does not end in a reset, so it gets
+     one erase, before its reply: the new secret is always written by a compaction into the
+     other store sector, which erases that sector and writes the live items there with the new
+     secret, so the sector with the old secret is no longer live (it is "stale"). The stale
+     sector is erased by whichever comes first: the next compaction (it is then the sector
+     that compaction erases), or the next start, before the management socket opens. It is
+     not erased on its own at any other time, so that no flash work starts outside a request
+     or a start (B2.3). Exception: if at that start the store has to fall back to the stale
+     sector's generation (0065 point 5, newest commit word unreadable), the stale sector is the
+     live one and is kept; this is logged. `SET_FIRST_SECRET` never replaces a secret: the
+     first-secret window opens only while no secret is set (A1.10), and a factory reset erases
+     the old secret from both sectors (above).
 2. **Reply bound for the radio.** The G7250 MUST send the reply to such a request within
    `t_flash_reply` = 15 s of receiving it, whether the flash work succeeds or fails (0065).
    Derivation: an erase of at most `t_erase_max` (4 s), programming one sector of 4096 words
@@ -61,7 +74,8 @@ window for every management request that may do flash work.
    `SET_CONFIG` with a compaction and an installer sector; each reply comes within 15 s; each
    request is executed once; flash.log shows at most one erase per request. T-A1-85: an erase
    that does not end gets its 55 reply within 15 s. T-A1-39: after a `FACTORY_RESET` neither
-   store sector holds the old secret, and the reset comes within 17 s of the reply.
+   store sector holds the old secret, and the reset comes within 17 s of the reply. T-A1-92
+   (new): the old secret after `CHANGE_SECRET`.
 
 ## Alternatives considered
 
