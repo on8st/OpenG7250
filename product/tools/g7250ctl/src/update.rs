@@ -128,6 +128,9 @@ pub enum Event {
     VerifyFailed { round: u32 },
     Verified,
     Activated,
+    /// The reply to `UPDATE_ACTIVATE` or `ROLLBACK` was lost, and `IDENTIFY` shows the reset
+    /// (A1.4 "Requests that end in a reset"); with the log's reason line if found.
+    ReplyLostResetSeen { reason: Option<String> },
     Restarted,
     Trial,
     Confirmed,
@@ -295,7 +298,7 @@ fn write_failure(f: &Failure) -> bool {
 /// during the transfer (uptime, tag 16, below `before`): it then answers the retransmitted
 /// block with 33, because its challenge did not survive the reset. An abort would only put it
 /// back in the update state for nothing.
-fn abort_in_progress(client: &mut Client, to: SocketAddr, secret: &Secret, before: writes::Before, ev: &mut dyn FnMut(Event)) {
+fn abort_in_progress(client: &mut Client, to: SocketAddr, secret: &Secret, uptime_before: u32, ev: &mut dyn FnMut(Event)) {
     match update_status(client, to) {
         Ok(st) if matches!(st.state, 1 | 2) => {
             if let Ok(restart_needed) = abort(client, to, secret) {
@@ -303,7 +306,8 @@ fn abort_in_progress(client: &mut Client, to: SocketAddr, secret: &Secret, befor
             }
         }
         Ok(st) => match identify(client, to) {
-            Ok(i) if before.restarted(i.uptime_ms, i.running_slot) => ev(Event::RadioRestarted),
+            // Any restart counts here, whatever its cause (tag 17): the transfer is gone.
+            Ok(i) if i.uptime_ms < uptime_before => ev(Event::RadioRestarted),
             _ => ev(Event::NoTransfer { state: st.state }),
         },
         Err(_) => ev(Event::LeftForResume),
@@ -369,7 +373,10 @@ pub fn install(
         verify(client, to, secret, file, opts.verify_retries, ev)?;
         verified = true;
         match writes::resetting(client, to, secret, Command::UpdateActivate, &mgmt_host::activate_request(false))? {
-            writes::Resetting::ResetSeen => restart_from = None,
+            writes::Resetting::ResetSeen { reason } => {
+                ev(Event::ReplyLostResetSeen { reason });
+                restart_from = None
+            }
             writes::Resetting::Answered(a, before) if a.ok() => {
                 if mgmt_host::parse_flag_reply(&a.payload) != Some(false) {
                     return Err(decode(&a, "UPDATE_ACTIVATE reply is not 'permanent 0' (Table M-1)"));
@@ -396,8 +403,7 @@ pub fn install(
             let _ = writes::end_session(client, to, secret);
             ev(Event::WriteFailed);
         } else if should_abort(&f) {
-            let before = writes::Before { uptime_ms: id.uptime_ms, running_slot: id.running_slot, slot_changes: false };
-            abort_in_progress(client, to, secret, before, ev);
+            abort_in_progress(client, to, secret, id.uptime_ms, ev);
         } else {
             ev(Event::LeftForResume);
         }
@@ -473,7 +479,10 @@ pub fn rollback(client: &mut Client, to: SocketAddr, secret: &Secret, wait: Opti
         s => return Err(other(format!("IDENTIFY reports running slot {s} (tag 23)"), to)),
     };
     let restart_from = match writes::resetting(client, to, secret, Command::Rollback, &[])? {
-        writes::Resetting::ResetSeen => None,
+        writes::Resetting::ResetSeen { reason } => {
+            ev(Event::ReplyLostResetSeen { reason });
+            None
+        }
         writes::Resetting::Answered(a, before) if a.ok() => Some(before),
         writes::Resetting::Answered(a, _) => {
             if !matches!(a.status_code, 16..=19 | 32..=35) {

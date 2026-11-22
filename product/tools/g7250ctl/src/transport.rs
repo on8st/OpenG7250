@@ -81,6 +81,8 @@ pub struct Answer {
     pub version: (u8, u8),
     /// Raw status (bytes 14-15).
     pub status_code: u16,
+    /// Header flags (byte 7; Table A1-1): bit 0 authenticated, bit 1 more blocks follow.
+    pub flags: u8,
     /// The status if it is one of Table A1-3.
     pub status: Option<Status>,
     pub payload: Vec<u8>,
@@ -232,6 +234,7 @@ pub fn matching(d: &[u8], from: SocketAddr, id: u32, cmd: Command, sends: u32) -
         command: r.header.command,
         version: (r.header.major, r.header.minor),
         status_code: r.header.status,
+        flags: r.header.flags,
         status: r.status,
         payload: r.payload.to_vec(),
         sends,

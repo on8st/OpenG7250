@@ -8,13 +8,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Args, Subcommand};
-use g7250_proto::mgmt::payload::{Config, Identify};
+use g7250_proto::mgmt::payload::Config;
 use g7250_proto::mgmt::Command;
 
 use g7250ctl::render::{self, Json};
 use g7250ctl::secret::Secret;
 use g7250ctl::writes::{self, Whereabouts};
-use g7250ctl::{args, exit, reads};
+use g7250ctl::{args, exit};
 
 use crate::{fail, open, Outcome};
 
@@ -307,13 +307,22 @@ fn reset(json: bool, policy: g7250ctl::transport::Policy, addr: &str, s: &Secret
     let (mut c, to) = open(policy, addr)?;
     let from = writes::reset(&mut c, to, s, cmd).map_err(fail)?;
     let what = if cmd == Command::Restart { "restart" } else { "factory reset" };
+    let before = match from {
+        writes::ResetStart::Answered(before) => before,
+        // A1.4 "Requests that end in a reset": the reply was lost, the reset is seen; the
+        // request is not sent again.
+        writes::ResetStart::Seen { reason } => {
+            let log = match reason {
+                Some(r) => format!("the log says \"{r}\""),
+                None => "no reason line found in the log".into(),
+            };
+            return done(json, &format!("{what} done: its reply was lost, and IDENTIFY shows the reset (uptime, reset cause software); {log}"));
+        }
+    };
     if !wait {
         return done(json, &format!("{what} accepted"));
     }
-    let waited = match from {
-        Some(before) => writes::wait_for_restart(&mut c, to, before, Duration::from_secs(limit)),
-        None => reads::identify(&mut c, to).map(|a| Identify::decode(&a.payload).map(|i| i.uptime_ms).unwrap_or(0)),
-    };
+    let waited = writes::wait_for_restart(&mut c, to, before, Duration::from_secs(limit));
     match waited {
         Ok(ms) => done(json, &format!("{what} done; the radio answers again (uptime {})", render::uptime(ms))),
         Err(e) if cmd == Command::FactoryReset => Err((

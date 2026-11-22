@@ -57,6 +57,11 @@ struct State {
     /// Drop the reply to the first datagram of this command.
     drop_first: Option<u16>,
     seen: Vec<Seen>,
+    /// The log (one `READ_LOG` page, flag bit 1 clear).
+    log: Vec<String>,
+    /// Tag 17 now, and after a commanded reset (None: 2, software).
+    reset_cause: u8,
+    reset_cause_after: Option<u8>,
 }
 
 fn config_payload(c: &BTreeMap<(u8, u8), Vec<u8>>) -> Vec<u8> {
@@ -91,6 +96,7 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
     }
     let needs_auth = !matches!(cmd, 0x01 | 0x02 | 0x10 | 0x11 | 0x20 | 0x30 | 0x45 | 0x60);
     let r = |status: u16, p: &[u8]| reply(id, cmd.to_be_bytes(), status, p);
+    let mut did_reset = false;
     let out = if needs_auth && flags & 1 == 0 {
         r(32, &[])
     } else if needs_auth && !auth_ok {
@@ -111,6 +117,7 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
                 st.uptime += 100;
                 let mut p = identify_payload(1, st.uptime);
                 p.extend([11, 1, st.secret.is_some() as u8]);
+                p.extend([17, 1, st.reset_cause]);
                 r(0, &p)
             }
             0x10 => {
@@ -150,8 +157,15 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
                     p = &p[2 + l..];
                 }
                 let out = r(0, &config_payload(&next));
+                // A change of address (tag 2) or netmask (tag 3) ends the write session and
+                // discards the challenges, after the reply (A1.10; 0074 item 9).
+                let moved = [2, 3].iter().any(|t| next.get(&(*t, 0)) != st.config.get(&(*t, 0)));
                 if !st.config_lies {
                     st.config = next;
+                }
+                if moved {
+                    st.holder = None;
+                    st.challenges.clear();
                 }
                 out
             }
@@ -161,6 +175,13 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
                 } else {
                     st.uptime = 0;
                     st.holder = None;
+                    // The reply is sent, then lost with the reset, as are the challenges
+                    // (Table A1-4); the reason, then the start entry (A1.7; 0068).
+                    did_reset = true;
+                    st.challenges.clear();
+                    st.log.push(if cmd == 0x22 { "restart: factory-reset" } else { "restart: restart" }.into());
+                    st.log.push("start after software: log kept".into());
+                    st.reset_cause = st.reset_cause_after.unwrap_or(2);
                     if cmd == 0x22 {
                         st.secret = None;
                         st.window_open = true;
@@ -169,6 +190,14 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
                 }
             }
             0x23 | 0x31 => r(0, &[]),
+            0x30 => {
+                let from = u32::from_be_bytes(payload[..4].try_into().unwrap()) as usize;
+                let mut p = Vec::new();
+                for (i, t) in st.log.iter().enumerate().skip(from) {
+                    p.extend(log_entry(i as u32, 0, t));
+                }
+                r(0, &p)
+            }
             0x60 => match &st.calibration {
                 None => r(0, &[0; 32]),
                 Some(set) => {
@@ -190,7 +219,11 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
             _ => r(16, &[]),
         }
     };
-    stored.insert((from, id), out.clone());
+    if did_reset {
+        stored.clear();
+    } else {
+        stored.insert((from, id), out.clone());
+    }
     if st.drop_first == Some(cmd) {
         st.drop_first = None;
         return vec![];
@@ -291,11 +324,50 @@ fn restart_is_allowed_while_another_host_writes_and_sends_no_session_end() {
     let other: SocketAddr = "127.0.0.1:9".parse().unwrap();
     let (addr, st) = start(State { secret: Some(OLD), holder: Some(other), uptime: 50_000, ..Default::default() });
     let mut c = client();
-    let before = writes::reset(&mut c, addr, &secret(OLD), g7250_proto::mgmt::Command::Restart).unwrap().expect("answered");
+    let writes::ResetStart::Answered(before) = writes::reset(&mut c, addr, &secret(OLD), g7250_proto::mgmt::Command::Restart).unwrap() else {
+        panic!("answered")
+    };
     assert_eq!(cmds(&st), vec![0x01, 0x10, 0x24], "IDENTIFY for the uptime, then the signed RESTART");
     assert_eq!((before.uptime_ms, before.slot_changes), (50_100, false), "a RESTART keeps the slot: only the uptime counts");
     let up = writes::wait_for_restart(&mut c, addr, before, std::time::Duration::from_secs(2)).unwrap();
     assert!(up < 50_000);
+}
+
+#[test]
+fn a_restart_with_its_reply_lost_is_told_from_identify_and_the_log_and_not_sent_again() {
+    // A1.4 "Requests that end in a reset" (0074 item 10): the retransmission after the reset
+    // meets a spent challenge (33); retransmitting stops there, IDENTIFY shows the reset
+    // (uptime, cause software) and the log names it. No new challenge, no new RESTART.
+    let (addr, st) = start(State { secret: Some(OLD), uptime: 50_000, reset_cause: 1, drop_first: Some(0x24), ..Default::default() });
+    let r = writes::reset(&mut client(), addr, &secret(OLD), g7250_proto::mgmt::Command::Restart).unwrap();
+    assert_eq!(r, writes::ResetStart::Seen { reason: Some("restart: restart".into()) });
+    let c = cmds(&st);
+    assert_eq!(c.iter().filter(|x| **x == 0x10).count(), 1, "one challenge: {c:x?}");
+    let restarts: Vec<Vec<u8>> = st.lock().unwrap().seen.iter().filter(|s| s.cmd == 0x24).map(|s| s.raw.clone()).collect();
+    assert_eq!(restarts.len(), 2, "the first send and one retransmission, stopped at the 33: {c:x?}");
+    assert_eq!(restarts[0], restarts[1], "the same datagram");
+    assert_eq!(c[c.len() - 2..], [0x01, 0x30], "IDENTIFY, then the log: {c:x?}");
+}
+
+#[test]
+fn a_restart_is_seen_only_with_a_software_cause_and_a_start_after_the_request() {
+    use g7250_proto::mgmt::payload::Identify;
+    let before = writes::Before { uptime_ms: 50_000, running_slot: 1, slot_changes: false, sent: std::time::Instant::now() };
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let id = |uptime_ms, reset_cause, running_slot| Identify { uptime_ms, reset_cause, running_slot, ..Default::default() };
+    assert!(before.restarted(&id(10, 2, 1)), "software, started after the request");
+    assert!(before.restarted(&id(10, 0, 1)), "cause unknown: no evidence against");
+    assert!(!before.restarted(&id(10, 3, 1)), "a watchdog reset is not the one asked for");
+    assert!(!before.restarted(&id(10, 1, 1)), "nor a power-on");
+    assert!(!before.restarted(&id(50_200, 2, 1)), "still the same run");
+    // ROLLBACK and UPDATE_ACTIVATE: a changed slot is evidence too, the version is not.
+    let before = writes::Before { slot_changes: true, ..before };
+    assert!(before.restarted(&id(60_000, 2, 2)));
+    assert!(!before.restarted(&id(60_000, 2, 1)));
+    // An uptime below the time since the request, even above the one before (a request just
+    // after a start): the radio started after it.
+    let early = writes::Before { uptime_ms: 5, running_slot: 1, slot_changes: false, sent: std::time::Instant::now() - std::time::Duration::from_secs(2) };
+    assert!(early.restarted(&id(1_000, 2, 1)));
 }
 
 #[test]
@@ -346,6 +418,39 @@ fn network_change_that_does_not_come_up_is_reported() {
     let f = writes::set_config(&mut c, addr, &secret(OLD), &change).unwrap_err();
     assert!(f.to_string().contains("kept its old address"), "{f}");
     assert_eq!(st.lock().unwrap().holder, None, "the session was ended at the address that answered");
+}
+
+#[test]
+fn an_address_or_netmask_change_sends_no_session_end() {
+    // The fake stays at 127.0.0.1; a new netmask is a change of A1.10 all the same.
+    let mut config = BTreeMap::new();
+    config.insert((1, 0), vec![1]);
+    config.insert((2, 0), vec![127, 0, 0, 1]);
+    config.insert((3, 0), vec![255, 0, 0, 0]);
+    let (addr, st) = start(State { secret: Some(OLD), config, ..Default::default() });
+    let mut c = client();
+    let change = Config { netmask: Some([255, 255, 0, 0]), ..Default::default() };
+    let r = writes::set_config(&mut c, addr, &secret(OLD), &change).unwrap();
+    assert_eq!(r.whereabouts, Whereabouts::At(addr));
+    assert_eq!(cmds(&st), vec![0x20, 0x10, 0x21, 0x20], "GET_CONFIG, SET_CONFIG, read-back; no END_WRITE_SESSION");
+    // The next write takes a new challenge and is accepted.
+    writes::clear_log(&mut c, addr, &secret(OLD)).unwrap();
+    let g = st.lock().unwrap();
+    assert!(g.seen.iter().rfind(|s| s.cmd == 0x31).unwrap().auth_ok);
+    assert_eq!(g.holder, None);
+}
+
+#[test]
+fn a_network_change_that_keeps_address_and_netmask_ends_the_session() {
+    let mut config = BTreeMap::new();
+    config.insert((1, 0), vec![1]);
+    config.insert((2, 0), vec![127, 0, 0, 1]);
+    config.insert((3, 0), vec![255, 0, 0, 0]);
+    let (addr, st) = start(State { secret: Some(OLD), config, ..Default::default() });
+    let change = Config { gateway: Some([127, 0, 0, 254]), ..Default::default() };
+    writes::set_config(&mut client(), addr, &secret(OLD), &change).unwrap();
+    assert_eq!(cmds(&st), vec![0x20, 0x10, 0x21, 0x20, 0x10, 0x13]);
+    assert_eq!(st.lock().unwrap().holder, None);
 }
 
 #[test]

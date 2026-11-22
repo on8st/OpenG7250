@@ -47,7 +47,7 @@ pub enum UpdateCmd {
         /// Radio address, `host` or `host:port` (port 7251 by default).
         addr: String,
     },
-    /// Abandon an update (UPDATE_ABORT). The radio stays in the update state until a restart.
+    /// Abandon an update (UPDATE_ABORT). The radio stays in the update state until a restart; a stock installation before its first erase restarts the radio by itself; with no update in progress nothing changes (0074).
     Abort {
         /// Radio address, `host` or `host:port` (port 7251 by default).
         addr: String,
@@ -121,6 +121,13 @@ pub(crate) fn progress(json: bool) -> impl FnMut(Event) {
             Event::VerifyFailed { round } => eprintln!("verify failed; sending every block again (round {round})"),
             Event::Verified => eprintln!("verified"),
             Event::Activated => eprintln!("activated; the radio restarts into the new image"),
+            Event::ReplyLostResetSeen { reason } => eprintln!(
+                "the reply was lost, but IDENTIFY shows the reset (A1.4); {}",
+                match reason {
+                    Some(r) => format!("the log says \"{r}\""),
+                    None => "no reason line found in the log".into(),
+                }
+            ),
             Event::Restarted => eprintln!("the radio answers again"),
             Event::Trial => eprintln!("trial boot; waiting for the self-confirmation"),
             Event::Confirmed => eprintln!("confirmed"),
@@ -189,7 +196,8 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &UpdateCmd) -> 
             let (mut c, to) = open(policy, addr)?;
             // Before its first erase the installer restarts the radio into this firmware by itself
             // (A1.8a item 3): no restart to ask for, and none to send.
-            let installer = update::update_status(&mut c, to).is_ok_and(|st| st.state == g7250ctl::stock::STATE_INSTALLER_BEFORE_ERASE);
+            let state = update::update_status(&mut c, to).ok().map(|st| st.state);
+            let installer = state == Some(g7250ctl::stock::STATE_INSTALLER_BEFORE_ERASE);
             let needed = update::abort(&mut c, to, &s).map_err(|f| {
                 let is_60 = matches!(&f, g7250ctl::reads::Failure::Status(a, _) if a.status_code == 60);
                 let (code, text) = fail(f);
@@ -204,6 +212,9 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &UpdateCmd) -> 
             }
             let needed = needed && !installer;
             let what = match (needed, restart) {
+                // No update state: answered 0 with restart needed 0, nothing changed (A1.8 "No
+                // transfer in progress"; 0074 item 1).
+                (false, false) if state == Some(0) => "no update in progress: nothing aborted, nothing changed",
                 _ if installer => "stock installation aborted before the first erase: the radio restarts into this firmware, secret and configuration unchanged",
                 (_, true) => "update aborted; restart requested",
                 (true, false) => "update aborted; the radio needs a restart (g7250ctl restart) before RX works again",

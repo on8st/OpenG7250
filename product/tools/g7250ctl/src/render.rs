@@ -420,12 +420,16 @@ pub fn config_human(c: &Config) -> String {
             line(&format!("power tx_band[{i}]"), format!("{} W", tenths(*l)));
         }
     }
-    if let Some(v) = c.swr_s2_x100 {
-        line("SWR limit S2", format!("{}.{:02}", v / 100, v % 100));
-    }
-    if let Some(v) = c.pa_temp_t3 {
-        line("PA temp T3", format!("{} °C", tenths(v)));
-    }
+    // Tags 9 and 10 are left out until the calibration set holds S2 and T3: the limit is not
+    // known then, never 0 (Table M-3; 0074 item 3).
+    line("SWR limit S2", match c.swr_s2_x100 {
+        Some(v) => format!("{}.{:02}", v / 100, v % 100),
+        None => "not known (the calibration set holds no S2)".into(),
+    });
+    line("PA temp T3", match c.pa_temp_t3 {
+        Some(v) => format!("{} °C", tenths(v)),
+        None => "not known (the calibration set holds no T3)".into(),
+    });
     if let Some(n) = c.allow_count {
         let list: Vec<_> = c.allow[..n as usize].iter().map(|(a, p)| format!("{}/{p}", ip(*a))).collect();
         line("TCI allow-list", if list.is_empty() { "empty (own subnet)".into() } else { list.join(", ") });
@@ -497,7 +501,12 @@ mod tests {
         let j = config_json(&c);
         assert!(j.contains(r#""band_limits":[{"tx_band":3,"limit_0_1w":1000}]"#), "{j}");
         assert!(j.contains(r#""netmask":null"#), "{j}");
-        assert!(config_human(&Config { allow_count: Some(0), ..Default::default() }).contains("empty (own subnet)"));
+        let h = config_human(&Config { allow_count: Some(0), ..Default::default() });
+        assert!(h.contains("empty (own subnet)"), "{h}");
+        assert!(h.contains("SWR limit S2       not known (the calibration set holds no S2)"), "{h}");
+        assert!(h.contains("PA temp T3         not known (the calibration set holds no T3)"), "{h}");
+        let j = config_json(&Config::default());
+        assert!(j.contains(r#""swr_s2_x100":null,"pa_temp_t3_0_1c":null"#), "absent, not 0: {j}");
     }
 
     #[test]

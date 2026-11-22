@@ -70,7 +70,14 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   `calibration set`/`clear` with `GET_CALIBRATION`, `set-secret` with `IDENTIFY` (secret set).
 - `config set` with a network change: the radio applies it after the reply (A1.6), so the
   read-back goes to the new static address, else to the old one (a fallback, C-4, is
-  reported); after a change to DHCP use `discover`.
+  reported); after a change to DHCP use `discover`. A change of address or netmask ends the
+  write session and discards the challenges (A1.10; 0074): then no `END_WRITE_SESSION` is
+  sent, and the next write takes a new challenge, as every write does. Without a certain
+  change (same address and netmask read back) the session is ended as usual; with none held
+  that is answered 0 and changes nothing.
+- `config get` shows the SWR limit S2 and the PA temperature limit T3 as "not known" while
+  the radio leaves tags 9 and 10 out (no S2 or T3 in the calibration set; Table M-3, 0074);
+  `--json` gives null, never 0.
 - `factory-reset` asks for confirmation unless `--yes`. `restart --wait` and
   `factory-reset --wait` wait until the radio answers with a lower uptime (30 s; 47 s after a
   factory reset, 0069).
@@ -103,11 +110,16 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   continued too, and then fails at the verify (55): every block is sent again, the verify
   fails again, and the transfer is aborted. Resume only the install that broke off.
 - A request that ends in a reset (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`)
-  loses its stored reply in the reset (Table A1-4). After a lost reply, a 33 to a
-  retransmission or no reply at all is resolved with `IDENTIFY`, never with another request:
-  an uptime below the one read just before shows the reset, and after `UPDATE_ACTIVATE` and
-  `ROLLBACK` so does a changed running slot (tag 23), which is the only evidence when the
-  request came a moment after a start. Once verified, an install never sends `UPDATE_ABORT`.
+  loses its stored reply in the reset (Table A1-4). The host rule of A1.4 (0074): after a
+  lost reply, retransmitting stops at the first 33, and the 33 or the silence is resolved with
+  `IDENTIFY`, never with another request. The reset is seen when the last reset cause (tag 17)
+  is software (or unknown) and the radio started after the request: its uptime (tag 16) is
+  below the time since the request, or below the one read just before it; after
+  `UPDATE_ACTIVATE` and `ROLLBACK` a changed running slot (tag 23) is evidence too, the version
+  alone never. The log entry just before the start entry (`restart: restart`,
+  `restart: factory-reset`, `restart: update-activated ...`, `rollback commanded: ...`) is
+  shown as well. Without that evidence the 33 is reported and nothing is sent again. Once
+  verified, an install never sends `UPDATE_ABORT`.
 - After `UPDATE_ACTIVATE` the tool waits for the reset and reads the result back: the new
   version runs in the target slot, as a trial, until it has confirmed itself (0044), or the
   rollback is reported. `--no-wait` skips this.
@@ -163,12 +175,12 @@ for Linux, macOS and Windows.
 | `switch-level <addr> <1\|2>`, `clear-log <addr>` | (done, M3) | A1.6 C-2, A1.7 |
 | `install <addr> <package>… [--downgrade] [--resume] [--no-wait]` | read the running slot (`IDENTIFY` tag 23), send the package linked for the other slot, verify, activate; watch the trial boot until it confirms itself (done, M4) | A1.8 (0043, 0067, 0071) |
 | `status <addr>` | progress of an update or installation (done, M4) | A1.8 |
-| `abort <addr> [--restart]` | abandon an update (not possible once a stock installation has started) (done, M4) | A1.8, A1.8a item 3 |
+| `abort <addr> [--restart]` | abandon an update (not possible once a stock installation has started); with no update in progress the radio answers "restart needed 0" and nothing changes (0074) (done, M4) | A1.8, A1.8a item 3 |
 | `rollback <addr> [--no-wait]` | return to the image in the other slot (done, M4) | A1.8 (0064) |
 | `package <file>` | check a package file and show its header; sends nothing (done, M4) | Annex M "Package file" |
 | `install-stock <addr> <image> --sha256 <hash> [--yes] [--resume] [--save-package file]` | return to the stock firmware: one-way streaming installation of an owner-supplied stock image (done, M5) | A1.8a items 3, 5 |
 | `return-to-stock <addr>`, `vendor-recovery <addr>` | `RETURN_TO_STOCK`, `ENTER_VENDOR_RECOVERY`: reserved, always status 56 in this version; the tool says why and what to use instead (done, M5) | A1.8a items 2, 4 |
-| `logs <addr> [--from seq] [--follow] [--poll s]` | read the log in pages to its end; `--follow` keeps reading, across a restart of the radio (log kept: the sequence continues; log lost: from 0 again, 0068); a gap left by the ring is reported (done, M2) | A1.7 |
+| `logs <addr> [--from seq] [--follow] [--poll s]` | read the log in pages to its end, the page with flag bit 1 ("more blocks follow") clear (0074); `--follow` keeps reading, across a restart of the radio (log kept: the sequence continues; log lost: from 0 again, 0068); a gap left by the ring is reported (done, M2) | A1.7 |
 | `config get <addr>` | every configuration item of Table M-3 (done, M2) | A1.6 |
 | `calibration get <addr>` | the calibration set: id, date, source, Table M-5 entries (values in hex until Table P-1 fixes their encodings) (done, M2) | A1.12 |
 
@@ -207,7 +219,9 @@ for Linux, macOS and Windows.
   by 10 s of silence is reported as "the stock firmware has most likely started", with exit
   code 5 (not confirmed), because a pulled cable or a hung radio looks the same.
 - A failure before the first erase (`UPDATE_STATUS` state 3): `UPDATE_ABORT`, and the radio
-  restarts into this firmware with its secret and configuration. After the first erase (state 4)
+  restarts into this firmware by itself with its secret and configuration (restart needed 0;
+  0074). Only an abort answered 0 is reported so; otherwise the tool says the abort was not
+  confirmed and what `UPDATE_STATUS` last showed. After the first erase (state 4)
   there is no way back: the tool never aborts (that would get 60), and the installer waits for
   blocks with no time limit; `install-stock --resume` with the same image continues. Keep the
   power on: after a power loss only the vendor's update path on the controller helps. `abort`

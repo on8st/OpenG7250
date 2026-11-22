@@ -395,6 +395,17 @@ fn binary_a_lost_activation_reply_with_silence_exits_5_not_confirmed() {
 }
 
 #[test]
+fn binary_abort_with_no_update_in_progress_changes_nothing() {
+    // A1.8 "No transfer in progress" (0074 item 1): 0 with restart needed 0.
+    let (secret, _image, _sha) = files("abort0", &image(10));
+    let (addr, st) = start(open_gate());
+    let out = run_binary(addr, &["abort", "--secret-file", secret.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(g7250ctl::exit::OK as i32), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("no update in progress: nothing aborted, nothing changed"));
+    assert_eq!(cmds(&st)[0], 0x45);
+}
+
+#[test]
 fn binary_abort_before_the_first_erase_names_the_installer_restart() {
     // Found on the reference model: the installer restarts the radio itself, so `abort` must
     // not ask for a restart, and `--restart` sends none.

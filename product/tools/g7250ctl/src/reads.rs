@@ -102,8 +102,9 @@ pub enum LogEvent {
 }
 
 /// Read the log from sequence `from` (0 = oldest) to its end, page by page: each page asks
-/// for the sequence after the last entry received (A1.7 L-3; Table M-1). Returns the sequence
-/// to ask for next.
+/// for the sequence after the last entry received (A1.7 L-3; Table M-1). The end is a page
+/// with flag bit 1 ("more blocks follow") clear, or an empty page (A1.7; 0074 item 6).
+/// Returns the sequence to ask for next.
 pub fn read_log(client: &mut Client, to: SocketAddr, from: u32, each: &mut dyn FnMut(LogEvent)) -> Result<u32, Failure> {
     let mut next = from;
     let mut first_page = true;
@@ -129,6 +130,9 @@ pub fn read_log(client: &mut Client, to: SocketAddr, from: u32, each: &mut dyn F
             return Err(bad(&a, "READ_LOG pages do not advance"));
         }
         next = after;
+        if a.flags & g7250_proto::mgmt::FLAG_MORE == 0 {
+            return Ok(next);
+        }
     }
 }
 

@@ -21,6 +21,8 @@ struct Radio {
     silent: bool,
     /// Reply to `READ_LOG` with this status instead.
     log_status: u16,
+    /// `READ_LOG` requests received.
+    log_reads: u32,
 }
 
 fn log_radio(r: Arc<Mutex<Radio>>) -> std::net::SocketAddr {
@@ -38,12 +40,18 @@ fn log_radio(r: Arc<Mutex<Radio>>) -> std::net::SocketAddr {
                 if r.log_status != 0 {
                     return vec![reply(id_of(d), cmd_of(d), r.log_status, &[])];
                 }
+                r.log_reads += 1;
                 let from = u32::from_be_bytes(payload_of(d).try_into().unwrap());
                 let mut p = Vec::new();
-                for (s, u, t) in r.log.iter().filter(|e| e.0 >= from).take(r.page) {
+                let after: Vec<_> = r.log.iter().filter(|e| e.0 >= from).collect();
+                for (s, u, t) in after.iter().take(r.page) {
                     p.extend(log_entry(*s, *u, t));
                 }
-                vec![reply(id_of(d), cmd_of(d), 0, &p)]
+                let mut v = reply(id_of(d), cmd_of(d), 0, &p);
+                if after.len() > r.page {
+                    v[7] |= 0x02; // more blocks follow (A1.7; 0074 item 6)
+                }
+                vec![v]
             }
             _ => vec![reply(id_of(d), cmd_of(d), 16, &[])],
         }
@@ -61,20 +69,33 @@ fn lines(ev: &[LogEvent]) -> Vec<u32> {
 
 #[test]
 fn log_is_read_in_pages_to_the_end() {
-    let r = Arc::new(Mutex::new(Radio { log: entries(0..7), page: 3, uptime: 0, silent: false, log_status: 0 }));
-    let addr = log_radio(r);
+    let r = Arc::new(Mutex::new(Radio { log: entries(0..7), page: 3, uptime: 0, silent: false, log_status: 0, log_reads: 0 }));
+    let addr = log_radio(r.clone());
     let mut c = client();
     let mut ev = Vec::new();
     let next = reads::read_log(&mut c, addr, 0, &mut |e| ev.push(e)).unwrap();
     assert_eq!(lines(&ev), (0..7).collect::<Vec<_>>());
     assert_eq!(next, 7);
     assert_eq!(ev[2], LogEvent::Entry(LogLine { seq: 2, uptime_ms: 2000, text: "entry 2".into() }));
+    // Pages 0-2 and 3-5 have bit 1 set, page 6 has it clear: no fourth request (0074 item 6).
+    assert_eq!(r.lock().unwrap().log_reads, 3);
+}
+
+#[test]
+fn log_ends_where_bit_1_is_clear_even_on_a_full_page() {
+    // 6 entries, 3 per page: the second page is full but has bit 1 clear, so it is the end.
+    let r = Arc::new(Mutex::new(Radio { log: entries(0..6), page: 3, uptime: 0, silent: false, log_status: 0, log_reads: 0 }));
+    let addr = log_radio(r.clone());
+    let mut ev = Vec::new();
+    assert_eq!(reads::read_log(&mut client(), addr, 0, &mut |e| ev.push(e)).unwrap(), 6);
+    assert_eq!(lines(&ev), (0..6).collect::<Vec<_>>());
+    assert_eq!(r.lock().unwrap().log_reads, 2);
 }
 
 #[test]
 fn log_from_a_sequence_and_a_gap() {
     // The ring has dropped 0..10; asking for 4 gives 10 onwards and reports the gap.
-    let r = Arc::new(Mutex::new(Radio { log: entries(10..13), page: 2, uptime: 0, silent: false, log_status: 0 }));
+    let r = Arc::new(Mutex::new(Radio { log: entries(10..13), page: 2, uptime: 0, silent: false, log_status: 0, log_reads: 0 }));
     let addr = log_radio(r);
     let mut c = client();
     let mut ev = Vec::new();
@@ -90,7 +111,7 @@ fn log_from_a_sequence_and_a_gap() {
 
 #[test]
 fn log_status_is_reported() {
-    let r = Arc::new(Mutex::new(Radio { log: vec![], page: 2, uptime: 0, silent: false, log_status: 34 }));
+    let r = Arc::new(Mutex::new(Radio { log: vec![], page: 2, uptime: 0, silent: false, log_status: 34, log_reads: 0 }));
     let addr = log_radio(r);
     let mut c = client();
     match reads::read_log(&mut c, addr, 0, &mut |_| {}) {
@@ -131,7 +152,7 @@ fn follow(r: Arc<Mutex<Radio>>, run: Duration, script: impl FnOnce(&Mutex<Radio>
 
 #[test]
 fn follow_reads_new_entries_and_survives_a_silent_reset_with_the_log_kept() {
-    let r = Arc::new(Mutex::new(Radio { log: entries(0..3), page: 2, uptime: 5000, silent: false, log_status: 0 }));
+    let r = Arc::new(Mutex::new(Radio { log: entries(0..3), page: 2, uptime: 5000, silent: false, log_status: 0, log_reads: 0 }));
     let (ev, silences) = follow(r, Duration::from_millis(1500), |r| {
         thread::sleep(Duration::from_millis(150));
         r.lock().unwrap().log.push((3, 9000, "new".into()));
@@ -151,7 +172,7 @@ fn follow_reads_new_entries_and_survives_a_silent_reset_with_the_log_kept() {
 
 #[test]
 fn follow_starts_again_at_0_when_the_log_was_lost() {
-    let r = Arc::new(Mutex::new(Radio { log: entries(0..5), page: 3, uptime: 5000, silent: false, log_status: 0 }));
+    let r = Arc::new(Mutex::new(Radio { log: entries(0..5), page: 3, uptime: 5000, silent: false, log_status: 0, log_reads: 0 }));
     let (ev, _) = follow(r, Duration::from_millis(800), |r| {
         thread::sleep(Duration::from_millis(200));
         // Power loss: the ring starts empty and numbering at 0 (0068).
