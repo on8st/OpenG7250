@@ -32,6 +32,10 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   is named from the reset flags (order watchdog, software, power-on, brown-out, pin; `unknown`
   only with no flag), read once and cleared; tag 17 values; P-SYS-2 is only whether the flags
   are trustworthy on this radio.
+- 0069 (proposed; emulator flash-model finding): a request does at most one sector erase and
+  programs at most one sector; its reply comes within `t_flash_reply` = 15 s; a host keeps
+  retransmitting such requests every 500 ms for at least 16 s. A1.4, B2.3; T-B5-22 and
+  T-A1-85 extended.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 

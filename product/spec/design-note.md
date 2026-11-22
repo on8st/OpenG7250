@@ -278,5 +278,5 @@ upstream through the RFC (0038).
   Radioddity product page, the HDSDR network tutorial and the Temporarily Offline video
   (`sources.md`).
 - **Decisions.** 0001–0066 are accepted (0033–0035 and 0037–0066 on 2026-11-21);
-  0067 (image check, SF-31) and 0068 (log kept over a reset) are proposed (`product-handover.md`). What remains for the product are the values of Annex P, which
+  0067 (image check, SF-31) 0068 (log kept over a reset) and 0069 (reply time with flash work) are proposed (`product-handover.md`). What remains for the product are the values of Annex P, which
   need the radio.
