@@ -272,7 +272,7 @@ pub fn reset(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command)
 /// `IDENTIFY` is compared with to see that the reset happened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Before {
-    /// Tag 12 (ms). An uptime below it shows a restart.
+    /// Tag 16 (ms). An uptime below it shows a restart.
     pub uptime_ms: u32,
     /// Tag 23, compared only when `slot_changes`: after `UPDATE_ACTIVATE` and `ROLLBACK` the
     /// other slot runs, so a changed running slot also shows the reset. It is the only evidence

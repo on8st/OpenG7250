@@ -85,11 +85,15 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   most twice.
 - A failed `UPDATE_VERIFY` (55): every block is sent again, in order, with new request ids,
   and verified again (`--verify-retries`, default 1; 0067).
-- A status that ends the transfer: the tool reads `UPDATE_STATUS`, and sends `UPDATE_ABORT`
-  only if a transfer is in progress; the radio then stays in the update state until a
-  restart (`abort --restart`, or `restart`). A radio that restarted during the transfer has
-  none (it answers the retransmitted block with 33, because its challenge did not survive the
-  reset): nothing is aborted, and the install is started again. If the radio stops
+- Status 55 to a block is a write failure (A1.8 "Write failure"; 0043): the radio has
+  discarded the transfer, so nothing is aborted; the tool ends the write session and reports
+  that RX stays off until a restart (`restart`) or a new install.
+- Another status that ends the transfer: the tool reads `UPDATE_STATUS`, and sends
+  `UPDATE_ABORT` only if a transfer is in progress; the radio then stays in the update state
+  until a restart (`abort --restart`, or `restart`). With no transfer, `IDENTIFY` decides: an
+  uptime (tag 16) below the one read at the start shows that the radio restarted during the
+  transfer (it answers the retransmitted block with 33, because its challenge did not survive
+  the reset; RX runs again). Nothing is aborted, and the install is started again. If the radio stops
   answering, the transfer is left as it is: `install --resume` within 10 min continues from
   the blocks received (`UPDATE_STATUS`).
 - `--resume` can compare only the block count, because `UPDATE_STATUS` gives no hash or

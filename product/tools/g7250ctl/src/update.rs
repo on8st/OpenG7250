@@ -135,8 +135,15 @@ pub enum Event {
     /// The radio stopped answering during the transfer; it is left as it is, so that
     /// `install --resume` can continue it within 10 min (A1.8).
     LeftForResume,
-    /// After a failure, `UPDATE_STATUS` showed no transfer in progress (state 0 idle, or the
-    /// installer): the radio restarted during the transfer, so nothing was aborted.
+    /// Status 55 to a block: writing the staging slot failed, and the radio has discarded the
+    /// transfer (A1.8 "Write failure"; 0043). Nothing to abort; the update state, with RX
+    /// stopped, lasts until a restart or a new install (`UPDATE_BEGIN`).
+    WriteFailed,
+    /// After a failure, `UPDATE_STATUS` shows no transfer and `IDENTIFY` a lower uptime: the
+    /// radio restarted during the transfer (RX runs again). Nothing to abort.
+    RadioRestarted,
+    /// After a failure, `UPDATE_STATUS` shows no transfer, and `IDENTIFY` shows no restart (or
+    /// did not answer): the cause is unknown. Nothing is aborted.
     NoTransfer { state: u8 },
 }
 
@@ -196,12 +203,13 @@ struct Ident {
     running: Version,
     update_state: u8,
     running_slot: u8,
+    uptime_ms: u32,
 }
 
 fn identify(client: &mut Client, to: SocketAddr) -> Result<Ident, Failure> {
     let a = reads::identify(client, to)?;
     let i = Identify::decode(&a.payload).expect("checked by reads::identify");
-    Ok(Ident { running: i.running, update_state: i.update_state, running_slot: i.running_slot })
+    Ok(Ident { running: i.running, update_state: i.update_state, running_slot: i.running_slot, uptime_ms: i.uptime_ms })
 }
 
 /// Send one block, with the 64 and 53 rules. Returns "blocks received".
@@ -276,18 +284,28 @@ fn should_abort(f: &Failure) -> bool {
     !matches!(f, Failure::Transport(transport::Error::NoReply { .. }) | Failure::Transport(transport::Error::Io(_)))
 }
 
+/// Status 55 to an `UPDATE_BLOCK`: a write failure, after which the radio has discarded the
+/// transfer (A1.8 "Write failure").
+fn write_failure(f: &Failure) -> bool {
+    matches!(f, Failure::Status(a, Command::UpdateBlock) if a.status_code == 55)
+}
+
 /// After a failed transfer: `UPDATE_ABORT` only if `UPDATE_STATUS` shows a transfer in
-/// progress (receiving or verified). A radio that restarted during the transfer has none: it
-/// answers the retransmitted block with 33 (its challenge did not survive the reset), and an
-/// abort would only put it in the update state ("RESTART needed") for nothing.
-fn abort_in_progress(client: &mut Client, to: SocketAddr, secret: &Secret, ev: &mut dyn FnMut(Event)) {
+/// progress (receiving or verified). Without one, `IDENTIFY` tells whether the radio restarted
+/// during the transfer (uptime, tag 16, below `before`): it then answers the retransmitted
+/// block with 33, because its challenge did not survive the reset. An abort would only put it
+/// back in the update state for nothing.
+fn abort_in_progress(client: &mut Client, to: SocketAddr, secret: &Secret, before: writes::Before, ev: &mut dyn FnMut(Event)) {
     match update_status(client, to) {
         Ok(st) if matches!(st.state, 1 | 2) => {
             if let Ok(restart_needed) = abort(client, to, secret) {
                 ev(Event::Aborted { restart_needed });
             }
         }
-        Ok(st) => ev(Event::NoTransfer { state: st.state }),
+        Ok(st) => match identify(client, to) {
+            Ok(i) if before.restarted(i.uptime_ms, i.running_slot) => ev(Event::RadioRestarted),
+            _ => ev(Event::NoTransfer { state: st.state }),
+        },
         Err(_) => ev(Event::LeftForResume),
     }
 }
@@ -373,8 +391,13 @@ pub fn install(
             }
         } else if verified {
             ev(Event::LeftForResume);
+        } else if write_failure(&f) {
+            // The transfer is gone; the write session this install opened is ended.
+            let _ = writes::end_session(client, to, secret);
+            ev(Event::WriteFailed);
         } else if should_abort(&f) {
-            abort_in_progress(client, to, secret, ev);
+            let before = writes::Before { uptime_ms: id.uptime_ms, running_slot: id.running_slot, slot_changes: false };
+            abort_in_progress(client, to, secret, before, ev);
         } else {
             ev(Event::LeftForResume);
         }

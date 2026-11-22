@@ -208,6 +208,8 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
                 r.crc_on_block.remove(i);
                 reply_of(53, &[])
             } else if r.write_fail_on_block == Some(num) {
+                // A1.8 "Write failure": the transfer is discarded; the update state stays.
+                r.transfer = None;
                 reply_of(55, &[])
             } else if crc != crc32(data) || num as usize >= t.blocks.len() {
                 reply_of(53, &[])
@@ -507,18 +509,25 @@ fn downgrade_flag_is_sent_when_asked() {
 }
 
 #[test]
-fn write_failure_on_a_block_aborts() {
+fn a_write_failure_on_a_block_is_reported_and_not_aborted() {
+    // A1.8 "Write failure": the radio has discarded the transfer; the host starts again.
     let img = image(512 * 3);
     let (addr, st) = start(Radio { write_fail_on_block: Some(1), ..radio(1) });
-    let f = update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |_| {}).unwrap_err();
+    let mut ev = Vec::new();
+    let f = update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |e| ev.push(e)).unwrap_err();
     assert!(f.to_string().contains("status 55"), "{f}");
-    assert!(cmds(&st).contains(&0x44));
+    let c = cmds(&st);
+    assert!(!c.contains(&0x44), "no abort: {c:x?}");
+    assert_eq!(c[c.len() - 2..], [0x10, 0x13], "only the write session is ended: {c:x?}");
+    assert!(ev.contains(&Event::WriteFailed), "{ev:?}");
+    assert!(!ev.iter().any(|e| matches!(e, Event::RadioRestarted | Event::NoTransfer { .. })), "{ev:?}");
 }
 
 #[test]
 fn a_radio_that_restarts_during_the_transfer_is_not_sent_an_abort() {
     // The reply to block 2 is lost in the restart; the retransmission meets a spent challenge
     // and gets 33. UPDATE_STATUS then shows no transfer, so no UPDATE_ABORT is sent.
+    // IDENTIFY then shows the lower uptime (tag 16): the restart is named as such.
     let img = image(512 * 4);
     let (addr, st) = start(Radio { restart_on_block: Some(2), ..radio(1) });
     let mut ev = Vec::new();
@@ -526,15 +535,17 @@ fn a_radio_that_restarts_during_the_transfer_is_not_sent_an_abort() {
     assert!(matches!(&f, Failure::Status(a, _) if a.status_code == 33), "{f}");
     let c = cmds(&st);
     assert!(!c.contains(&0x44), "no abort: {c:x?}");
-    assert_eq!(c.last(), Some(&0x45), "UPDATE_STATUS decided it: {c:x?}");
-    assert!(ev.contains(&Event::NoTransfer { state: 0 }), "{ev:?}");
+    assert_eq!(c[c.len() - 2..], [0x45, 0x01], "UPDATE_STATUS, then IDENTIFY: {c:x?}");
+    assert!(ev.contains(&Event::RadioRestarted), "{ev:?}");
+    assert!(!ev.contains(&Event::WriteFailed), "{ev:?}");
     assert!(!st.lock().unwrap().aborted);
 }
 
 #[test]
 fn a_failure_with_a_transfer_in_progress_reads_update_status_then_aborts() {
+    // A second 64 for one block ends the install; the transfer is still in progress.
     let img = image(512 * 3);
-    let (addr, st) = start(Radio { write_fail_on_block: Some(1), ..radio(1) });
+    let (addr, st) = start(Radio { room_on_block: vec![1, 1], ..radio(1) });
     let mut ev = Vec::new();
     update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |e| ev.push(e)).unwrap_err();
     let c = cmds(&st);

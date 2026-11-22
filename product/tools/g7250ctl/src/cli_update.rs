@@ -128,7 +128,9 @@ fn progress(json: bool) -> impl FnMut(Event) {
                 "update aborted{}",
                 if restart_needed { "; the radio needs a restart (g7250ctl restart) before RX works again" } else { "" }
             ),
-            Event::NoTransfer { state } => eprintln!("the radio has no transfer in progress (UPDATE_STATUS state {state}; it restarted?): nothing aborted, start the install again"),
+            Event::WriteFailed => eprintln!("write failed (55 to a block); the radio has discarded the transfer; RX stays off until a restart (g7250ctl restart) or a new install"),
+            Event::RadioRestarted => eprintln!("the radio restarted during the transfer (RX runs again); nothing aborted; start the install again"),
+            Event::NoTransfer { state } => eprintln!("the radio has no transfer in progress (UPDATE_STATUS state {state}) and shows no restart; nothing aborted; check `g7250ctl info` and `g7250ctl logs`"),
             Event::LeftForResume => eprintln!("the transfer is left as it is (no abort): `install --resume` within 10 min continues it"),
         }
     }
