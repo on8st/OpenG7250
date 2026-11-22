@@ -368,6 +368,121 @@ def run_test(tid, ep):
                       'AddEccText "0x080C0040" true' in script and "SetEraseUs 4000000" in script, script[-400:]),
                 check("the corrupted byte survives power cycles and is restored", sc2.get("ok") and (sc2.get("value") or {}).get("restored") == 255, str(sc2)),
                 check("flash.log read after the cycles", fl2.get("ok"), str(fl2)[:200])]
+    if tid == "T-EMU-23":
+        # format v1.8: flash.fault on real flash work (net_test "F" commands), a watchdog reset that
+        # ends a never-ending erase, RCC_RSR, power.cut replaced by a later one, AXI SRAM kept over
+        # resets and pseudo-random (not zero, not kept) at power-on
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 8))
+
+        def cmd(payload, wait=20.0, again=False):
+            """One datagram, sent once (again: every 2 s, for waiting until the image is back)."""
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(2.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def words(d):
+            return (int.from_bytes(d[2:6], "big"), int.from_bytes(d[6:10], "big")) if d and len(d) >= 10 else (None, None)
+
+        def log():
+            return (ctl.op("flash.log", action="read").get("value") or {}).get("entries", [])
+        FF, PGSERR, ERRS = 0xFFFFFFFF, 1 << 18, 0x1FE << 16
+        out = []
+        ctl.op("flash.timing", erase_us=200000)
+        r0 = words(cmd(b"FR", again=True, wait=60.0))
+        out.append(check("power-on: RCC_RSR 0x00E80000, 0 after RMVF", r0 == (0x00E80000, 0), str(r0)))
+        m0 = words(cmd(b"FM"))
+        out.append(check("AXI SRAM at power-on is neither 0 nor the marker", None not in m0 and all(x not in (0, 0x4B455054, 0x4B455055) for x in m0), str(m0)))
+        ctl.op("flash.log", action="start")
+        e1 = words(cmd(b"FE"))
+        out.append(check("erase without a fault: no error flag, word erased", e1[0] is not None and not e1[0] & ERRS and e1[1] == FF, str(e1)))
+        p0 = words(cmd(b"FP\x00"))
+        out.append(check("program without a fault: content, no error flag", p0[0] is not None and not p0[0] & ERRS and p0[1] == 0xA5000000, str(p0)))
+        f1 = ctl.op("flash.fault", op="program", after=1, flag="PGSERR")
+        p1, p2, p3 = words(cmd(b"FP\x01")), words(cmd(b"FP\x02")), words(cmd(b"FP\x03"))
+        out.append(check("flash.fault program after 1: the second word has PGSERR and stays erased, the others are written",
+                         f1.get("ok") and not (p1[0] or 0) & ERRS and p1[1] == 0xA5000100 and (p2[0] or 0) & PGSERR and p2[1] == FF
+                         and not (p3[0] or 0) & ERRS and p3[1] == 0xA5000300, str((p1, p2, p3))))
+        f2 = ctl.op("flash.fault", op="erase", flag="PGSERR")
+        e2 = words(cmd(b"FE"))
+        e3 = words(cmd(b"FP\x04"))
+        out.append(check("flash.fault erase: PGSERR, the sector keeps its content; the flag is cleared by CCR1",
+                         f2.get("ok") and (e2[0] or 0) & PGSERR and e2[1] == 0xA5000000 and not (e3[0] or 0) & ERRS, str((e2, e3))))
+        bad = [ctl.op("flash.fault", op="program", never_end=True), ctl.op("flash.fault", op="program", flag="PGSERR", never_end=True),
+               ctl.op("flash.fault", op="erase"), ctl.op("flash.fault", op="erase", flag="NOFLAG"), ctl.op("flash.fault", op="mass", flag="PGSERR")]
+        out.append(check("refused: never_end with program, no flag, unknown flag, unknown op", all(b.get("ok") is False for b in bad), str(bad)))
+        L = log()
+        ops = [(x["op"], x["result"]) for x in L]
+        out.append(check("flash.log results", ops.count(("program", "error:PGSERR")) == 1 and ops.count(("erase", "error:PGSERR")) == 1
+                         and ops.count(("erase", "ok")) == 1, str(ops)))
+        # a never-ending erase (no flag), ended by the watchdog
+        m1 = words(cmd(b"FM"))
+        f3 = ctl.op("flash.fault", op="erase", never_end=True)
+        w = cmd(b"FW")
+        sk.sendto(b"FE", addr(c))                  # the watchdog (0.5 s) ends it: look at once
+        during, t0 = [], time.time()
+        while not during and time.time() - t0 < 5.0:
+            L = log()
+            during = [x for x in L if x["result"] == "running"]
+            if any(x["op"] == "erase" and x["result"] == "reset" for x in L):
+                break
+            time.sleep(0.02)
+        sk.settimeout(0.05)
+        try:
+            n = sk.recv(2048)
+        except OSError:
+            n = None
+        back = words(cmd(b"FR", again=True, wait=90.0))
+        ends = [x for x in log() if x["op"] == "erase"]
+        out.append(check("never_end without a flag accepted; no answer during it; listed running with t_end_us null",
+                         f3.get("ok") and w is not None and n is None and len(during) == 1 and during[0].get("t_end_us", 0) is None, str((f3, w, n, during))))
+        out.append(check("the watchdog reset ends it: the image runs again, RCC_RSR IWDG1RSTF and PINRSTF only", back[0] == (1 << 26 | 1 << 22), str(back)))
+        out.append(check("flash.log: that erase has result reset", ends and ends[-1]["result"] == "reset", str(ends[-1:])))
+        m2 = words(cmd(b"FM"))
+        out.append(check("AXI SRAM kept over the watchdog reset", m2 == (0x4B455054, 0x4B455055), "%s then %s" % (m1, m2)))
+        e4 = words(cmd(b"FE"))
+        out.append(check("the next erase works (BSY cleared by the reset, sector erased)", e4[0] is not None and not e4[0] & ERRS and e4[1] == FF, str(e4)))
+        cmd(b"FX", wait=1.0)
+        sw = words(cmd(b"FR", again=True, wait=60.0))
+        m3 = words(cmd(b"FM"))
+        out.append(check("software reset: RCC_RSR SFT1RSTF and PINRSTF only; AXI SRAM kept", sw[0] == (1 << 24 | 1 << 22) and m3 == (0x4B455054, 0x4B455055), str((sw, m3))))
+        # a later power.cut replaces one still armed
+        k1 = ctl.op("power.cut", after_flash_words=3)
+        k2 = ctl.op("power.cut", during_erase=0.5)
+        cmd(b"FP\x05"), cmd(b"FP\x06"), cmd(b"FP\x07")
+        alive = cmd(b"FP\x08")
+        cmd(b"FE", wait=1.0)
+        m4 = words(cmd(b"FM", again=True, wait=90.0))
+        cuts = [x for x in log() if x.get("result") == "cut"]
+        out.append(check("power.cut replaced: four words programmed without a cut, then one cut at half of the erase",
+                         k1.get("ok") and k2.get("ok") and alive is not None and len(cuts) == 1 and cuts[0]["op"] == "erase"
+                         and 0.45 <= cuts[0].get("fraction_done", 0) <= 0.55, str(cuts)))
+        out.append(check("AXI SRAM not kept over the power loss: the power-on pattern again", m4 == m0, "%s, at first power-on %s" % (m4, m0)))
+        tn = ctl.op("flash.timing", erase_us=None)
+        out.append(check("flash.timing erase_us null: back to the datasheet model", tn.get("ok") and (tn.get("value") or {}).get("erase_us", 0) is None, str(tn)))
+        e5 = words(cmd(b"FE", wait=40.0))
+        L2 = [x for x in log() if x["op"] == "erase" and x["result"] == "ok"]
+        # the end is stamped at the emulator's next synchronisation point (100 us)
+        out.append(check("that erase takes 1.1 s (x64), to one synchronisation quantum", e5[0] is not None and L2
+                         and 1100000 <= L2[-1]["t_end_us"] - L2[-1]["t_us"] <= 1100200, str(L2[-1:])))
+        return out
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

@@ -56,6 +56,71 @@ static uint8_t rd8(uint16_t a, uint8_t bsb) { uint8_t v; rd(a, bsb, &v, 1); retu
 static uint16_t rd16(uint16_t a, uint8_t bsb) { uint8_t v[2]; rd(a, bsb, v, 2); return (uint16_t)((v[0] << 8) | v[1]); }
 static void wr16(uint16_t a, uint8_t bsb, uint16_t v) { uint8_t b[2] = { (uint8_t)(v >> 8), (uint8_t)v }; wr(a, bsb, b, 2); }
 
+/* Commands in a datagram that starts with 'F' (runner self-test T-EMU-23); the reply is the
+ * same first two bytes and then big-endian words:
+ *   FE        erase sector 7                        -> SR1, word at 0x080E0000
+ *   FP n      program the n-th 32-byte word of it   -> SR1, first word read back
+ *   FW        start the watchdog (0.5 s, not fed)   -> 0
+ *   FR        RCC_RSR, then RMVF                    -> RSR
+ *   FM        0x2401E700 and 0x2401FFFC, then a marker is written to both -> the two old words
+ *   FX        software reset (no reply)
+ * The code runs from flash: an erase stalls it until the erase ends. */
+#define FLASHC 0x52002000u
+#define F_KEYR REG(FLASHC + 0x004)
+#define F_CR   REG(FLASHC + 0x00C)
+#define F_SR   REG(FLASHC + 0x010)
+#define F_CCR  REG(FLASHC + 0x014)
+#define F_ERRS (0x1FEu << 16)
+#define S7     0x080E0000u
+#define W32(a) (*(volatile uint32_t *)(a))
+
+static void put_be(uint8_t *d, uint32_t v) { d[0] = (uint8_t)(v >> 24); d[1] = (uint8_t)(v >> 16); d[2] = (uint8_t)(v >> 8); d[3] = (uint8_t)v; }
+
+static uint32_t flash_wait(void)
+{
+    while(F_SR & 7u) {}                   /* BSY, WBNE, QW */
+    return F_SR;
+}
+
+static uint16_t command(uint8_t *d, uint16_t len)
+{
+    uint32_t a = 0, b = 0;
+    if(d[1] == 'E' || d[1] == 'P')
+    {
+        if(F_CR & 1u) { F_KEYR = 0x45670123u; F_KEYR = 0xCDEF89ABu; }
+        F_CCR = F_ERRS | (1u << 16);
+    }
+    if(d[1] == 'E')
+    {
+        F_CR = (1u << 2) | (3u << 4) | (7u << 8);
+        F_CR |= 1u << 7;
+        a = flash_wait(); b = W32(S7);
+        F_CR = 0;
+    }
+    else if(d[1] == 'P' && len >= 3)
+    {
+        uint32_t t = S7 + 32u * d[2];
+        F_CR = (1u << 1) | (3u << 4);
+        for(int i = 0; i < 8; i++) W32(t + 4u * i) = 0xA5000000u + ((uint32_t)d[2] << 8) + i;
+        a = flash_wait(); b = W32(t);
+        F_CR = 0;
+    }
+    else if(d[1] == 'W')
+    {
+        REG(0x58004800u) = 0xCCCCu; REG(0x58004800u) = 0x5555u;
+        REG(0x58004804u) = 0; REG(0x58004808u) = 4000u; REG(0x58004800u) = 0xAAAAu;
+    }
+    else if(d[1] == 'R') { a = REG(RCC_BASE + 0xD0); REG(RCC_BASE + 0xD0) = 1u << 16; b = REG(RCC_BASE + 0xD0); }
+    else if(d[1] == 'M')
+    {
+        a = W32(0x2401E700u); b = W32(0x2401FFFCu);
+        W32(0x2401E700u) = 0x4B455054u; W32(0x2401FFFCu) = 0x4B455055u;
+    }
+    else if(d[1] == 'X') { REG(0xE000ED0Cu) = 0x05FA0004u; for(;;) {} }
+    put_be(&d[2], a); put_be(&d[6], b);
+    return 10;
+}
+
 int main(void)
 {
     console_init();
@@ -104,6 +169,7 @@ int main(void)
         rd((uint16_t)(rxrd + 8), 3, data, len);
         wr16(0x0028, 1, (uint16_t)(rxrd + 8 + len));
         wr8(0x0001, 1, 0x40);             /* RECV */
+        if(len >= 2 && data[0] == 'F' && data[1] >= 'A' && data[1] <= 'Z') len = command(data, len);
         wr(0x000C, 1, hdr, 4);            /* DIPR = sender */
         wr(0x0010, 1, &hdr[4], 2);        /* DPORT = sender port */
         uint16_t txwr = rd16(0x0024, 1);

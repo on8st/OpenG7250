@@ -496,7 +496,9 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         "subject": {"kind": "emulator", "elf_sha256": _sha256(elf)},
         "runner": {"name": "product_run.py", "version": "1.%d" % FORMAT_MINOR, "emulator_commit": commit},
         "testbench": {"commit": tbcommit},
-        "environment": dict({"boot": pr.BOOT_MODES[boot][1]},
+        "environment": dict({"boot": pr.BOOT_MODES[boot][1],
+                             "axi_sram_at_power_on": ("pseudo-random, seed 0x%X" % pr.RAM_FILL_SEED)
+                             if os.environ.get("G7250_RAM_FILL", "1") != "0" else "zero"},
                             **({"pwr_cr3_at_power_on": "0x%08X locked" % pwr_cr3} if pwr_cr3 is not None else {}),
                             **({"flash_erase_us": flash_erase_us} if flash_erase_us else {}),
                             **({"dhcp_server_at_power_on": True} if dhcp_on else {}),

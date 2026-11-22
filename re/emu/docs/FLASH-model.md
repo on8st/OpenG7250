@@ -65,8 +65,11 @@ characteristics" (format v1.8 build).
 - **flash.fault {op, after, flag, never_end}**: the next matching operation (after `after`
   more) sets the RM0468 SR1 flag (WRPERR PGSERR STRBERR INCERR RDPERR RDSERR SNECCERR
   DBECCERR CRCRDERR; CCR1 clears it). An erase with a flag leaves the sector as it was; a
-  program with a flag leaves the word as it was; `never_end` keeps BSY and QW set until a
-  reset (fetches from the bank stall meanwhile).
+  program with a flag leaves the word as it was; `never_end` (op erase only, no flag
+  needed; refused for op program) keeps BSY and QW set until a reset (fetches from the
+  bank stall meanwhile); its entry is `running` with t_end_us null, then `reset`. Other
+  running erases are listed with result `running` and the predicted t_end_us. A reset
+  during an erase leaves the sector as it was (a power cut erases the fraction done).
 - **flash.ecc {address, type}** and torn words: reads of that 32-byte word (sysbus read
   watchpoints) set SNECCERR or DBECCERR and FLASH_ECC_FA1R (the flash-word index), one
   flash.log entry while the flag is set. The word cut by `power.cut {after_flash_words}` is
@@ -80,12 +83,19 @@ characteristics" (format v1.8 build).
   controller access after PG is cleared.
 - **power.cut {after_flash_words | during_erase | at_address}**: the layer stops the core
   at the k-th programmed word, at that fraction of the next erase, or at the programming of
-  that word; the runner then power-cycles as for `power.cut {at_us}`.
+  that word; the runner then power-cycles as for `power.cut {at_us}`. A new `power.cut`
+  replaces one still armed (any form).
+- **Evidence rule**: `harness/g7250emu/flash_dump_check.py <run dir>` compares the flash
+  dump of each boot with flash.log; a cut or ECC result is reported only with it (a build
+  before d605292 missed programmed words and placed cuts on the wrong word).
 - **CPU speed during an erase**: as at all other times (one instruction per core
   clock cycle, docs/CLOCKS-model.md). During an erase fw-e518331 runs its TX path
   check from RAM: per SR1 poll some 270 instructions and 27 peripheral accesses (MODER,
   OTYPER, ODR, IDR of six GPIO ports, the watchdog, DWT, SR1), each a C# model call, and
-  the emulation runs at about 0.22 of real time (a 1.1 s erase in 4.9 s wall). There is
+  the emulation runs at about 0.22 of real time (a 1.1 s erase in 4.9 s wall). After it
+  Renode catches up with the host: 1.1-1.4 of real time for some 20 s wall after one such
+  erase, so waits in wall time there see more radio time than they count, and duration_s
+  over a whole test can equal wall_s although erases were in it. There is
   no cheap path for these accesses in Renode. The bench's waits across an erase must be
   in emulated time or allow for this.
   `G7250_ERASE_MIPS_DIV=N` (opt-in, off by default) divides the core's MIPS by N during
@@ -99,6 +109,10 @@ characteristics" (format v1.8 build).
   `fetch_stalls`, `sr1_reads` and `instructions`.
 - **slot.corrupt**: one byte of slot 1 (0x08040000) or 2 (0x08080000) XORed in the array
   (no ECC error); `restore` XORs it back, also after power cycles.
+
+Exercised by the self-test T-EMU-23 (net_test "F" commands): faults on erase and program,
+`after`, the refusals, a never-ending erase ended by the watchdog, cut replacement,
+`erase_us` null. `flash.ecc` on reads is exercised by product tests only (T-A1-87).
 
 ## Not modelled
 

@@ -1063,6 +1063,8 @@ class FixtureServer:
             if not r or not r.startswith("ok "):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"boots": n}}
+        if op == "power.cut" and agent:
+            agent.ask("cutclear")                 # a new power.cut replaces one still armed
         if op == "power.cut" and any(k in args for k in ("after_flash_words", "during_erase", "at_address")):
             if "after_flash_words" in args:
                 k = args["after_flash_words"]

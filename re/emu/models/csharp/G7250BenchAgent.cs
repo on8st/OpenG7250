@@ -1180,6 +1180,13 @@ namespace Antmicro.Renode.Peripherals.SPI
                         }
                         return "blk ?";
                     }
+                    case "cutclear":     // power.cut: whatever is still armed is replaced
+                    {
+                        if(cutTimer != null) cutTimer.Enabled = false;
+                        IPeripheral fl;
+                        if(machine.TryGetByName("sysbus.flashtiming", out fl)) fl.GetType().GetMethod("ClearCuts").Invoke(fl, null);
+                        return "ok";
+                    }
                     case "cut": return ScheduleCut(ulong.Parse(w[1], CultureInfo.InvariantCulture));
                     case "flashdump": return FlashDump(line.Substring(10));
                     case "halt":

@@ -205,7 +205,20 @@ What each does in the model: docs/FLASH-model.md "Format v1.8".
 - `ch394.silent {boots}`: for the next `boots` MCU boots (a reset of any kind) the CH394
   gives no answer: MISO reads 0xFF (HYPOTHESIS: the level of an absent chip is not in the
   HIS), writes and arriving datagrams are ignored.
-- Self-test T-EMU-22.
+- A new `power.cut` (any form) replaces one still armed.
+- Self-tests T-EMU-22, T-EMU-23.
+
+## RAM and reset causes
+
+- **AXI SRAM** (320 KiB at 0x24000000) holds a pseudo-random pattern with a fixed seed
+  (0x7250) at every power-on (a power cycle starts a new emulator), never zeros and never
+  the old content; results carry `environment.axi_sram_at_power_on`. `G7250_RAM_FILL=0`
+  switches it off (diagnostics). The other RAMs (TCM, SRAM1/2/4, backup SRAM) are zero at
+  power-on. A software or watchdog reset keeps the AXI SRAM (T-EMU-23 checks 0x2401E700
+  and 0x2401FFFC). Not modelled: an ECC error on reading RAM not written since power-up.
+- **RCC_RSR** (0x580244D0): power-on 0x00E80000; a watchdog reset IWDG1RSTF | PINRSTF, any
+  other reset SFT1RSTF | PINRSTF, added to what is set; RMVF clears all (docs/IWDG-model.md).
+  The alias at RCC + 0x130 is not served.
 
 ## Fixtures (format section 4)
 

@@ -234,6 +234,16 @@
    "target": "emulator",
    "scope": "v1.0",
    "timeout_s": 240
+  },
+  {
+   "id": "T-EMU-23",
+   "title": "format v1.8: flash.fault, watchdog reset of a never-ending erase, RCC_RSR, power.cut replaced, AXI SRAM at power-on",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 240
   }
  ]
 }

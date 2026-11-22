@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import random
 import os
 import re
 import struct
@@ -260,6 +261,18 @@ def iwdg_repl(out, boot_address):
     return rp
 
 
+RAM_FILL_SEED = 0x7250
+
+
+def random_ram(out):
+    """A 320 KiB pseudo-random pattern with a fixed seed: the AXI SRAM at power-on (its content is
+    undefined on the radio; zeros would hide an image that relies on them)."""
+    p = os.path.join(out, "axi-sram-power-on.bin")
+    if not os.path.isfile(p) or os.path.getsize(p) != 0x50000:
+        open(p, "wb").write(random.Random(RAM_FILL_SEED).randbytes(0x50000))
+    return p
+
+
 def erased_flash(out):
     """A 1 MiB file of 0xFF (the flash bank erased)."""
     p = os.path.join(out, "flash-erased.bin")
@@ -316,7 +329,8 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
         'logLevel 2',
         'sysbus.usart1 CreateFileBackend @%s true' % console,
         # after a power cycle or cut the flash keeps what it held (dump of both banks)
-    ] + ([('sysbus LoadBinary @%s 0x08000000' % flash_image)] if flash_image else [
+    ] + (['sysbus LoadBinary @%s 0x24000000' % random_ram(out)] if os.environ.get("G7250_RAM_FILL", "1") != "0" else []) + (
+        [('sysbus LoadBinary @%s 0x08000000' % flash_image)] if flash_image else [
         # a new board: the flash outside the image is in the erased state (0xFF, RM0468), not
         # Renode's zero-filled memory
         'sysbus LoadBinary @%s 0x08000000' % erased_flash(out), 'sysbus LoadELF @%s' % elf]) + [

@@ -100,6 +100,11 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private ulong refreshesAtStart;
 
         public void CutAfterWords(long k) { lock(sync) { cutAfter = k; words = 0; } }
+        // a new power.cut replaces one still armed (also one placed in an erase that runs now)
+        public void ClearCuts()
+        {
+            lock(sync) { cutAfter = -1; cutAtAddress = 0; cutFraction = -1; cut.Enabled = false; }
+        }
         public bool NotifyCut { get; set; }   // power.cut from the bench: the runner power-cycles
 
         // ---- format v1.8: erase durations per PSIZE from ST DS13311 Rev 5 Table 48, ----
@@ -269,6 +274,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         public string Fault(string op, long after, string flag, bool neverEnd)
         {
             if(op != "erase" && op != "program") return "op must be erase or program";
+            if(neverEnd && op != "erase") return "never_end is for op erase only (a word's programming has no duration here)";
             if(flag != null && flag != "" && !Flags.ContainsKey(flag)) return "unknown flag " + flag + " (RM0468 SR1 names)";
             if(string.IsNullOrEmpty(flag) && !neverEnd) return "a flag or never_end is needed";
             lock(sync) { faultOp = op; faultAfter = Math.Max(0, after); faultFlag = flag ?? ""; faultNeverEnd = neverEnd; }
@@ -555,7 +561,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             bool fault = TakeFault("erase");
             eraseFaultFlag = fault ? faultFlag : null;
             bool never = fault && faultNeverEnd;
-            Add(EraseEntry(addr, size, us, "running"));
+            Add(EraseEntry(addr, size, us, "running", never));
             lastProg = 0;
             eraseAddr = addr; eraseSize = size; eraseUs = us;
             snapshot = machine.SystemBus.ReadBytes(addr, (int)size);
@@ -594,12 +600,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         }
 
         private int eraseEntry = -1; private ulong eraseT0;
-        private string EraseEntry(ulong addr, ulong size, ulong us, string result)
+        private string EraseEntry(ulong addr, ulong size, ulong us, string result, bool noEnd = false)
         {
             bool bank = size > SectorSize;
             return "{\"t_us\": " + eraseT0 + ", \"op\": \"" + (bank ? "bank_erase" : "erase") + "\", \"bank\": 1"
                 + (bank ? "" : ", \"sector\": " + Sector(addr) + ", \"address\": \"0x" + addr.ToString("X8") + "\", \"len\": " + size)
-                + ", \"t_end_us\": " + (eraseT0 + us) + ", \"result\": \"" + result + "\", \"fpga_bus\": \"" + FpgaBus() + "\"}";
+                + ", \"t_end_us\": " + (noEnd ? "null" : (eraseT0 + us).ToString()) + ", \"result\": \"" + result + "\", \"fpga_bus\": \"" + FpgaBus() + "\"}";
         }
 
         private string eraseFaultFlag;
