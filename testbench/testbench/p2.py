@@ -296,11 +296,12 @@ def reread_endpoint(ctx):
 
 def wait_reachable(ctx, what: str = "power-on", limit_s: float = REACH_S) -> float:
     """Poll discovery until the radio answers (rereading the endpoint where the runner offers
-    net.endpoint, since the address can change); the seconds it took. Not reachable within
-    limit_s is a failed test."""
-    from .core import Missing, Skip
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < limit_s:
+    net.endpoint, since the address can change); the wall seconds it took. Not reachable within
+    limit_s of wall time and, on an emulator, of radio time too, is a failed test."""
+    from .core import Missing, RadioClock, Skip
+    t0, clock = time.monotonic(), RadioClock(ctx)
+    r0 = clock.now()
+    while time.monotonic() - t0 < limit_s or (clock.emu and time.monotonic() - t0 < 12 * limit_s and clock.now() - r0 < limit_s):
         if "net.endpoint" in ctx.endpoint.get("fixtures", []):
             reread_endpoint(ctx)
         try:

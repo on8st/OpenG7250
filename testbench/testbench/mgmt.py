@@ -84,8 +84,24 @@ class Mgmt:
         self.close()
 
     pace = 0  # requests per second at most from this socket (0 = unpaced; A1.10 S4 caps at 20)
+    clock = None  # core.RadioClock: pacing and reply waits also in radio time (an emulator)
+    why = ""  # why the last retransmitted request has no reply
 
     def raw(self, data: bytes, timeout: float = 0.5, kind: str = "unicast") -> list[dict]:
+        self.post(data, kind)
+        return self.listen(data, timeout)
+
+    def post(self, data: bytes, kind: str = "unicast"):
+        """Send one datagram, paced on the wall clock and, on an emulator, in radio time."""
+        if self.pace and self.clock is not None and self.clock.emu:
+            # the radio counts its cap in radio time: at most `pace` datagrams in any second of it
+            rt = self.__dict__.setdefault("_sent_rt", [])
+            now, w0 = self.clock.now(), time.monotonic()
+            while len(rt) >= self.pace and now - rt[-self.pace] < 1.0 and time.monotonic() - w0 < 20:
+                time.sleep(0.02)
+                now = self.clock.now()
+            rt.append(now)
+            del rt[:-self.pace]
         if self.pace:
             sent = self.__dict__.setdefault("_sent", [])
             now = time.monotonic()
@@ -94,6 +110,9 @@ class Mgmt:
                 time.sleep(max(0.0, 1.0 - (now - sent[0])) + 0.005)
             sent.append(time.monotonic())
         self.s.sendto(data, self.net.dest(7251, kind))
+
+    def listen(self, data: bytes, timeout: float) -> list[dict]:
+        """The reply to the request `data`, within timeout seconds of wall time; [] if none."""
         # only the reply to this request: a late reply to an earlier one (same socket) is not its
         # answer and is counted in self.stale (a framing-error reply, 16-19, may not carry the id)
         sent = parse(data)
@@ -140,31 +159,76 @@ class Mgmt:
 RETRANSMIT_S, RETRANSMITS = 0.5, 5  # A1.4 host retransmission: every 500 ms, up to 5 times (0041)
 
 
-def send_retransmit(c: "Mgmt", data: bytes):
-    """One request datagram sent as a host does (A1.4; A1.11 bound on a borrow): the same bytes,
-    so the same request id, every 500 ms, up to 5 retransmissions; a DHCP borrow of at most 2 s
-    is covered. The reply, or None."""
-    for _ in range(1 + RETRANSMITS):
+FLASH_WINDOW_S = 16.0  # a request that may do flash work: at least 16 s (0069)
+FLASH_CMDS = {"SET_CONFIG", "SET_FIRST_SECRET", "CHANGE_SECRET", "FACTORY_RESET", "SET_CALIBRATION", "CLEAR_CALIBRATION",
+              "UPDATE_BEGIN", "UPDATE_BLOCK", "UPDATE_ACTIVATE", "ROLLBACK"}
+
+
+def send_retransmit(c: "Mgmt", data: bytes, window: float | None = None, what: str = "request"):
+    """One request datagram sent as a host does (A1.4): the same bytes, so the same request id,
+    every 500 ms, up to 5 retransmissions (a DHCP borrow of at most 2 s is covered, A1.11), or,
+    with `window`, for that many seconds (0069). Each wait lasts 500 ms of wall time and, on an
+    emulator, also 500 ms of radio time (an erase can run at a fifth of real time); `window` counts
+    radio time. The reply, or None with the reason in c.why."""
+    clock = c.clock if c.clock is not None and c.clock.emu else None
+    w0, t0, sends = time.monotonic(), None, 0
+    limit = window if window is not None else (1 + RETRANSMITS) * RETRANSMIT_S
+    cap = limit * 12 + 60  # wall: the emulator stands still
+    while True:
         r = c.raw(data, timeout=RETRANSMIT_S)
+        sends += 1
         if r:
+            c.why = ""
             return r[0]
-    return None
+        if clock is not None:  # no reply in 500 ms of wall time: look at the radio's clock
+            t_send = clock.now() if t0 is None else t_send_next
+            if t0 is None:
+                t0 = t_send  # the first wait is not counted: never shorter than the rule
+            while clock.now() - t_send < RETRANSMIT_S and time.monotonic() - w0 < cap:
+                r = c.listen(data, 0.1)
+                if r:
+                    c.why = ""
+                    return r[0]
+            t_send_next = clock.now()
+            spent = t_send_next - t0
+        else:
+            spent = time.monotonic() - w0
+        if (spent >= limit if window is not None else sends > RETRANSMITS) or time.monotonic() - w0 >= cap:
+            c.why = (f"no reply to {what} in {sends} sends over {spent:.1f} s of radio time, {time.monotonic() - w0:.1f} s wall"
+                     f" ({getattr(c, 'stale', 0)} replies to earlier ids set aside so far)")
+            return None
 
 
 def req_retransmit(c: "Mgmt", cmd: str, payload: bytes = b""):
-    """An unauthenticated request with A1.4 retransmission."""
-    return send_retransmit(c, build(CMD[cmd], payload, c.next_id()))
+    """An unauthenticated request with A1.4 retransmission (16 s where it may do flash work)."""
+    return send_retransmit(c, build(CMD[cmd], payload, c.next_id()), FLASH_WINDOW_S if cmd in FLASH_CMDS else None, cmd)
 
 
-def authed_retransmit(c: "Mgmt", cmd: str, secret: bytes, payload: bytes = b""):
+def signed(c: "Mgmt", cmd: str, secret: bytes, payload: bytes = b"") -> bytes | None:
+    """The signed request datagram, with a fresh challenge (GET_CHALLENGE retransmitted per A1.4);
+    None with the reason in c.why when the radio gives no challenge."""
+    r = req_retransmit(c, "GET_CHALLENGE")
+    if not r or r["status"] != 0:
+        c.why = f"{cmd} not sent: " + (f"GET_CHALLENGE answered {r['status']}" if r else c.why)
+        return None
+    msg = build(CMD[cmd], payload, c.next_id(), flags=1)
+    return msg + hmac.new(secret, r["payload"] + msg, hashlib.sha256).digest()
+
+
+def authed_retransmit(c: "Mgmt", cmd: str, secret: bytes, payload: bytes = b"", window: float | None = None):
     """An authenticated request with A1.4 retransmission: GET_CHALLENGE retransmitted, then the
     signed request retransmitted unchanged (same id, same challenge and MAC: a retransmission the
     radio already answered is answered from its stored reply)."""
-    r = req_retransmit(c, "GET_CHALLENGE")
-    if not r or r["status"] != 0:
+    data = signed(c, cmd, secret, payload)
+    if data is None:
         return None
-    msg = build(CMD[cmd], payload, c.next_id(), flags=1)
-    return send_retransmit(c, msg + hmac.new(secret, r["payload"] + msg, hashlib.sha256).digest())
+    if window is None and cmd in FLASH_CMDS:
+        window = FLASH_WINDOW_S
+    t0 = c.clock.now() if getattr(c, "timed", False) and c.clock is not None else None
+    r = send_retransmit(c, data, window, cmd)
+    if t0 is not None:
+        c.reply_s = c.clock.now() - t0  # at most this long, radio time
+    return r
 
 
 def identify(ctx, c: Mgmt) -> dict[int, bytes]:
@@ -253,7 +317,7 @@ def read_log(c: "Mgmt", first: int = 0) -> list[tuple[int, int, str]]:
     """Every log entry from sequence `first` on, page by page (L-3)."""
     out: list = []
     while True:
-        r = c.req("READ_LOG", first.to_bytes(4, "big"))
+        r = req_retransmit(c, "READ_LOG", first.to_bytes(4, "big"))
         if not r or r.get("status") != 0:
             return out
         page = parse_log(r["payload"])

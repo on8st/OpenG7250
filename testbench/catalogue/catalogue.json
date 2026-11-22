@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "d4b7578",
-  "sha256_of_inputs": "41175dce5785a6cb4ac3ad15ea0289df23e9d44452bc80b0ea36539679893d89"
+  "commit": "1a8ee8b",
+  "sha256_of_inputs": "cf770e0e76eab722262c17cc0d04b1fe29a8e0741da5d42086433c3003dd934f"
  },
  "his": {
   "commit": "069ea0b"
@@ -104,7 +104,8 @@
    "needs": [],
    "pending": [],
    "tx_part": true,
-   "notes": []
+   "notes": [],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-06",
@@ -183,7 +184,8 @@
    "notes": [],
    "covers": [
     "UP-05a (a trial without confirmation rolls back and logs it)"
-   ]
+   ],
+   "timeout_s": 900
   },
   {
    "id": "T-A1-10",
@@ -429,7 +431,8 @@
    "notes": [],
    "covers": [
     "UP-03 (run request: reason 10; register write: BUSY)"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-24",
@@ -624,15 +627,18 @@
    "needs": [],
    "pending": [],
    "tx_part": true,
-   "notes": []
+   "notes": [],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-34",
    "origin": "spec",
    "part": "A-B",
-   "title": "After `UPDATE_BEGIN` and 10 min without an update command, the update is aborted and logged and the radio restarts into the running image; RX works afterwards (reference model).",
+   "title": "After `UPDATE_BEGIN` and 10 min without an update command, the update is aborted and the radio restarts into the running image. After the restart `READ_LOG` returns, in sequence with no gap, `restart: update-abandoned` with an uptime of the previous run within 5 s of `UPDATE_BEGIN` plus 10 min, then `start after software: log kept`, then the new run's entries; `UPDATE_STATUS` reports idle, `IDENTIFY` tag 10 reports 0, and RX works (reference model or emulator; on the radio once P-SYS-9 is set, before that only the start entry, `log kept` or `log lost`; A1.7, A1.8; 0068).",
    "reqs": [
-    "A1"
+    "A1",
+    "A1.7",
+    "A1.8"
    ],
    "scope": "v1.0",
    "target": "emulator",
@@ -642,7 +648,9 @@
    "needs": [
     "time.advance"
    ],
-   "pending": [],
+   "pending": [
+    "P-SYS-9"
+   ],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
@@ -755,10 +763,11 @@
    "id": "T-A1-39",
    "origin": "spec",
    "part": "A-B",
-   "title": "After `FACTORY_RESET` with every item of Table A1-4 changed beforehand: C-1, C-2, C-5, C-6, C-7 and the TCI port are at their factory defaults, the first-secret window is open, and the C-3 limits, the log, the fault and reset counters, `TRIP_COUNT` and the firmware images are unchanged (A1.6a).",
+   "title": "After `FACTORY_RESET` with every item of Table A1-4 changed beforehand: C-1, C-2, C-5, C-6, C-7 and the TCI port are at their factory defaults, the first-secret window is open, and the C-3 limits, the log, the fault and reset counters, `TRIP_COUNT` and the firmware images are unchanged; on the emulator neither store sector holds the old secret after the reset, the reset comes within 17 s of the reply with every erase stretched to `t_erase_max`, and an erase failed after the reply is logged and finished at the next start before the management socket opens (A1.6a; B2.3 \"Flash work\"; 0069).",
    "reqs": [
     "A1",
     "A1.6a",
+    "B2.3",
     "Table A1-4"
    ],
    "scope": "v1.0",
@@ -1214,7 +1223,8 @@
    ],
    "covers": [
     "ST-06b (in part: a block or image that does not verify gets 53 or 55)"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-60",
@@ -1410,7 +1420,8 @@
     "UP-01 (63 for the running slot)",
     "UP-02 (the full update and the trial)",
     "UP-08 (write failure, status 55)"
-   ]
+   ],
+   "timeout_s": 300
   },
   {
    "id": "T-A1-68",
@@ -1441,7 +1452,7 @@
     "UP-05 (network down: rollback after 60 s)",
     "UP-05a (reset before confirming)"
    ],
-   "timeout_s": 300
+   "timeout_s": 900
   },
   {
    "id": "T-A1-69",
@@ -1669,7 +1680,8 @@
    ],
    "covers": [
     "UP-01 (63 whatever the length)"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-79",
@@ -1686,7 +1698,8 @@
    "needs": [],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-80",
@@ -1710,7 +1723,8 @@
    ],
    "covers": [
     "UP-02 (no transfer after an activation)"
-   ]
+   ],
+   "timeout_s": 300
   },
   {
    "id": "T-A1-81",
@@ -1731,7 +1745,8 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-A1-82",
@@ -1777,7 +1792,7 @@
    "pending": [],
    "tx_part": false,
    "notes": [],
-   "timeout_s": 300
+   "timeout_s": 600
   },
   {
    "id": "T-A1-84",
@@ -1802,13 +1817,13 @@
     "spec marks it reference model; emulator only with the fixtures",
     "minutes of radio time: time.advance (reference model now; emulator when it offers it)"
    ],
-   "timeout_s": 300
+   "timeout_s": 600
   },
   {
    "id": "T-A1-85",
    "origin": "spec",
    "part": "A-B",
-   "title": "With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported (emulator; B2.3 \"Flash work\"; 0065).",
+   "title": "With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported; the 55 reply to an erase that does not end comes within 15 s of the request (emulator; B2.3 \"Flash work\"; 0065, 0069).",
    "reqs": [
     "A1",
     "B2.3"
@@ -1869,6 +1884,72 @@
    "timeout_s": 300
   },
   {
+   "id": "T-A1-91",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "Each commanded reset (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`, the trial's 60 s limit, the abandonment after `UPDATE_ABORT`) leaves its `restart:` line as the last entry before the start entry; after a trial that resets before confirming, `boot: rollback to slot <s> (trial not confirmed)` follows the start entry; a watchdog reset keeps the entries before it, followed by `start after watchdog: log kept`; a power cycle gives `start after power-on: log lost` with sequence numbers from 0; a kept ring with one entry corrupted keeps the entries before it and drops it and those after (reference model or emulator; A1.7 \"Kept over a reset\"; 0068).",
+   "reqs": [
+    "A1",
+    "A1.7"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [
+    "power.cycle",
+    "time.scale"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
+   "id": "T-A1-92",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "On the emulator, after the reply to `CHANGE_SECRET` the flash dump shows the new secret only in the live store sector and the old secret only in the other, stale sector; after a `RESTART`, and after a power cycle, neither sector holds the old secret, and flash.log shows the stale sector erased before the management socket opens, with `store: stale secret erased` in the log; a non-live sector that holds only the live secret is not erased at start; after a `FACTORY_RESET` whose second erase was made to fail, the next start erases the sector with the old secret; a `SET_CONFIG` that needs a compaction before any restart erases the stale sector then; each reply within 15 s with one erase per request; with the new generation's commit word made unreadable before the restart, the store falls back, keeps the stale sector and logs it (A1.10 \"The old secret in flash\"; B2.3 \"Flash work\"; 0069).",
+   "reqs": [
+    "A1",
+    "A1.10",
+    "B2.3"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "power.cycle"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": []
+  },
+  {
+   "id": "T-A1-93",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "`g7250ctl` against the reference model: every command of Table A1-2 is sent; a lost reply is retransmitted with the same request id and payload every 500 ms, 5 times, and for a request that may do flash work for at least 16 s, while every new request gets a new id; each authenticated request uses one fresh challenge and `CHANGE_SECRET` sends the masked secret; an update picks the package for the slot not running (tag 23), after a failed verify sends every block again in order with new ids, and confirms the result with `IDENTIFY` after the reset; package files with a wrong length, magic, header version, signature length or hash are refused before `UPDATE_BEGIN` (reference model; A1.1a; Annex M \"Package file\"; 0070, 0071).",
+   "reqs": [
+    "A1",
+    "A1.1a",
+    "Table A1-2"
+   ],
+   "scope": "v1.0",
+   "target": "host",
+   "also": [
+    "emulator"
+   ],
+   "needs": [],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "spec marks it reference model; emulator only with the fixtures"
+   ]
+  },
+  {
    "id": "T-A1-88",
    "origin": "spec",
    "part": "A-B",
@@ -1889,7 +1970,7 @@
     "spec marks it reference model; emulator only with the fixtures",
     "off the reference model the cases are built from params.package_slot_a and _b; other hardware, the boot-stage kind and an entry point outside the slot need packages built so on the firmware side"
    ],
-   "timeout_s": 300
+   "timeout_s": 900
   },
   {
    "id": "T-A1-89",
@@ -1914,7 +1995,7 @@
     "spec marks it reference model; emulator only with the fixtures",
     "the tag 9 = 2 part needs slot.corrupt; the good-verify parts need a real package"
    ],
-   "timeout_s": 300
+   "timeout_s": 900
   },
   {
    "id": "T-A1-90",
@@ -1939,7 +2020,7 @@
    "notes": [
     "slot.corrupt (proposed for the emulator); the both-slots case only on an emulator"
    ],
-   "timeout_s": 400
+   "timeout_s": 900
   },
   {
    "id": "T-A2-01",
@@ -4946,12 +5027,13 @@
    "id": "T-B5-22",
    "origin": "spec",
    "part": "A-B",
-   "title": "With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run (\"idle\"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on; a pin of Table A3-6b forced to the other level during a stretched erase gives `TX_PATH_NOT_BLOCKED` no later than 20 ms after the erase ends, and one forced and released within the erase gives no fault unless the firmware's samples in its wait loop saw it for 10 ms (B2.3 \"Flash work\"; A3.6b; 0065, 0066).",
+   "title": "With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run (\"idle\"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on; a pin of Table A3-6b forced to the other level during a stretched erase gives `TX_PATH_NOT_BLOCKED` no later than 20 ms after the erase ends, and one forced and released within the erase gives no fault unless the firmware's samples in its wait loop saw it for 10 ms Reply time (0069): with every word program also at its maximum, a host that retransmits every 500 ms for 16 s completes an update, a `SET_CONFIG` with a compaction and an installer sector; each reply comes within 15 s of the request, each request is executed once although its retransmissions arrive during the erase, and flash.log shows at most one sector erase per request (B2.3 \"Flash work\"; A1.4; A3.6b; 0065, 0066, 0069).",
    "reqs": [
     "B5",
     "A3.6",
     "A3",
     "B2.3",
+    "A1.4",
     "A3.6b",
     "Table A3-6"
    ],
@@ -4967,7 +5049,7 @@
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
    ],
-   "timeout_s": 900
+   "timeout_s": 1800
   },
   {
    "id": "T-B6-01",
@@ -5809,7 +5891,8 @@
    "notes": [],
    "covers": [
     "UP-03 (a non-owner's register write: BUSY)"
-   ]
+   ],
+   "timeout_s": 120
   },
   {
    "id": "T-B8-11",

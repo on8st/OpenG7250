@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import struct
 import zlib
-import zlib
 
 from .mgmt import Mgmt, tlv
 
@@ -74,9 +73,13 @@ def parse_package(data: bytes):
     length = struct.unpack(">I", h[14:18])[0]
     if magic != PK_MAGIC or hver != 1:
         raise ValueError(f"not a version-1 G7PK header (magic {magic:#x}, version {hver})")
-    img = data[53:53 + length]
-    if len(img) != length:
-        raise ValueError(f"image of {len(img)} bytes, the header says {length}")
+    if len(data) != 53 + length:  # Annex M "Package file" (0071): the header, the image, nothing else
+        raise ValueError(f"file of {len(data)} bytes, 53 + the header's image length is {53 + length}")
+    if h[50:52] != b"\0\0":
+        raise ValueError(f"signature length {h[50:52].hex()}, not 0")
+    img = data[53:]
+    if hashlib.sha256(img).digest() != h[18:50]:
+        raise ValueError("the image does not hash to header bytes 18-49")
     return h, img, dict(component=comp, hw=hw, hw_rev=rev, version=version, length=length, sha=h[18:50], slot=h[52])
 
 
@@ -110,11 +113,29 @@ class Updater:
         # authenticated command is two datagrams (GET_CHALLENGE and the request)
         c.pace = 18
 
-    def req(self, cmd: str, payload: bytes = b""):
+    def req(self, cmd: str, payload: bytes = b"", window: float | None = None):
         """Every update command as a host sends it: retransmitted per A1.4 (a DHCP borrow of up
-        to 2 s closes the management socket, A1.11)."""
+        to 2 s closes the management socket, A1.11), for 16 s where it may do flash work (0069);
+        `window` overrides that (a power cut: no reply is expected)."""
         from .mgmt import authed_retransmit
-        return authed_retransmit(self.c, cmd, self.s, payload)
+        return authed_retransmit(self.c, cmd, self.s, payload, window)
+
+    def post(self, cmd: str, payload: bytes = b"") -> bytes | None:
+        """Send a signed request once without waiting for its reply; the datagram, for collect()."""
+        from .mgmt import signed
+        data = signed(self.c, cmd, self.s, payload)
+        if data is not None:
+            self.c.post(data)
+        return data
+
+    def collect(self, data: bytes, what: str = "request"):
+        """The reply to a posted request (retransmitted for 16 s as a repeat, A1.4)."""
+        from .mgmt import FLASH_WINDOW_S, send_retransmit
+        return send_retransmit(self.c, data, FLASH_WINDOW_S, what)
+
+    def said(self, step, st) -> str:
+        """What a step answered, with the reason when there was no reply."""
+        return f"{step} answered {st}" + (f": {self.c.why}" if st is None and getattr(self.c, "why", "") else "")
 
     def identify(self) -> dict[int, bytes]:
         """IDENTIFY TLVs; {} when the radio gave no reply to the request and its retransmissions

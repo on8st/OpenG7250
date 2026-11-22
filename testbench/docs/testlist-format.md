@@ -502,7 +502,9 @@ A test with target `emulator` is also run against the reference model. A test wi
    - `flash.timing {erase_us, program_us}` → `{erase_us, program_us, source}`; the endpoint
      carries `flash_timing` with the values in use, `t_erase_max_us` and their `source` (a
      labelled stand-in until the datasheet value is known); T-B5-22 stretches every erase to
-     `t_erase_max_us` and names the value in its result.
+     `t_erase_max_us` and every word program to `t_program_max_us` (580 us where the endpoint
+     gives none; 0069), names the values in its result, and at its end puts back `erase_us` and
+     `program_us` as the endpoint gave them at its start.
    - `flash.fault {op: "erase"|"program", after?, flag, never_end?}`: the next matching operation
      sets that RM0468 error flag; `never_end` keeps BSY set until a reset (T-A1-85).
    - `power.cut {after_flash_words: n} | {during_erase: 0..1} | {at_address: a}`; a cut entry in

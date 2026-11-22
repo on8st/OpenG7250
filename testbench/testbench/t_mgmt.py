@@ -192,7 +192,9 @@ def secret_of(ctx) -> bytes:
         win = tlv(r["payload"]).get(12, b"") if r and r.get("status") == 0 else b""
         if win[:1] == b"\x01":
             new = os.urandom(32)
-            r = c.req("SET_FIRST_SECRET", new)
+            from .core import RadioClock
+            c.clock = RadioClock(ctx)
+            r = req_retransmit(c, "SET_FIRST_SECRET", new)  # flash work: 16 s (0069)
             if r and r.get("status") == 0:
                 ctx.endpoint.setdefault("_learned", {})["secret"] = new.hex()
                 ctx.notes.append("secret set by the bench in the open first-secret window (A1.10)")

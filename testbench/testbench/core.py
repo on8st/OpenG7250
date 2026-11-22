@@ -125,7 +125,7 @@ class Ctx:
             return
         raise Skip(f"fixture:{fixture}")
 
-    def fixture(self, op: str, _timeout: float = 30.0, **args):
+    def fixture(self, op: str, /, _timeout: float = 30.0, **args):  # "op" may be an argument too (flash.fault)
         """Call a fixture on the control socket (section 4). `_timeout`: the wall time the answer
         may take (30 s; a blocking fixture such as time.advance passes more)."""
         self.need(op)
@@ -152,6 +152,32 @@ class Ctx:
         if not rep.get("ok"):
             raise Skip(rep.get("error", f"fixture:{op}"))
         return rep.get("value")
+
+
+class RadioClock:
+    """Seconds of radio time: hw.observe t_us on an emulator, else the wall clock (the reference
+    model runs in real time; its clock only jumps on time.advance). t_us restarts at a power
+    cycle; now() keeps counting. While hw.observe does not answer, wall time stands in."""
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.emu = "hw.observe" in ctx.endpoint.get("fixtures", []) and "model" not in ctx.endpoint
+        self.total, self.last, self.wall, self.misses = 0.0, None, time.monotonic(), 0
+
+    def now(self) -> float:
+        t = None
+        if self.emu:
+            try:
+                t = (self.ctx.fixture("hw.observe") or {}).get("t_us")
+            except (Skip, RunnerFault):
+                self.misses += 1
+        w = time.monotonic()
+        if t is not None and self.last is not None:
+            self.total += (t - self.last if t >= self.last else t) / 1e6
+        else:
+            self.total += w - self.wall
+        self.last, self.wall = t, w
+        return self.total
 
 
 def fmt(v):

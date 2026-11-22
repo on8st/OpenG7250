@@ -35,7 +35,7 @@ def wait_radio(ctx, ms: float):
         time.sleep(ms / 1000)
 
 
-def console_line_t_us(ctx, text: str) -> int | None:
+def console_line_t_us(ctx, text: str, after_us: float = -1) -> int | None:
     """The emulated t_us of the first console line containing `text` (console.log, v1.8: every
     console line with its emulated time, on the clock of hw.trace, net.log and flash.log, which
     count from power-on). The image's log uptime counts from its own start and is not that clock."""
@@ -65,6 +65,7 @@ def console_line_t_us(ctx, text: str) -> int | None:
         return e["t_us"]
 
     ts = [first_char(e) for e in out if text in str(e.get("line", ""))]
+    ts = [t for t in ts if t >= after_us]  # lines of an earlier case or test in the same boot left out
     if ts and not timed and not any("t_first_us" in e for e in out):
         ctx.notes.append("console line times: t_us taken as the line start (USART1 untimed, no t_first_us)")
     return int(min(ts)) if ts else None

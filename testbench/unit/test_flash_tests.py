@@ -97,7 +97,7 @@ class FakeU:
         self.r = radio
         self.c = self
 
-    def req(self, cmd, payload=b""):
+    def req(self, cmd, payload=b"", window=None):
         if cmd == "SET_CONFIG":
             st = self.r.write(struct.unpack(">I", payload[2:6])[0])
             return None if st is None else dict(status=st, payload=b"")
@@ -153,6 +153,66 @@ class FlashTestsTest(unittest.TestCase):
     def test_a1_87_passes_and_fails(self):
         self.assertEqual(run(t_flash.t_a1_87, FakeRadio()), [])
         self.assertTrue(run(t_flash.t_a1_87, FakeRadio(broken="ecc")))
+
+
+class CompactionTest(unittest.TestCase):
+    """T-B5-22: the SET_CONFIG loop and the erase the force is placed in."""
+
+    def test_erase_found_after_an_unanswered_write(self):
+        """A write that gets no reply while its erase runs: the erase is found, not 'no erase'."""
+        r = FakeRadio()
+
+        class U(FakeU):
+            def req(self, cmd, payload=b"", window=None):
+                got = super().req(cmd, payload, window)
+                return None if cmd == "SET_CONFIG" and r.writes == 10 else got
+        u = U(r)
+        u.why = "no reply to SET_CONFIG"
+        ctx = FakeCtx(r)
+        self.assertEqual(t_flash.compaction_writes(ctx, u, 200_000, STORE, STORE + 2 * 131072), (200_010, 10))
+        self.assertIn("1 store erases", ctx.__dict__["_compaction"])
+
+    def test_a_refused_write_is_named(self):
+        r = FakeRadio()
+        r.fault = dict(op="program")
+        ctx = FakeCtx(r)
+        self.assertIsNone(t_flash.compaction_writes(ctx, FakeU(r), 200_000, STORE, STORE + 2 * 131072))
+        self.assertIn("answered 55", ctx.__dict__["_compaction"])
+
+    def post(self, erase_at):
+        r = FakeRadio()
+        ctx = FakeCtx(r)
+
+        class U:
+            why, sent = "", []
+            c = property(lambda self: self)
+
+            def post(self, cmd, payload):
+                self.sent.append(cmd)
+                if len(self.sent) == erase_at:
+                    r.log.append(dict(op="erase", sector=4, address=0x08080000, t_us=10))  # running: no end yet
+                return b"req%d" % len(self.sent)
+
+            def listen(self, data, timeout):
+                return [] if len(self.sent) == erase_at else [dict(status=0)]
+
+            def collect(self, data, what):
+                raise AssertionError("waited for a reply")
+        u = U()
+        u.sent = []
+        return t_flash.post_until_erase(ctx, u, b"h" * 53, b"i" * 2148), u.sent
+
+    def test_erase_in_begin(self):
+        (er, data), sent = self.post(1)
+        self.assertEqual((er["sector"], data, sent), (4, b"req1", ["UPDATE_BEGIN"]))
+
+    def test_erase_in_the_first_block(self):
+        (er, data), sent = self.post(2)
+        self.assertEqual((data, sent), (b"req2", ["UPDATE_BEGIN", "UPDATE_BLOCK"]))
+
+    def test_no_erase(self):
+        (er, data), sent = self.post(99)
+        self.assertEqual((er, data, len(sent)), (None, None, 6))
 
 
 if __name__ == "__main__":

@@ -403,9 +403,13 @@ UNCOVERED = [
 # Tests that need more than the 30 s default (radio time; the emulator runner enforces it in
 # emulated time with a wall cap of 30 x timeout_s + 120 s).
 TIMEOUTS: dict[str, int] = {
-    "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 300, "T-A1-84": 300, "T-A1-83": 300, "T-A1-88": 300, "T-A1-89": 300, "T-A1-90": 400,
+    # a real package is about 275 blocks, two datagrams each at 18 per second: 30 s per update
+    "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 900, "T-A1-09": 900, "T-A1-84": 600, "T-A1-83": 600,
+    "T-A1-88": 900, "T-A1-89": 900, "T-A1-90": 900, "T-A1-67": 300, "T-A1-80": 300,
+    "T-A1-05": 120, "T-A1-33": 120, "T-A1-23": 120, "T-A1-59": 120, "T-A1-78": 120, "T-A1-79": 120, "T-A1-81": 120,
+    "T-B8-10": 120,
     "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-76": 120,
-    "T-B5-22": 900, "T-A1-85": 300, "T-A1-86": 1800, "T-A1-87": 300, "T-EMU-IDLE": 120,
+    "T-B5-22": 1800, "T-A1-85": 300, "T-A1-86": 1800, "T-A1-87": 300, "T-EMU-IDLE": 120,
 }
 
 

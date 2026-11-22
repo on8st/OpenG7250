@@ -248,6 +248,21 @@ def t_a2_11(ctx):
         a.stop()
 
 
+def limited_floor(w_us: list, limit_us: int = 100_000) -> int:
+    """The least a correct radio sends in answer to writes at these times (us) under a limit of one
+    per 100 ms. 100 ms is a lower bound on the spacing, so at most floor(S / 100 ms) - 1 can be
+    asked over a span S; and an answer needs a write to come after the limit has passed, so no more
+    than a 110 ms limiter would let through from these arrivals, less one for the edges."""
+    if not w_us:
+        return 1
+    w = sorted(w_us)
+    n, last = 0, None
+    for t in w:
+        if last is None or t - last >= limit_us + 10_000:
+            n, last = n + 1, t
+    return max(1, min((w[-1] - w[0]) // limit_us - 1, n - 1))
+
+
 @test("T-A2-13")
 def t_a2_13(ctx):
     with Host(ctx.net) as a, Host(ctx.net) as b, Host(ctx.net) as dest:
@@ -282,9 +297,11 @@ def t_a2_13(ctx):
             mine = lambda e, port: str(e.get("peer", "")).endswith(f":{port}")
             w = [e["t_us"] for e in log if e.get("dir") == "to_radio" and e.get("radio_port") == PORT_REG and mine(e, a.port)]
             span = (max(w) - min(w)) / 1e6 if len(w) > 1 else 0.0
-            want = max(1, int(span / 0.1))  # one per 100 ms, less one for the edges of the span
-            ans = [e for e in log if e.get("dir") == "from_radio" and e.get("radio_port") == PORT_REG and mine(e, a.port)]
-            nts = [e for e in log if e.get("dir") == "from_radio" and e.get("radio_port") == PORT_REG and mine(e, dest.port)]
+            want = limited_floor(w)
+            first = min(w) if w else 0  # the three takeover copies came before A's first write
+            sent = lambda port: [e["t_us"] for e in log if e.get("dir") == "from_radio" and e.get("radio_port") == PORT_REG
+                                 and mine(e, port) and e["t_us"] >= first]
+            ans, nts = sent(a.port), sent(dest.port)
             ctx.check("register writes from A: NOT_OWNER answers at A's source port, one per 100 ms of radio time (B8.5; net.log)",
                       len(ans) >= want, f"{len(ans)} answers over {span:.3f} s of writes, want >= {want}")
             ctx.check("and notices at the register destination, one per 100 ms of radio time (net.log)", len(nts) >= want,
@@ -293,8 +310,11 @@ def t_a2_13(ctx):
             ctx.check("register writes from A: NOT_OWNER answers at A's source port (B8.5)", len(no_owner) >= 3,
                       f"{len(no_owner)} answers at the source port in 1.5 s (host clock)")
             ctx.check("and notices at the register destination", len(nd) >= 3, f"{len(nd)} notices in 1.5 s (host clock)")
-        gaps = [nd[i + 1][0] - nd[i][0] for i in range(len(nd) - 1)]
-        ctx.check("at most one notice per 100 ms", all(g >= NOTICE_MIN_S - 0.01 for g in gaps),
+        if log:  # on the radio's clock: an emulator faster than real time shortens host gaps
+            gaps = [(nts[i + 1] - nts[i]) / 1e6 for i in range(len(nts) - 1)]
+        else:
+            gaps = [nd[i + 1][0] - nd[i][0] for i in range(len(nd) - 1)]
+        ctx.check("at most one notice per 100 ms" + (" (net.log)" if log else ""), all(g >= NOTICE_MIN_S - 0.01 for g in gaps),
                   f"smallest gap {min(gaps) * 1000:.0f} ms" if gaps else "fewer than 2")
         ctx.eq("no notice at A's source port", len(notices(at_src)), 0)
         b.stop()

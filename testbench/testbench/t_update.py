@@ -15,7 +15,7 @@ import struct
 import time
 from contextlib import contextmanager
 
-from .core import Blocked, Ctx, PartSkip, Skip, test
+from .core import Blocked, Ctx, PartSkip, RadioClock, Skip, test
 from .mgmt import Mgmt
 from .p2 import (PORT_REG, STREAM_STATUS, TX_MODE_CLASS, Host, parse_regs, value, wait_reachable, write_status)
 from .update import HW_ID, SECTOR, Updater, header, image, layout, version_of
@@ -45,6 +45,7 @@ def updating(ctx, s: bytes, restart_at_end: bool = True):
     """A management socket holding the write session; at the end, also after an error, a
     RESTART so that no update state is left for the next test."""
     with Mgmt(ctx.net) as c:
+        c.clock = RadioClock(ctx)
         u = Updater(c, s)
         try:
             yield u
@@ -62,7 +63,7 @@ def facts(ctx, u: Updater):
     t = u.identify()
     if not t:
         from .core import Missing
-        raise Missing("IDENTIFY: no reply to the request and 5 retransmissions 500 ms apart (A1.4)"
+        raise Missing(f"IDENTIFY: {u.c.why or 'no reply to the request and 5 retransmissions 500 ms apart (A1.4)'}"
                       if getattr(u, "no_identify", False) else "IDENTIFY: a status other than 0")
     lay = layout(t)
     run = t.get(23, b"")[:1]
@@ -447,9 +448,15 @@ def last_log_seq(u: Updater) -> int:
 
 
 def rx_works(ctx) -> bool:
+    """A session gets status packets (every 50 ms of radio time; an emulator may run slower)."""
     with Host(ctx.net) as h:
         h.start()
-        got = [p for p, _, _ in h.recv(0.3) if p == 1025]
+        got = []
+        for _ in range(10):
+            got = [p for p, _, _ in h.recv(0.3) if p == 1025]
+            if got:
+                break
+            h.keepalive()
         h.stop()
         return bool(got)
 
@@ -575,8 +582,10 @@ def t_a1_82(ctx: Ctx):
 
 def activate_new(ctx, s, seed: int, net_down: bool = False):
     """A complete update into the other slot and its activation; (old slot, new slot, old
-    version, new version) or None."""
+    version, new version) or None. With net_down on an emulator (ch394.silent) the trial never
+    answers, so this does not wait for it: the caller uses trial_rolls_back()."""
     ctx.__dict__["_upd_fail"] = ""
+    silent = False
     with updating(ctx, s, restart_at_end=False) as u:
         run, other, ver, lay = facts(ctx, u)
         if net_down:
@@ -586,19 +595,44 @@ def activate_new(ctx, s, seed: int, net_down: bool = False):
                 ctx.fixture("trial.sim", network_down=True)
             else:
                 ctx.need("ch394.silent")
-                ctx.fixture("ch394.silent", boots=1)
+                silent = True
         img, hdr, newver = trial_package(ctx, other, ver, seed)
         st, step = u.full(img, hdr)
         if (st, step) != (0, "verified"):
-            ctx.__dict__["_upd_fail"] = f"{step} answered {st}"
+            ctx.__dict__["_upd_fail"] = u.said(step, st)
             return None
+        if silent:
+            ctx.fixture("ch394.silent", boots=1)  # the next start only: the trial's
         r = u.req("UPDATE_ACTIVATE", b"\x00")
         if not r or r["status"] != 0:
-            ctx.__dict__["_upd_fail"] = f"UPDATE_ACTIVATE answered {r['status'] if r else None}"
+            ctx.__dict__["_upd_fail"] = u.said("UPDATE_ACTIVATE", r["status"] if r else None)
             return None
+        ctx.__dict__["_activated_at"] = u.c.clock
+        ctx.__dict__["_activated_t"] = u.c.clock.now()
+    if silent:
+        return run, other, ver, newver
     time.sleep(0.3)
     wait_reachable(ctx, "UPDATE_ACTIVATE")
     return run, other, ver, newver
+
+
+def trial_rolls_back(ctx, what: str = "trial rollback"):
+    """The trial cannot confirm itself: its 60 s limit passes, it resets, and the previous image
+    starts and reaches the network (a boot and the power-on address exchange, so more than 60 s).
+    On an emulator: the start of the previous image, in radio time since the activation reply
+    (the time now less its uptime), is not before the 60 s limit."""
+    advance(ctx, 65)
+    wait_reachable(ctx, what, limit_s=40)
+    clock = ctx.__dict__.get("_activated_at")
+    if clock is not None and clock.emu:
+        with Mgmt(ctx.net) as c:
+            c.clock = clock
+            up = uptime_s(Updater(c, b""))
+            t = clock.now() - ctx.__dict__["_activated_t"]
+        if up is not None:
+            # uptime counts from the image's own start, about 0.2 s after the reset
+            ctx.check(f"{what}: not before 60 s after the trial's start (radio time)", t - up >= 59.0,
+                      f"the previous image started {t - up:.1f} s after the activation reply")
 
 
 @test("T-A1-68", "T-A1-09")
@@ -612,25 +646,46 @@ def t_a1_68(ctx: Ctx):
     a = activate_new(ctx, s, 681)
     if ctx.check("update activated (confirm case)", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
         with updating(ctx, s, restart_at_end=False) as u:
-            advance(ctx, 8)
-            ctx.eq("8 s after start: still a trial (tag 10 = 1)", u.identify().get(10), b"\x01")
-            advance(ctx, 3)
+            # 10 s with the network up (0044): the network came up at the latest when the radio
+            # was reached, so it is confirmed 11 s from here; under 10 s of uptime it cannot be
+            up = uptime_s(u)
+            if up is not None and up < 7.5:
+                advance(ctx, 8 - up)
+                t, up = u.identify(), uptime_s(u)
+                if up is not None and up < 9.5:
+                    ctx.eq(f"{up:.1f} s after start: still a trial (tag 10 = 1)", t.get(10), b"\x01")
+            else:
+                ctx.notes.append(f"reached {up} s after the trial's start: 'still a trial before 10 s' not judged")
+            advance(ctx, 11)
             t = u.identify()
-            ctx.eq("after 10 s: confirmed (tag 10 = 0), the new slot runs", (t.get(10), t.get(23, b"")[:1]), (b"\x00", bytes([a[1]])))
+            ctx.eq("after 10 s with the network up: confirmed (tag 10 = 0), the new slot runs", (t.get(10), t.get(23, b"")[:1]),
+                   (b"\x00", bytes([a[1]])))
     # keeps its network down: rolls back after 60 s
     a = activate_new(ctx, s, 682, net_down=True)
     if ctx.check("update activated (network-down case)", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
+        modelled = "trial.sim" in ctx.endpoint.get("fixtures", [])  # the model's trial still answers
+        n0 = None
+        if modelled:
+            with updating(ctx, s, restart_at_end=False) as u:
+                n0 = last_log_seq(u)
+                advance(ctx, 55)
+                ctx.eq("55 s after start: still the trial in the new slot", (u.identify().get(10), u.identify().get(23, b"")[:1]),
+                       (b"\x01", bytes([a[1]])))
+                advance(ctx, 10)
+                wait_reachable(ctx, "trial rollback")
+        else:  # the trial has no network at all: the previous image answers after 60 s and a boot
+            trial_rolls_back(ctx)
         with updating(ctx, s, restart_at_end=False) as u:
-            n0 = last_log_seq(u)
-            advance(ctx, 55)
-            ctx.eq("55 s after start: still the trial in the new slot", (u.identify().get(10), u.identify().get(23, b"")[:1]),
-                   (b"\x01", bytes([a[1]])))
-            advance(ctx, 10)
-            wait_reachable(ctx, "trial rollback")
             t = u.identify()
             ctx.eq("after 60 s: rolled back (tag 10 = 2), the previous slot and version run",
                    (t.get(10), t.get(23, b"")[:1], version_of(t)), (b"\x02", bytes([a[0]]), a[2]))
-            ctx.check("the rollback is logged", bool(logs_since(u, n0)), "no new log entry")
+            if n0 is not None:
+                ctx.check("the rollback is logged", bool(logs_since(u, n0)), "no new log entry")
+            else:
+                from .mgmt import read_log
+                texts = [e[2] for e in read_log(u.c)]
+                ctx.check("the rollback is logged (an entry naming it)", any("rollback" in x.lower() or "rolled back" in x.lower() or "confirmed" in x.lower() for x in texts),
+                          f"{texts[-4:]}")
     # a class 2 fault (a safe-state pin forced, TX_PATH_NOT_BLOCKED): not confirmed, rolls back
     if "trial.sim" in ctx.endpoint.get("fixtures", []):
         ctx.fixture("trial.sim", class2_fault=True)
@@ -972,9 +1027,7 @@ def t_a1_89(ctx: Ctx):
     b = activate_new(ctx, s, 895, net_down=True)
     if not ctx.check("an update installed for a trial that fails", b is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
         return
-    with updating(ctx, s, restart_at_end=False) as u:
-        advance(ctx, 65)
-    wait_reachable(ctx, "trial rollback")
+    trial_rolls_back(ctx)
     with updating(ctx, s, restart_at_end=False) as u:
         t = u.identify()
         ctx.eq("the failed trial rolled back (tag 23 the previous slot, tag 10 = 2)", (t.get(23, b"")[:1], t.get(10)),
