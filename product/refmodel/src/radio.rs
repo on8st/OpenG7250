@@ -276,6 +276,8 @@ pub struct Session {
     pub arm_confirmed_at: Option<u64>,
     pub keyed_at: Option<u64>,
     pub last_hp: u64,
+    /// the last sequence numbers received on ports 1027 and 1029 (B11.6)
+    pub rx_seq: [Option<u32>; 2],
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -343,6 +345,12 @@ pub struct Radio {
     pub update_in_progress: bool,
     pub link_mbit: u16,
     pub stats: HashMap<String, u64>,
+    /// the last log line per port and reason (B11.1: once per second), and per foreign DUC I&Q source (B10.7)
+    drop_log: HashMap<(u16, &'static str), u64>,
+    duc_foreign_log: HashMap<Host, u64>,
+    /// the address and netmask in force, as the management channel sees them (A1.10, 0074); the
+    /// sockets stay where the shell bound them
+    pub addr: (Ipv4Addr, Ipv4Addr),
     pub log: Vec<(u32, u64, String)>,
     pub log_seq: u32,
     /// model fixture log.corrupt: this entry of the kept ring fails its check at the next start
@@ -406,11 +414,11 @@ pub const FREEZE_SET: [&str; 19] = [
 /// Annex P freeze rule as amended by 0042 (P-RX-2) and 0050 (P-SYS-9).
 pub const FREEZE_EXTRA: [&str; 3] = ["P-ANT-1", "P-RX-2", "P-SYS-9"];
 /// Every parameter id of Table P-1.
-pub const ALL_PARAMS: [&str; 37] = [
+pub const ALL_PARAMS: [&str; 38] = [
     "P-RF-1", "P-RF-2", "P-RF-3", "P-RF-4", "P-RF-5", "P-ANT-1", "P-ATU-1", "P-PWR-1",
     "P-PWR-2", "P-PWR-3", "P-PWR-4", "P-PWR-5", "P-SEN-1", "P-SEN-2", "P-SEN-3", "P-SEN-4",
     "P-SEN-5", "P-TIM-1", "P-TIM-2", "P-NET-1", "P-NET-2", "P-NET-3", "P-SYS-1", "P-SYS-2",
-    "P-SYS-3", "P-SYS-4", "P-SYS-5", "P-SYS-6", "P-SYS-7", "P-SYS-8", "P-SYS-9", "P-RX-1", "P-RX-2",
+    "P-SYS-3", "P-SYS-4", "P-SYS-5", "P-SYS-6", "P-SYS-7", "P-SYS-8", "P-SYS-9", "P-SYS-10", "P-RX-1", "P-RX-2",
     "P-TX-1", "P-L2-1", "P-L2-2", "P-L2-3",
 ];
 
@@ -474,8 +482,10 @@ impl Radio {
             write_rejects: 0,
             update_in_progress: false,
             link_mbit: 100,
-            // the counters whose names the spec gives are listed from the start, at 0
-            stats: ["hp_rx", "cw_speed_clamped", "cw_hang_clamped"].iter().map(|n| (n.to_string(), 0)).collect(),
+            stats: HashMap::new(), // GET_STATS lists the names of Table M-6 at 0 without an entry here
+            drop_log: HashMap::new(),
+            duc_foreign_log: HashMap::new(),
+            addr: (Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED), // set below
             log: Vec::new(),
             log_seq: 0,
             log_corrupt: None,
@@ -503,6 +513,7 @@ impl Radio {
             nonowner_seq: 0,
             old_seq: 0,
         };
+        r.addr = (r.cfg.ip, r.cfg.netmask);
         r.new_token();
         // the factory image in slot A, confirmed
         r.fw.slots[0] = Some(Image { version: r.cfg.fw, len: 0, sha: [0; 32], good: true, integ: 1, corrupt: false });
@@ -614,8 +625,29 @@ impl Radio {
         let complete = self.cal.as_ref().map_or(false, |c| c.complete());
         self.record = cap::build(&self.cfg, complete, self.has_param("P-RX-2"));
     }
+    /// A counter: a name of Table M-6, or one of the model's own (at most 16 characters, Table M-1).
     pub fn count(&mut self, what: &str) {
+        debug_assert!(what.len() <= 16, "counter name {what}");
         *self.stats.entry(what.to_string()).or_insert(0) += 1;
+    }
+    /// B11.1: a discarded packet is counted per port, the reason logged at most once per second per
+    /// port and reason (0074).
+    pub fn discard(&mut self, port: u16, reason: &'static str) {
+        self.count(&format!("drop_{port}"));
+        if self.drop_log.get(&(port, reason)).map_or(true, |t| self.now >= t + S) {
+            self.drop_log.insert((port, reason), self.now);
+            self.logf(&format!("drop on port {port}: {reason}"));
+        }
+    }
+    /// B11.6: a number newer than the one before by more than 1 is a gap; the same or an older one is not.
+    fn gap(&mut self, port: u16, n: u32) {
+        let k = (port == port::DUC_IQ) as usize;
+        let Some(s) = self.session.as_mut() else { return };
+        let d = s.rx_seq[k].map_or(1, |p| n.wrapping_sub(p));
+        s.rx_seq[k] = Some(n);
+        if d > 1 && d < 1 << 31 {
+            self.count(if k == 1 { "gap_1029" } else { "gap_1027" });
+        }
     }
     pub fn logf(&mut self, msg: &str) {
         let up = (self.now - self.booted_at) / MS;
@@ -889,7 +921,10 @@ impl Radio {
         let ip = *rx.src.ip();
         match rx.local_port {
             port::MGMT => {
+                // a limit that is due acts before a request is handled, whenever it was received (B2.3, 0073)
+                self.confirm_trial();
                 let mut m = self.mgmt.take().expect("management state");
+                m.tick(self, &mut out);
                 m.on_request(self, rx, &mut out);
                 self.mgmt = Some(m);
                 return out;
@@ -902,7 +937,7 @@ impl Radio {
                     self.count("hp_rx");
                 }
                 if !self.own_subnet(ip) {
-                    self.count("drop.outside_subnet");
+                    self.discard(rx.local_port, "outside-subnet");
                     return out;
                 }
                 match rx.local_port {
@@ -911,7 +946,7 @@ impl Radio {
                     port::HIGH_PRIORITY => self.on_cc(rx, CcKind::Hp, &mut out),
                     port::DUC_IQ => self.on_duc_iq(rx, &mut out),
                     port::REGMAP => self.on_regmap(rx, &mut out),
-                    _ => self.count("drop.closed_port"),
+                    _ => {} // 1035: not a receiving port (Table B2-1)
                 }
             }
         }
@@ -921,17 +956,19 @@ impl Radio {
     fn on_1024(&mut self, rx: &Rx, out: &mut Vec<Tx>) {
         let d = rx.data;
         if d.len() < 5 {
-            self.count("drop.1024.short");
+            self.discard(port::DISCOVERY, "short");
             return;
         }
         match d[4] {
             0x02 => {
                 if rx.src.port() == port::DISCOVERY {
-                    self.count("drop.1024.from_1024");
+                    self.count("disc_src1024");
+                    self.discard(port::DISCOVERY, "from-port-1024");
                     return;
                 }
                 if !self.lim_disc.allow(&rx.src, self.now) {
-                    self.count("drop.discovery.rate");
+                    self.count("disc_rate_drop");
+                    self.discard(port::DISCOVERY, "rate");
                     return;
                 }
                 if let Some(s) = &self.session {
@@ -945,13 +982,13 @@ impl Radio {
             0x03 => self.on_set_ip(rx, out),
             0x00 => {
                 if !self.own_subnet(*rx.src.ip()) {
-                    self.count("drop.outside_subnet");
+                    self.discard(port::DISCOVERY, "outside-subnet");
                     return;
                 }
                 self.on_cc(rx, CcKind::General, out)
             }
-            0x04 | 0x05 => self.count("drop.1024.erase_program"),
-            _ => self.count("drop.1024.unknown"),
+            0x04 | 0x05 => self.discard(port::DISCOVERY, "erase-program"),
+            _ => self.discard(port::DISCOVERY, "unknown-command"),
         }
     }
 
@@ -974,16 +1011,17 @@ impl Radio {
     fn on_set_ip(&mut self, rx: &Rx, out: &mut Vec<Tx>) {
         let d = rx.data;
         if d.len() < 15 {
-            self.count("drop.setip.short");
+            self.discard(port::DISCOVERY, "short");
             return;
         }
         if d[5..11] != self.cfg.mac {
-            self.count("drop.setip.other_mac");
+            self.discard(port::DISCOVERY, "other-mac");
             return;
         }
         let limited = rx.to_ip == Some(Ipv4Addr::BROADCAST);
         if !limited && !self.own_subnet(*rx.src.ip()) {
-            self.count("drop.setip.outside_subnet");
+            self.count("setip_ignored");
+            self.discard(port::DISCOVERY, "setip-outside-subnet");
             return;
         }
         let new_ip = Ipv4Addr::new(d[11], d[12], d[13], d[14]);
@@ -992,7 +1030,17 @@ impl Radio {
         // sockets is the shell's job (it restarts on the new address when asked).
         let reply = self.discovery_reply(rx.src);
         out.push(Tx { src_port: port::DISCOVERY, dst: rx.src, data: reply });
-        self.stats.insert("setip.pending".into(), u32::from(new_ip) as u64);
+        // the new address with the netmask of B3.9 (0039); 0.0.0.0 selects DHCP (the start values here)
+        let new = if new_ip == Ipv4Addr::UNSPECIFIED {
+            (self.cfg.ip, self.cfg.netmask)
+        } else if in_subnet(new_ip, self.addr.0, self.addr.1) {
+            (new_ip, self.addr.1)
+        } else {
+            (new_ip, Ipv4Addr::new(255, 255, 255, 0))
+        };
+        let mut m = self.mgmt.take().expect("management state");
+        m.set_address(self, new);
+        self.mgmt = Some(m);
     }
 
     fn on_cc(&mut self, rx: &Rx, kind: CcKind, out: &mut Vec<Tx>) {
@@ -1004,7 +1052,7 @@ impl Radio {
             CcKind::Hp => 1444,
         };
         if d.len() < min {
-            self.count(&format!("drop.short.{}", kind.name()));
+            self.discard(rx.local_port, "short");
             return;
         }
         let d = &d[..min];
@@ -1013,6 +1061,7 @@ impl Radio {
                 let data = self.reg_packet(&[(reg::LINK_STATUS, self.link_status()), (reg::STREAM_STATUS, self.stream_status())]);
                 out.push(Tx { src_port: port::REGMAP, dst: rx.src, data });
             }
+            self.discard(rx.local_port, "link-speed");
             return;
         }
         if self.update_in_progress {
@@ -1022,6 +1071,7 @@ impl Radio {
                 let data = self.reg_packet_nonowner(&[(reg::STREAM_STATUS, self.stream_status())]);
                 out.push(Tx { src_port: port::REGMAP, dst: rx.src, data });
             }
+            self.discard(rx.local_port, "update");
             return;
         }
         let owner = self.session.as_ref().map(|s| s.owner);
@@ -1072,7 +1122,11 @@ impl Radio {
             arm_confirmed_at: None,
             keyed_at: None,
             last_hp: self.now,
+            rx_seq: [None; 2],
         });
+        // counted from the start of the running session (Table M-6)
+        self.stats.remove("gap_1027");
+        self.stats.remove("gap_1029");
         self.last_owner = Some(host);
         self.check_ports();
         let t = self.token;
@@ -1105,7 +1159,7 @@ impl Radio {
         self.old_seq = *self.seq.get(&port::REGMAP).unwrap_or(&0);
         let notice = self.reg_packet_noseq(&pairs);
         self.old_owner_notice = Some((old, old_dest.port(), self.now + 5 * S, 0, notice));
-        self.count("takeover");
+        self.count("takeovers");
         self.logf(&format!("takeover {old} -> {newhost}"));
         // TX settings back (A3.6a); RX settings kept (A2.4 step 4)
         self.reset_tx_settings();
@@ -1116,6 +1170,7 @@ impl Radio {
         s.record_sent = false;
         s.arm_confirmed_at = None;
         s.keyed_at = None;
+        s.rx_seq = [None; 2];
         s.s.hp.ptt = false;
         s.s.hp.last_ptt1_at = None;
         s.s.hp.cwx_req = false;
@@ -1164,7 +1219,7 @@ impl Radio {
         let Some(dst) = self.reg_dest() else { return };
         if let Some(&t) = self.last_unasked.get(&dst) {
             if self.now.saturating_sub(t) < S {
-                self.count("record.unasked.suppressed");
+                self.count("rec_suppressed");
                 return;
             }
         }
@@ -1221,7 +1276,10 @@ impl Radio {
                     self.logf(&format!("CW hang delay {hang} clamped to 2000"));
                 }
             }
-            CcKind::Hp => self.apply_hp(d, out),
+            CcKind::Hp => {
+                self.gap(port::HIGH_PRIORITY, be32(d, 0));
+                self.apply_hp(d, out)
+            }
         }
         if self.ddc0_reason() != before_ddc {
             let w = self.stream_status();
@@ -1422,17 +1480,28 @@ impl Radio {
     fn on_duc_iq(&mut self, rx: &Rx, out: &mut Vec<Tx>) {
         let owner = self.session.as_ref().map(|s| s.owner);
         if owner != Some(rx.src) {
-            self.count("drop.duc_iq.not_owner");
+            self.count("duc_foreign");
+            self.count("drop_1029");
+            // B10.7 (0074): the source, at most once per second per source
+            if self.duc_foreign_log.get(&rx.src).map_or(true, |t| self.now >= t + S) {
+                if self.duc_foreign_log.len() > 4096 {
+                    self.duc_foreign_log.clear();
+                }
+                self.duc_foreign_log.insert(rx.src, self.now);
+                self.logf(&format!("DUC I&Q from {} discarded: not the owner", rx.src));
+            }
             self.maybe_notice(rx.src, out);
             return;
         }
         if rx.data.len() < 1444 {
-            self.count("drop.short.duc_iq");
+            self.discard(port::DUC_IQ, "short");
             return;
         }
+        self.gap(port::DUC_IQ, be32(rx.data, 0));
         if !self.tx_calibrated() {
             // B10.7: while TX is not calibrated the owner's DUC I&Q is discarded and counted.
-            self.count("drop.duc_iq.tx_not_calibrated");
+            self.count("duc_not_tx");
+            self.discard(port::DUC_IQ, "tx-not-calibrated");
         }
     }
 
@@ -1453,13 +1522,14 @@ impl Radio {
     fn on_regmap(&mut self, rx: &Rx, out: &mut Vec<Tx>) {
         let d = rx.data;
         if d.len() < 10 {
-            self.count("drop.short.regmap");
+            self.discard(port::REGMAP, "short");
             return;
         }
         let owner = self.session.as_ref().map(|s| s.owner);
         let is_owner = owner == Some(rx.src);
         if !is_owner && rx.src.port() == port::REGMAP {
-            self.count("drop.regmap.from_7250");
+            self.count("reg7250_drop");
+            self.discard(port::REGMAP, "from-port-7250");
             return;
         }
         if !is_owner {
@@ -1498,11 +1568,13 @@ impl Radio {
         if !is_owner {
             if cap_req {
                 if !self.lim_cap.allow(&rx.src, self.now) {
-                    self.count("drop.cap_request.rate");
+                    self.count("cap_rate_drop");
+                    self.discard(port::REGMAP, "cap-request-rate");
                     return;
                 }
             } else if not_owner_answer && !self.lim_notowner.allow(&rx.src, self.now) {
-                self.count("drop.not_owner.rate");
+                self.count("notowner_drop");
+                self.discard(port::REGMAP, "not-owner-rate");
                 return;
             }
         }
@@ -1837,6 +1909,17 @@ impl Radio {
             self.log_seq = self.log.last().map_or(0, |e| e.0 + 1);
         }
         let kept = !power_lost && !self.log.is_empty();
+        // A3.6 "Evidence at the next start" (0075): a software reset whose last kept entry is no reason
+        // line. Faults are not modelled, so the line is all there is (no WDT_RESET_AT_START here).
+        let unexpected = cause == "software" && !power_lost && !self.log.last().map_or(false, |e| reason_line(&e.2));
+        // A3.5 "Counters": the resets per cause (fault entries and trips stay 0 in the model) are kept
+        // over a reset without loss of power; every other counter starts at 0
+        self.stats.retain(|k, _| !power_lost && k.starts_with("reset_"));
+        if !power_lost {
+            self.count(&format!("reset_{cause}"));
+        }
+        self.drop_log.clear();
+        self.duc_foreign_log.clear();
         self.reset_cause = match cause {
             "power-on" => 1,
             "software" => 2,
@@ -1876,7 +1959,18 @@ impl Radio {
         for l in boot_lines {
             self.logf(&l);
         }
+        if unexpected {
+            self.logf("start: unexpected stop");
+        }
     }
+}
+
+/// The entries A1.7 lists as the reason before a commanded reset (0068; A3.6, 0075).
+fn reason_line(l: &str) -> bool {
+    ["restart: restart", "restart: factory-reset", "restart: update-abandoned", "restart: installer-abandoned",
+     "restart: trial-unconfirmed"].contains(&l)
+        || l.starts_with("restart: update-activated slot ")
+        || l.starts_with("rollback commanded: ")
 }
 
 enum W {
@@ -1892,17 +1986,6 @@ enum CcKind {
     Duc,
     Hp,
 }
-impl CcKind {
-    fn name(&self) -> &'static str {
-        match self {
-            CcKind::General => "general",
-            CcKind::Ddc => "ddc_specific",
-            CcKind::Duc => "duc_specific",
-            CcKind::Hp => "high_priority",
-        }
-    }
-}
-
 impl Settings {
     fn apply_kept(&mut self, kind: CcKind, d: &[u8]) {
         match kind {

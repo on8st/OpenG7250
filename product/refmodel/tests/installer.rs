@@ -197,7 +197,7 @@ fn back_before_the_first_erase() {
         assert_eq!(h.begin(&img, 0x00C8, img.len() as u32).0, st::OK);
         assert_eq!(h.block(0, &img, false), st::OK);
         match how {
-            "abort" => assert_eq!(h.req(ABORT, &[]), (st::OK, vec![1])),
+            "abort" => assert_eq!(h.req(ABORT, &[]), (st::OK, vec![0])), // restarts by itself (0074)
             "10 min" => {
                 h.t += 601 * S;
                 h.r.tick(h.t);

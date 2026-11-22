@@ -1,10 +1,9 @@
 //! Management channel, UDP 7251 (spec A1.4–A1.10). Framing, status precedence, challenge and
 //! response, write session, stored replies, rate limits and the first-secret window follow the
-//! spec. Payload layouts are not fixed by the spec yet ("fixed with the reference model before
-//! payload layouts are those of the spec's Annex M (0039).
+//! spec; payload layouts are those of the spec's Annex M (0039).
 //!
-//! Model gaps (answered with status 56): UPDATE_BEGIN … UPDATE_ACTIVATE, UPDATE_ABORT, ROLLBACK.
-//! The network items of SET_CONFIG (C-1) are stored and reported but not applied to the sockets.
+//! The network items of SET_CONFIG (C-1) are stored and reported, and a change of the address or
+//! netmask in force ends the write session (A1.10, 0074); the sockets stay where they are bound.
 
 use std::net::Ipv4Addr;
 
@@ -45,6 +44,8 @@ pub struct Mgmt {
     pub last_update: Option<u64>,
     /// the streaming installer (A1.8a item 3), only with Config::f1_open
     pub inst: Option<Inst>,
+    /// the reply being sent sets flag bit 1, "more blocks follow" (READ_LOG, 0074)
+    more: bool,
 }
 
 /// The streaming installer of A1.8a item 3 (model option --f1 open): in RAM, so a power loss ends it.
@@ -180,7 +181,22 @@ impl Mgmt {
             upd: None,
             last_update: None,
             inst: None,
+            more: false,
         }
+    }
+
+    /// The address or netmask in force becomes `new`: a change ends the write session and discards
+    /// every challenge and stored reply, logged (A1.10, 0074).
+    pub fn set_address(&mut self, r: &mut Radio, new: (Ipv4Addr, Ipv4Addr)) {
+        if r.addr == new {
+            return;
+        }
+        r.logf(&format!("address {} {} -> {} {}: write session, challenges and stored replies end",
+                        r.addr.0, r.addr.1, new.0, new.1));
+        r.addr = new;
+        self.holder = None;
+        self.challenges.clear();
+        self.stored.clear();
     }
 
     pub fn on_reset(&mut self, now: u64) {
@@ -266,15 +282,16 @@ impl Mgmt {
         let d = rx.data;
         let now = r.now;
         if d.len() < 4 || be32(d, 0) != MAGIC {
-            r.count("mgmt.drop.magic");
+            r.discard(crate::codes::port::MGMT, "magic");
             return;
         }
         if d.len() >= 7 && d[6] != 1 {
-            r.count("mgmt.drop.not_request");
+            r.count("mg_not_request");
+            r.discard(crate::codes::port::MGMT, "not-a-request");
             return;
         }
         if d.len() < 12 {
-            r.count("mgmt.drop.short");
+            r.discard(crate::codes::port::MGMT, "short");
             return;
         }
         let ip = *rx.src.ip();
@@ -301,7 +318,7 @@ impl Mgmt {
             }
         };
         if !inside && cmd != IDENTIFY {
-            r.count("mgmt.drop.outside_subnet");
+            r.discard(crate::codes::port::MGMT, "outside-subnet");
             return;
         }
         if let Some(s) = status {
@@ -322,7 +339,7 @@ impl Mgmt {
                 if self.limits(r, rx, cmd, inside) {
                     out.push(Tx { src_port: crate::codes::port::MGMT, dst: rx.src, data: s.reply });
                 }
-                r.count("mgmt.repeat");
+                r.count("mg_repeat");
                 return;
             }
         }
@@ -354,7 +371,7 @@ impl Mgmt {
             if !ok {
                 self.fails.push((ip, now));
                 r.logf(&format!("mgmt: authentication failed from {}", rx.src));
-                r.count("mgmt.auth_failed");
+                r.count("mg_auth_failed");
                 return self.send(r, rx, st::AUTH_FAILED, &[], true, cmd, out);
             }
             verified = true;
@@ -373,7 +390,7 @@ impl Mgmt {
         // 58, 57, 50
         // A1.8a item 3 "Installer state": the installer answers only these commands
         if self.inst.is_some() && !matches!(cmd, IDENTIFY | GET_CHALLENGE | UPDATE_BLOCK | UPDATE_STATUS | UPDATE_VERIFY
-            | UPDATE_ACTIVATE | UPDATE_ABORT)
+            | UPDATE_ACTIVATE | UPDATE_ABORT | END_WRITE_SESSION)
         {
             return self.send(r, rx, st::UPDATE_IN_PROGRESS, &[], true, cmd, out);
         }
@@ -466,7 +483,9 @@ impl Mgmt {
             }
             READ_LOG => {
                 let from = if payload.len() >= 4 { be32(payload, 0) } else { 0 };
-                (st::OK, log_payload(r, from), None)
+                let (v, more) = log_payload(r, from);
+                self.more = more;
+                (st::OK, v, None)
             }
             CLEAR_LOG => {
                 r.log.clear();
@@ -517,10 +536,12 @@ impl Mgmt {
             GET_CONFIG => (st::OK, self.conf_payload(r), None),
             SET_CONFIG => {
                 let mut tmp = Vec::new();
+                let net = |c: &Conf| (c.addr_mode, c.addr, c.mask);
+                let before = net(&self.conf);
                 let s = self.set_config(r, payload, rx.src, &mut tmp);
                 out.extend(tmp);
                 let p = if s == st::OK { self.conf_payload(r) } else { vec![] };
-                (s, p, None)
+                (s, p, if net(&self.conf) != before { Some("ADDRESS") } else { None })
             }
             RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY => (st::NOT_SUPPORTED, vec![], None),
             UPDATE_BLOCK if self.inst.is_some() => self.inst_block(payload),
@@ -547,7 +568,7 @@ impl Mgmt {
                 if self.inst.as_ref().unwrap().erased() {
                     (st::ONE_WAY, vec![], None)
                 } else {
-                    (st::OK, vec![1], Some("INSTALLER_ABORT"))
+                    (st::OK, vec![0], Some("INSTALLER_ABORT")) // no RESTART needed: it restarts by itself (0074)
                 }
             }
             UPDATE_BEGIN => self.update_begin(r, payload, rx.src, out),
@@ -615,6 +636,11 @@ impl Mgmt {
                 Some(u) if u.verified => (st::OK, vec![0], Some("ACTIVATE")), // permanent 0: a trial boot follows
                 _ => (st::VERIFY_FAILED, vec![], None),
             },
+            UPDATE_ABORT if !r.update_in_progress => {
+                // no update state: nothing changes (A1.8 "No transfer in progress", 0074)
+                r.logf(&format!("update abort by {}: no update state, nothing changed", rx.src));
+                (st::OK, vec![0], None)
+            }
             UPDATE_ABORT => {
                 self.upd = None;
                 r.logf("update aborted: staging discarded, RESTART needed");
@@ -638,13 +664,6 @@ impl Mgmt {
             }
             _ => (st::NOT_SUPPORTED, vec![], None),
         };
-        if verified && cmd != RESTART {
-            if let Some((h, _)) = self.holder {
-                if h == rx.src {
-                    self.holder = Some((h, now));
-                }
-            }
-        }
         // A1.8 "What restarts the timer" (0063 addendum): only an update command answered with 0
         // (or 1); not UPDATE_STATUS, not a second UPDATE_ABORT, not a refused command, not a
         // repeat answered from the stored reply (that one returned above)
@@ -652,7 +671,21 @@ impl Mgmt {
             self.last_update = Some(now);
         }
         self.send(r, rx, status, &reply_payload, true, cmd, out);
+        // the holder's verified request refreshes the 60 s, which do not run until its reply is sent (A1.10, 0077)
+        if verified && cmd != RESTART {
+            if let Some((h, t)) = self.holder.as_mut() {
+                if *h == rx.src {
+                    *t = r.now;
+                }
+            }
+        }
         match after {
+            Some("ADDRESS") => {
+                // the model's sockets stay; DHCP is the address the model was started with
+                let c = &self.conf;
+                let new = if c.addr_mode == 1 { (c.addr.into(), c.mask.into()) } else { (r.cfg.ip, r.cfg.netmask) };
+                self.set_address(r, new);
+            }
             Some("RESTART") => {
                 r.reset("software", Some("restart: restart"));
                 self.on_reset(r.now);
@@ -707,6 +740,7 @@ impl Mgmt {
                 // Table A1-4: the network, default level, region and allow-list return to their
                 // factory values; the C-3 limits (persistent_limits, band_limits) are kept
                 self.conf = Conf { band_limits: self.conf.band_limits, ..Conf::factory() };
+                r.addr = (r.cfg.ip, r.cfg.netmask);
                 self.upd = None;
                 r.reset("software", Some("restart: factory-reset"));
                 self.on_reset(r.now);
@@ -717,13 +751,20 @@ impl Mgmt {
 
     fn limits(&mut self, r: &mut Radio, rx: &Rx, cmd: u16, inside: bool) -> bool {
         let now = r.now;
-        if !self.lim_src.check(&rx.src, now) || !self.lim_total.check(&0, now) {
-            r.count("mgmt.drop.rate");
+        if !self.lim_src.check(&rx.src, now) {
+            r.count("mg_rate_drop");
+            r.discard(crate::codes::port::MGMT, "rate");
+            return false;
+        }
+        if !self.lim_total.check(&0, now) {
+            r.count("mg_cap_drop");
+            r.discard(crate::codes::port::MGMT, "cap");
             return false;
         }
         if cmd == IDENTIFY {
             if !self.lim_ident.check(&0, now) || (!inside && !self.lim_outside.check(&0, now)) {
-                r.count("mgmt.drop.rate_identify");
+                r.count("mg_cap_drop");
+                r.discard(crate::codes::port::MGMT, "cap");
                 return false;
             }
             self.lim_ident.record(&0, now);
@@ -747,7 +788,8 @@ impl Mgmt {
             std::thread::sleep(std::time::Duration::from_micros(r.flash_delay.0));
             r.now += r.flash_delay.0 * (MS / 1000);
         }
-        let reply = header(rx.data, status, payload);
+        let mut reply = header(rx.data, status, payload);
+        reply[7] = (std::mem::take(&mut self.more) as u8) << 1;
         if store && rx.data.len() >= 18 {
             let n = be16(rx.data, 16) as usize;
             if rx.data.len() >= 18 + n {
@@ -982,14 +1024,11 @@ impl Mgmt {
             let b = l.to_be_bytes();
             tlv(8, &[i as u8, b[0], b[1]]);
         }
-        // S2 (x100) and T3 (0.1 degC): 0 while the calibration set does not hold P-PWR-2
-        let (s2, t3) = if r.has_param("P-PWR-2") {
-            ((r.persistent_limits[2] / 10) as u16, (r.persistent_limits[3] / 100) as u16)
-        } else {
-            (0, 0)
-        };
-        tlv(9, &s2.to_be_bytes());
-        tlv(10, &t3.to_be_bytes());
+        // S2 (x100) and T3 (0.1 degC): left out while the calibration set does not hold P-PWR-2 (0074)
+        if r.has_param("P-PWR-2") {
+            tlv(9, &((r.persistent_limits[2] / 10) as u16).to_be_bytes());
+            tlv(10, &((r.persistent_limits[3] / 100) as u16).to_be_bytes());
+        }
         let mut a = Vec::new();
         for (ip, pl) in &c.allow {
             a.extend_from_slice(ip);
@@ -1212,36 +1251,38 @@ fn parse_cal(p: &[u8]) -> Option<Calibration> {
     Some(Calibration { id: sha256(p), date, source, entries })
 }
 
+/// GET_STATS (Table M-1): the names of Table M-6 first, all of them, in its order; then the model's
+/// own, as many as fit the reply of 1400 bytes (A1.4).
 fn stats_payload(r: &Radio) -> Vec<u8> {
-    let mut keys: Vec<_> = r.stats.iter().collect();
-    keys.sort();
+    let names = crate::codes::COUNTERS;
+    let mut own: Vec<(&str, u64)> = r.stats.iter().filter(|(k, _)| !names.contains(&k.as_str()))
+        .map(|(k, n)| (k.as_str(), *n)).collect();
+    own.push(("resets", r.resets));
+    own.sort();
     let mut v = Vec::new();
-    for (k, n) in keys {
-        if v.len() + k.len() + 9 > 1380 {
+    for (k, n) in names.iter().map(|k| (*k, r.stats.get(*k).copied().unwrap_or(0))).chain(own) {
+        if 18 + v.len() + 9 + k.len() > 1400 {
             break;
         }
         v.push(k.len() as u8);
         v.extend_from_slice(k.as_bytes());
         v.extend_from_slice(&n.to_be_bytes());
     }
-    let resets = b"resets";
-    v.push(resets.len() as u8);
-    v.extend_from_slice(resets);
-    v.extend_from_slice(&r.resets.to_be_bytes());
     v
 }
 
-fn log_payload(r: &Radio, from: u32) -> Vec<u8> {
+/// One page of the log from `from` on, and whether entries after it exist (READ_LOG's flag bit 1).
+fn log_payload(r: &Radio, from: u32) -> (Vec<u8>, bool) {
     let mut v = Vec::new();
     for (seq, up, text) in r.log.iter().filter(|(s, _, _)| *s >= from) {
         let t = &text.as_bytes()[..text.len().min(200)];
         if v.len() + 9 + t.len() > 1380 {
-            break;
+            return (v, true);
         }
         v.extend_from_slice(&seq.to_be_bytes());
         v.extend_from_slice(&(*up as u32).to_be_bytes());
         v.push(t.len() as u8);
         v.extend_from_slice(t);
     }
-    v
+    (v, false)
 }
