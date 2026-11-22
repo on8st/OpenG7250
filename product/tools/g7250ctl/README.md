@@ -52,6 +52,10 @@ self-contained but links the system libraries (libSystem), as every macOS binary
 - `SET_FIRST_SECRET` carries the secret in the clear (spec A1.10, known risk): set it on a
   network you trust. `CHANGE_SECRET` sends it masked; afterwards the tool sends
   `END_WRITE_SESSION` signed with the new secret, which checks the change.
+- Keep the old secret file until the radio has restarted once since the change. If the
+  store falls back to the older generation at a start (spec A1.10 "The old secret in
+  flash"; 0069 addendum), the radio is on the older secret again: the new one gets status
+  33, and `logs` shows the fall-back line and `store: stale secret erased`.
 - Every authenticated request gets its own `GET_CHALLENGE`, from the same socket (the radio
   keeps one challenge per address and port). A retransmission is the identical signed
   datagram. Status 33 is reported, never retried with a new challenge, because the request
