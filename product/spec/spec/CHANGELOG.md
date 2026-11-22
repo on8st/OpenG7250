@@ -13,7 +13,7 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0072 (C-3 limits that may be lost) accepted in principle by ON8ST on 2026-11-22 and held
   for the point with Table M-3 (ending the lost state before the calibration set holds S2 and
   T3); the number is reserved, and none of its text is in the spec yet.
-- 0073, 0074 accepted by ON8ST on 2026-11-22.
+- 0073, 0074, 0075 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
   "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
@@ -91,6 +91,12 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   `READ_LOG` flag bit 1; opening and ending the write session; an address change ends it; host
   rule for requests that end in a reset. A1.4, A1.7, A1.8, A1.8a, A1.10, Tables M-1, M-3, M-6;
   T-A1-15, T-A1-62, T-A1-80, T-A1-85, T-A1-93 extended, T-A1-95 to T-A1-98 new.
+- 0075 (accepted 2026-11-22; firmware question): unexpected stop of the firmware. On a processor
+  fault or the firmware's own stop, the RF control pins go to their safe levels within 20 µs,
+  a log line follows where it can, and a reset within 10 ms; during flash work the 20 µs count
+  from when the flash answers again. At the next start, a software reset without a reason line
+  of A1.7 counts as an unexpected stop (`WDT_RESET_AT_START`, class 1). In force before the
+  first build that can arm TX. A3.6, A3.5, A1.7; HIS-21; T-A3-62 new.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 

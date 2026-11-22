@@ -2,7 +2,7 @@
 
 - Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
 - Status: version 1.0 (tag `spec-v1.0`). Applies decisions 0001–0066, all accepted by ON8ST
-  (`product-handover.md`); after 1.0 also 0067–0071 and 0073–0074, accepted by ON8ST on 2026-11-22,
+  (`product-handover.md`); after 1.0 also 0067–0071 and 0073–0075, accepted by ON8ST on 2026-11-22,
   listed under "After 1.0" in `spec/CHANGELOG.md` (not yet a version). Complete for milestones M1–M5 except for the values that need the
   radio, which are named in Annex P with a safe placeholder each; level 2 (part C) waits for
   gate G6 (0011).
@@ -375,9 +375,14 @@ power loss (0035).
   started`, `boot: rollback to slot <s> (trial not confirmed)`, `boot: slot <s> refused:
   <check>`, `boot: fallback to slot <s> (active slot refused, no trial)` (A1.8 "Boot-stage
   refusals"; 0068 addendum).
+- **Unexpected stop** (0075). Before the reset of A3.6 "Unexpected stop of the firmware" the
+  firmware logs `restart: processor fault <kind>` or `restart: stop <code>` where it can; a
+  start judged an unexpected stop logs `start: unexpected stop` after the start entry.
 - **Pending hardware** (0068). Whether this RAM survives the stage before the boot stage is
   P-SYS-9 (HIS-13), measured by the same radio check as the counters. Until it is set the log
-  MAY start empty after a reset (`log lost`); nothing else depends on it.
+  MAY start empty after a reset (`log lost`); nothing else depends on it, except that a
+  software reset with the log lost then counts as an unexpected stop (`WDT_RESET_AT_START`,
+  class 1, clearable; A3.6, 0075).
 
 Packet, error and sequence-gap counters are read
 with `GET_STATS` (0020 §19, §28).
@@ -1531,7 +1536,7 @@ A3.5 **Fault state** (0007, Decision 5):
   (0022 §5).
 - **Entry.** Any `FAULT` action of Table A3-2, 3 SWR `UNKEY` trips within 10 s (the only
   repeated-trip rule; 0020 §29), drop event 13, a processor watchdog reset seen at start-up
-  (HIS-13), a failed start-up self-test, or an internal error (0022 §5).
+  (HIS-13) or an unexpected stop (A3.6, 0075), a failed start-up self-test, or an internal error (0022 §5).
 - **Effect.** Unkey, drop the arm (`FAULT`), release SEND and the TUNER trigger, refuse arm
   requests. RX MUST continue, so that the host can still see the radio and the fault.
 - **Reporting.** `SAFETY_STATE`, `FAULT_CODE` (first cause), `FAULT_FLAGS` (latched bitmask
@@ -1603,6 +1608,50 @@ unkeys first and switches the relays of this state only after RF is gone (A3.9a 
 reset starts (0022 §40).
 What the hardware does between reset and the moment the firmware drives these pins is
 HIS-13; if the PA can key from floating lines, M4 waits for a mitigation (0007).
+
+**Unexpected stop of the firmware** (0075). This holds for any processor fault the firmware
+does not handle as part of its normal work (hard fault, bus fault, usage fault,
+memory-management fault, any exception without a handler of its own) and for a stop the
+firmware makes itself, a failed assertion or a panic, in the boot stage and in the image
+alike. The G7250 MUST put the RF control pins of A3.6 ([HIS] HIS 85; those checked are in
+Table A3-6b) at their safe-state levels no later than 20 µs after the fault is taken or the
+stop is called, before anything else, without relying on the stack, the RAM content or a
+peripheral state it cannot trust. It then MUST log it as the last entry before the reset
+where it can, as `restart: processor fault <kind>` (<kind> one of `hard`, `bus`, `usage`,
+`memmanage`, `other`) or `restart: stop <code>` (<code> a short fixed code the firmware
+defines, lower-case letters, digits and hyphens, at most 16 characters, or a decimal number;
+never a file name, a path, a line of source or a panic text) (A1.7, 0068), and reset within
+10 ms, without waiting for the processor watchdog.
+
+**During flash work** the processor cannot fetch the handler while an erase or program runs
+(B2.3), so the 20 µs count from the moment the flash answers again, and the reset follows as
+soon as the operation has ended; meanwhile the pins hold their A3.6 levels (B2.3 "during
+flash work"), and flash work never overlaps an arm (0055).
+
+**Evidence at the next start** (0075). The reset of this rule is a software reset. The start
+tells it from a commanded reset by the log kept over the reset (A1.7, 0068), with no mark of
+its own: a start whose reset flags name a software reset (A1.7 "The start entry") is a
+commanded reset only if the last entry kept is one of the reason lines A1.7 lists for a
+commanded reset (`restart: restart`, `restart: factory-reset`, `restart: update-activated slot
+<s> <version>`, `restart: update-abandoned`, `restart: installer-abandoned`, `restart:
+trial-unconfirmed`, and the `ROLLBACK` line), checked as every kept entry is. In every other
+case it is an unexpected stop: the last entry is `restart: processor fault <kind>` or
+`restart: stop <code>`, the log was lost, or the last entry kept is no reason line. An
+unexpected stop is entered as a processor watchdog reset seen at start-up is (A3.5 "Entry",
+`WDT_RESET_AT_START`, class 1; Table A3-1 event 5, drop reason `RESET`) and logged `start:
+unexpected stop`. A lost or damaged reason therefore errs to the safe side. A software reset
+the boot stage makes itself MUST log a reason line first. Power-on, brown-out or no flag is
+power loss (0068 addendum) and never an unexpected stop; a watchdog flag is judged as today.
+A software reset made by something other than this firmware (the vendor bootloader before the
+first start, or after the vendor path, A1.8a item 9) has no reason line either, so it counts
+once as an unexpected stop, class 1, clearable; it does not stop a trial from confirming
+(A1.8 asks for no class 2 fault).
+
+A trial image that stops before it confirms is rolled back (A1.8). A fault while the handler
+runs (a lockup) is left to the processor watchdog: the pins keep the safe-state levels already
+set, if the first step ran; a fault inside the first 20 µs is a residual (HIS-21). This MUST
+hold in every build in which TX can be armed (0036). That every fault vector of the image
+points to the handler of this rule is a firmware build check, not a conformance test.
 
 A3.6b **TX path check** (0066). While TX is not armed and not keyed, the TX path MUST be
 blocked as A3.6 sets it, and the firmware MUST check that it is, at least every 5 ms. **Start** (0066 addendum): the
@@ -4240,6 +4289,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-59 | With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040). |
 | T-A3-60 | Needs the radio (P-SYS-9): after two `SWR_REPEATED` entries, a `RESTART` and then a processor watchdog reset leave the fault entry counter and `TRIP_COUNT` unchanged, so the third entry is class 2; a power cycle clears them. Before P-SYS-9 is set the arm is rejected with `NOT_CALIBRATED` (A3.5; Annex P; 0050). |
 | T-A3-61 | Not armed: forcing the level at each pin of Table A3-6b (PF4, PF6, PC7, PH11, PA10, PB14) to the other level from outside (output register unchanged), and, separately, changing a pin's output register or making it an input: each held for 20 ms or more gives `FAULT_CODE` 16 `TX_PATH_NOT_BLOCKED`, class 2, within 20 ms of its start; a pulse of 5 ms gives no fault; RX goes on; the log names the pin and the comparison; after a `RESTART` with the force removed the fault is gone, with it kept it comes back at start-up; armed with the TX path open, no fault with a pin of Table A3-6b forced from power-on, the fault is raised within 120 ms of the boot stage's first instruction (emulator; A3.6b; 0066). The DAC rows: a value other than 0 recorded as written to channel 2, 7 or 8 gives the fault (host test of the check, until the firmware has a DAC driver; then also on the emulator). |
+| T-A3-62 | Unexpected stop (emulator, pending the fault fixture that raises an undefined instruction in the running, unchanged image at a chosen emulated time; the fixture's entry latency is not cycle true, and its stacked PC is a stub). Unarmed, with a P2 session and RX running, the fault is raised once in thread mode and once inside an interrupt handler, in separate runs. In each: (1) no pin of Table A3-6b leaves its safe level, and no write to the PA bias DAC is made, from the fault to the end of the next start (unarmed, every pin of Table A3-6b is already at its safe level while RX runs, so no pin has to move); (2) a reset follows within 10 ms of the handler's entry, and the reset cause (RCC_RSR) is a software reset, not the independent watchdog; (3) after the restart `READ_LOG` holds, before the start entry, a line beginning `restart: processor fault` with a kind of A3.6, judged on that prefix and the kind only, never on a fault address; (4) the next start logs `start: unexpected stop`, has `WDT_RESET_AT_START` and `TX_ARM_STATE` drop reason 5 `RESET`, and RX and the management channel work after it. Also: after a `RESTART`, no unexpected stop at the next start; after a software reset with the last kept entry made invalid (kept RAM changed between reset and start), `start: unexpected stop`; after the trial's `restart: trial-unconfirmed`, no unexpected stop. With a fault raised during a stretched erase, when the fixture can: (1) holds throughout and (2) counts from the end of the operation. Keyed part, pending with the other TX tests (needs a calibration set; `NOT_CALIBRATED` until then): the same, armed and keyed; the pins of Table A3-6b reach their safe levels within 20 µs of the handler's entry (emulated time to the last pin change), and the transmission ends. Coverage: the 20 µs are unproven until the keyed part. Not covered: bus faults, faults during exception stacking, MemManage unless the emulator shows it, lockup (not modelled; no result may rest on it), the first-20-µs residual; those stay with review, the firmware build check and a radio drill (A3.6 "Unexpected stop of the firmware"; A1.7; A3.5; 0075). |
 
 ### Discovery (B3)
 
