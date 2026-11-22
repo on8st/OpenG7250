@@ -4,8 +4,10 @@ MEMORY
 {
   @FLASH@
   /* AXI SRAM; 128 KiB is present whatever the TCM/AXI sharing option ([HIS] HIS 15). */
-  RAM   : ORIGIN = 0x24000000, LENGTH = 128K - 128
-  /* The top 128 bytes of that AXI SRAM: values kept over a reset without power loss
+  RAM   : ORIGIN = 0x24000000, LENGTH = 128K - 6400
+  LOGRING : ORIGIN = 0x2401E700, LENGTH = 6272
+  /* Below and above: values kept over a reset without power loss: LOGRING, the log ring
+     (A1.7, board/common logmem.rs), and the top 128 bytes, the counters and the handover
      (TRIP_COUNT, board/common persist.rs); outside RAM above, so no data, bss or stack. */
   PERSIST : ORIGIN = 0x2401FF80, LENGTH = 128
   /* SRAM4 (D3 domain, 16 KiB, RM0468): the only RAM the BDMA reaches, so the only place for
@@ -30,6 +32,13 @@ SECTIONS
     KEEP(*(.persist .persist.*));
   } > PERSIST
 } INSERT AFTER .sram4;
+SECTIONS
+{
+  .logring (NOLOAD) : ALIGN(8)
+  {
+    KEEP(*(.logring .logring.*));
+  } > LOGRING
+} INSERT AFTER .persist;
 /* Keep the stack limit and heap start in RAM, not after .sram4 (cortex-m-rt takes `.`). */
 _stack_end = ALIGN(__euninit, 4);
 __sheap = _stack_end;

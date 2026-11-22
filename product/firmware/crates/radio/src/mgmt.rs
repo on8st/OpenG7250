@@ -17,8 +17,9 @@ pub mod update;
 pub mod write;
 
 pub use update::{NoUpdate, Rollback, Updater};
-pub use write::{Effect, Log};
+pub use write::{Effect, Log, Reason};
 
+use g7250_safety::logring;
 use g7250_proto::mgmt::{self, auth, Command, Incoming, Status};
 use g7250_proto::netcfg;
 use g7250_proto::ratelimit::RateLimit;
@@ -202,7 +203,8 @@ struct AuthFail {
     last_ms: u64,
 }
 
-pub struct Server {
+/// The management server; `W` is the memory of its log ring (the board: RAM kept over a reset).
+pub struct Server<W = [u64; logring::WORDS]> {
     repeat: [Option<Stored>; HOSTS],
     challenges: [Option<Challenge>; HOSTS],
     fails: [Option<AuthFail>; HOSTS],
@@ -221,7 +223,7 @@ pub struct Server {
     used_challenge: [u8; 16],
     /// Effects of the last request for the board (store, network, reset), in order.
     pub effects: heapless::Vec<Effect, 4>,
-    pub log: Log,
+    pub log: Log<W>,
 }
 
 fn is_broadcast_source(ip: [u8; 4], own: [u8; 4], mask: [u8; 4]) -> bool {
@@ -235,7 +237,14 @@ impl Default for Server {
 }
 
 impl Server {
-    pub const fn new() -> Self {
+    /// A server with an empty log in its own memory (host tests).
+    pub fn new() -> Self {
+        Self::with_log(logring::Ring::open([0; logring::WORDS], true).0)
+    }
+}
+
+impl<W: logring::Words> Server<W> {
+    pub const fn with_log(ring: logring::Ring<W>) -> Self {
         Server {
             repeat: [None; HOSTS],
             challenges: [None; HOSTS],
@@ -276,7 +285,7 @@ impl Server {
             reset_pending: false,
             used_challenge: [0; 16],
             effects: heapless::Vec::new(),
-            log: Log::new(),
+            log: Log(ring),
         }
     }
 

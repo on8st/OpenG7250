@@ -10,8 +10,8 @@
 //! A previous stage that writes there (the vendor bootloader, HIS 10) is caught by the checks
 //! and only costs the counts (P-SYS-9).
 //!
-//! When: the block is read only when the reset flags show no power-on or brown-out reset since
-//! the application last cleared them (the boot stage does not clear them, `reset::read`). After a
+//! When: the block is read only when the reset flags of this start (read and cleared by the boot
+//! stage, handed over) show no power-on or brown-out reset, and at least one reset. After a
 //! power loss it is written first: SRAM never written since power-up may hold words with a bad
 //! ECC, and a read of such a word is a bus error (RM0468, RAMECC). So every read is of a block
 //! this application wrote since power-up.
@@ -32,7 +32,7 @@ use g7250_safety::counters::{Counters, SLOT_WORDS};
 #[repr(C)]
 struct Region {
     slots: [[u64; SLOT_WORDS]; 2],
-    handover: [u64; 2],
+    handover: [u64; 3],
 }
 #[unsafe(link_section = ".persist")]
 static mut REGION: core::mem::MaybeUninit<Region> = core::mem::MaybeUninit::uninit();
@@ -53,6 +53,8 @@ pub struct Handover {
     /// A mismatch run still open at the jump: pin index and its start, ms since the boot stage
     /// start (the DWT cycle counter runs on into the application).
     pub open: Option<(u8, u32)>,
+    /// The reset flags of this start, read once by the boot stage (0068).
+    pub reset: crate::reset::Flags,
 }
 
 fn handover_ptr() -> *mut u64 {
@@ -66,6 +68,8 @@ pub fn write_handover(h: &Handover) {
     let (oi, os) = h.open.map_or((0xFFu64, 0u64), |(i, s)| (i as u64, s as u64));
     // SAFETY: the `.persist` block, 8-aligned; volatile; the magic word last.
     unsafe {
+        let r = h.reset.bits() as u32;
+        write_volatile(handover_ptr().add(2), r as u64 | (!r as u64) << 32);
         write_volatile(handover_ptr().add(1), f | oi << 8 | os << 32);
         write_volatile(handover_ptr(), HANDOVER_MAGIC as u64 | (h.first_check_us as u64) << 32);
     }
@@ -73,12 +77,12 @@ pub fn write_handover(h: &Handover) {
 
 /// The application, at start: the boot stage's handover of this start, then cleared.
 pub fn take_handover() -> Option<Handover> {
-    // SAFETY: as `write_handover`; the boot stage wrote both words before the jump.
-    let (w0, w1) = unsafe { (read_volatile(handover_ptr()), read_volatile(handover_ptr().add(1))) };
+    // SAFETY: as `write_handover`; the boot stage wrote the words before the jump.
+    let (w0, w1, w2) = unsafe { (read_volatile(handover_ptr()), read_volatile(handover_ptr().add(1)), read_volatile(handover_ptr().add(2))) };
     unsafe {
         write_volatile(handover_ptr(), 0);
     }
-    if w0 as u32 != HANDOVER_MAGIC {
+    if w0 as u32 != HANDOVER_MAGIC || w2 as u32 != !((w2 >> 32) as u32) {
         return None;
     }
     let b = |v: u64| (v != 0xFF).then_some(v as u8);
@@ -86,6 +90,7 @@ pub fn take_handover() -> Option<Handover> {
         first_check_us: (w0 >> 32) as u32,
         fault: b(w1 & 0xFF),
         open: b((w1 >> 8) & 0xFF).map(|i| (i, (w1 >> 32) as u32)),
+        reset: crate::reset::Flags::from_bits(w2 as u8),
     })
 }
 

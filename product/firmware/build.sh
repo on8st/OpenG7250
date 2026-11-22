@@ -40,6 +40,9 @@ sh board/check-ramfunc.sh "$out/g7250-app-b.elf"
 echo "== fault-tolerant flash read: nothing leaves the FAULTMASK window (R0)"
 python3 board/check-faultmask.py "$out/g7250-boot.elf" "$out/g7250-app-a.elf" "$out/g7250-app-b.elf"
 
+echo "== RAM kept over a reset: one address in every image (0068, A3.5)"
+python3 board/check-kept-ram.py "$out/g7250-boot.elf" "$out/g7250-app-a.elf" "$out/g7250-app-b.elf"
+
 echo "== safe state within 20 us of the boot stage's first instruction (0045)"
 python3 board/check-safe-margin.py "$out/g7250-boot.elf"
 

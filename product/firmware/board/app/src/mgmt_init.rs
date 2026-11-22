@@ -59,7 +59,7 @@ fn factory_config() -> Config {
 }
 
 impl MgmtInit {
-    pub fn new(mut store: Option<NvStore>, tx_arm_state: u32, slot: Slot) -> Self {
+    pub fn new(mut store: Option<NvStore>, tx_arm_state: u32, slot: Slot, cause: g7250_safety::reset::Cause) -> Self {
         let mut buf = [0u8; g7250_store::MAX_PAYLOAD];
         let store_unreadable = store.as_ref().map_or(0, |s| s.unreadable_at_open());
         let mut get = |k: Kind, buf: &mut [u8]| store.as_mut().and_then(|s| s.get(k, buf).ok().flatten()).map(|(_, n)| n);
@@ -119,7 +119,7 @@ impl MgmtInit {
             owner: ([0; 4], 0),
             tx_arm_state,
             uptime_ms: 0,
-            reset_cause: 0, // P-SYS-2: the codes are pending hardware
+            reset_cause: cause as u8, // tag 17, from the boot stage's one reading (0068)
             versions: [m::VERSION_MAJOR, m::VERSION_MINOR, 44, 1, 1],
             controller: 0,
             tx_calibrated: false,
@@ -182,7 +182,7 @@ pub fn apply_stored(m: &mut MgmtInit, e: g7250_radio::mgmt::Effect) -> Result<Op
             m.identify.calibration_date = 0;
             Ok(None)
         }
-        later @ (Effect::ApplyNetwork | Effect::Restart | Effect::FactoryReset | Effect::UpdateStarted) => Ok(Some(later)),
+        later @ (Effect::ApplyNetwork | Effect::Restart(_) | Effect::FactoryReset | Effect::UpdateStarted) => Ok(Some(later)),
         // Applied by the net loop before any store write (0055).
         Effect::DisarmForMaintenance => Ok(None),
     }

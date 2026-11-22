@@ -2,7 +2,7 @@
 //! Radio end of the management channel, step 2 (A1.4, A1.10, Annex M).
 use g7250_proto::mgmt::{self, payload::Identify, Command, Status};
 use g7250_proto::mgmt::payload::Package;
-use g7250_radio::mgmt::{Ctx, Effect, Server, Updater, FIRST_SECRET_WINDOW_MS};
+use g7250_radio::mgmt::{Ctx, Effect, Reason, Server, Updater, FIRST_SECRET_WINDOW_MS};
 
 /// A model of the update side: counts blocks, verifies once complete.
 #[derive(Default)]
@@ -477,7 +477,7 @@ fn update_commands_through_the_updater() {
     assert_eq!((st, p), (Status::Ok, vec![0x5A; 32]));
     let (st, p) = authed(&mut w, &mut s, HOST, 420, Command::UpdateActivate, &[0], 42000);
     assert_eq!((st, p), (Status::Ok, vec![0]));
-    assert_eq!(s.take_effects().as_slice(), &[Effect::Restart]);
+    assert_eq!(s.take_effects().as_slice(), &[Effect::Restart(Reason::Activated { slot: 2, version: 0x0001_0002 })]);
     assert!(w.up.activated);
     // One commanded reset at a time.
     assert_eq!(authed(&mut w, &mut s, HOST, 430, Command::Rollback, &[], 43000).0, Status::Busy);
@@ -554,10 +554,10 @@ fn rollback_is_logged_with_slots_and_versions() {
     assert!(s.take_effects().is_empty());
     w.up.trial = false;
     assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::Rollback, &[], 1000).0, Status::Ok);
-    assert_eq!(s.take_effects().as_slice(), &[Effect::Restart]);
+    assert_eq!(s.take_effects().as_slice(), &[Effect::Restart(Reason::Rollback)]);
     let log = w.call(&mut s, HOST, &req(30, Command::ReadLog, &[0, 0, 0, 0]), 2000).unwrap().2;
     let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
-    assert!(e.iter().any(|t| t.contains("rollback commanded: slot A 0.1.2 to slot B 0.1.1")), "{e:?}");
+    assert_eq!(e.last().unwrap(), "rollback commanded: slot A 0.1.2 to slot B 0.1.1");
 }
 
 #[test]
@@ -686,4 +686,53 @@ fn t_a1_76_get_stats_has_ll_unprobed() {
     let r = w.call(&mut s, HOST, &req(1, Command::GetStats, &[]), 0).unwrap();
     let got: Vec<(String, u64)> = mgmt::payload::stats(&r.2).map(|e| e.unwrap()).map(|(n, v)| (String::from_utf8(n.to_vec()).unwrap(), v)).collect();
     assert!(got.contains(&("ll_unprobed".to_string(), 2)), "{got:?}");
+}
+
+#[test]
+fn reasons_before_a_commanded_reset_0068() {
+    let last = |r: Reason| {
+        let mut s = Server::new();
+        s.log.push(1, format_args!("before"));
+        r.log(&mut s.log.0, 77);
+        let (a, b) = s.log.0.range();
+        assert_eq!(a, 0, "sequence numbers start at 0");
+        let e = s.log.0.entry(b - 1).unwrap();
+        String::from_utf8(e.text().to_vec()).unwrap()
+    };
+    assert_eq!(last(Reason::Restart), "restart: restart");
+    assert_eq!(last(Reason::FactoryReset), "restart: factory-reset");
+    assert_eq!(last(Reason::Activated { slot: 2, version: 0x0001_0002 }), "restart: update-activated slot B 0.1.2");
+    assert_eq!(last(Reason::UpdateAbandoned), "restart: update-abandoned");
+    assert_eq!(last(Reason::TrialUnconfirmed), "restart: trial-unconfirmed");
+    assert_eq!(last(Reason::Rollback), "before", "its line was logged when it was accepted");
+}
+
+#[test]
+fn read_log_goes_on_over_a_reset_t_a1_34() {
+    // The old run's last entry, the boot stage's lines, the new run: one sequence, no gap.
+    use g7250_safety::logring::Ring;
+    let mut s = Server::new();
+    s.log.push(600_000, format_args!("update aborted by 192.168.1.5:50000"));
+    Reason::UpdateAbandoned.log(&mut s.log.0, 600_700);
+    let mem = s.log.0.into_memory();
+    let (mut r, kept) = Ring::open(mem, false);
+    assert!(kept);
+    r.log(0, format_args!("start after software: log kept"));
+    let mut s = Server::with_log(Ring::open(r.into_memory(), false).0);
+    let mut w = World::new();
+    s.log.push(6_000, format_args!("new run"));
+    let log = w.call(&mut s, HOST, &req(1, Command::ReadLog, &[0, 0, 0, 0]), 7_000).unwrap().2;
+    let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| e.unwrap()).map(|e| (e.seq, e.uptime_ms, String::from_utf8(e.text.to_vec()).unwrap())).collect();
+    assert_eq!(
+        e,
+        [
+            (0, 600_000, "update aborted by 192.168.1.5:50000".to_string()),
+            (1, 600_700, "restart: update-abandoned".to_string()),
+            (2, 0, "start after software: log kept".to_string()),
+            (3, 6_000, "new run".to_string()),
+        ]
+    );
+    // From a sequence number on.
+    let log = w.call(&mut s, HOST, &req(2, Command::ReadLog, &[0, 0, 0, 3]), 8_000).unwrap().2;
+    assert_eq!(mgmt::payload::log_entries(&log).count(), 1);
 }

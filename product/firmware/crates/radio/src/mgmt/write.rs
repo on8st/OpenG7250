@@ -8,6 +8,7 @@
 //! before step 5). The update commands (`UPDATE_*`, `ROLLBACK`, A1.8) go to the context's
 //! [`Updater`](super::Updater).
 
+use g7250_safety::logring::{Entry, Ring, Words};
 use super::{Addr, Ctx, Server};
 use g7250_proto::mgmt::payload::{self, Config};
 use g7250_proto::mgmt::{self, auth, Command, Request, Status};
@@ -37,7 +38,7 @@ pub enum Effect {
     SetCalibration(heapless::Vec<u8, 1024>),
     ClearCalibration,
     /// Commanded reset after the reply (A1.9).
-    Restart,
+    Restart(Reason),
     /// Factory reset (Table A1-4) between steps 4 and 5 of the commanded reset, then the reset.
     FactoryReset,
     /// `UPDATE_BEGIN` accepted: the P2 session ends, streams stop, arms are refused with
@@ -45,56 +46,57 @@ pub enum Effect {
     UpdateStarted,
 }
 
-const LOG_ENTRIES: usize = 64;
-const LOG_TEXT: usize = 72;
-
 /// A slot in a log line is named by its letter (A1.8 "Log names"; 0067).
 fn slot_letter(code: u8) -> char {
     if code == 1 { 'A' } else { 'B' }
 }
 
-/// RAM log ring (A1.7: kept in RAM, lost at power loss; size a firmware choice).
-pub struct Log {
-    entries: [(u32, u32, u8, [u8; LOG_TEXT]); LOG_ENTRIES],
-    next_seq: u32,
+/// Why the firmware resets (A1.7 "The reason before a commanded reset"; 0068 point 3): the last
+/// entry of the run, written after the unkey and RF gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reason {
+    Restart,
+    FactoryReset,
+    /// `UPDATE_ACTIVATE`: the slot (1 A, 2 B) and version that start as the trial.
+    Activated { slot: u8, version: u32 },
+    /// `ROLLBACK`: its line (A1.8) was logged when it was accepted.
+    Rollback,
+    UpdateAbandoned,
+    TrialUnconfirmed,
 }
 
-impl Default for Log {
-    fn default() -> Self {
-        Self::new()
+impl Reason {
+    /// Write the reason entry.
+    pub fn log<W: Words>(self, r: &mut Ring<W>, uptime_ms: u32) {
+        match self {
+            Reason::Restart => r.log(uptime_ms, format_args!("restart: restart")),
+            Reason::FactoryReset => r.log(uptime_ms, format_args!("restart: factory-reset")),
+            Reason::Activated { slot, version: v } => {
+                r.log(uptime_ms, format_args!("restart: update-activated slot {} {}.{}.{}", slot_letter(slot), v >> 24, (v >> 16) & 0xFF, v & 0xFFFF));
+            }
+            Reason::Rollback => {}
+            Reason::UpdateAbandoned => r.log(uptime_ms, format_args!("restart: update-abandoned")),
+            Reason::TrialUnconfirmed => r.log(uptime_ms, format_args!("restart: trial-unconfirmed")),
+        }
     }
 }
 
-impl Log {
-    pub const fn new() -> Self {
-        Log { entries: [(0, 0, 0, [0; LOG_TEXT]); LOG_ENTRIES], next_seq: 1 }
-    }
+/// The log (A1.7), on the ring kept over a reset (g7250_safety::logring; 0068).
+pub struct Log<W>(pub Ring<W>);
 
+impl<W: Words> Log<W> {
     pub fn push(&mut self, uptime_ms: u64, args: core::fmt::Arguments<'_>) {
-        use core::fmt::Write;
-        let mut s: heapless::String<LOG_TEXT> = heapless::String::new();
-        let _ = s.write_fmt(args);
-        let mut t = [0u8; LOG_TEXT];
-        t[..s.len()].copy_from_slice(s.as_bytes());
-        let i = (self.next_seq as usize) % LOG_ENTRIES;
-        self.entries[i] = (self.next_seq, uptime_ms as u32, s.len() as u8, t);
-        self.next_seq = self.next_seq.wrapping_add(1).max(1);
+        self.0.log(uptime_ms as u32, args);
     }
 
     pub fn clear(&mut self) {
-        for e in &mut self.entries {
-            e.0 = 0;
-        }
+        self.0.clear();
     }
 
-    /// Entries in sequence order from `first` (0 = oldest kept).
-    fn from(&self, first: u32) -> impl Iterator<Item = &(u32, u32, u8, [u8; LOG_TEXT])> {
-        let oldest = self.next_seq.saturating_sub(LOG_ENTRIES as u32).max(1);
-        let start = if first == 0 { oldest } else { first.max(oldest) };
-        (start..self.next_seq).filter_map(move |q| {
-            let e = &self.entries[(q as usize) % LOG_ENTRIES];
-            (e.0 == q).then_some(e)
-        })
+    /// Entries in sequence order from `first`, or from the oldest kept if that is newer.
+    fn from(&self, first: u32) -> impl Iterator<Item = Entry> + '_ {
+        let (oldest, next) = self.0.range();
+        (first.max(oldest)..next).filter_map(|q| self.0.entry(q))
     }
 }
 
@@ -102,7 +104,7 @@ fn ip(a: [u8; 4]) -> (u8, u8, u8, u8) {
     (a[0], a[1], a[2], a[3])
 }
 
-impl Server {
+impl<W: Words> Server<W> {
     /// `READ_LOG` (Table M-1): as many entries as fit in a reply.
     pub(super) fn read_log(&mut self, req: &[u8], p: &mut [u8]) -> (Status, usize) {
         let Some(first) = req.get(..4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]])) else {
@@ -110,8 +112,8 @@ impl Server {
         };
         let room = (mgmt::MAX_REPLY - mgmt::HEADER_LEN).min(p.len());
         let mut at = 0;
-        for (seq, up, len, text) in self.log.from(first) {
-            let e = payload::LogEntry { seq: *seq, uptime_ms: *up, text: &text[..*len as usize] };
+        for l in self.log.from(first) {
+            let e = payload::LogEntry { seq: l.seq, uptime_ms: l.uptime_ms, text: l.text() };
             if at + e.encoded_len() > room {
                 break;
             }
@@ -186,7 +188,7 @@ impl Server {
             }
             Command::Restart => {
                 self.reset_pending = true;
-                let _ = self.effects.push(Effect::Restart);
+                let _ = self.effects.push(Effect::Restart(Reason::Restart));
                 self.log.push(now, format_args!("RESTART by {a}.{b}.{c}.{d}:{}", src.1));
                 (Status::Ok, 0)
             }
@@ -338,7 +340,8 @@ impl Server {
                 match ctx.update.activate(now) {
                     Ok(()) => {
                         self.reset_pending = true;
-                        let _ = self.effects.push(Effect::Restart);
+                        let (slot, version, _) = ctx.update.verify_note();
+                        let _ = self.effects.push(Effect::Restart(Reason::Activated { slot, version }));
                         self.log.push(now, format_args!("update activated by {a}.{b}.{c}.{d}:{}: trial boot follows", src.1));
                         p[0] = 0; // not permanent: a trial boot (A1.8a item 5)
                         (Status::Ok, 1)
@@ -364,14 +367,14 @@ impl Server {
                 match ctx.update.rollback(now) {
                     Ok(r) => {
                         self.reset_pending = true;
-                        let _ = self.effects.push(Effect::Restart);
+                        let _ = self.effects.push(Effect::Restart(Reason::Rollback));
                         let slot = slot_letter;
                         let v = |x: u32| (x >> 24, (x >> 16) & 0xFF, x & 0xFFFF);
                         let (f, t) = (v(r.from.1), v(r.to.1));
                         self.log.push(
                             now,
                             format_args!(
-                                "rollback commanded: slot {} {}.{}.{} to slot {} {}.{}.{} (by {a}.{b}.{c}.{d}:{})",
+                                "rollback commanded: slot {} {}.{}.{} to slot {} {}.{}.{}",
                                 slot(r.from.0),
                                 f.0,
                                 f.1,
@@ -379,8 +382,7 @@ impl Server {
                                 slot(r.to.0),
                                 t.0,
                                 t.1,
-                                t.2,
-                                src.1
+                                t.2
                             ),
                         );
                         (Status::Ok, 0)

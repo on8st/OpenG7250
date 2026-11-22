@@ -246,7 +246,7 @@ fn boot_check_inner() {
 
 /// The boot stage, just before the jump: the check ends here and its state goes to the
 /// application (persist::write_handover).
-pub fn boot_check_handover() {
+pub fn boot_check_handover(reset: crate::reset::Flags) {
     boot_check_now();
     let h = cortex_m::interrupt::free(|cs| {
         let mut b = BOOT.borrow(cs).borrow_mut();
@@ -255,6 +255,7 @@ pub fn boot_check_handover() {
             first_check_us: b.first_us.unwrap_or(0),
             fault: b.fault,
             open: b.check.run_since().and_then(|s| b.seen.map(|i| (i, s as u32))),
+            reset,
         }
     });
     crate::persist::write_handover(&h);

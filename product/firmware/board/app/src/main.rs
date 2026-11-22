@@ -19,8 +19,9 @@ mod update;
 use embassy_executor::Spawner;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_stm32::interrupt;
+use g7250_radio::mgmt::Reason;
 use embassy_time::{Duration, Instant, Ticker, Timer};
-use g7250_board::{FW_BETA, FW_BUILD, FW_MAJOR, FW_MINOR, FW_VERSION, console, early_init, println, reset, safe, wdg};
+use g7250_board::{FW_BETA, FW_BUILD, FW_MAJOR, FW_MINOR, FW_VERSION, console, early_init, println, safe, wdg};
 use g7250_layout::header::{self, Header, Kind};
 use g7250_layout::{Range, Slot};
 use g7250_safety::keypath::Keyer;
@@ -129,32 +130,19 @@ async fn main(spawner: Spawner) {
     // after a program or erase, and the store, would need cache maintenance.
     // SAFETY: the core peripherals are taken once, at the start, for this only.
     unsafe { cortex_m::Peripherals::steal() }.SCB.enable_icache();
-    let cause = reset::read(true);
+    // What the boot stage hands over: the reset flags (read once per start, by it; 0068) and the
+    // TX path check's state. Without a handover nothing kept in RAM is believed.
+    let handover = g7250_board::persist::take_handover();
+    let flags = handover.map_or(g7250_board::reset::Flags::default(), |h| h.reset);
+    cortex_m::interrupt::free(|cs| HANDOVER.borrow(cs).set(handover));
     // The counters of A3.5 over resets without power loss (TRIP_COUNT, fault entries, resets):
-    // before anything else reads or writes the persist block. Then this reset is counted under
-    // its cause (one cause: the watchdogs first; the pin flag is set with every reset).
-    let (counters, kept) = g7250_board::persist::start(cause.power_on || cause.brown_out);
+    // before anything else reads or writes the persist block. Then this reset is counted.
+    let (counters, kept) = g7250_board::persist::start(flags.power_lost());
     let trips = counters.trip_count;
-    if !(cause.power_on || cause.brown_out) {
-        use g7250_safety::counters::ResetCause as R;
-        let rc = if cause.independent_watchdog {
-            Some(R::IndependentWatchdog)
-        } else if cause.window_watchdog {
-            Some(R::WindowWatchdog)
-        } else if cause.software {
-            Some(R::Software)
-        } else if cause.low_power {
-            Some(R::LowPower)
-        } else if cause.pin {
-            Some(R::Pin)
-        } else {
-            None
-        };
-        if let Some(rc) = rc {
-            let mut c = counters;
-            c.count_reset(rc);
-            g7250_board::persist::set(&c);
-        }
+    if let Some(rc) = flags.counted() {
+        let mut c = counters;
+        c.count_reset(rc);
+        g7250_board::persist::set(&c);
     }
 
     // The boot stage set the core supply once; the HAL init must not write it (vendored patch
@@ -182,7 +170,7 @@ async fn main(spawner: Spawner) {
     safety.spawn(tx_path().unwrap());
     // A processor watchdog reset seen at start-up: WDT_RESET_AT_START, class 1 (A3.5 "Entry";
     // HIS-13); its third since power-on is escalated (counted over resets in persist.rs).
-    if cause.independent_watchdog || cause.window_watchdog {
+    if flags.watchdog() {
         fault::raise(g7250_safety::fault::code::WDT_RESET_AT_START);
     }
 
@@ -203,13 +191,8 @@ async fn main(spawner: Spawner) {
             Slot::B => "B",
         }
     );
-    println!("app: reset cause {}", cause.name());
+    println!("app: reset cause {}", flags.cause().name());
     println!("app: TRIP_COUNT {} ({})", trips, if kept { "kept over the reset" } else { "power-on or not found: from 0" });
-    if cause.is_watchdog() {
-        // 0007 sub-decision 5 "Entry": a watchdog reset seen at start-up is a fault.
-        println!("app: FAULT watchdog reset seen at start-up");
-        update::set_class2_fault();
-    }
     // Non-volatile store in sector 7: boot counter (B10.2 item 5), secret, configuration,
     // calibration set. A store that cannot be opened is reported and the radio runs on defaults.
     let mut store = match g7250_store::Store::open(nv::BoardFlash::new(nv::writer_for(SLOT)), nv::writer_for(SLOT)) {
@@ -262,8 +245,10 @@ async fn main(spawner: Spawner) {
 
     let id = g7250_proto::discovery::Identity { mac: [0; 6], fw_major: FW_MAJOR, fw_minor: FW_MINOR, beta: FW_BETA, num_ddc: 1 };
     let pins = net::NetPins { spi: p.SPI6, sck: p.PG13, mosi: p.PG14, miso: p.PG12, cs: p.PG15, rst: p.PB5, rx_dma: p.BDMA_CH0, tx_dma: p.BDMA_CH1, int: p.PC13, int_exti: p.EXTI13 };
-    let mgmt = mgmt_init::MgmtInit::new(store, tx.arm_state_reg(), SLOT);
-    spawner.spawn(net::run(pins, id, mgmt, tx).unwrap());
+    let mgmt = mgmt_init::MgmtInit::new(store, tx.arm_state_reg(), SLOT, flags.cause());
+    // The log ring goes on where the boot stage left it.
+    let log = g7250_board::logmem::open(handover.is_none()).0;
+    spawner.spawn(net::run(pins, id, mgmt, tx, log).unwrap());
     // From here the console no longer blocks: lines go into a ring that the net loop and this
     // task pump into the USART FIFO (0054: a blocking line costs about 5 ms).
     console::set_buffered(true);
@@ -282,8 +267,7 @@ async fn main(spawner: Spawner) {
         if update::trial_pending() && Instant::now().as_millis() >= update::TRIAL_LIMIT_MS {
             println!("app: FAULT trial image not confirmed 60 s after start; restarting into the previous image");
             safe::reassert();
-            console::flush();
-            cortex_m::peripheral::SCB::sys_reset();
+            commanded_reset(Reason::TrialUnconfirmed);
         }
         if n % 10 == 0 {
             println!("app: alive {} s", Instant::now().as_secs());
@@ -310,18 +294,28 @@ fn hold_without_hal(o: g7250_safety::supply::Outcome) -> ! {
 }
 
 /// Steps 4-5 of a commanded reset (A1.9): relays to the A3.6 state, for a factory reset the
-/// Table A1-4 items in the store (A1.6a), then the reset.
-pub fn safe_reset(mgmt: &mut mgmt_init::MgmtInit, factory: bool) -> ! {
+/// Table A1-4 items in the store (A1.6a), the reason as the last log entry (0068), then the reset.
+pub fn safe_reset(mgmt: &mut mgmt_init::MgmtInit, reason: Reason) -> ! {
     safe::reassert();
-    if factory {
+    if reason == Reason::FactoryReset {
         if let Err(e) = mgmt_init::factory_reset_store(mgmt) {
             println!("app: FAULT factory reset of the store failed ({})", e);
         }
     }
-    println!("app: commanded reset{}", if factory { " (factory reset)" } else { "" });
+    commanded_reset(reason)
+}
+
+/// The reason, then the reset; the caller has put the relays in the A3.6 state.
+fn commanded_reset(reason: Reason) -> ! {
+    let up = Instant::now().as_millis() as u32;
+    g7250_board::logmem::last(|r| reason.log(r, up));
+    println!("app: commanded reset ({:?})", reason);
     console::flush();
     cortex_m::peripheral::SCB::sys_reset()
 }
+
+/// The boot stage's handover of this start, for the TX path task.
+static HANDOVER: cortex_m::interrupt::Mutex<core::cell::Cell<Option<g7250_board::persist::Handover>>> = cortex_m::interrupt::Mutex::new(core::cell::Cell::new(None));
 
 /// Moves buffered console output into the USART FIFO when the net loop does not (idle times).
 static CONSOLE_OUT: embassy_sync::signal::Signal<embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, ()> = embassy_sync::signal::Signal::new();
@@ -351,7 +345,7 @@ async fn tx_path() {
     // The boot stage's check (A3.6b; 0066 addendum): its first time, a fault it found, a
     // mismatch run still open at the jump (counted on from its start).
     let first = safe::us_since_boot_stage();
-    match g7250_board::persist::take_handover() {
+    match cortex_m::interrupt::free(|cs| HANDOVER.borrow(cs).get()) {
         Some(h) => {
             TX_CHECK_FIRST_US.store(h.first_check_us, core::sync::atomic::Ordering::Relaxed);
             let pin = |i: u8| {

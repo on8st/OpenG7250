@@ -11,9 +11,9 @@
 #![no_std]
 #![no_main]
 
-use core::cell::Cell;
+use core::cell::{Cell, RefCell};
 use cortex_m_rt::entry;
-use g7250_board::{FW_BETA, FW_MAJOR, FW_MINOR, FW_BUILD, FW_VERSION, console, early_init, println, reset, safe, wdg};
+use g7250_board::{FW_BETA, FW_MAJOR, FW_MINOR, FW_BUILD, FW_VERSION, console, early_init, logmem, println, reset, safe, wdg};
 use g7250_layout::header::{self, Header, Kind};
 use g7250_board::flash::RawFlash;
 use g7250_layout::select::Choice;
@@ -57,7 +57,8 @@ fn main() -> ! {
     early_init();
     console::clocks_hsi();
     console::init();
-    let cause = reset::read(false);
+    // The reset flags, read once per start here and cleared (0068).
+    let flags = reset::read_and_clear();
 
     println!("");
     println!(
@@ -68,8 +69,17 @@ fn main() -> ! {
         if FW_BETA { "-beta" } else { "" },
         env!("G7250_REV")
     );
-    println!("boot: reset cause {}", cause.name());
+    println!("boot: reset cause {}", flags.cause().name());
     start.print();
+    // The log ring kept over a reset (A1.7; 0068): the start entry, the first of the run, written
+    // here and nowhere else; then the outcomes of this stage. The application continues the ring.
+    let (ring, kept) = logmem::open(flags.power_lost());
+    let log = RefCell::new(ring);
+    let note = |args: core::fmt::Arguments<'_>| {
+        println!("{}", args);
+        log.borrow_mut().log(safe::us_since_boot_stage() / 1000, args);
+    };
+    note(format_args!("start after {}: log {}", flags.cause().name(), if kept { "kept" } else { "lost" }));
 
     if !safe::holds() {
         // The safe state could not be established: class 2 fault, stay here (0007 sub-decision 5).
@@ -98,7 +108,7 @@ fn main() -> ! {
         let mut io = RawFlash::new(Writer::BootStage);
         let r = image::check(&mut io, Kind::Application, s.range(), APP_RAM, &mut safe::boot_poll);
         if let Err(e) = r {
-            println!("boot: slot {} refused: {}", slot_name(s), e.word());
+            note(format_args!("boot: slot {} refused: {}", slot_name(s), e.word()));
         }
         c.set(Some(r.is_ok()));
         r.is_ok()
@@ -123,8 +133,9 @@ fn main() -> ! {
             let trial = before.is_some_and(|r| r.trial.is_some() && !r.confirmed);
             let active = before.map_or(Slot::A, |r| r.active);
             match c {
-                Choice::Boot(s) if trial => println!("boot: rollback to slot {} (trial not confirmed)", slot_name(s)),
-                Choice::Boot(s) if s != active => println!("boot: rollback to slot {}", slot_name(s)),
+                Choice::Trial(s) => note(format_args!("boot: trial of slot {} started", slot_name(s))),
+                Choice::Boot(s) if trial => note(format_args!("boot: rollback to slot {} (trial not confirmed)", slot_name(s))),
+                Choice::Boot(s) if s != active => note(format_args!("boot: rollback to slot {}", slot_name(s))),
                 _ => {}
             }
             c
@@ -141,7 +152,7 @@ fn main() -> ! {
             println!("boot: starting slot {}{} at {:#010x}", slot_name(s), trial, s.range().start);
             console::flush();
             // The TX path check goes on in the application, with what this one saw.
-            safe::boot_check_handover();
+            safe::boot_check_handover(flags);
             // SAFETY: the slot holds a sealed application linked for this address, checked above.
             unsafe { jump(s.range().start) }
         }

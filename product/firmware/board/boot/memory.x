@@ -4,9 +4,10 @@ MEMORY
 {
   @FLASH@
   /* AXI SRAM; 128 KiB is present whatever the TCM/AXI sharing option ([HIS] HIS 15). The top
-     128 bytes (0x2401FF80) are the application's persist block (board/common persist.rs),
-     kept over a reset: the boot stage's data, bss and stack stay below it. */
-  RAM   : ORIGIN = 0x24000000, LENGTH = 128K - 128
+     6400 bytes (0x2401E700) are kept over a reset: the log ring (A1.7, logmem.rs) and the
+     persist block (counters and handover, persist.rs); the boot stage's data, bss and stack stay below it. */
+  RAM   : ORIGIN = 0x24000000, LENGTH = 128K - 6400
+  LOGRING : ORIGIN = 0x2401E700, LENGTH = 6272
   /* The persist block: the boot stage writes only its TX path check handover there
      (persist.rs write_handover, A3.6b), just before the jump. */
   PERSIST : ORIGIN = 0x2401FF80, LENGTH = 128
@@ -20,6 +21,13 @@ SECTIONS
     KEEP(*(.persist .persist.*));
   } > PERSIST
 } INSERT AFTER .uninit;
+SECTIONS
+{
+  .logring (NOLOAD) : ALIGN(8)
+  {
+    KEEP(*(.logring .logring.*));
+  } > LOGRING
+} INSERT AFTER .persist;
 /* Keep the stack limit and heap start in RAM, not after .persist (cortex-m-rt takes `.`). */
 _stack_end = ALIGN(__euninit, 4);
 __sheap = _stack_end;

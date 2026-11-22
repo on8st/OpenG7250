@@ -36,7 +36,7 @@ const SPI_HZ: u32 = 16_000_000;
 const SOCK_DISCOVERY: u8 = 0;
 /// A failed flash operation (error flag, or not done within 2 x t_erase_max) raises
 /// INTERNAL_ERROR (class 2) and is logged; every fault entered is logged once (A3.5; A1.7).
-fn flash_failures(server: &mut Server) {
+fn flash_failures(server: &mut Server<g7250_board::logmem::Mem>) {
     let now = Instant::now().as_millis();
     if let Some(sr) = g7250_board::flash::take_failure() {
         let how = if sr == g7250_board::flash::TIMEOUT {
@@ -622,7 +622,7 @@ fn print_cfg(c: &NetConfig, s: Source) {
 }
 
 #[embassy_executor::task]
-pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_init::MgmtInit, tx: g7250_safety::tx::TxCore) {
+pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_init::MgmtInit, tx: g7250_safety::tx::TxCore, log: g7250_safety::logring::Ring<g7250_board::logmem::Mem>) {
     let (mut chip, mut int) = match bring_up(pins).await {
         Ok(c) => c,
         Err(e) => {
@@ -682,7 +682,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         println!("net: FAULT cannot open the management port {} ({:?})", m::PORT, e);
         return;
     }
-    let mut server = Server::new();
+    let mut server = Server::with_log(log);
     server.network_up(Instant::now().as_millis());
     mgmt.identify.mac = mac;
     // The first TX path check, from the boot stage's start (A3.6b; 0066 addendum: <= 100 ms).
@@ -706,21 +706,14 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
             server.log.push(now, format_args!("store: no readable secret; none set"));
         }
     }
-    // Boot record at start (A1.8 U-6): a rollback is logged; a trial cannot arm until confirmed.
+    // Boot record at start (A1.8 U-6): the boot stage logged what it did (0068); a trial cannot
+    // arm until confirmed.
     let slot_name = if mgmt.update.run.slot == g7250_layout::Slot::A { "A" } else { "B" };
     match mgmt.update.state {
         g7250_update::boot::UpdateState::RolledBack => {
-            let now = Instant::now().as_millis();
-            let other = if slot_name == "A" { "B" } else { "A" };
-            // Until the boot stage writes its own lines (0068): what it refused, from the same check.
-            if let (2, Some(word)) = (mgmt.update.other, mgmt.update.other_failed) {
-                server.log.push(now, format_args!("boot: slot {other} refused: {word}"));
-            }
-            server.log.push(now, format_args!("boot: rollback to slot {slot_name}"));
             println!("net: running slot {} after a rollback", slot_name);
         }
         g7250_update::boot::UpdateState::Trial => {
-            server.log.push(Instant::now().as_millis(), format_args!("trial boot of slot {}", slot_name));
             println!("net: trial boot of slot {}: arm refused (MAINTENANCE) until confirmed", slot_name);
         }
         g7250_update::boot::UpdateState::Normal => {}
@@ -797,9 +790,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         // staging discarded, logged, restart into the running image (no RF in this build).
         if mgmt.update.stager.abandoned(Instant::now().as_millis()) {
             mgmt.update.stager.abort(Instant::now().as_millis());
-            server.log.push(Instant::now().as_millis(), format_args!("update abandoned after 10 min; restart into the running image"));
             println!("net: update abandoned (10 min); restarting into the running image");
-            crate::safe_reset(&mut mgmt, false);
+            crate::safe_reset(&mut mgmt, g7250_radio::mgmt::Reason::UpdateAbandoned);
         }
         match chip.udp_recv(SOCK_DISCOVERY, &mut rx) {
             // General packet on 1024: byte 4 = 0x00 (B11.4; Table B11-1).
@@ -1012,7 +1004,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         // arm (MAINTENANCE) first, before any store write and before the reply.
                         if matches!(
                             e,
-                            g7250_radio::mgmt::Effect::DisarmForMaintenance | g7250_radio::mgmt::Effect::Restart | g7250_radio::mgmt::Effect::FactoryReset
+                            g7250_radio::mgmt::Effect::DisarmForMaintenance | g7250_radio::mgmt::Effect::Restart(_) | g7250_radio::mgmt::Effect::FactoryReset
                         ) {
                             p2.disarm_for_maintenance(&mut chip, Instant::now().as_millis());
                         }
@@ -1067,14 +1059,17 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                                     return;
                                 }
                             }
-                            g7250_radio::mgmt::Effect::Restart | g7250_radio::mgmt::Effect::FactoryReset => {
+                            g7250_radio::mgmt::Effect::Restart(_) | g7250_radio::mgmt::Effect::FactoryReset => {
                                 // Commanded reset (A1.9): unkeyed and disarmed (above, before the
                                 // reply), RF gone (never keyed in this build), reply sent, relays to
                                 // the A3.6 state, then the reset. A factory reset writes the items of
                                 // Table A1-4 only now, between steps 4 and 5 (A1.6a).
-                                let factory = e == g7250_radio::mgmt::Effect::FactoryReset;
+                                let reason = match e {
+                                    g7250_radio::mgmt::Effect::Restart(r) => r,
+                                    _ => g7250_radio::mgmt::Reason::FactoryReset,
+                                };
                                 Timer::after_millis(20).await; // let the reply leave the CH394
-                                crate::safe_reset(&mut mgmt, factory);
+                                crate::safe_reset(&mut mgmt, reason);
                             }
                             g7250_radio::mgmt::Effect::UpdateStarted => {
                                 // A1.8: the session ends, streams stop, arms get MAINTENANCE,
