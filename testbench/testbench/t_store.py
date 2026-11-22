@@ -1,8 +1,8 @@
 """The factory reset (A1.6a, A1.10 "The old secret in flash", B2.3 "Flash work"; 0069): T-A1-39, and
 the host rule of 0069 on the reference model. T-A1-92 is in t_stale.py.
 
-What is in flash is judged on a dump of the store sectors (flash.dump {address, len} -> {hex},
-proposed): the bench only looks for the 32 bytes of a secret it knows. Where the radio does not
+What is in flash is judged on a dump of the store sectors (flash.dump {address, len} -> {hex}):
+the bench only looks for the 32 bytes of a secret it knows. Where the radio does not
 keep the secret as those 32 bytes in a row the search proves nothing, so the bench first asks that
 it finds the secret in force, and says so when it does not.
 

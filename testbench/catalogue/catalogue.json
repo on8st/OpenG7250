@@ -1940,7 +1940,7 @@
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
-    "the corrupted entry needs log.corrupt (reference model); the update parts need a real package"
+    "the corrupted entry needs log.corrupt (an emulator only when it knows the ring); the update parts need a real package"
    ],
    "timeout_s": 1500
   },
@@ -1963,7 +1963,7 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "what the sectors hold needs flash.dump (proposed); the cases of the 0069 addendum need flash.ecc, power.cut and flash.fill (proposed)",
+    "what the sectors hold needs flash.dump; the cases of the 0069 addendum need flash.ecc, power.cut and flash.fill",
     "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip gives on the read"
    ],
    "timeout_s": 2700

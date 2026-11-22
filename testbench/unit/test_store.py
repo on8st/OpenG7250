@@ -240,7 +240,10 @@ class FakeCtx(core.Ctx):
         if op == "flash.fill":
             st.fill(a["address"], a["len"], bytes.fromhex(a.get("data", "")))
         elif op == "flash.ecc":
+            if st.broken == "ecc-late":
+                return dict(in_force=False)
             st.ecc.add(a["address"])
+            return dict(in_force=True)
         elif op == "power.cut":
             st.cut = ("erase", a["during_erase"]) if "during_erase" in a else ("words", a["after_flash_words"])
         elif op == "power.cycle":
@@ -344,6 +347,13 @@ class OldSecret(unittest.TestCase):
             except core.RunnerFault:
                 bad = ["runner"]
             self.assertTrue(any(seen in b for b in bad), (broken, bad[:6]))
+
+    def test_ecc_mark_not_in_force_is_not_judged(self):
+        ctx = run("ecc-late")
+        self.assertEqual(failed(ctx), [])
+        self.assertTrue(ctx.no_pass)
+        self.assertTrue(any("fall_back: not judged" in p for p in ctx.parts), ctx.parts)
+        self.assertEqual(ctx.store.secret, bytes(range(32)))  # put back
 
     def test_planned_cuts_not_seen(self):
         with mock.patch.object(FakeCtx, "fixture", lambda self, op, /, _f=FakeCtx.fixture, **a: None if op == "power.cut" else _f(self, op, **a)):

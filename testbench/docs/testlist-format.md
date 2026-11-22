@@ -518,7 +518,9 @@ A test with target `emulator` is also run against the reference model. A test wi
      `flash.log` has `result: "cut"` with `words_written` or `fraction_done` (T-A1-83, T-A1-86).
      Armed with `during_erase` before a `RESTART`, it hits the first erase after it, whichever it
      is (T-A1-92 checks that it was the stale sector's).
-   - `flash.ecc {address, type: "double"|"single"}`; each detection is a `flash.log` entry
+   - `flash.ecc {address, type: "double"|"single"}` → `{in_force}`: it answers when the mark is in
+     force, or after 3 s with `in_force: false`; a case with a false is not judged and the test does
+     not pass. Each detection is a `flash.log` entry
      `{op: "ecc", type, address, boot}` (T-A1-87, T-A1-92). Limit: a double error shows only in the
      flash flags; the bus fault the chip gives on the read is not delivered, so a pass does not
      cover "without a fault or reset". The result says so wherever a test sets one.
@@ -539,22 +541,24 @@ A test with target `emulator` is also run against the reference model. A test wi
      image may overwrite it); `null` releases (the channel takes the word the image last wrote);
      the image's start-up safe state (PB14 low) and `power.cycle` clear it; traced
      `{"kind": "dac_force", channel, value, t_us}` (T-A3-61).
-   - Proposed (v1.9): `flash.dump {address, len}` → `{hex}`: flash as it is now, at most 32768 bytes per
+   - (v1.9) `flash.dump {address, len}` → `{hex}`: flash as it is now, at most 32768 bytes per
      call (T-A1-39, T-A1-92: the bench looks for the 32 bytes of a secret it set itself);
      `flash.fill {address, len, data?}`: these bytes of flash become `data` (hex) repeated over
      `len`, which the length of `data` must divide, or erased without `data`; aligned to 32
      bytes, refused while the image does flash work, ECC consistent (an earlier
      `flash.ecc` there is gone), a 32-byte word of only FF is an erased one, no `flash.log` entry,
-     kept across `power.cycle`, only within 0x080C0000 to 0x080FFFFF, refused outside; agreed
-     in this shape and planned for the emulator's next build (T-A1-92: foreign data, an erased sector, the store put back from
-     a dump); and
+     kept across `power.cycle`, only within 0x080C0000 to 0x080FFFFF, refused outside (T-A1-92:
+     foreign data, an erased sector, the store put back from a dump); and
      `log.corrupt {seq}`: the kept log entry with that sequence number changed in RAM so that its
-     check fails at the next start (T-A1-91; the layout is the firmware's, so an emulator needs its
-     address from the firmware side). The reference model has `log.corrupt`, and
+     check fails at the next start (T-A1-91; the layout is the firmware's, so an emulator offers it
+     only when its runner knows the ring). The emulator (emu/bench `8a2a100`, minor 9) has these
+     three and `reset.flags`. The reference model has `log.corrupt`, and
      `flash.delay {us, count}`: the flash work of the next `count` requests takes `us` (T-B5-22),
      `store.full {}`: the next `UPDATE_BLOCK` or `UPDATE_VERIFY` finds no room in the store
      (T-A1-88), and `reset.flags {flags: [...]}`: the reset flags of the next start, e.g. `[]` or
-     `["software", "power-on"]` (T-A1-91). `reset.flags` is proposed for the emulator too. Started
+     `["software", "power-on"]` (T-A1-91). On the emulator `reset.flags` acts on the next MCU reset,
+     not on a power cycle; the model takes it at the next start of any kind; the bench uses it only
+     before a `RESTART`. Started
      with `--f1 open` (off by default; endpoint `model.f1_gate`) the model also has
      `installer.state {}` for the streaming installer of A1.8a item 3 (product/refmodel/README.md);
      no test of the bench uses it yet. `vendor.install {}` (always) puts the model back as after the

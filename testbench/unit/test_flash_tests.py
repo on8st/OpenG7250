@@ -41,8 +41,10 @@ class FakeRadio:
             self.fault = a
             return None
         if op == "flash.ecc":
+            if self.broken == "ecc-late":
+                return dict(in_force=False)
             self.ecc.add(a["address"])
-            return None
+            return dict(in_force=True)
         if op == "power.cycle":
             self.boot()
             return None
@@ -166,6 +168,15 @@ class FlashTestsTest(unittest.TestCase):
         self.assertEqual(run(keep, FakeRadio()), [])
         self.assertEqual(notes.count(t_flash.ECC_LIMIT), 1)  # two errors set, said once
         self.assertTrue(run(t_flash.t_a1_87, FakeRadio(broken="ecc")))
+
+    def test_a1_87_mark_not_in_force_is_not_judged(self):
+        kept = []
+        def keep(ctx):
+            kept.append(ctx)
+            t_flash.t_a1_87(ctx)
+        self.assertEqual(run(keep, FakeRadio(broken="ecc-late")), [])
+        self.assertTrue(kept[0].no_pass)
+        self.assertEqual(len(kept[0].parts), 1)  # the first case not judged, the second not run
 
 
 class CompactionTest(unittest.TestCase):

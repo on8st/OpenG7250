@@ -75,6 +75,7 @@ class Ctx:
     checks: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     parts: list = field(default_factory=list)  # parts of the claim that did not run
+    no_pass: bool = False  # a part that did not run leaves no pass here, whatever the test's `whole`
     trace_file: str | None = None  # v1.3: the live trace file of this test, from hw.trace start
     trace_pins: list | None = None  # extra pins a test watches (hw.trace start {pins})
     trace_since: str = "start"  # from when pin levels are judged: "start" or "boot" (+20 us)
@@ -229,6 +230,8 @@ def run_one(tid: str, ctx: Ctx) -> dict:
             ctx.check(name, ok_, detail)
 
     def whole() -> bool:
+        if ctx.no_pass:
+            return True
         w = getattr(fn, "whole", False)
         return w if isinstance(w, bool) else all(x in ctx.endpoint.get("fixtures", []) or ctx.params.get(x) for x in w)
 

@@ -260,12 +260,12 @@ OVERRIDES: dict[str, dict] = {
     "T-B5-22": {"target": "emulator", "also": ["host"], "needs": [],
                 "notes": ["on the reference model the host rule of 0069 (flash.delay); the rest needs flash.log and flash.timing"]},
     "T-A1-91": {"target": "emulator", "also": ["host"], "needs": ["time.advance"],
-                "notes": ["the corrupted entry needs log.corrupt (reference model); the update parts need a real package"]},
+                "notes": ["the corrupted entry needs log.corrupt (an emulator only when it knows the ring); the update parts need a real package"]},
     "T-A1-39": {"target": "emulator", "also": ["host"], "needs": [],
                 "notes": ["the flash part (0069) needs flash.log, flash.timing, flash.fault and flash.dump"]},
     "T-A1-92": {"target": "emulator", "also": [], "needs": ["flash.log"],
-                "notes": ["what the sectors hold needs flash.dump (proposed); the cases of the 0069 addendum need flash.ecc, "
-                          "power.cut and flash.fill (proposed)",
+                "notes": ["what the sectors hold needs flash.dump; the cases of the 0069 addendum need flash.ecc, "
+                          "power.cut and flash.fill",
                           "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: " + ECC_LIMIT]},
     "T-A1-93": {"target": "host", "also": [], "needs": [],
                 "notes": ["g7250ctl's own test against the reference model (0070); not run by this bench"]},

@@ -45,6 +45,16 @@ class Verdicts(unittest.TestCase):
         fn.whole = True
         self.assertEqual(run(fn)["status"], "skip")
 
+    def test_no_pass(self):
+        for end in (None, core.PartSkip("x")):
+            def fn(ctx):
+                ctx.check("one part", True, "detail")
+                ctx.part("another part not judged")
+                ctx.no_pass = True
+                if end:
+                    raise end
+            self.assertEqual(run(fn)["status"], "skip")
+
     def test_flash_rules(self):
         bad = dict(op="erase", address="0x08000000", len=131072)
 

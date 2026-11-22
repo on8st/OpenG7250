@@ -37,8 +37,12 @@ ECC_LIMIT = ("limit of the emulator: a double ECC error shows only in the flash 
 
 
 def double_ecc(ctx, address: int):
-    """A double ECC error at `address`; the result then says what the emulator cannot show."""
-    ctx.fixture("flash.ecc", address=address, type="double")
+    """A double ECC error at `address`; the result then says what the emulator cannot show. A mark
+    the emulator says is not in force is not judged: PartSkip, and no pass for the test."""
+    r = ctx.fixture("flash.ecc", _timeout=63, address=address, type="double")  # in force within 3 s, or it says not
+    if isinstance(r, dict) and r.get("in_force") is False:
+        ctx.no_pass = True
+        raise PartSkip(f"not judged: the double ECC error at {address:#x} was not in force (flash.ecc in_force false)")
     if ECC_LIMIT not in ctx.notes:
         ctx.notes.append(ECC_LIMIT)
 
@@ -572,7 +576,11 @@ def t_a1_87(ctx: Ctx):
         if not ctx.check(f"{where}: the store write of {base + 1} seen in flash.log", w is not None, "no program entry"):
             continue
         addr = w[i]
-        double_ecc(ctx, addr)
+        try:
+            double_ecc(ctx, addr)
+        except PartSkip as e:  # the mark may still come: nothing after it in this run is judged
+            ctx.part(f"{where}: {e}")
+            break
         ctx.fixture("power.cycle")
         wait_reachable(ctx, f"ECC error in {where}")
         with mg(ctx, s) as u:

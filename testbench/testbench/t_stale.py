@@ -7,7 +7,7 @@ the addendum with the radio's own requests, with power cuts and with flash.fill 
 erased sector). Where the radio does not keep the secret as 32 bytes in a row, a search proves
 nothing: the bench first asks that it finds the secret in force, and says so when it does not.
 
-flash.fill {address, len, data?} (proposed): these bytes of flash become `data` (hex) repeated over
+flash.fill {address, len, data?}: these bytes of flash become `data` (hex) repeated over
 `len`, or erased without `data`; ECC consistent, a 32-byte word of only FF is an erased one; no
 flash.log entry. The cases that empty the store put both sectors back as they were at the start of
 the test (flash.dump, flash.fill), so the boot record and the configuration are kept.
@@ -193,7 +193,7 @@ def t_a1_92(ctx: Ctx):
     original = secret(ctx)
     st = State(ctx, original)
     if not st.dump:
-        ctx.part("what the sectors hold not judged: no flash.dump {address, len} (proposed); judged on flash.log and the log")
+        ctx.part("what the sectors hold not judged: no flash.dump; judged on flash.log and the log")
     elif not st.known:
         ctx.part("where the secrets are not judged: the secret in force is not found as 32 bytes in a row")
     snapshot = {x: dump(ctx, x) for x in st.secs} if st.dump and has(ctx, "flash.fill") and has(ctx, "power.cycle") else None
@@ -219,6 +219,8 @@ def t_a1_92(ctx: Ctx):
                         broken = case.__name__
                 except PartSkip as e:
                     ctx.part(f"{case.__name__}: {e}")
+                    if ctx.no_pass:  # an ECC mark not in force may still come: the later cases would meet it
+                        broken = case.__name__
     finally:
         put_back(ctx, st, original, snapshot)
     ctx.notes.append("the FACTORY_RESET whose second erase fails is judged in T-A1-39; 'other store writes at a start compact when the "
