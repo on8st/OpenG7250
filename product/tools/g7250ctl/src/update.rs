@@ -383,10 +383,11 @@ pub fn install(
                     return Err(decode(&a, "UPDATE_ACTIVATE reply is not 'permanent 0' (Table M-1)"));
                 }
                 restart_from = Some(before);
+                // Only with the reply: after a lost one the reset is already seen and told.
+                ev(Event::Activated);
             }
             writes::Resetting::Answered(a, _) => return Err(Failure::Status(a, Command::UpdateActivate)),
         }
-        ev(Event::Activated);
         Ok(())
     })();
     if let Err(f) = run {

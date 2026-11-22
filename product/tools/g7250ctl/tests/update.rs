@@ -441,6 +441,7 @@ fn full_install_blocks_in_order_each_signed_then_confirmed() {
     assert!(g.seen.iter().filter(|s| s.cmd != 0x01 && s.cmd != 0x10 && ids.insert(s.id)).all(|s| s.auth_ok));
     assert_eq!((g.running_slot, g.running, g.update_state), (2, [1, 1, 0, 9], 0));
     assert!(ev.contains(&Event::Trial) && ev.contains(&Event::Confirmed));
+    assert!(ev.contains(&Event::Activated), "the answered activation is told: {ev:?}");
 }
 
 #[test]
@@ -623,6 +624,9 @@ fn a_lost_activation_reply_is_resolved_with_identify_and_never_aborted() {
     let c = cmds(&st);
     assert!(!c.contains(&0x44), "no UPDATE_ABORT: {c:x?}");
     assert_eq!(c.iter().filter(|x| **x == 0x43).count(), 2, "UPDATE_ACTIVATE sent and retransmitted once");
+    let lost = ev.iter().position(|e| matches!(e, Event::ReplyLostResetSeen { .. })).expect("the lost reply is told");
+    assert!(!ev.contains(&Event::Activated), "no 'the radio restarts' after the restart was seen: {ev:?}");
+    assert!(matches!(ev[lost + 1], Event::Restarted { .. }), "{ev:?}");
     let g = st.lock().unwrap();
     assert_eq!((g.running_slot, g.update_state, g.aborted), (2, 0, false));
 }
