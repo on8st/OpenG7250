@@ -317,7 +317,35 @@ fn due_limits_before_waiting_requests() {
     assert!(b.logged("restart: update-abandoned"));
 }
 
-/// 0075: a software reset without a reason line as the last kept entry.
+/// 0078: a gap is a number newer than the newest one by 2 to 2^31 - 1; port 1027 never uses 0.
+#[test]
+fn gaps() {
+    let run = |port: u16, seqs: &[u32]| {
+        let mut b = Bench::new(Config::default());
+        b.to(A, port::HIGH_PRIORITY, &hp(0, true));
+        for n in seqs {
+            let mut d = if port == port::DUC_IQ { vec![0; 1444] } else { hp(0, true) };
+            d[..4].copy_from_slice(&n.to_be_bytes());
+            b.to(A, port, &d);
+        }
+        (b.stat("gap_1027"), b.stat("gap_1029"))
+    };
+    let iq = port::DUC_IQ;
+    assert_eq!(run(iq, &[10, 11, 14, 13, 15]), (0, 1));
+    assert_eq!(run(iq, &[u32::MAX, 0]), (0, 0));
+    assert_eq!(run(iq, &[0, 2]), (0, 1));
+    assert_eq!(run(iq, &[5, 5, 4, 6]), (0, 0));
+    assert_eq!(run(iq, &[5, 5 + (1 << 31), 6]), (0, 0)); // not newer
+    assert_eq!(run(iq, &[5, 4 + (1 << 31)]), (0, 1));
+    let hp = port::HIGH_PRIORITY;
+    assert_eq!(run(hp, &[u32::MAX, 1, 2]), (0, 0));
+    assert_eq!(run(hp, &[u32::MAX, 2]), (1, 0));
+    assert_eq!(run(hp, &[7, 0, 8, 0, 0]), (0, 0));
+    assert_eq!(run(hp, &[10, 12, 11, 13]), (1, 0));
+    assert_eq!(run(hp, &[0, 0, 0]), (0, 0));
+}
+
+/// 0075, 0078: a software reset is commanded only with the word and the reason line it names.
 #[test]
 fn unexpected_stop_line() {
     let mut b = Bench::new(Config::default());
@@ -332,6 +360,52 @@ fn unexpected_stop_line() {
     b.r.log_corrupt = Some(0); // the whole ring
     b.r.reset("software", Some("restart: restart"));
     assert_eq!(b.r.log.iter().map(|e| e.2.as_str()).collect::<Vec<_>>(), ["start after software: log lost", line]);
+    let stops = |b: &Bench| {
+        let k = b.r.log.iter().rposition(|e| e.2.starts_with("start after ")).unwrap();
+        b.r.log[k..].iter().any(|e| e.2 == line)
+    };
+    // the hole of 0075: the start entry lost, so that the last entry kept is the reason line before it
+    for with_line in [true, false] {
+        for word in [true, false] {
+            b.r.reset("software", Some("restart: restart"));
+            assert!(!stops(&b));
+            b.r.reset("software", Some("restart: restart")); // twice in a row
+            assert!(!stops(&b) && b.r.commanded.is_none());
+            let start = b.r.log.iter().rev().find(|e| e.2.starts_with("start after ")).unwrap().0;
+            b.r.log_corrupt = Some(start);
+            if word {
+                b.r.reset("software", Some("restart: restart")); // the word names an entry dropped
+            } else {
+                b.r.stop(if with_line { Some("restart: stop 1") } else { None });
+            }
+            assert!(stops(&b));
+            assert!(b.r.log.iter().any(|e| e.0 == start - 1 && e.2 == "restart: restart"));
+        }
+    }
+    // a stop that leaves no entry, with the word of an earlier reset cleared at its start
+    b.r.reset("software", Some("restart: restart"));
+    b.r.log_corrupt = None;
+    b.r.stop(None);
+    assert!(stops(&b));
+    // the stop path clears a word already set
+    let n = b.r.log_seq;
+    b.r.logf("restart: restart");
+    b.r.commanded = Some(n);
+    b.r.stop(None);
+    assert!(stops(&b));
+    // a power loss clears the word and judges nothing
+    b.r.logf("restart: restart");
+    b.r.commanded = Some(b.r.log_seq - 1);
+    b.r.reset("power-on", None);
+    assert!(!stops(&b) && b.r.commanded.is_none());
+    // a full ring
+    for i in 0..600 {
+        b.r.logf(&format!("entry {i}"));
+        if (500..520).contains(&i) {
+            b.r.reset("software", Some("restart: restart"));
+            assert!(!stops(&b));
+        }
+    }
 }
 
 /// 0077: the write session goes on in the installer.

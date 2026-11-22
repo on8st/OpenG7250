@@ -276,7 +276,7 @@ pub struct Session {
     pub arm_confirmed_at: Option<u64>,
     pub keyed_at: Option<u64>,
     pub last_hp: u64,
-    /// the last sequence numbers received on ports 1027 and 1029 (B11.6)
+    /// the newest sequence numbers received on ports 1027 and 1029 (B11.6)
     pub rx_seq: [Option<u32>; 2],
 }
 
@@ -355,6 +355,8 @@ pub struct Radio {
     pub log_seq: u32,
     /// model fixture log.corrupt: this entry of the kept ring fails its check at the next start
     pub log_corrupt: Option<u32>,
+    /// the commanded-reset word (A1.7; 0078): the sequence number of the reason line it names
+    pub commanded: Option<u32>,
     /// IDENTIFY tag 17, the reset cause the boot stage named (0068)
     pub reset_cause: u8,
     /// model fixture flash.delay: the flash work of the next requests takes this long (ns or us as
@@ -489,6 +491,7 @@ impl Radio {
             log: Vec::new(),
             log_seq: 0,
             log_corrupt: None,
+            commanded: None,
             reset_cause: 1,
             flash_delay: (0, 0),
             store_full: false,
@@ -639,13 +642,25 @@ impl Radio {
             self.logf(&format!("drop on port {port}: {reason}"));
         }
     }
-    /// B11.6: a number newer than the one before by more than 1 is a gap; the same or an older one is not.
+    /// B11.6 (0078): a number newer than the newest one of the session by 2 to 2^31 - 1 is a gap and
+    /// counts once; the same or an older one changes nothing. On port 1027 the number 0 takes no part
+    /// and 0xFFFFFFFF to 1 is a difference of 1.
     fn gap(&mut self, port: u16, n: u32) {
         let k = (port == port::DUC_IQ) as usize;
+        if k == 0 && n == 0 {
+            return;
+        }
         let Some(s) = self.session.as_mut() else { return };
-        let d = s.rx_seq[k].map_or(1, |p| n.wrapping_sub(p));
+        let Some(p) = s.rx_seq[k] else {
+            s.rx_seq[k] = Some(n);
+            return;
+        };
+        let d = if k == 0 && (p, n) == (u32::MAX, 1) { 1 } else { n.wrapping_sub(p) };
+        if d == 0 || d >= 1 << 31 {
+            return;
+        }
         s.rx_seq[k] = Some(n);
-        if d > 1 && d < 1 << 31 {
+        if d > 1 {
             self.count(if k == 1 { "gap_1029" } else { "gap_1027" });
         }
     }
@@ -1882,15 +1897,28 @@ impl Radio {
         self.app != App::Own
     }
 
+    /// The firmware stops by itself (A3.6 "Unexpected stop of the firmware"): the commanded-reset word
+    /// cleared, then the line where it can (`line` None: nothing reached the log), then a software reset.
+    pub fn stop(&mut self, line: Option<&str>) {
+        self.commanded = None;
+        if let Some(l) = line {
+            self.logf(l);
+        }
+        self.reset("software", None);
+    }
+
     /// Simulated reset (RESTART, FACTORY_RESET, power cycle, processor watchdog reset).
-    /// A reset: `reason` is the last entry before a commanded reset (0068; None: not commanded, or
-    /// logged by the caller), `cause` what the reset flags say (power-on, software, watchdog).
+    /// A reset: `reason` is the last entry before a commanded reset, named by the commanded-reset word
+    /// (0068, 0078; None: not commanded), `cause` what the reset flags say (power-on, software, watchdog).
     pub fn reset(&mut self, cause: &str, reason: Option<&str>) {
         let mut out = Vec::new();
         self.drop_arm(drop::MAINTENANCE, &mut out);
         if let Some(l) = reason {
             self.logf(l);
+            self.commanded = self.log.last().map(|e| e.0);
         }
+        // the start: the word is cleared at every start, and judged from what it held
+        let word = self.commanded.take();
         let boot_lines = self.boot_choice();
         // the ring (A1.7 "Kept over a reset"; 0068): lost with the power; an entry that fails its
         // check and all after it are dropped, and the numbers continue from the last one kept
@@ -1909,9 +1937,11 @@ impl Radio {
             self.log_seq = self.log.last().map_or(0, |e| e.0 + 1);
         }
         let kept = !power_lost && !self.log.is_empty();
-        // A3.6 "Evidence at the next start" (0075): a software reset whose last kept entry is no reason
-        // line. Faults are not modelled, so the line is all there is (no WDT_RESET_AT_START here).
-        let unexpected = cause == "software" && !power_lost && !self.log.last().map_or(false, |e| reason_line(&e.2));
+        // A3.6 "Evidence at the next start" (0075, 0078): a software reset is commanded only if the word
+        // names the last entry kept and that is a reason line. Faults are not modelled, so the line is
+        // all there is (no WDT_RESET_AT_START here).
+        let commanded = self.log.last().map_or(false, |e| word == Some(e.0) && reason_line(&e.2));
+        let unexpected = cause == "software" && !power_lost && !commanded;
         // A3.5 "Counters": the resets per cause (fault entries and trips stay 0 in the model) are kept
         // over a reset without loss of power; every other counter starts at 0
         self.stats.retain(|k, _| !power_lost && k.starts_with("reset_"));

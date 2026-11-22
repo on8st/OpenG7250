@@ -116,7 +116,7 @@ fn main() {
         }
     });
 
-    let mut fixtures = vec!["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay", "store.full", "reset.flags", "vendor.install"];
+    let mut fixtures = vec!["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay", "store.full", "reset.flags", "stop.sim", "vendor.install"];
     if cfg.f1_open {
         fixtures.push("installer.state");
     }
@@ -408,6 +408,14 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 return err("log.corrupt: no such entry");
             }
             r.log_corrupt = Some(n as u32);
+            ok(J::Null)
+        }
+        "stop.sim" => {
+            // model only: the firmware stops by itself (A3.6); `log` false: its line never reaches the log
+            if !r.not_this_firmware() {
+                let log = args.get("log").map_or(true, |v| *v != J::Bool(false));
+                r.stop(if log { Some("restart: stop 1") } else { None });
+            }
             ok(J::Null)
         }
         "store.full" => {
