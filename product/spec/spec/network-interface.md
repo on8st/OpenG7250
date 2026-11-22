@@ -1982,8 +1982,12 @@ holds may be lost, and a P2 session may end by its watchdog (B5.6) and be restar
   ended, and from the update state (`UPDATE_STATUS`, `IDENTIFY`);
 - **one erase per request, and the reply time** (0069): a request MUST do at most one sector
   erase and program at most one sector (128 KiB); a staging slot is erased sector by sector as
-  its blocks arrive, never as a whole in one request. The reply to a request that does flash
-  work MUST be sent within `t_flash_reply` = 15 s of its receipt, success or failure: an erase
+  its blocks arrive, never as a whole in one request. A request that ends in a commanded reset
+  (A1.9) MAY do more after its reply and before the reset: at most two sector erases, the reset
+  following within 17 s of the reply, with the rules below; `FACTORY_RESET` uses this to erase
+  the old secret from both store sectors (A1.6a); an erase that fails there is logged (A1.7)
+  and finished at the next start before the management socket opens. The reply to a request
+  that does flash work MUST be sent within `t_flash_reply` = 15 s of its receipt, success or failure: an erase
   of at most `t_erase_max`, one sector of 4096 words at 580 µs ([STM32H72x] Table 48, x8), a
   failure declared at the latest 2 × `t_erase_max` into a hung operation, and 0.5 s. A request
   from any host that arrives meanwhile is answered after the work, if its stored reply time
@@ -3925,7 +3929,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-36 | With the reference model holding forward power above `P_rf_off` after the unkey, `RESTART` while keyed unkeys and disarms, does not reset, logs the event, enters the fault state with `RF_NOT_KEYED` and replies with status 59 after `t_reset_wait` (2 s); `UPDATE_ACTIVATE` and `ROLLBACK` in the same state get 59 as well (A1.9). |
 | T-A1-37 | After `UPDATE_BEGIN` and 10 min without an update command, with forward power held above `P_rf_off`, the radio does not restart, logs it and stays in the update state and in fault (reference model; A1.8, A1.9). |
 | T-A1-38 | `RESTART`, `FACTORY_RESET` and `SWITCH_LEVEL` while keyed: the `TX_STATE` push showing unkeyed and the `TX_ARM_STATE` push showing the drop leave the radio before the management reply; a retransmission of `RESTART` with the same request id during the wait for RF gone is answered with status 1 and does not start a second reset (A1.9, A2.5a). |
-| T-A1-39 | After `FACTORY_RESET` with every item of Table A1-4 changed beforehand: C-1, C-2, C-5, C-6, C-7 and the TCI port are at their factory defaults, the first-secret window is open, and the C-3 limits, the log, the fault and reset counters, `TRIP_COUNT` and the firmware images are unchanged (A1.6a). |
+| T-A1-39 | After `FACTORY_RESET` with every item of Table A1-4 changed beforehand: C-1, C-2, C-5, C-6, C-7 and the TCI port are at their factory defaults, the first-secret window is open, and the C-3 limits, the log, the fault and reset counters, `TRIP_COUNT` and the firmware images are unchanged; on the emulator neither store sector holds the old secret after the reset, the reset comes within 17 s of the reply with every erase stretched to `t_erase_max`, and an erase failed after the reply is logged and finished at the next start before the management socket opens (A1.6a; B2.3 "Flash work"; 0069). |
 | T-A1-40 | An arm write and `UPDATE_BEGIN` sent so that they reach the radio within 1 ms of each other, repeated 1000 times: each time either the arm is confirmed and `UPDATE_BEGIN` gets status 50, or `UPDATE_BEGIN` succeeds and the arm is rejected with `MAINTENANCE`; never both (reference model; A1.8). |
 | T-A1-41 | With forward power held above `P_rf_off` (reference model), `FACTORY_RESET` while keyed gets status 59 and changes nothing of Table A1-4: the secret still works, no first-secret window opens, and C-1, C-2, C-6, C-7 and the TCI port are unchanged; the attempt is logged; without RF it restores Table A1-4 only with the reset (A1.6a). |
 | T-A1-42 | Identification requests from 200 sources inside the subnet at 10 per second each get at most 50 replies per second in total; from sources outside the subnet at most 10 per second; all management replies together at most 100 per second; the excess is counted (A1.10). |

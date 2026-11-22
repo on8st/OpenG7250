@@ -36,6 +36,9 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   programs at most one sector; its reply comes within `t_flash_reply` = 15 s; a host keeps
   retransmitting such requests every 500 ms for at least 16 s. A1.4, B2.3; T-B5-22 and
   T-A1-85 extended.
+- 0069, firmware question: a request that ends in a commanded reset may do up to two sector
+  erases after its reply and before the reset (reset within 17 s of the reply); `FACTORY_RESET`
+  erases the old secret from both store sectors this way.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 

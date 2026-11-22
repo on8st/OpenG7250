@@ -26,7 +26,18 @@ window for every management request that may do flash work.
 1. **Route (c), with a bound on the work per request.** A request MUST do at most one sector
    erase and program at most one sector (128 KiB). Store compactions, a staging slot erased
    sector by sector as its blocks arrive, and the installer's sectors all fit this. Erasing a
-   whole slot in one request is not allowed.
+   whole slot in one request is not allowed. The bound counts the flash work before the reply.
+   - **Work after the reply, before a reset** (firmware question, 2026-11-22). A request that
+     ends in a commanded reset (A1.9) MAY do further flash work after its reply (step 3) and
+     before the reset (step 5): at most two sector erases with what they need programmed, the
+     reset following within 2 × (2 × `t_erase_max`) + 1 s = 17 s of the reply. The rules of B2.3
+     "during flash work" apply; RF is gone and nothing is armed (A1.9), so 0055 holds. This is
+     what `FACTORY_RESET` needs: a first compaction moves the store into the other sector, a
+     second erases the sector that still holds the old secret, so that the secret is gone from
+     both sectors before the reset (A1.6a). If an erase after the reply fails
+     (0065), it is logged (kept over the reset, 0068) and the next start finishes it before the
+     management socket opens. A host that waits for the radio after such a reset allows 17 s
+     more than after a `RESTART`.
 2. **Reply bound for the radio.** The G7250 MUST send the reply to such a request within
    `t_flash_reply` = 15 s of receiving it, whether the flash work succeeds or fails (0065).
    Derivation: an erase of at most `t_erase_max` (4 s), programming one sector of 4096 words
@@ -49,7 +60,8 @@ window for every management request that may do flash work.
    its maximum, a host that retransmits every 500 ms for 16 s completes an update, a
    `SET_CONFIG` with a compaction and an installer sector; each reply comes within 15 s; each
    request is executed once; flash.log shows at most one erase per request. T-A1-85: an erase
-   that does not end gets its 55 reply within 15 s.
+   that does not end gets its 55 reply within 15 s. T-A1-39: after a `FACTORY_RESET` neither
+   store sector holds the old secret, and the reset comes within 17 s of the reply.
 
 ## Alternatives considered
 
