@@ -168,6 +168,17 @@ pub struct Config {
     pub builtin_swr_s2: u32,
     pub builtin_pa_temp_t3_mc: u32,
     pub boot_counter: u32,
+    /// The F1 gate of A1.8a item 3 (P-SYS-5): closed unless the model is started with --f1 open.
+    pub f1_open: bool,
+}
+
+/// What the application area holds: this firmware, or after a streaming installation (A1.8a item 3)
+/// a stock image, or nothing valid (power lost after the first erase). Only with --f1 open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum App {
+    Own,
+    Stock,
+    Nothing,
 }
 
 impl Default for Config {
@@ -186,6 +197,7 @@ impl Default for Config {
             builtin_swr_s2: 3_000,
             builtin_pa_temp_t3_mc: 70_000,
             boot_counter: 1,
+            f1_open: false,
         }
     }
 }
@@ -301,6 +313,8 @@ pub struct Hw {
 
 pub struct Radio {
     pub cfg: Config,
+    /// not Own: nothing of this firmware answers (A1.8a item 3)
+    pub app: App,
     pub now: u64,
     pub booted_at: u64,
     pub record: Vec<u32>,
@@ -437,6 +451,7 @@ impl Radio {
         let persistent = [cfg.builtin_tx_time_ms, cfg.builtin_fwd_power_mw, cfg.builtin_swr_s2,
                           cfg.builtin_pa_temp_t3_mc];
         let mut r = Radio {
+            app: App::Own,
             cfg,
             now,
             booted_at: now,
@@ -865,6 +880,10 @@ impl Radio {
     pub fn on_datagram(&mut self, now: u64, rx: &Rx) -> Vec<Tx> {
         self.now = now;
         let mut out = Vec::new();
+        // A1.8a item 3: another image or none; in the installer discovery and the P2 ports are closed
+        if self.app != App::Own || (self.mgmt.inst.is_some() && rx.local_port != port::MGMT) {
+            return out;
+        }
         self.run_keyer(now, &mut out);
         let ip = *rx.src.ip();
         match rx.local_port {
@@ -1697,6 +1716,9 @@ impl Radio {
     pub fn tick(&mut self, now: u64) -> Vec<Tx> {
         self.now = now;
         let mut out = Vec::new();
+        if self.app != App::Own {
+            return out; // not this firmware (A1.8a item 3)
+        }
         self.confirm_trial();
         self.run_keyer(now, &mut out);
         let mut due: Vec<Tx> = Vec::new();
@@ -1766,6 +1788,19 @@ impl Radio {
             self.session.as_mut().unwrap().next_ddc = now;
         }
         out
+    }
+
+    /// Power lost, or a reset, outside this firmware (A1.8a item 3): after the installer's first erase
+    /// the application area holds the stock image if all of it was written, else nothing valid; a
+    /// stock image or an empty area stays as it is. True: this firmware does not start.
+    pub fn not_this_firmware(&mut self) -> bool {
+        if let Some(i) = self.mgmt.inst.as_ref() {
+            if i.erased() {
+                self.app = if i.complete() { App::Stock } else { App::Nothing };
+                self.mgmt.inst = None;
+            }
+        }
+        self.app != App::Own
     }
 
     /// Simulated reset (RESTART, FACTORY_RESET, power cycle, processor watchdog reset).

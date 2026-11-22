@@ -180,6 +180,7 @@ pub mod mgmt {
         pub const WINDOW_CLOSED: u16 = 36;
         pub const INVALID_CONFIG: u16 = 48;
         pub const NOT_ALLOWED: u16 = 49;
+        pub const ONE_WAY: u16 = 60; // A1.8a item 3 "No way back"
         pub const TOO_LARGE_IMAGE: u16 = 61;
         pub const NEEDS_CALIBRATION: u16 = 62;
         pub const NOT_SUPPORTED: u16 = 56;

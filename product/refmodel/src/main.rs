@@ -4,7 +4,7 @@
 //!
 //!   g7250-refmodel [--ip 127.0.0.1] [--netmask 255.0.0.0] [--mac 02:00:00:00:72:50]
 //!                  [--tx locked|unlocked] [--cal none|rx|full] [--port-base 20000]
-//!                  [--control 127.0.0.1:<base+7290>] [--endpoint-file PATH]
+//!                  [--control 127.0.0.1:<base+7290>] [--endpoint-file PATH] [--f1 closed|open]
 //!
 //! Port base: the model binds each spec port p (Table B2-1) at local port base + p and writes
 //! the mapping into the endpoint file as `radio.connect` (testlist-format v1.3 section 3). The
@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use g7250_refmodel::codes::port;
 use g7250_refmodel::json::{self, J};
-use g7250_refmodel::radio::{Config, Radio, Rx, MS};
+use g7250_refmodel::radio::{App, Config, Radio, Rx, MS};
 
 fn parse_mac(s: &str) -> [u8; 6] {
     let mut m = [0u8; 6];
@@ -59,6 +59,12 @@ fn main() {
                 "rx" => { cfg.calibrated = false; cfg.rx_params = true; }
                 "full" => cfg.calibrated = true,
                 o => panic!("--cal none|rx|full, not {o}"),
+            },
+            // the F1 gate of A1.8a item 3 (P-SYS-5): closed (default), or open with the streaming installer
+            "--f1" => cfg.f1_open = match v.as_str() {
+                "closed" => false,
+                "open" => true,
+                o => panic!("--f1 closed|open, not {o}"),
             },
             "--control" => control = Some(v),
             "--port-base" => base = v.parse().expect("port base"),
@@ -110,7 +116,10 @@ fn main() {
         }
     });
 
-    let fixtures = ["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay", "store.full", "reset.flags"];
+    let mut fixtures = vec!["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay", "store.full", "reset.flags"];
+    if cfg.f1_open {
+        fixtures.extend(["installer.state", "vendor.install"]);
+    }
     let ep = J::obj(vec![
         ("format", J::Str("g7250-endpoint".into())),
         ("version", J::Num(1.0)),
@@ -140,7 +149,8 @@ fn main() {
         ("control", J::obj(vec![("transport", J::Str("tcp".into())), ("address", J::Str(control.clone()))])),
         ("fixtures", J::Arr(fixtures.iter().map(|f| J::Str(f.to_string())).collect())),
         ("time_scale", J::Num(1.0)),
-        ("model", J::obj(vec![("tx", J::Str(if cfg.calibrated { "unlocked" } else { "locked" }.into()))])),
+        ("model", J::obj(vec![("tx", J::Str(if cfg.calibrated { "unlocked" } else { "locked" }.into())),
+                              ("f1_gate", J::Str(if cfg.f1_open { "open" } else { "closed" }.into()))])),
     ]);
     if let Some(p) = &endpoint_file {
         std::fs::write(p, ep.dump() + "\n").expect("endpoint file");
@@ -315,11 +325,39 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
             ok(J::Null)
         }
         "power.cycle" => {
-            r.reset("power-on", None);
+            if !r.not_this_firmware() {
+                r.reset("power-on", None);
+            }
             ok(J::Null)
         }
         "reset.wdt" => {
-            r.reset("watchdog", None);
+            if !r.not_this_firmware() {
+                r.reset("watchdog", None);
+            }
+            ok(J::Null)
+        }
+        "installer.state" if r.cfg.f1_open => {
+            // model only, --f1 open: what the application area holds (A1.8a item 3)
+            let i = r.mgmt.inst.as_ref();
+            let state = match r.app {
+                App::Stock => "stock",
+                App::Nothing => "nothing",
+                App::Own if i.map_or(false, |i| i.erased()) => "writing",
+                App::Own if i.is_some() => "before-erase",
+                App::Own => "own",
+            };
+            ok(J::obj(vec![
+                ("state", J::Str(state.into())),
+                ("sectors", J::Num(i.map_or(0, |i| i.sectors) as f64)),
+                ("bytes_written", J::Num(i.map_or(0, |i| i.flash.len()) as f64)),
+                ("secret_stored", J::Bool(r.mgmt.secret.is_some())),
+            ]))
+        }
+        "vendor.install" if r.cfg.f1_open => {
+            // model only, --f1 open: the vendor path through the controller puts this firmware back
+            // (A1.8a item 9): a fresh radio without a secret, its first-secret window open
+            let cfg = r.cfg.clone();
+            *r = Radio::new(cfg, now);
             ok(J::Null)
         }
         "link.set" => {

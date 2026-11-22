@@ -10,7 +10,7 @@ use std::net::Ipv4Addr;
 
 use crate::codes::mgmt::{st, *};
 use crate::crypto::{crc32, ct_eq, hmac_sha256, sha256};
-use crate::radio::{image_check, Calibration, Firmware, Image, Radio, Rx, Tx, ALL_PARAMS, LAYOUT, MS, S};
+use crate::radio::{image_check, App, Calibration, Firmware, Image, Radio, Rx, Tx, ALL_PARAMS, LAYOUT, MS, S};
 use crate::util::*;
 
 pub const CHALLENGE_LEN: usize = 16; // Annex M
@@ -43,6 +43,40 @@ pub struct Mgmt {
     pub upd: Option<Upd>,
     /// the last update command other than UPDATE_STATUS (A1.8: the 10-minute rule)
     pub last_update: Option<u64>,
+    /// the streaming installer (A1.8a item 3), only with Config::f1_open
+    pub inst: Option<Inst>,
+}
+
+/// The streaming installer of A1.8a item 3 (model option --f1 open): in RAM, so a power loss ends it.
+#[derive(Debug, Clone)]
+pub struct Inst {
+    pub len: u32,
+    pub sha: [u8; 32],
+    pub count: u32,
+    pub received: u32,
+    /// the blocks as received (the firmware keeps one sector; what matters is when it is written)
+    data: Vec<u8>,
+    /// the application area from sector 1 on, as far as it is written
+    pub flash: Vec<u8>,
+    /// sectors erased and written
+    pub sectors: u8,
+    pub verified: bool,
+    /// the session's authentication state, kept in RAM (item 7)
+    key: [u8; 32],
+}
+
+/// Sectors 1 to 7 of 128 KiB (A1.8a item 3).
+const APP_AREA: u32 = 7 * 128 * 1024;
+const SECTOR_BLOCKS: u32 = (128 * 1024 / BLOCK) as u32;
+
+impl Inst {
+    pub fn erased(&self) -> bool {
+        self.sectors > 0
+    }
+    /// The whole image is written and hashes to the owner's SHA-256.
+    pub fn complete(&self) -> bool {
+        self.flash.len() == self.len as usize && sha256(&self.flash) == self.sha
+    }
 }
 
 /// One update transfer: the header of Table M-4 and the blocks received so far.
@@ -145,11 +179,13 @@ impl Mgmt {
             conf: Conf::factory(),
             upd: None,
             last_update: None,
+            inst: None,
         }
     }
 
     pub fn on_reset(&mut self, now: u64) {
         self.last_update = None;
+        self.inst = None;
         self.challenges.clear();
         self.stored.clear();
         self.holder = None;
@@ -187,10 +223,14 @@ impl Mgmt {
         if r.update_in_progress && self.last_update.map_or(false, |t| now >= t + 600 * S) {
             // at the deadline itself: time.advance jumps past it
             let due = self.last_update.map_or(now, |t| t + 600 * S);
+            if self.inst.as_ref().map_or(false, |i| i.erased()) {
+                return; // A1.8a item 3: after the first erase the installer waits and never restarts by itself
+            }
+            let why = if self.inst.is_some() { "restart: installer-abandoned" } else { "restart: update-abandoned" };
             self.upd = None;
             self.last_update = None;
             r.now = due;
-            r.reset("software", Some("restart: update-abandoned"));
+            r.reset("software", Some(why));
             self.on_reset(due);
             r.now = now;
             return;
@@ -298,16 +338,16 @@ impl Mgmt {
         let mut verified = false;
         let mut used_challenge = [0u8; CHALLENGE_LEN];
         if needs_auth(cmd) {
-            if !authed || self.secret.is_none() {
+            let Some(key) = self.inst.as_ref().map(|i| i.key).or(self.secret).filter(|_| authed) else {
                 return self.send(r, rx, st::AUTH_REQUIRED, &[], false, cmd, out);
-            }
+            };
             let ch = self.challenges.remove(&rx.src);
             let ok = match ch {
                 Some((c, t)) if now.saturating_sub(t) <= 10 * S => {
                     used_challenge = c;
                     let mut m = c.to_vec();
                     m.extend_from_slice(&d[..18 + n]);
-                    ct_eq(&hmac_sha256(self.secret.as_ref().unwrap(), &m), &d[18 + n..])
+                    ct_eq(&hmac_sha256(&key, &m), &d[18 + n..])
                 }
                 _ => false,
             };
@@ -331,6 +371,12 @@ impl Mgmt {
         }
         let armed_or_keyed = r.armed() || r.tx.keyed;
         // 58, 57, 50
+        // A1.8a item 3 "Installer state": the installer answers only these commands
+        if self.inst.is_some() && !matches!(cmd, IDENTIFY | GET_CHALLENGE | UPDATE_BLOCK | UPDATE_STATUS | UPDATE_VERIFY
+            | UPDATE_ACTIVATE | UPDATE_ABORT)
+        {
+            return self.send(r, rx, st::UPDATE_IN_PROGRESS, &[], true, cmd, out);
+        }
         // during an update the transfer commands go on; a new UPDATE_BEGIN (and ROLLBACK) gets 58,
         // and so does UPDATE_BEGIN during an unconfirmed trial boot (A1.8, 0043)
         if ((cmd == UPDATE_BEGIN || cmd == ROLLBACK) && (r.update_in_progress || r.fw.trial.is_some()))
@@ -429,15 +475,16 @@ impl Mgmt {
             }
             // Annex M: state (u8), blocks received (u32), block count (u32), sectors written (u8)
             UPDATE_STATUS => {
-                let (state, rec, cnt) = match &self.upd {
-                    Some(u) if u.verified => (2u8, u.received, u.count),
-                    Some(u) => (1, u.received, u.count),
-                    None => (0, 0, 0),
+                let (state, rec, cnt) = match (&self.inst, &self.upd) {
+                    (Some(i), _) => (if i.erased() { 4u8 } else { 3 }, i.received, i.count),
+                    (_, Some(u)) if u.verified => (2, u.received, u.count),
+                    (_, Some(u)) => (1, u.received, u.count),
+                    _ => (0, 0, 0),
                 };
                 let mut v = vec![state];
                 v.extend_from_slice(&rec.to_be_bytes());
                 v.extend_from_slice(&cnt.to_be_bytes());
-                v.push(0);
+                v.push(self.inst.as_ref().map_or(0, |i| i.sectors));
                 (st::OK, v, None)
             }
             GET_CALIBRATION => (st::OK, cal_payload(r), None),
@@ -476,7 +523,34 @@ impl Mgmt {
                 (s, p, None)
             }
             RETURN_TO_STOCK | ENTER_VENDOR_RECOVERY => (st::NOT_SUPPORTED, vec![], None),
-            UPDATE_BEGIN => self.update_begin(r, payload, out),
+            UPDATE_BLOCK if self.inst.is_some() => self.inst_block(payload),
+            UPDATE_VERIFY if self.inst.is_some() => {
+                let i = self.inst.as_mut().unwrap();
+                i.verified = i.complete();
+                if i.verified {
+                    (st::OK, i.sha.to_vec(), None)
+                } else {
+                    (st::VERIFY_FAILED, vec![], None)
+                }
+            }
+            UPDATE_ACTIVATE if self.inst.is_some() => {
+                // without the flag 17, before a good verify 55 (T-A1-55); permanent (item 5)
+                if payload[0] & 1 == 0 {
+                    (st::MALFORMED, vec![], None)
+                } else if !self.inst.as_ref().unwrap().verified {
+                    (st::VERIFY_FAILED, vec![], None)
+                } else {
+                    (st::OK, vec![1], Some("STOCK"))
+                }
+            }
+            UPDATE_ABORT if self.inst.is_some() => {
+                if self.inst.as_ref().unwrap().erased() {
+                    (st::ONE_WAY, vec![], None)
+                } else {
+                    (st::OK, vec![1], Some("INSTALLER_ABORT"))
+                }
+            }
+            UPDATE_BEGIN => self.update_begin(r, payload, rx.src, out),
             UPDATE_BLOCK => {
                 let before = if r.store_full { self.upd.clone() } else { None };
                 let mut res = self.update_block(payload);
@@ -582,6 +656,15 @@ impl Mgmt {
             Some("RESTART") => {
                 r.reset("software", Some("restart: restart"));
                 self.on_reset(r.now);
+            }
+            Some("INSTALLER_ABORT") => {
+                // before the first erase: back into this firmware, secret and configuration unchanged
+                r.reset("software", Some("restart: installer-abandoned"));
+                self.on_reset(r.now);
+            }
+            Some("STOCK") => {
+                self.inst = None;
+                r.app = App::Stock;
             }
             Some("ACTIVATE") => {
                 // atomic switch, then the trial boot of the new image (A1.8 U-5, U-6)
@@ -699,7 +782,7 @@ impl Mgmt {
         tlv(8, &[0]); // bit 0 stock image retained = 0; bit 1 vendor recovery supported = 0
         let integ = |i: Option<&Image>| i.map_or(0, |i| i.integ);
         tlv(9, &[integ(r.fw.running_image()), integ(r.fw.other_image())]);
-        let state = if r.fw.trial.is_some() { 1 } else if r.fw.rolled_back { 2 } else { 0 };
+        let state = if self.inst.is_some() { 3 } else if r.fw.trial.is_some() { 1 } else if r.fw.rolled_back { 2 } else { 0 };
         tlv(10, &[state]);
         tlv(11, &[self.secret.is_some() as u8]);
         let w = self.window_open(r.now).map_or(0, |us| (us / S) as u16);
@@ -723,7 +806,7 @@ impl Mgmt {
             c[32..].copy_from_slice(&cal.date.to_be_bytes());
         }
         tlv(21, &c);
-        tlv(22, &[0]); // sectors written by the streaming installer (none in the model)
+        tlv(22, &[self.inst.as_ref().map_or(0, |i| i.sectors)]); // the streaming installer, with --f1 open
         tlv(23, &[r.fw.running]);
         tlv(24, &[0]); // the model's link-local address is never used unprobed
         let mut lay = Vec::new();
@@ -740,7 +823,7 @@ impl Mgmt {
     /// UPDATE_BEGIN (A1.8, Table M-4): the command-specific checks after the state checks, in the
     /// order of A1.8 (51, 63, 61), then 52 for an older image without the downgrade flag; a
     /// foreign image (A1.8a item 3) gets 56 after 51 while the F1 gate (P-SYS-5) is closed.
-    fn update_begin(&mut self, r: &mut Radio, p: &[u8], out: &mut Vec<Tx>) -> (u16, Vec<u8>, Option<&'static str>) {
+    fn update_begin(&mut self, r: &mut Radio, p: &[u8], src: Host, out: &mut Vec<Tx>) -> (u16, Vec<u8>, Option<&'static str>) {
         let flags = p[0];
         let h = &p[1..];
         if be16(h, 6) != HW_ID {
@@ -750,7 +833,10 @@ impl Mgmt {
             return (st::NOT_SUPPORTED, vec![], None); // a component this version does not know (0063)
         }
         if flags & 1 != 0 {
-            return (st::NOT_SUPPORTED, vec![], None); // F1 gate closed (P-SYS-5), A1.8a "Gate"
+            if !r.cfg.f1_open {
+                return (st::NOT_SUPPORTED, vec![], None); // F1 gate closed (P-SYS-5), A1.8a "Gate"
+            }
+            return self.foreign_begin(r, h, src, out);
         }
         let version = (h[10], h[11], be16(h, 12));
         let len = be32(h, 14);
@@ -779,6 +865,68 @@ impl Mgmt {
         let mut v = (BLOCK as u16).to_be_bytes().to_vec();
         v.extend_from_slice(&count.to_be_bytes());
         v.push(0); // not one-way
+        (st::OK, v, None)
+    }
+
+    /// A foreign UPDATE_BEGIN with the gate open (A1.8a items 3, 6, 8): 61 if it does not fit sectors
+    /// 1-7; no downgrade check. The session ends, the hand-over is logged, the installer runs. RF is
+    /// never present here, so 59 does not occur.
+    fn foreign_begin(&mut self, r: &mut Radio, h: &[u8], src: Host, out: &mut Vec<Tx>) -> (u16, Vec<u8>, Option<&'static str>) {
+        let len = be32(h, 14);
+        if len > APP_AREA {
+            return (st::TOO_LARGE_IMAGE, vec![], None);
+        }
+        let mut sha = [0u8; 32];
+        sha.copy_from_slice(&h[18..50]);
+        let count = (len as usize).div_ceil(BLOCK) as u32;
+        let Some(key) = self.secret else { return (st::AUTH_REQUIRED, vec![], None) };
+        r.begin_update(out);
+        let hex: String = sha.iter().map(|b| format!("{b:02x}")).collect();
+        r.logf(&format!("installer: foreign image by {src}, {len} bytes, SHA-256 {hex}"));
+        self.inst = Some(Inst { len, sha, count, received: 0, data: Vec::new(), flash: Vec::new(), sectors: 0, verified: false, key });
+        let mut v = (BLOCK as u16).to_be_bytes().to_vec();
+        v.extend_from_slice(&count.to_be_bytes());
+        v.push(1); // one-way
+        (st::OK, v, None)
+    }
+
+    /// UPDATE_BLOCK in the installer: order, length and CRC as for this firmware's image; a sector is
+    /// written when its last block has arrived; the secret goes with the first erase (item 7).
+    fn inst_block(&mut self, p: &[u8]) -> (u16, Vec<u8>, Option<&'static str>) {
+        let Some(i) = self.inst.as_mut() else { return (st::OUT_OF_ORDER, vec![], None) };
+        let (n, crc, data) = (be32(p, 0), be32(p, 4), &p[8..]);
+        if n >= i.count || n > i.received {
+            return (st::OUT_OF_ORDER, vec![], None);
+        }
+        let want = if n + 1 < i.count { BLOCK } else { i.len as usize - BLOCK * (i.count as usize - 1) };
+        if data.len() != want {
+            return (st::MALFORMED, vec![], None);
+        }
+        if crc32(data) != crc {
+            return (st::BAD_CRC, vec![], None);
+        }
+        let o = n as usize * BLOCK;
+        if n == i.received {
+            i.data.extend_from_slice(data);
+            i.received += 1;
+        } else {
+            i.data[o..o + data.len()].copy_from_slice(data);
+        }
+        i.verified = false;
+        if (n + 1) % SECTOR_BLOCKS == 0 || n + 1 == i.count {
+            let s = n / SECTOR_BLOCKS;
+            let start = (s * SECTOR_BLOCKS) as usize * BLOCK;
+            let end = o + data.len();
+            if i.flash.len() < end {
+                i.flash.resize(end, 0xFF);
+            }
+            i.flash[start..end].copy_from_slice(&i.data[start..end]);
+            i.sectors = i.sectors.max(s as u8 + 1);
+            self.secret = None;
+            self.window_used = true; // no first-secret window in the installer
+        }
+        let mut v = n.to_be_bytes().to_vec();
+        v.extend_from_slice(&self.inst.as_ref().map_or(0, |i| i.received).to_be_bytes());
         (st::OK, v, None)
     }
 
