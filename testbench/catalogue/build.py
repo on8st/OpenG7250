@@ -160,6 +160,8 @@ OVERRIDES: dict[str, dict] = {
     "T-A2-14": {**TXR, "notes": ["KEY part not in v1.0 (0030)"]},
     # A3: whole group needs a transmission, except these
     **{t: TXR for t in [f"T-A3-{n:02d}" for n in range(1, 58)]},
+    "T-A3-51": {**TXR, "also": ["host", "emulator"],
+                "notes": ["only the clamp's log entry and counter are built (no arm needed); never a pass until the hang delay is"]},
     "T-A3-03": {"target": "emulator", "also": ["host"], "tx_part": False,
                 "notes": ["LIMIT_* writes need register group 2 only, no arm"]},
     "T-A3-06": {"target": "emulator", "also": ["host", "needs-radio"], "tx_part": False,

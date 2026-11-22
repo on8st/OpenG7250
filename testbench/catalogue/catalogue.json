@@ -3466,14 +3466,17 @@
    "scope": "v1.0",
    "target": "needs-radio",
    "also": [
-    "host"
+    "host",
+    "emulator"
    ],
    "needs": [
     "hw.observe"
    ],
    "pending": [],
    "tx_part": true,
-   "notes": []
+   "notes": [
+    "only the clamp's log entry and counter are built (no arm needed); never a pass until the hang delay is"
+   ]
   },
   {
    "id": "T-A3-52",

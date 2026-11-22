@@ -459,7 +459,7 @@ impl Radio {
             update_in_progress: false,
             link_mbit: 100,
             // the counters whose names the spec gives are listed from the start, at 0
-            stats: ["hp_rx", "cw_speed_clamped"].iter().map(|n| (n.to_string(), 0)).collect(),
+            stats: ["hp_rx", "cw_speed_clamped", "cw_hang_clamped"].iter().map(|n| (n.to_string(), 0)).collect(),
             log: Vec::new(),
             log_seq: 0,
             log_corrupt: None,
@@ -1191,8 +1191,15 @@ impl Radio {
                     self.count("cw_speed_clamped");
                     self.logf(&format!("CW speed {} used as 60", d[9]));
                 }
-                let (set, _) = self.keyer_settings();
+                let (set, break_in) = self.keyer_settings();
                 self.keyer.set = set;
+                // Table B10-1 bytes 11-12 (0022 §83 item 1): used with break-in set only. The model
+                // logs and counts the clamp; it has no hang delay itself.
+                let hang = if d.len() > 12 { be16(d, 11) } else { 0 };
+                if break_in && hang > 2000 {
+                    self.count("cw_hang_clamped");
+                    self.logf(&format!("CW hang delay {hang} clamped to 2000"));
+                }
             }
             CcKind::Hp => self.apply_hp(d, out),
         }

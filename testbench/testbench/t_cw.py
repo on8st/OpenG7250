@@ -291,6 +291,38 @@ def t_b10_44(ctx):
             cw.idle(0.2)
 
 
+@test("T-A3-51", whole=True)
+def t_a3_51(ctx):
+    """Table B10-1 bytes 11-12 (0022 §83 item 1): the clamp logged and counted; it needs no arm. The
+    hang delay itself does not run here, so this never gives a pass."""
+    with Host(ctx.net) as h, Mgmt(ctx.net) as c:
+        h.start()
+        try:
+            def after(hang: int, until):
+                """One DUC-specific packet with break-in and this hang delay; counter rise and new log texts."""
+                n = (ctx.got(stats(c), "GET_STATS")).get("cw_hang_clamped", 0)
+                last = max([e[0] for e in read_log(c, complete=True)], default=-1)
+                h.send(PORT_DUC, duc_specific(cw=BREAK_IN, hang=hang))
+                end = time.monotonic() + 5
+                while True:
+                    h.keepalive()
+                    h.drain(0.2)
+                    rise = ctx.got(stats(c), "GET_STATS").get("cw_hang_clamped", 0) - n
+                    texts = [e[2] for e in read_log(c, last + 1, complete=True)]
+                    if until(rise, texts) or time.monotonic() > end:
+                        return rise, texts
+            said = lambda texts: any("CW hang delay 5000 clamped to 2000" in t for t in texts)
+            rise, texts = after(5000, lambda r, t: r > 0 and said(t))
+            ctx.check("hang delay 5000 with break-in: logged 'CW hang delay 5000 clamped to 2000'", said(texts), f"{texts}")
+            ctx.check("and counted in GET_STATS cw_hang_clamped", rise >= 1, f"+{rise}")
+            rise, texts = after(2000, lambda r, t: False)
+            ctx.eq("hang delay 2000: neither counted nor logged as clamped", (rise, [t for t in texts if "CW hang delay" in t]), (0, []))
+        finally:
+            h.stop()
+    ctx.part("'the hang delay in force is 2000 ms' and its end by the keyed timeout not run: not built (needs a key-down; the "
+             "reference model has no hang delay)")
+
+
 def one_dot_then(ctx, cw: Cw, label: str, press_ms: int, release_ms: int):
     """One dot (press 0, release 30: inside the mark), then the dot paddle again from press_ms
     to release_ms."""

@@ -1,6 +1,7 @@
-"""T-A1-28: what counts as a logged loosening (A1.6, A1.7). No network. GPL-3.0-or-later, (c) 2026 ON8ST."""
+"""T-A1-28: what counts as a logged loosening (A1.6, A1.7); T-A1-26: a counted excess. No network. GPL-3.0-or-later, (c) 2026 ON8ST."""
 import unittest
 
+from testbench.t_mgmt import counted_excess
 from testbench.t_store import logged_change, names_value
 
 IP = "192.168.7.9"
@@ -35,6 +36,17 @@ class Logged(unittest.TestCase):
     def test_values(self):
         self.assertTrue(names_value("a 80.0 b", 800, (1, 10)))
         self.assertFalse(names_value("a 80.5 b", 800, (1, 10)))
+
+
+class Excess(unittest.TestCase):
+    def test_a_counter_rises_by_it(self):
+        self.assertTrue(counted_excess({"drop": 3, "rx": 10}, {"drop": 28, "rx": 56}, 25)[0])
+        self.assertTrue(counted_excess({}, {"drop": 25}, 25)[0])  # not listed while 0
+
+    def test_not_counted(self):
+        self.assertFalse(counted_excess({"rx": 10}, {"rx": 56}, 25)[0])
+        self.assertFalse(counted_excess({"drop": 25}, {"drop": 25}, 25)[0])
+        self.assertFalse(counted_excess({"drop": 0}, {"drop": 24}, 25)[0])
 
 
 if __name__ == "__main__":

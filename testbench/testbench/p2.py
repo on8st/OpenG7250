@@ -67,13 +67,14 @@ def ddc_specific(rate: int = 192, enable: bool = True, size: int = 24) -> bytes:
 
 
 def duc_specific(rate: int = 192, bits: int = 24, eer: bool = False, cw: int = 0,
-                 speed: int = 0, weight: int = 0) -> bytes:
+                 speed: int = 0, weight: int = 0, hang: int = 0) -> bytes:
     """[P2] DUC specific packet: byte 5 bit [0] EER, the CW option bits [1]-[7] in `cw`
-    (Table B10-1); byte 9 keyer speed, byte 10 weight."""
+    (Table B10-1); byte 9 keyer speed, byte 10 weight, bytes 11-12 hang delay in ms."""
     b = bytearray(60)
     b[5] = (1 if eer else 0) | (cw & 0xFE)
     b[9] = speed
     b[10] = weight
+    struct.pack_into(">H", b, 11, hang)
     struct.pack_into(">H", b, 14, rate)
     b[16] = bits
     return bytes(b)
