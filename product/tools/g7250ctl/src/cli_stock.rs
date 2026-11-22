@@ -161,6 +161,19 @@ pub fn run(json: bool, policy: g7250ctl::transport::Policy, cmd: &StockCmd) -> O
                     let (code, text) = fail(f);
                     let after = match left {
                         Some(StockLeft::AbortedBeforeErase) => "; aborted before the first erase: the radio restarts into this firmware, secret and configuration unchanged".to_string(),
+                        Some(StockLeft::AbortNotConfirmed { status, state, received, count, sectors }) => format!(
+                            "; the abort was not confirmed ({}); UPDATE_STATUS last showed state {state} ({}), {received} of {count} blocks, {sectors} sectors written. Check with `g7250ctl status`: before the first erase `g7250ctl abort` can be tried again, or `install-stock --resume` continues",
+                            match status {
+                                Some(c) => format!("UPDATE_ABORT answered {c}"),
+                                None => "no valid reply to UPDATE_ABORT".into(),
+                            },
+                            match state {
+                                stock::STATE_INSTALLER_BEFORE_ERASE => "installer, before the first erase",
+                                stock::STATE_INSTALLER_WRITING => "installer writing: no way back",
+                                0 => "idle",
+                                _ => "other",
+                            }
+                        ),
                         Some(StockLeft::Writing { sectors }) => format!(
                             "; the installer has erased and written {sectors} sectors: there is no way back. It waits for blocks with no time limit: run `install-stock --resume` with the same image. Keep the power on; after a power loss only the vendor's update path on the controller helps"
                         ),

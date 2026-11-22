@@ -113,9 +113,14 @@ pub enum StockOutcome {
 /// What a failure left behind, for the message (the error itself is returned as well).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StockLeft {
-    /// Before the first erase: `UPDATE_ABORT` was sent; the radio restarts into this firmware,
-    /// secret and configuration unchanged.
+    /// Before the first erase: `UPDATE_ABORT` answered 0; the radio restarts into this
+    /// firmware, secret and configuration unchanged.
     AbortedBeforeErase,
+    /// Before the first erase, but `UPDATE_ABORT` did not answer 0: `status` is its answer
+    /// (`None`: no reply, or a reply that does not decode). `state`, `received`, `count` and
+    /// `sectors` are what `UPDATE_STATUS` last showed (read again after the abort when it
+    /// answers).
+    AbortNotConfirmed { status: Option<u16>, state: u8, received: u32, count: u32, sectors: u8 },
     /// The installer has erased (the secret too) and is writing: no way back; it waits for
     /// blocks with no time limit (`install-stock --resume`). A power loss now needs the vendor
     /// path through the controller (A1.8a item 3 "No way back").
@@ -234,12 +239,21 @@ fn activate(client: &mut Client, to: SocketAddr, secret: &Secret) -> Result<Stoc
 /// installer waiting.
 fn after_failure(client: &mut Client, to: SocketAddr, secret: &Secret, ev: &mut dyn FnMut(Event)) -> StockLeft {
     match update::update_status(client, to) {
-        Ok(st) if st.state == STATE_INSTALLER_BEFORE_ERASE => {
-            if let Ok(restart_needed) = update::abort(client, to, secret) {
+        Ok(st) if st.state == STATE_INSTALLER_BEFORE_ERASE => match update::abort(client, to, secret) {
+            Ok(restart_needed) => {
                 ev(Event::Aborted { restart_needed });
+                StockLeft::AbortedBeforeErase
             }
-            StockLeft::AbortedBeforeErase
-        }
+            Err(f) => {
+                // No reply, 33, 35, 60, ...: nothing says the installer gave up.
+                let status = match &f {
+                    Failure::Status(a, _) => Some(a.status_code),
+                    _ => None,
+                };
+                let last = update::update_status(client, to).unwrap_or(st);
+                StockLeft::AbortNotConfirmed { status, state: last.state, received: last.received, count: last.count, sectors: last.sectors_written }
+            }
+        },
         Ok(st) if st.state == STATE_INSTALLER_WRITING => StockLeft::Writing { sectors: st.sectors_written },
         Ok(_) => StockLeft::Nothing,
         Err(_) => StockLeft::Unknown,

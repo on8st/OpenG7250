@@ -47,6 +47,8 @@ struct Radio {
     /// Status 53 to this block, this many times.
     crc_fail: Option<(u32, u32)>,
     drop_activate_reply: bool,
+    /// The answer to `UPDATE_ABORT` in state 3, instead of aborting: `Some(None)` is silence.
+    abort_answer: Option<Option<u16>>,
     /// The activation ran with its reply lost: the next request (the retransmission) meets the
     /// spent challenge and gets 33, then the stock firmware runs and nothing answers.
     switching: bool,
@@ -73,6 +75,9 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
     }
     let id = id_of(d);
     let cmd = u16::from_be_bytes(cmd_of(d));
+    if cmd == 0x44 && r.state == 3 && r.abort_answer == Some(None) {
+        return None; // a lost UPDATE_ABORT: neither it nor its retransmissions arrive
+    }
     let n = u16::from_be_bytes([d[16], d[17]]) as usize;
     let payload = d[18..18 + n].to_vec();
     let auth_ok = d[7] & 1 != 0 && r.challenges.get(&from).is_some_and(|ch| hmac(&SECRET, &[ch, &d[..18 + n]]) == d[18 + n..18 + n + 32]);
@@ -175,6 +180,7 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
                 reply_of(0, &[1])
             }
         }
+        0x44 if r.state == 3 && let Some(Some(code)) = r.abort_answer => reply_of(code, &[]),
         0x44 => match r.state {
             4 => reply_of(60, &[]),
             3 => {
@@ -315,6 +321,19 @@ fn a_failure_before_the_first_erase_is_aborted() {
 }
 
 #[test]
+fn an_abort_that_is_not_answered_0_is_not_told_as_aborted() {
+    // The coordinator's case: no reply, 33, 35 or 60 to UPDATE_ABORT is no abort.
+    let img = image(512 * 3);
+    for answer in [None, Some(33), Some(35), Some(60)] {
+        let (addr, st) = start(Radio { crc_fail: Some((0, 3)), abort_answer: Some(answer), ..open_gate() });
+        let mut left = None;
+        stock::install_stock(&mut client(),addr, &Secret(SECRET), &package(&img), opts(), &mut |_| {}, &mut left).unwrap_err();
+        assert_eq!(left, Some(StockLeft::AbortNotConfirmed { status: answer, state: 3, received: 0, count: 3, sectors: 0 }), "{answer:?}");
+        assert!(!st.lock().unwrap().restarted_into_this_firmware);
+    }
+}
+
+#[test]
 fn a_failure_after_the_first_erase_is_never_aborted_and_resume_completes_it() {
     // The first erase comes after two blocks; block 2 then fails.
     let img = image(512 * 4);
@@ -419,4 +438,16 @@ fn binary_resume_while_writing_does_not_ask() {
     let c = cmds(&st);
     assert_eq!(c.iter().filter(|x| **x == 0x41).count(), 2, "blocks 1 and 2 only: {c:x?}");
     assert!(st.lock().unwrap().activated);
+}
+
+#[test]
+fn binary_an_abort_answered_35_is_told_as_not_confirmed() {
+    let img = image(512 * 3);
+    let (secret, image, sha) = files("abort35", &img);
+    let (addr, _st) = start(Radio { crc_fail: Some((0, 3)), abort_answer: Some(Some(35)), ..open_gate() });
+    let out = run_binary(addr, &["install-stock", image.to_str().unwrap(), "--sha256", &sha, "--yes", "--secret-file", secret.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("the abort was not confirmed (UPDATE_ABORT answered 35)"), "{err}");
+    assert!(err.contains("state 3 (installer, before the first erase), 0 of 3 blocks"), "{err}");
+    assert!(!err.contains("restarts into this firmware"), "{err}");
 }
