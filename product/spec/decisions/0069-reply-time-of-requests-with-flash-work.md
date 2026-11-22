@@ -42,13 +42,21 @@ window for every management request that may do flash work.
      longer than until the next start). `CHANGE_SECRET` does not end in a reset, so it gets
      one erase, before its reply: the new secret is always written by a compaction into the
      other store sector, which erases that sector and writes the live items there with the new
-     secret, so the sector with the old secret is no longer live (it is "stale"). The stale
+     secret, so the sector with the old secret is no longer live (it is "stale"). Because
+     `CHANGE_SECRET` always compacts, the live sector never holds an older secret record
+     (firmware input, 2026-11-22: an appended record would need a second erase). The stale
      sector is erased by whichever comes first: the next compaction (it is then the sector
-     that compaction erases), or the next start, before the management socket opens. It is
-     not erased on its own at any other time, so that no flash work starts outside a request
-     or a start (B2.3). Exception: if at that start the store has to fall back to the stale
-     sector's generation (0065 point 5, newest commit word unreadable), the stale sector is the
-     live one and is kept; this is logged. `SET_FIRST_SECRET` never replaces a secret: the
+     that compaction erases), or the start check below. It is not erased on its own at any
+     other time, so that no flash work starts outside a request or a start (B2.3).
+   - **Start check** (firmware proposal, 2026-11-22). At every start, before the management
+     socket opens, the firmware checks the non-live store sector; if it holds a secret record
+     other than the live secret (or any secret record while the live generation has none, as
+     after a factory reset), it erases that sector once and logs `store: stale secret
+     erased`. This is safe because the live sector holds a complete generation. It covers a
+     secret left by `CHANGE_SECRET` and an erase left unfinished by a `FACTORY_RESET`. A
+     non-live sector that holds only the live secret is left as it is. Exception: if the store
+     has to fall back to the non-live sector's generation at that start (0065 point 5, newest
+     commit word unreadable), that sector is the live one and is kept; this is logged. `SET_FIRST_SECRET` never replaces a secret: the
      first-secret window opens only while no secret is set (A1.10), and a factory reset erases
      the old secret from both sectors (above).
 2. **Reply bound for the radio.** The G7250 MUST send the reply to such a request within

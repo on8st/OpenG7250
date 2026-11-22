@@ -40,8 +40,8 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   erases after its reply and before the reset (reset within 17 s of the reply); `FACTORY_RESET`
   erases the old secret from both store sectors this way.
 - 0069: `CHANGE_SECRET` writes the new secret by a compaction before its reply; the stale
-  sector with the old secret is erased by the next compaction or at the next start, whichever
-  comes first. A1.10 "The old secret in flash"; T-A1-92 new.
+  sector with the old secret is erased by the next compaction or by a start check (the
+  non-live sector erased once, logged, if it holds a secret other than the live one). A1.10 "The old secret in flash"; T-A1-92 new.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 
