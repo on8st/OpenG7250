@@ -141,7 +141,7 @@ Two firmware readings, relayed by the openg7250 session, 2026-11-22.
      Other store writes at a start erase as A1.6 "Store writes" says: the boot counter or the
      boot record compacts when the live sector is full, and finishing a factory reset compacts;
      each erases the other sector first. These rules say only when the start check erases.
-   - **Accepted consequence.** In the first case above, the owner's first `SET_CONFIG` or
+   - **Accepted consequence.** In the first case above, the owner's first `SET_CONFIG` (with no C-3 item; 0072) or
      `SET_CALIBRATION` after it writes a record of the list into sector 7, and the next start
      check erases sector 6. That is meant: sector 6's generation has not been in use since its
      commit word became unreadable.

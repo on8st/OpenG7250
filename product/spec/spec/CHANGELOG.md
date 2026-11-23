@@ -10,9 +10,9 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - The 0067 addenda (log words; full store, status 64) and the 0068 addendum (build readings)
   accepted by ON8ST on 2026-11-22.
 - The 0069 addendum (start check) accepted by ON8ST on 2026-11-22, as it stands at `78aa233`.
-- 0072 (C-3 limits that may be lost) accepted in principle by ON8ST on 2026-11-22 and held
-  for the point with Table M-3 (ending the lost state before the calibration set holds S2 and
-  T3); the number is reserved, and none of its text is in the spec yet.
+- 0072 (C-3 limits that may be lost) accepted in principle by ON8ST on 2026-11-22, held, and
+  accepted in full on 2026-11-23 (reading (b), points A to I, option (i)).
+- 0079 accepted by ON8ST on 2026-11-23 (option (a)).
 - 0073, 0074, 0075, 0076, 0077, 0078 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
@@ -108,6 +108,19 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   to 0073); power lost with every sector written may leave an unchecked stock image; from the
   first erase `IDENTIFY` reports no secret and no window, and `SET_FIRST_SECRET` gets 36.
   A1.8a item 3, A1.10, B2.3; T-A1-60, T-A1-15 extended.
+- 0079 (accepted 2026-11-23; firmware questions while fixing T-A1-28): the built-in power limit
+  at 50 MHz is 0 W until P-PWR-2, so the record and `GET_CONFIG` carry 0 there and a C-3 limit
+  above 0 gets 49; the `SET_CONFIG` reply gives the items as `GET_CONFIG` does (tags 9 and 10
+  only with S2 and T3 in the calibration set). A1.6 C-3, A3.4c, B4.8 `tx_band`, Table M-1;
+  T-A1-28, T-A1-96 extended.
+- 0072 (accepted 2026-11-23; a C-3 limit with no readable record): a lost tightening never
+  comes back as a looser limit. A C-3 write always compacts into a new generation; the
+  generation number is kept in two places; a failed newer generation counts and gives the
+  stricter values; a C-3 state record keeps the judgment before a newer uncommitted sector is
+  erased; C-3 that cannot be read is lost, TX closed on every band until a `SET_CONFIG` of
+  every C-3 item (48 for a partial one while lost). A1.6 C-3 and "Store writes", Table A1-4,
+  A1.8a item 9; T-A1-86, T-A1-87, T-A1-92, T-A1-39, T-A3-47 extended; the 0069 addendum's
+  accepted consequence narrowed to a `SET_CONFIG` with no C-3 item.
 - 0078 (accepted 2026-11-22; testbench questions on 0073 to 0077): the evidence of a commanded
   reset is a commanded-reset word in kept RAM, set last on every commanded-reset path, cleared by
   the fault handler and, at every start, by the boot stage; it names the reason line's sequence
