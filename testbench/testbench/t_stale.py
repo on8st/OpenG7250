@@ -21,9 +21,9 @@ import os
 from .core import Ctx, PartSkip, RadioClock, test
 from .mgmt import Mgmt, identify
 from .p2 import wait_reachable
-from .t_flash import (REPLY_S, SECTOR, compaction_writes, cut_at_word, cut_entry, double_ecc, flog, flog_start, in_range, is_erase, mg, need,
-                      plain, planned_cuts_seen, set_plain, store_range, words)
-from .t_store import address, change_secret, first_secret, has, keep_secret, sectors, where
+from .t_flash import (LOST_LINE, REPLY_S, SECTOR, compaction_writes, cut_at_word, cut_entry, double_ecc, flog, flog_start, in_range, is_erase,
+                      mg, need, plain, planned_cuts_seen, set_plain, set_tx_time, store_range, tx_time, words)
+from .t_store import BUILT_IN_TX_MS, address, change_secret, first_secret, has, keep_secret, sectors, where
 from .t_update import secret, updating
 from .update import Updater
 
@@ -200,7 +200,8 @@ def t_a1_92(ctx: Ctx):
     slot = ident(ctx).get(23, b"")[:1]
     if has(ctx, "sock.log"):
         ctx.fixture("sock.log", action="start")
-    cases = [stale_at_start, compaction, unrecognised_word, cut_erase, cut_compaction, fall_back, lost_sector, foreign, config_only]
+    cases = [stale_at_start, compaction, unrecognised_word, cut_erase, cut_compaction, fall_back, older_generation, lost_sector, foreign,
+             config_only]
     broken = ""
     try:
         for case in cases:
@@ -521,6 +522,10 @@ def foreign(ctx, st: State):
         st.left(label, entries, x, full[x] if st.dump else None)
     t = ident(ctx)
     ctx.eq(f"{label}: Table A1-4 values: no secret, the window open (tags 11, 12)", (t.get(11), t.get(12, b"")[:1]), (b"\x00", b"\x01"))
+    with Mgmt(ctx.net) as c:
+        ms = tx_time(Updater(c, b""))
+    ctx.eq(f"{label}: C-3 takes the built-in values (TX time {BUILT_IN_TX_MS} ms; 0072)", ms, BUILT_IN_TX_MS)
+    ctx.check(f"{label}: no '{LOST_LINE}' line", not any(LOST_LINE in x for x in run_texts(ctx)), f"{run_texts(ctx)[-3:]}")
     new = os.urandom(32)
     flog_start(ctx)
     if not ctx.eq(f"{label}: the first store write works (SET_FIRST_SECRET 0)", first_secret(ctx, new), 0):
@@ -537,6 +542,43 @@ def foreign(ctx, st: State):
     st.lines(f"{label}, with a first generation", (UNREC,))
     st.gone(f"{label}, with a first generation", rest[0])
     ctx.eq(f"{label}: the secret is kept", accepts(ctx, new), 0)
+
+
+def older_generation(ctx, st: State):
+    """0072 point I: with G live and committed and the older generation G-1 in the other sector, G-1's
+    commit word given a double ECC error: C-3 is G's, TX is not closed, and the start check erases
+    G-1's sector as unrecognised data. Each generation is a C-3 write (always a compaction); a
+    commit word is the last word its compaction programmed (its place is the firmware's choice)."""
+    label = "G-1's commit word unreadable, G live"
+    with mg(ctx, st.cur) as u:
+        tx0 = tx_time(u)
+        if tx0 is None:
+            ctx.part(f"{label}: not run, GET_CONFIG gives no TX time")
+            return None
+        made = []
+        for ms in (tx0 - 20, tx0 - 40):  # G-1, then G (tighter)
+            flog_start(ctx)
+            r = set_tx_time(u, ms)
+            entries = flog(ctx)
+            if not ctx.eq(f"{label}: the C-3 write of {ms}: 0", r["status"] if r else None, 0):
+                return False
+            made.append((commit_word(entries, st.secs), which(st.secs, store_erases(entries, st.secs))))
+    (w1, er1), (w2, er2) = made
+    if w1 is None or w2 is None or len(er1) != 1 or len(er2) != 1 or er1 == er2:
+        ctx.part(f"{label}: not run, the two C-3 writes are not two compactions into the two sectors "
+                 f"(erases {[hex(x) for x in er1]}, {[hex(x) for x in er2]})")
+        return None
+    older = st.other(er2[0])  # G was written into the sector erased for it; G-1 is in the other
+    double_ecc(ctx, w1)
+    er = which(st.secs, store_erases(st.restart("a power cycle"), st.secs))
+    with mg(ctx, st.cur) as u:
+        ms = tx_time(u)
+        ctx.eq(f"{label}: C-3 is G's (TX time {tx0 - 40})", ms, tx0 - 40)
+        ctx.check(f"{label}: TX not closed: no '{LOST_LINE}' line", not any(LOST_LINE in x for x in run_texts(ctx)), f"{run_texts(ctx)[-3:]}")
+        ctx.eq(f"{label}: the start check erases G-1's sector once, and nothing else", er, [older])
+        st.lines(label, (UNREC,))
+        set_tx_time(u, tx0)
+    ctx.part(f"{label}: the same with G-1's number unreadable in both places: not run, its places are the firmware's choice")
 
 
 def config_only(ctx, st: State):
@@ -590,6 +632,6 @@ def config_only(ctx, st: State):
 
 
 NEEDS = {unrecognised_word: ("flash.fill",), cut_erase: ("power.cut",), cut_compaction: ("power.cut",),
-         fall_back: ("flash.ecc", "power.cycle"), lost_sector: ("flash.ecc", "power.cycle"),
+         fall_back: ("flash.ecc", "power.cycle"), older_generation: ("flash.ecc", "power.cycle"), lost_sector: ("flash.ecc", "power.cycle"),
          foreign: ("flash.fill", "power.cycle"), config_only: ("flash.fill", "flash.ecc", "power.cycle")}
 WIPES = (lost_sector, foreign, config_only)

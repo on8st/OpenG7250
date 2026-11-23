@@ -297,9 +297,12 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-92": {"target": "emulator", "also": [], "needs": ["flash.log"],
                 "notes": ["what the sectors hold needs flash.dump; the cases of the 0069 addendum need flash.ecc, "
                           "power.cut and flash.fill",
-                          "the erase cuts inside the old secret's record are placed from a dump and take the emulator's erase to run "
-                          "from the start of the sector (a model assumption)",
-                          "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: " + ECC_LIMIT]},
+                          "the erase cuts inside the old secret's record are placed from a dump as if the erase ran from the start "
+                          "of the sector (an assumption that only places the cut; the verdict is what flash.log and the dump show)",
+                          "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: " + ECC_LIMIT,
+                          "0072: foreign data in both sectors (built-in C-3, no lost line) and G-1's commit word unreadable with G "
+                          "live; the C-3 state record cases and G-1's number unreadable are parts, not run yet (places the "
+                          "firmware's choice)"]},
     "T-A1-93": {"target": "host", "also": [], "needs": [],
                 "notes": ["g7250ctl's own test against the reference model (0070); not run by this bench"]},
     "T-A1-83": {"target": "emulator", "also": [], "needs": ["power.cut", "time.advance", "flash.log", "hw.trace"]},
@@ -311,7 +314,10 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-90": {"target": "emulator", "also": ["host"], "needs": ["time.advance", "slot.corrupt"],
                 "notes": ["needs slot.corrupt; the both-slots case only on an emulator"]},
     "T-A1-85": {"target": "emulator", "also": [], "needs": ["flash.fault"]},
-    "T-A1-86": {"target": "emulator", "also": [], "needs": ["flash.log", "power.cut"]},
+    "T-A1-86": {"target": "emulator", "also": [], "needs": ["flash.log", "power.cut"],
+                "notes": ["0072: the commit word of a C-3 write is taken as the last word it programs; the cases that need a "
+                          "store where C-3 was never written, the start check's erase cut and a sector left by a cut compaction "
+                          "are parts, not run yet"]},
     "T-A1-87": {"target": "emulator", "also": ["host"], "needs": ["flash.log", "flash.ecc", "power.cycle"], "pending": [],
                 "notes": ["on the emulator 'without a fault or reset' is not covered: " + ECC_LIMIT,
                           "not blocked by P-PWR-2: S2 and T3 come from a simulated set (0072 point B)",

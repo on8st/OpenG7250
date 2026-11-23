@@ -1897,7 +1897,9 @@
    ],
    "pending": [],
    "tx_part": false,
-   "notes": [],
+   "notes": [
+    "0072: the commit word of a C-3 write is taken as the last word it programs; the cases that need a store where C-3 was never written, the start check's erase cut and a sector left by a cut compaction are parts, not run yet"
+   ],
    "timeout_s": 1800
   },
   {
@@ -1976,8 +1978,9 @@
    "tx_part": false,
    "notes": [
     "what the sectors hold needs flash.dump; the cases of the 0069 addendum need flash.ecc, power.cut and flash.fill",
-    "the erase cuts inside the old secret's record are placed from a dump and take the emulator's erase to run from the start of the sector (a model assumption)",
-    "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip gives on the read"
+    "the erase cuts inside the old secret's record are placed from a dump as if the erase ran from the start of the sector (an assumption that only places the cut; the verdict is what flash.log and the dump show)",
+    "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip gives on the read",
+    "0072: foreign data in both sectors (built-in C-3, no lost line) and G-1's commit word unreadable with G live; the C-3 state record cases and G-1's number unreadable are parts, not run yet (places the firmware's choice)"
    ],
    "timeout_s": 2700
   },

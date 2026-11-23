@@ -23,7 +23,8 @@ def word(kind: bytes, value: int = 0) -> bytes:
 
 class Store:
     """Words of 32 bytes: F first generation, H n compacted generation n, S then 32 bytes a secret,
-    T a configuration value, B the boot counter, C n the commit of generation n."""
+    T a configuration value, X the C-3 TX time (written only by a compaction, 0072), B the boot counter,
+    C n the commit of generation n."""
 
     def __init__(self, secret, broken=""):
         self.mem, self.ecc = {A: {}, B: {}}, set()
@@ -78,7 +79,7 @@ class Store:
             w, ok = m[k], x + k * W not in self.ecc
             c = w[:1]
             n = struct.unpack(">I", w[1:5])[0]
-            valid = ok and w[5:] == b"\0" * (W - 5) and c in b"FHSTBC"
+            valid = ok and w[5:] == b"\0" * (W - 5) and c in b"FHSTBCX"
             if k - 1 in m and m[k - 1] == word(b"S") and x + (k - 1) * W not in self.ecc and k != 0:
                 if ok:
                     recs.append((b"S", w))
@@ -92,7 +93,7 @@ class Store:
                 gen = ("new", n)
             elif c == b"C":
                 gen, junk = (("committed", n), junk) if gen == ("new", n) else (gen, True)
-            elif c in b"TB":
+            elif c in b"TBX":
                 recs.append((c, n))
             elif c == b"S" and k + 1 not in m:
                 junk = True
@@ -130,14 +131,15 @@ class Store:
             words = [word(b"F")] + words
         self.program(x, words)
 
-    def compact(self, secret=None):
+    def compact(self, secret=None, c3=None):
         x, live = self.other(self.live()), self.live()
         n = self.read(live)[0][1] + 1
-        secret, cfg = secret or self.secret, self.get(b"T")
+        secret, cfg, c3 = secret or self.secret, self.get(b"T"), c3 or self.get(b"X")
         self.erase(x)
         if self.broken == "two-erases":
             self.erase(live)
-        body = [word(b"H", n)] + ([word(b"S"), secret] if secret else []) + ([word(b"T", cfg)] if cfg else [])
+        body = [word(b"H", n)] + ([word(b"S"), secret] if secret else []) + ([word(b"T", cfg)] if cfg else []) + \
+            ([word(b"X", c3)] if c3 else [])
         self.program(x, body + [word(b"C", n)])
 
     def config(self, ms):
@@ -301,7 +303,8 @@ def run(broken="", without=()):
         return dict(status=0)
     new = dict(mg=mg, updating=updating, change_secret=change, compaction_writes=compaction, secret=lambda c: original,
                wait_reachable=lambda *a, **k: 0.0, sectors=lambda u: [A, B], store_range=lambda u: (A, B + SECTOR),
-               first_secret=first, set_plain=config, plain=lambda u: st.get(b"T"), accepts=lambda c, s: 0 if s == st.secret else 33,
+               first_secret=first, set_plain=config, plain=lambda u: st.get(b"T"),
+               set_tx_time=lambda u, ms, window=None: safely(lambda: st.compact(c3=ms)), tx_time=lambda u: st.get(b"X") or 300_000, accepts=lambda c, s: 0 if s == st.secret else 33,
                ident=lambda c: {11: b"\1" if st.secret else b"\0", 12: b"\0" if st.secret else b"\1\1\x2c", 23: b"\1"},
                Mgmt=mock.MagicMock(), run_texts=lambda c: [e[2] for e in st.log[t_log.last_start(st.log):]])
     with mock.patch.multiple(t_stale, **new):
@@ -318,7 +321,8 @@ class OldSecret(unittest.TestCase):
     def test_correct_store(self):
         ctx = run()
         self.assertEqual(failed(ctx), [])
-        self.assertEqual(ctx.parts, [])  # every case ran to its end
+        # every case ran to its end; what needs a place only the firmware knows is a part
+        self.assertEqual([p for p in ctx.parts if "firmware's choice" not in p], [])
         self.assertEqual(ctx.notes.count(t_flash.ECC_LIMIT), 1)  # what the emulator cannot show is in the result, once
         self.assertEqual(ctx.store.secret, bytes(range(32)))  # put back
 
@@ -326,7 +330,8 @@ class OldSecret(unittest.TestCase):
         names = " ".join(c["name"] for c in run().checks)
         for what in ("a second start: nothing erased", "only the live secret is not erased", "foreign word at offset 0x1ffe0", "first word of the old secret: completed", "one word further on: completed", "cut at 0.1, not erased again", "cut at 0.9, not erased again",
                      "cut at word 1 ", "the old secret authenticates, the new one gets 33", "lost sector 6, the second start",
-                     "the next start erases sector 6 once", "the next start erases the other sector", "the first generation kept"):
+                     "the next start erases sector 6 once", "the next start erases the other sector", "the first generation kept",
+                     "C-3 is G's", "erases G-1's sector once", "C-3 takes the built-in values"):
             self.assertIn(what, names)
 
     def test_parts_without_a_fixture(self):
