@@ -228,6 +228,32 @@ fn authenticated_requests_before_a_secret_exists_t_a1_99() {
 }
 
 #[test]
+fn five_failures_in_10_s_give_34_and_a_32_does_not_count() {
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let mut b = [0u8; 1000];
+    // Four wrong HMACs (33), then ten requests without a trailer (32): still no 34.
+    for i in 0..4u32 {
+        let n = mgmt::build_request(&mut b, 100 + i, Command::SetConfig, &[], Some((&[1; 32], &[2; 16]))).unwrap();
+        assert_eq!(w.call(&mut s, HOST, &b[..n], 100 * i as u64).unwrap().1, Status::AuthFailed);
+    }
+    for i in 0..10u32 {
+        assert_eq!(w.call(&mut s, HOST, &req(120 + i, Command::SetConfig, &[]), 400 + 60 * i as u64).unwrap().1, Status::AuthRequired);
+    }
+    // The fifth 33 within 10 s: from then on 34, also for GET_CHALLENGE.
+    let n = mgmt::build_request(&mut b, 140, Command::SetConfig, &[], Some((&[1; 32], &[2; 16]))).unwrap();
+    assert_eq!(w.call(&mut s, HOST, &b[..n], 1_100).unwrap().1, Status::AuthFailed);
+    let n = mgmt::build_request(&mut b, 200, Command::SetConfig, &[], Some((&[1; 32], &[2; 16]))).unwrap();
+    assert_eq!(w.call(&mut s, HOST, &b[..n], 1_200).unwrap().1, Status::RateLimited);
+    assert_eq!(w.call(&mut s, HOST, &req(201, Command::GetChallenge, &[]), 1_300).unwrap().1, Status::RateLimited);
+    // Reads stay answered; 10 s after the last failure the limit lifts.
+    assert_eq!(w.call(&mut s, HOST, &req(202, Command::Identify, &[]), 1_400).unwrap().1, Status::Ok);
+    assert_eq!(w.call(&mut s, HOST, &req(203, Command::GetChallenge, &[]), 11_099).unwrap().1, Status::RateLimited);
+    assert_eq!(w.call(&mut s, HOST, &req(204, Command::GetChallenge, &[]), 11_100).unwrap().1, Status::Ok);
+}
+
+#[test]
 fn a_32_with_a_secret_set_leaves_the_challenge_usable_t_a1_99() {
     let mut s = Server::new();
     let mut w = World::new();
