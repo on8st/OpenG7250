@@ -450,6 +450,130 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             }
         }
         public void AddEccText(string address, bool dbl) { AddEcc(Convert.ToInt64(address, 16), dbl, true); }
+
+        // ---- diagnostic flash read log (off by default; the runner's G7250_FLASH_READLOG=lo-hi) ----
+        // Every read by the core of a word in [lo, hi] (byte to doubleword, aligned), every
+        // FLASH_SR1 read (32-bit, the value the core gets), every FLASH_CCR1 and FLASH_CR1 write,
+        // and FLASH_CR1 1 us after each power-on and MCU reset, in emulated time, one JSON line
+        // each in its own file. Its watchpoints follow the ECC ones: lifted while CR1.PG is set
+        // and put back 1 us after PG is cleared (an "unwatched" and a "watched" line), installed
+        // only from a timer event or before the core runs. A run of equal SR1 values is one line
+        // and a "sr1_repeat" line. Nothing of it reaches flash.log, the fixtures or the bench.
+        private ulong rlLo, rlHi;
+        private System.IO.StreamWriter rlOut;
+        private readonly List<Tuple<ulong, SysbusAccessWidth, BusHookDelegate>> rlHooks = new List<Tuple<ulong, SysbusAccessWidth, BusHookDelegate>>();
+        private bool rlLifted, rlCr1Due;
+        private LimitTimer rlTimer;
+        private long rlSr1Last = -1, rlSr1Repeat; private ulong rlSr1LastUs;
+        public string ReadLog(string range, string file)
+        {
+            var p = range.Split('-');
+            if(p.Length != 2) return "err range lo-hi";
+            ulong lo = Convert.ToUInt64(p[0].Trim(), 16) & ~7UL, hi = Convert.ToUInt64(p[1].Trim(), 16);
+            if(lo < FlashBase || hi >= FlashEnd || hi < lo) return "err range outside the flash bank";
+            lock(sync)
+            {
+                rlLo = lo; rlHi = hi | 7UL;
+                rlOut = new System.IO.StreamWriter(file, true) { AutoFlush = true };
+                rlTimer = new LimitTimer(machine.ClockSource, 1000000, this, "flash-readlog", 1UL << 40, direction: Direction.Descending,
+                                         enabled: false, workMode: WorkMode.OneShot, eventEnabled: true);
+                rlTimer.LimitReached += RlTime;
+                RlLog("\"op\": \"start\", \"range\": \"0x" + rlLo.ToString("X8") + "-0x" + rlHi.ToString("X8") + "\"");
+                InstallRead();
+                rlCr1Due = true;
+            }
+            Arm(rlTimer, 1);
+            return "ok";
+        }
+        private void RlTime()
+        {
+            lock(sync)
+            {
+                rlTimer.Enabled = false;
+                if(rlCr1Due)
+                {
+                    rlCr1Due = false;
+                    uint v = machine.SystemBus.ReadDoubleWord(0x5200200CUL);
+                    RlLog("\"op\": \"cr1\", \"value\": \"0x" + v.ToString("X8") + "\", \"pg\": " + ((v & PG) != 0 ? "true" : "false"));
+                }
+                if(rlLifted && (lastCr1 & PG) == 0) RestoreRead();
+            }
+        }
+        private void RlFlushRepeat()
+        {
+            if(rlSr1Repeat > 0)
+                rlOut.WriteLine("{\"t_us\": " + rlSr1LastUs + ", \"op\": \"sr1_repeat\", \"count\": " + rlSr1Repeat + "}");
+            rlSr1Repeat = 0; rlSr1Last = -1;
+        }
+        private void RlLog(string body)
+        {
+            if(rlOut == null) return;
+            RlFlushRepeat();
+            rlOut.WriteLine("{\"t_us\": " + NowUs() + ", " + body + "}");
+        }
+        private void RlSr1(uint value)
+        {
+            if(rlOut == null) return;
+            if(rlSr1Last == value) { rlSr1Repeat++; rlSr1LastUs = NowUs(); return; }
+            RlLog("\"op\": \"sr1\", \"value\": \"0x" + value.ToString("X8") + "\", \"dbeccerr\": " + ((value & Flags["DBECCERR"]) != 0 ? "true" : "false")
+                  + ", \"pc\": \"0x" + Pc().ToString("X8") + "\"");
+            rlSr1Last = value;
+        }
+        private ulong Pc()
+        {
+            foreach(var cpu in machine.SystemBus.GetCPUs()) return (ulong)cpu.PC;
+            return 0;
+        }
+        private void InstallRead()
+        {
+            var bus = machine.SystemBus;
+            foreach(var width in new[] { SysbusAccessWidth.Byte, SysbusAccessWidth.Word, SysbusAccessWidth.DoubleWord, SysbusAccessWidth.QuadWord })
+            {
+                ulong step = width == SysbusAccessWidth.Byte ? 1UL : width == SysbusAccessWidth.Word ? 2UL : width == SysbusAccessWidth.DoubleWord ? 4UL : 8UL;
+                int n = (int)step;
+                for(ulong a = rlLo; a + step - 1 <= rlHi; a += step)
+                {
+                    BusHookDelegate h = (cpu, addr, wd, v) => RlRead(addr, n);
+                    bus.AddWatchpointHook(a, width, Access.Read, h);
+                    rlHooks.Add(Tuple.Create(a, width, h));
+                }
+            }
+        }
+        private void RlRead(ulong addr, int width)
+        {
+            lock(sync)
+            {
+                if(rlOut == null || rlLifted) return;
+                // the hook's own value argument is 0 for a read: the value is what the bus holds there
+                // (little-endian, as the core reads it; the data of a marked word reads as stored)
+                var b = machine.SystemBus.ReadBytes(addr, width);
+                ulong value = 0;
+                for(int i = width - 1; i >= 0; i--) value = (value << 8) | b[i];
+                bool marked = eccWords.ContainsKey(addr & ~31UL);
+                RlLog("\"op\": \"read\", \"address\": \"0x" + addr.ToString("X8") + "\", \"width\": " + width + ", \"value\": \"0x" + value.ToString("X")
+                      + "\", \"pc\": \"0x" + Pc().ToString("X8") + "\"" + (marked ? ", \"ecc_mark\": true" : ""));
+            }
+        }
+        private void LiftRead()
+        {
+            if(rlOut == null || rlLifted) return;
+            foreach(var t in rlHooks) machine.SystemBus.RemoveWatchpointHook(t.Item1, t.Item3);
+            rlHooks.Clear();
+            rlLifted = true;
+            RlLog("\"op\": \"unwatched\", \"why\": \"CR1.PG set\"");
+        }
+        private void RestoreRead()
+        {
+            if(rlOut == null || !rlLifted) return;
+            InstallRead();
+            rlLifted = false;
+            RlLog("\"op\": \"watched\"");
+        }
+        private void ScheduleRead()
+        {
+            if(rlOut == null || (!rlLifted && !rlCr1Due)) return;
+            Arm(rlTimer, 1);
+        }
         private void EccRead(ulong w)
         {
             lock(sync)
@@ -543,6 +667,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 SlowCore(false);
                 erasing = false; neverEnding = false; lastCr1 = LOCK; keyStep = 0; errFlags = 0; pendingEop = false; eopSeen = false;
                 ScheduleEcc();                    // a reset while PG was set: the marks count again
+                if(rlOut != null) { RlLog("\"op\": \"reset\""); rlCr1Due = true; ScheduleRead(); }
             }
             busy.Enabled = false; Unstall();
         }
@@ -657,7 +782,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             if(offset == 0x014)
             {
                 // CCR1: CLR_EOP and the CLR_ error bits (same bit positions as SR1)
-                lock(sync) { if((value & EOP) != 0) { eopSeen = false; pendingEop = false; } errFlags &= ~value; }
+                lock(sync) { if((value & EOP) != 0) { eopSeen = false; pendingEop = false; } errFlags &= ~value; RlLog("\"op\": \"ccr1\", \"value\": \"0x" + value.ToString("X8") + "\", \"pc\": \"0x" + Pc().ToString("X8") + "\""); }
                 return value;
             }
             if(offset == 0x018 && (value & 0x2u) != 0)
@@ -670,10 +795,11 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             if(offset != CR1) return value;
             lock(sync)
             {
+                RlLog("\"op\": \"cr1_write\", \"value\": \"0x" + value.ToString("X8") + "\", \"locked\": " + ((lastCr1 & LOCK) != 0 ? "true" : "false"));
                 if((lastCr1 & LOCK) != 0) return lastCr1;           // locked: the write is ignored
                 bool start = (value & START) != 0 && (value & (SER | BER)) != 0;
                 lastCr1 = value;
-                if((value & PG) != 0) LiftEcc(); else ScheduleEcc();
+                if((value & PG) != 0) { LiftEcc(); LiftRead(); } else { ScheduleEcc(); ScheduleRead(); }
                 if(start)
                 {
                     bool bank = (value & BER) != 0;
@@ -692,7 +818,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         private uint AfterRead(uint value, long offset)
         {
-            if(offset == CR1) { lock(sync) { lastCr1 = value; if((value & PG) == 0) ScheduleEcc(); } return value; }
+            if(offset == CR1) { lock(sync) { lastCr1 = value; if((value & PG) == 0) { ScheduleEcc(); ScheduleRead(); } } return value; }
             if(offset == 0x054) { lock(sync) return eccFa; }        // FLASH_ECC_FA1R
             if(offset == SR1)
             {
@@ -700,11 +826,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 lock(sync)
                 {
                     value |= errFlags | (pendingEop ? EOP : 0u);
-                    if(erasing) { sr1InErase++; return value | BSY | QW; }
+                    if(erasing) { sr1InErase++; value |= BSY | QW; RlSr1(value); return value; }
                     // a flash word programmed: the controller reports EOP; counted once
                     // until the image clears EOP through CCR1
                     if((value & EOP) != 0 && (lastCr1 & PG) != 0) EopReads++;
                     if((value & EOP) != 0 && !eopSeen && (lastCr1 & PG) != 0) { eopSeen = true; word = true; }
+                    RlSr1(value);
                 }
                 if(word) Word();
             }

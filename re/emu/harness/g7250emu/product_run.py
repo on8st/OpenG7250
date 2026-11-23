@@ -276,6 +276,14 @@ def random_ram(out):
     return p
 
 
+def readlog_file(out):
+    """flash-reads-N.jsonl: N is the power-on of the test (one file per emulator start)."""
+    n = 1
+    while os.path.exists(os.path.join(out, "flash-reads-%d.jsonl" % n)):
+        n += 1
+    return os.path.join(out, "flash-reads-%d.jsonl" % n)
+
+
 def erased_flash(out):
     """A 1 MiB file of 0xFF (the flash bank erased)."""
     p = os.path.join(out, "flash-erased.bin")
@@ -339,7 +347,10 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
         'sysbus LoadBinary @%s 0x08000000' % erased_flash(out), 'sysbus LoadELF @%s' % elf]) + [
     ] + ['sysbus LoadBinary @%s 0x%08X' % (f, a) for a, f in (flash_preload if not flash_image else ())] + [
     ] + ['sysbus.spi1.agent ForceIdrAtBoot "%s" %d' % (p_, l_) for p_, l_ in (boot_forces or [])] + list(boot_lines or []) + (
-        ['sysbus.flashtiming EraseMipsDivisor %d' % int(os.environ["G7250_ERASE_MIPS_DIV"])] if os.environ.get("G7250_ERASE_MIPS_DIV") else []) + [
+        ['sysbus.flashtiming EraseMipsDivisor %d' % int(os.environ["G7250_ERASE_MIPS_DIV"])] if os.environ.get("G7250_ERASE_MIPS_DIV") else []) + (
+        # diagnostics only, off by default: the flash read log of a range (docs/FLASH-model.md)
+        ['sysbus.flashtiming ReadLog "%s" "%s"' % (os.environ["G7250_FLASH_READLOG"], readlog_file(out))]
+        if os.environ.get("G7250_FLASH_READLOG") else []) + [
         'sysbus.watchdog PowerOnBoot',
         'sysbus.spi1.agent ArmBootHook',
     ] + (['sysbus LogPeripheralAccess sysbus.flashController true', 'logLevel 0 sysbus.flashController']

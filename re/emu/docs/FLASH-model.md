@@ -139,6 +139,31 @@ Exercised by the self-test T-EMU-23 (net_test "F" commands): faults on erase and
 `after`, the refusals, a never-ending erase ended by the watchdog, cut replacement,
 `erase_us` null. `flash.ecc` on reads is exercised by product tests only (T-A1-87).
 
+## Diagnostic flash read log (off by default)
+
+For a diagnosis only, never in a counted run unless the report says so: with
+`G7250_FLASH_READLOG=<lo>-<hi>` (hex, inside the bank) in the runner's environment, every
+emulator start writes `flash-reads-N.jsonl` into the test's folder (N: the power-on of the
+test). Each line is JSON with `t_us`, the emulated time since that power-on, and `op`:
+
+- `start` (the range) and `cr1` 1 us after the power-on and after each MCU reset (`reset`):
+  FLASH_CR1 as the bus reads it, `pg`;
+- `read`: a read by the core of the range (byte, halfword, word or doubleword, aligned), its
+  `address`, `width` in bytes, `value` as the bus holds it (little-endian), `pc`, and
+  `ecc_mark: true` when the word carries a `flash.ecc` mark (its data reads as stored);
+- `sr1`: every 32-bit FLASH_SR1 read with the value the core gets (also BSY and QW of an erase),
+  `dbeccerr`, `pc`; a run of equal values is one line and a `sr1_repeat` line with its count
+  (a byte or halfword read of SR1 is not logged and does not get the layer's flags);
+- `ccr1` (with `pc`) and `cr1_write` (with `locked`): every write of FLASH_CCR1 and FLASH_CR1;
+- `unwatched` / `watched`: the read watchpoints are lifted while CR1.PG is set and put back
+  1 us after PG is cleared, as the ECC ones (Renode's controller does not see the program
+  through them otherwise); reads between the two lines are not logged.
+
+Nothing of it reaches `flash.log`, the fixtures, the endpoint or the bench. It costs one
+watchpoint per aligned address and width (7680 for 4 KiB): keep the range small. The
+self-test T-EMU-30 (`tests/fakebench/flash-readlog.json`, m1_smoke step [13]) runs it on
+net_test's sector 7.
+
 ## Not modelled
 
 PGSERR on a write without PG (Renode lets that write reach the array), the

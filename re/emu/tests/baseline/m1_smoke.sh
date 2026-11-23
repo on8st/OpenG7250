@@ -253,5 +253,18 @@ else
   echo "  skip (no arm-none-eabi-gcc or Renode)"
 fi
 
+echo "[13] diagnostic flash read log: reads, SR1, CCR1 and CR1 in emulated time (T-EMU-30)"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
+  if G7250_FLASH_READLOG=0x080E0000-0x080E0FFF G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" \
+       python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
+       tests/fakebench/flash-readlog.json --run-id smoke-readlog >/dev/null 2>&1; then
+    ok "flash read log: T-EMU-30 passes (each value as the image got it)"
+  else
+    bad "flash read log (see .private/product-runs/smoke-readlog/result.json)"
+  fi
+else
+  echo "  skip (no arm-none-eabi-gcc or Renode)"
+fi
+
 echo
 [ $fail -eq 0 ] && { echo "M1 smoke: ALL PASS"; exit 0; } || { echo "M1 smoke: FAILURES"; exit 1; }

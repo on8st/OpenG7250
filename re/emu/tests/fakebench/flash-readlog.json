@@ -1,0 +1,22 @@
+{
+ "format": "g7250-testlist",
+ "version": 1,
+ "minor": 2,
+ "defaults": {
+  "timeout_s": 20
+ },
+ "boot": "per-list",
+ "tests": [
+  {
+   "id": "T-EMU-30",
+   "title": "The diagnostic flash read log: reads of a range with their values, SR1 as read, CCR1 and CR1 writes, CR1 at power-on and reset",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 300
+  }
+ ],
+ "note": "Run with G7250_FLASH_READLOG=0x080E0000-0x080E0FFF (m1_smoke step [13]). The image is firmware-tests/bench/net_test.c (its F commands on sector 7)."
+}

@@ -1119,6 +1119,93 @@ def run_test(tid, ep):
         out.append(check("refused: an exception number with mode thread, and neither at_us nor in_us",
                          b1.get("ok") is False and b2.get("ok") is False, "%s %s" % (b1, b2)))
         return out
+    if tid == "T-EMU-30":
+        # the diagnostic flash read log (off by default; run with G7250_FLASH_READLOG=0x080E0000-0x080E0FFF):
+        # reads of the range with their values, SR1 as the core reads it, CCR1 and CR1 writes, CR1 at
+        # power-on and after a reset, the watchpoints lifted while PG is set
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 15))
+
+        def cmd(payload, wait=20.0, again=False):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(1.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def words(d):
+            return tuple(int.from_bytes(d[i:i + 4], "big") for i in range(2, len(d) - 3, 4)) if d else ()
+
+        def rl(n):
+            p = os.path.join(os.path.dirname(os.path.abspath(EP_PATH)), "flash-reads-%d.jsonl" % n)
+            try:
+                return [json.loads(x) for x in open(p) if x.strip()]
+            except OSError:
+                return []
+
+        DBECC, S7 = 1 << 26, 0x080E0000
+        cmd(b"FR", again=True, wait=60.0)
+        cmd(b"FE", wait=60.0)
+        cmd(b"FP\x03")
+        cmd(b"FP\x05")
+        d3 = words(cmd(b"FD\x03"))
+        ctl.op("flash.ecc", address=S7 + 32 * 5, type="double")
+        d5 = words(cmd(b"FD\x05"))
+        sk.sendto(b"FX", addr(c))                      # software reset, no reply
+        time.sleep(1.0)
+        cmd(b"FR", again=True, wait=60.0)
+        ctl.op("power.cycle")
+        cmd(b"FR", again=True, wait=90.0)
+        r1, r2 = rl(1), rl(2)
+
+        def first(es, i0, f):
+            for i in range(i0, len(es)):
+                if f(es[i]):
+                    return i
+            return -1
+        i3 = first(r1, 0, lambda e: e.get("op") == "read" and e.get("address") == "0x%08X" % (S7 + 96) and e.get("width") == 4)
+        s3 = first(r1, i3 + 1 if i3 >= 0 else len(r1), lambda e: e.get("op") == "sr1")
+        c3 = [e for e in r1[:i3 if i3 >= 0 else 0] if e.get("op") == "ccr1"]
+        i5 = first(r1, 0, lambda e: e.get("op") == "read" and e.get("address") == "0x%08X" % (S7 + 160) and e.get("width") == 4)
+        s5 = first(r1, i5 + 1 if i5 >= 0 else len(r1), lambda e: e.get("op") == "sr1")
+        un = [i for i, e in enumerate(r1) if e.get("op") == "unwatched"]
+        wa = [i for i, e in enumerate(r1) if e.get("op") == "watched"]
+        quiet = all(not any(r1[k].get("op") == "read" for k in range(u, w)) for u, w in zip(un, wa))
+        rs = first(r1, 0, lambda e: e.get("op") == "reset")
+        return [check("the log starts with its range, and CR1 is read 1 us after the power-on (both power-ons)",
+                      bool(r1) and r1[0].get("range") == "0x080E0000-0x080E0FFF"
+                      and any(e.get("op") == "cr1" and e["t_us"] <= 2 for e in r1[:8])
+                      and bool(r2) and any(e.get("op") == "cr1" and e["t_us"] <= 2 for e in r2[:8]), json.dumps(r1[:5] + r2[:5])),
+                check("a 32-bit read of word 3 with the value the image got (FD 3)",
+                      i3 >= 0 and len(d3) >= 2 and int(r1[i3]["value"], 16) == d3[1], "%s %s" % (r1[i3] if i3 >= 0 else None, d3)),
+                check("the SR1 read after it, with the value the image got, and a CCR1 write before it",
+                      s3 >= 0 and int(r1[s3]["value"], 16) == d3[0] and bool(c3) and int(c3[-1]["value"], 16) & DBECC,
+                      "%s %s %s" % (r1[s3] if s3 >= 0 else None, c3[-1:], d3)),
+                check("the marked word 5: its read with ecc_mark, the SR1 after it with DBECCERR as the image got it",
+                      i5 >= 0 and r1[i5].get("ecc_mark") is True and s5 >= 0 and r1[s5].get("dbeccerr") is True
+                      and len(d5) >= 1 and int(r1[s5]["value"], 16) == d5[0] and d5[0] & DBECC,
+                      "%s %s %s" % (r1[i5] if i5 >= 0 else None, r1[s5] if s5 >= 0 else None, d5)),
+                check("while PG is set the reads are not watched: an unwatched and a watched line per program, no read between",
+                      len(un) >= 2 and len(wa) >= 2 and quiet, "unwatched %d, watched %d, quiet %s" % (len(un), len(wa), quiet)),
+                check("CR1 writes logged (PG for the programs)",
+                      any(e.get("op") == "cr1_write" and int(e["value"], 16) & 2 for e in r1), str([e for e in r1 if e.get("op") == "cr1_write"][:2])),
+                check("the software reset: a reset line and CR1 read after it",
+                      rs >= 0 and first(r1, rs, lambda e: e.get("op") == "cr1") > rs, str(r1[rs:rs + 3] if rs >= 0 else None))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]
