@@ -53,31 +53,36 @@ the new one (after), with every value present. Host tests cut power at every fla
 compaction, at every word of a plain append (old value or new, never a mix) and halfway
 through the erase; a second cut during the recovery from a first; each both with the cut word
 written and with it left torn (unreadable, R0); and check that a half-erased sector's old commit
-does not win (`crates/store`, 14 tests).
+does not win (`crates/store`).
 
-**Erase from RAM.** A 128 KiB sector erase can outlast the 2 s IWDG, and the CPU cannot fetch
-from the bank being erased (RM0468). `board/app/src/nv.rs` erases with `erase_sector_from_ram`:
-placed in `.data` (AXI SRAM), interrupts masked for its duration (vector table and handlers are
-in that bank), own FLASH register access, IWDG refreshed on every poll of BSY/QW, poll count
-bounded (far above the datasheet maximum); a timeout or an error flag is an error, the store
-stays on the old sector. `board/check-ramfunc.sh` (run by `build.sh`) fails the build if the
-function is not in RAM or branches out of it.
+**Erase and program from RAM.** A 128 KiB sector erase can outlast the 2 s IWDG, and the CPU
+cannot fetch from the bank being erased or programmed (RM0468). `board/common/src/flash.rs`
+(boot stage and application) erases with `flash_erase_from_ram` and programs a flash word with
+`flash_program_from_ram`: both in `.data` (AXI SRAM), interrupts masked for their duration (vector
+table and handlers are in that bank), own FLASH register access, IWDG refreshed on every poll of
+BSY/WBNE/QW, the time bounded at 2 x `t_erase_max` = 8 s with the DWT cycle counter (B2.3; 0065);
+a timeout or an error flag is an error, and a compaction that failed leaves the store on the old
+sector. A programmed word is read back. `board/check-ramfunc.sh` (run by `build.sh`) fails the
+build if a routine is not in RAM or branches out of it.
 
 **Flash ECC (R0).** On the radio, a word left half-programmed or half-erased by a power loss may
 carry an invalid ECC; a CPU read of it returns a bus error (RM0468, flash ECC: double error,
-DBECCERR1 in FLASH_SR1), which the CRC scheme alone cannot catch. Every flash read of the store
-and of the stager goes through `g7250_board::flash::read_tolerant`: FAULTMASK set and SCB
-CCR.BFHFNMIGN for the copy only (a precise data bus fault at priority -1 is ignored, ARMv7-M),
-then FLASH_SR1 says whether a word was unreadable (flags and the BusFault status cleared). The
-store skips such a word like a torn record and never programs it (`FlashIo::unreadable`; host
-tests cut power at every word of a compaction and during the erase with the cut word left
-unreadable, and put unreadable words in a header, a payload and a commit). A slot is read
-through its mapped slice only after `flash::probe` read every word of it: the boot stage, the
-rollback check and IDENTIFY's integrity code treat a slot with an unreadable word as not
-bootable / bad (code 2), and the stager's VERIFY answers 55. `board/check-faultmask.py` (run by
-`build.sh`) checks in each ELF that nothing between `cpsid f` and `cpsie f` calls or branches
-out. Not covered: an unreadable word in the image that is running, or in the boot stage itself
-(both are only written by the vendor bootloader or a completed, verified update).
+DBECCERR1 in FLASH_SR1), which the CRC scheme alone cannot catch. Every read of the store and of a
+slot, also of an image by the image check, goes through `g7250_board::flash::read_tolerant`:
+FAULTMASK set and SCB CCR.BFHFNMIGN for the copy only (a precise data bus fault at priority -1 is
+ignored, ARMv7-M), then FLASH_SR1 and the BusFault status say whether a word was unreadable
+(`g7250_safety::tolerant`; either is enough, both cleared before FAULTMASK is released). Nothing
+reads a slot through a mapped slice. The store skips such a word like a torn record and never
+programs it (`FlashIo::unreadable`; host tests cut power at every word of a compaction and during
+the erase with the cut word left unreadable, and put unreadable words in a header, a payload and
+a commit). A slot with an unreadable word within the length its image record gives fails the
+image check of A1.8 (`g7250_update::image::check`, word `unreadable`): one function, read in
+chunks, for `UPDATE_VERIFY`, the boot stage's start of a slot, the rollback check and IDENTIFY.
+`board/check-faultmask.py` (run by `build.sh`) checks in each ELF, for this read and that of the
+RAM kept over a reset (`kept.rs`), that between `cpsid f` and `cpsie f` the CCR store, the
+barriers, the read and the CCR restore are there in this order, and that nothing calls or
+branches out. Not covered: an unreadable word in the image that is running, or in the boot stage
+itself (both are only written by the vendor bootloader or a completed, verified update).
 
 **Test build.** `out/test/g7250-compact.elf` (feature `test-compact-at-start`) compacts at every
 start, for the emulator run (`docs/emulator-run.md`, "Store").
@@ -88,7 +93,7 @@ start, for the emulator run (`docs/emulator-run.md`, "Store").
 |---|---|
 | 0x24000000–0x2401E6FF | AXI SRAM: `.data`, `.bss`, stack (128 KiB less 6400 bytes, present in every TCM/AXI option setting); the same for the boot stage |
 | 0x2401E700–0x2401FF7F | AXI SRAM: `.logring` (NOLOAD, 6272 bytes), the log ring of A1.7, kept over a reset without power loss (0068): header in two copies, 64 entries of 96 bytes, each with a check word (g7250_safety::logring). Opened and, after a power loss (or with no reset flag), written first by the boot stage, which writes the start entry; continued by the application. Same rules as `.persist`: never the Backup SRAM, whole 64-bit words, P-SYS-9. `board/check-kept-ram.py` checks both regions in every image |
-| 0x2401FF80–0x2401FFFF | AXI SRAM: `.persist` (application, NOLOAD, 128 bytes), kept over a reset without power loss: the counters of A3.5 (`TRIP_COUNT`, the fault entry counter per class 1 code, the reset counter per reset cause; g7250_safety::counters). Two slots of six 64-bit words `[magic | sequence, values, check]`, written alternately in whole aligned 64-bit words (`strd`; the AXI SRAM's ECC word is 64 bits, [HIS] HIS 10, MEDIUM), value and check first, magic last; read only when the reset flags show no power-on or brown-out reset (after a power loss it is written first, so no never-written SRAM word with a bad ECC is read, RM0468); a block overwritten by a previous stage fails the check and the count starts at 0. Not the Backup SRAM ([HIS] HIS 15 rule 4). **Pending hardware parameter P-SYS-9** (0050): whether this range survives the stage that runs before the boot stage at a reset is not known ([HIS] HIS 10, HIS 90, gate review 9, with its measurement; first-radio check RD-01, T-A3-60); part of the freeze rule |
+| 0x2401FF80–0x2401FFFF | AXI SRAM: `.persist` (NOLOAD, 128 bytes; the boot stage writes the handover, the application reads it and keeps the counters), kept over a reset without power loss: the counters of A3.5 (`TRIP_COUNT`, the fault entry counter per class 1 code, the reset counter per reset cause; g7250_safety::counters). Two slots of six 64-bit words `[magic | sequence, values, check]`, then the boot stage's handover (three words), all written in whole aligned 64-bit words (`strd`; the AXI SRAM's ECC word is 64 bits, [HIS] HIS 10, MEDIUM), the slots alternately, value and check first, magic last (g7250_safety::kept); read only when the reset flags show no power-on or brown-out reset (after a power loss it is written first, so no never-written SRAM word with a bad ECC is read, RM0468); a block overwritten by a previous stage fails the check and the count starts at 0. Not the Backup SRAM ([HIS] HIS 15 rule 4). **Pending hardware parameter P-SYS-9** (0050): whether this range survives the stage that runs before the boot stage at a reset is not known ([HIS] HIS 10, HIS 90, gate review 9, with its measurement; first-radio check RD-01, T-A3-60); part of the freeze rule |
 | 0x38000000–0x38003FFF | SRAM4 (D3): section `.sram4`, the **only** place for SPI6 DMA buffers. SPI6 is in D3 and can use only the BDMA, which reaches only D3 memory (RM0468); a BDMA buffer in AXI or D2 SRAM gives a transfer error. Today SPI6 runs without DMA. |
 | 0x38800000–0x38800FFF | Backup SRAM: never used ([HIS] HIS 15 rule 4); `g7250-imgtool` refuses any segment there |
 
@@ -104,7 +109,7 @@ It refuses, in this order:
 
 Tests (`crates/layout/tests/guard.rs`) try every flash word of sector 0 with four lengths, for
 every writer and both operations, plus spans that start below sector 0, wrap around, or run
-from an allowed region into a forbidden one. In milestone F1 no code writes flash at all.
+from an allowed region into a forbidden one.
 
 ## Images
 
