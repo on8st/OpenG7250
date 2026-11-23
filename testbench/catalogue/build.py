@@ -289,6 +289,8 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-92": {"target": "emulator", "also": [], "needs": ["flash.log"],
                 "notes": ["what the sectors hold needs flash.dump; the cases of the 0069 addendum need flash.ecc, "
                           "power.cut and flash.fill",
+                          "the erase cuts inside the old secret's record are placed from a dump and take the emulator's erase to run "
+                          "from the start of the sector (a model assumption)",
                           "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: " + ECC_LIMIT]},
     "T-A1-93": {"target": "host", "also": [], "needs": [],
                 "notes": ["g7250ctl's own test against the reference model (0070); not run by this bench"]},

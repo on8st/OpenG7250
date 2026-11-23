@@ -319,26 +319,58 @@ def unrecognised_word(ctx, st: State):
         ctx.eq(f"{label}: the secret in force still authenticates", accepts(ctx, st.cur), 0)
 
 
+CUT_FROM_START = ("the erase cuts inside a record take the emulator's erase to run from the start of the sector (a model "
+                  "assumption): a cut at fraction f leaves what lies from f x 128 KiB on")
+
+
+def cut_offset(data: bytes, s: bytes, words_in: int) -> int | None:
+    """Where an erase that runs from the start of the sector is cut so that a part of the record of
+    secret `s` is left: at the word with its first byte (`words_in` 0), or that many words further on.
+    None: not in the dump, at offset 0 (nothing erased), or nothing left there."""
+    pos = data.rfind(s)
+    at = pos // WORD * WORD + words_in * WORD
+    return at if pos >= 0 and 0 < at < len(data) and not erased(data[at:at + WORD]) else None
+
+
 def cut_erase(ctx, st: State):
-    """The stale-sector erase of a start, cut by a power loss: completed at the next start."""
+    """The stale-sector erase of a start, cut by a power loss: completed at the next start. Cuts inside
+    the old secret's record (the store fills only the first part of a sector, so that the large
+    fractions leave nothing), and large fractions."""
     torn = 0
-    for frac in (0.1, 0.5, 0.9):
-        label = f"the stale-sector erase cut at {frac}"
+    for frac in ("at the first word of the old secret", "one word further on", 0.1, 0.5, 0.9):
+        label = f"the stale-sector erase cut {frac}" if isinstance(frac, str) else f"the stale-sector erase cut at {frac}"
+        if isinstance(frac, str) and not st.known:
+            ctx.part(f"{label}: not run, the dump does not show where the old secret lies")
+            continue
         got = st.change(label)
         if got is None:
             return False
         old, new, live, _ = got
         stale = st.other(live)
+        sure = False  # bytes of the old secret are left for certain
+        if isinstance(frac, str):
+            if CUT_FROM_START not in ctx.notes:
+                ctx.notes.append(CUT_FROM_START)
+            data = dump(ctx, stale)
+            at = cut_offset(data, old, 0 if "first" in frac else 1)
+            if at is None:
+                ctx.part(f"{label}: not run, no such word in the dump (the secret at offset {data.rfind(old)})")
+                continue
+            frac, sure = at / SECTOR, at < data.rfind(old) + len(old)
         ctx.fixture("power.cut", during_erase=frac)
         entries = st.restart("RESTART")
         e = cut_entry(entries, "erase")
         if e is None or not in_range(e, stale, stale + SECTOR):
             st.missing.append(f"{label} (cut entries {[x for x in entries if x.get('result') == 'cut'][:2]})")
             continue
+        done = e.get("fraction_done", frac)
+        if abs(done - frac) * SECTOR >= WORD:
+            ctx.part(f"{label}: the cut came at {done * SECTOR:.0f} bytes, {frac * SECTOR:.0f} planned")
+            sure = False
         er = store_erases(entries[entries.index(e) + 1:], st.secs)
         texts = run_texts(ctx)
         rest = any(x in t for t in texts for x in (STALE, UNREC))
-        if not er and not rest:
+        if not er and not rest and not sure:
             # nothing left, or only whole records with no secret but the live one, which a start leaves:
             # the bench cannot tell records apart, so without an erase only the old secret is looked for
             if st.known:
@@ -355,7 +387,7 @@ def cut_erase(ctx, st: State):
         st.gone(label, stale, old)
         ctx.eq(f"{label}: the new secret stays in force", accepts(ctx, new), 0)
     if not torn:
-        ctx.part(f"the line '{UNREC}' after a cut erase: no cut left a part of a record")
+        ctx.part(f"the line '{UNREC}' after a cut erase: not shown, no cut left a part of a record")
 
 
 def cut_compaction(ctx, st: State):

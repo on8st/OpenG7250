@@ -40,11 +40,12 @@ class Store:
         e = dict(op="erase", address=x, len=SECTOR, t_us=self.t, t_end_us=self.t + 10, result="ok")
         self.flog.append(e)
         self.t += 20
-        n = len(self.mem[x])
         if self.cut and self.cut[0] == "erase":
             f, self.cut = self.cut[1], None
+            if self.broken == "cut-elsewhere":
+                f = 0.3
             e.update(result="cut", fraction_done=f)
-            for k in sorted(self.mem[x])[:max(1, int(n * f))]:
+            for k in [k for k in self.mem[x] if (k + 1) * W <= f * SECTOR]:  # from the start of the sector
                 self.blank(x, k)
             raise Cut
         for k in list(self.mem[x]):
@@ -183,6 +184,8 @@ class Store:
             return
         if br == "keeps-torn":
             junk = False
+        if br == "leaves-rest" and not any(w[:1] == b"H" for w in self.mem[y].values()):
+            return  # a sector whose first words are gone counts as erased
         if br == "whole-records-only" and not any(k != b"B" for k, _ in recs) and len(self.mem[y]) > 1:
             junk = False
         if stale or junk or br == "always-erases":
@@ -321,7 +324,7 @@ class OldSecret(unittest.TestCase):
 
     def test_every_case_judged(self):
         names = " ".join(c["name"] for c in run().checks)
-        for what in ("a second start: nothing erased", "only the live secret is not erased", "foreign word at offset 0x1ffe0", "cut at 0.5: completed", "cut at 0.9, not erased again",
+        for what in ("a second start: nothing erased", "only the live secret is not erased", "foreign word at offset 0x1ffe0", "first word of the old secret: completed", "one word further on: completed", "cut at 0.1, not erased again", "cut at 0.9, not erased again",
                      "cut at word 1 ", "the old secret authenticates, the new one gets 33", "lost sector 6, the second start",
                      "the next start erases sector 6 once", "the next start erases the other sector", "the first generation kept"):
             self.assertIn(what, names)
@@ -341,7 +344,8 @@ class OldSecret(unittest.TestCase):
                              ("no-complete-rule", "lost sector 6, the first start: sector 0x80c0000 not erased"),
                              ("counter-counts", "lost sector 6, the first start: sector 0x80c0000 not erased"),
                              ("config-does-not-count", "only configuration: the failed newer generation erased"),
-                             ("whole-records-only", "cut at")):
+                             ("whole-records-only", "cut at"), ("keeps-torn", "cut at the first word of the old secret: completed"),
+                             ("leaves-rest", "cut at the first word of the old secret: completed")):
             try:
                 bad = failed(run(broken))
             except core.RunnerFault:
@@ -354,6 +358,22 @@ class OldSecret(unittest.TestCase):
         self.assertTrue(ctx.no_pass)
         self.assertTrue(any("fall_back: not judged" in p for p in ctx.parts), ctx.parts)
         self.assertEqual(ctx.store.secret, bytes(range(32)))  # put back
+
+    def test_cut_not_where_planned(self):
+        """The cut never leaves a part of a record: never shown, and said so."""
+        ctx = run("cut-elsewhere")
+        self.assertEqual(failed(ctx), [])
+        self.assertTrue(any("not shown, no cut left a part of a record" in p for p in ctx.parts), ctx.parts)
+        self.assertTrue(any("the cut came at 39322 bytes" in p for p in ctx.parts), ctx.parts)
+
+    def test_cut_offset(self):
+        s, rest = bytes(range(1, 33)), b"\xff" * SECTOR
+        for pos in (64, 70):
+            data = (b"\1" * pos + s + b"\2" * 32 + rest)[:SECTOR]
+            self.assertEqual([t_stale.cut_offset(data, s, k) for k in (0, 1)], [64, 96])
+        self.assertIsNone(t_stale.cut_offset(s + rest, s, 0))  # nothing erased
+        self.assertIsNone(t_stale.cut_offset((b"\1" * 32 + s + rest)[:SECTOR], s, 1))  # nothing left there
+        self.assertIsNone(t_stale.cut_offset(rest, s, 0))
 
     def test_planned_cuts_not_seen(self):
         with mock.patch.object(FakeCtx, "fixture", lambda self, op, /, _f=FakeCtx.fixture, **a: None if op == "power.cut" else _f(self, op, **a)):
