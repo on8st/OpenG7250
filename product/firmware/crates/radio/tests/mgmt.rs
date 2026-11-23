@@ -972,6 +972,35 @@ fn c3_lost_ends_only_with_every_item_0072() {
     assert!(matches!(fx.as_slice(), [Effect::SetConfig(_, false)]), "{fx:?}");
 }
 
+/// A1.6 "Lost" (0072): the write that ends the lost state is "a loosening toward the built-in
+/// values ... logged as A1.6 C-3 says": its old values are the ones reported while lost, 0 W for
+/// every band. In this build that write always gets 62 first (S2 and T3 need the calibration
+/// set), so the entries are checked from the reported values with the 62 out of the way: a write
+/// of every band and the TX time against the lost report.
+#[test]
+fn the_write_that_ends_the_lost_state_logs_each_band_from_0_w_0072() {
+    use g7250_proto::mgmt::payload::Config;
+    let enc = |c: &Config| {
+        let mut b = [0u8; 256];
+        let n = c.encode(&mut b).unwrap();
+        b[..n].to_vec()
+    };
+    let bands = g7250_radio::record::TX_BANDS.len();
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    // GET_CONFIG while lost: every band 0 W, the TX time built-in (board mgmt_init merged_config).
+    let lost = Config { max_tx_time_ms: Some(300_000), band_limit: core::array::from_fn(|i| (i < bands).then_some(0)), ..Config::factory() };
+    w.config = enc(&lost);
+    let new = Config { max_tx_time_ms: Some(300_000), band_limit: core::array::from_fn(|i| (i < bands).then_some(if i == bands - 1 { 0 } else { 900 })), ..Default::default() };
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::SetConfig, &enc(&new), 1000).0, Status::Ok);
+    let log = w.call(&mut s, HOST, &req(20, Command::ReadLog, &[0, 0, 0, 0]), 2000).unwrap().2;
+    let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
+    let loose: Vec<_> = e.iter().filter(|t| t.starts_with("C-3 loosened")).cloned().collect();
+    let want: Vec<_> = (0..bands - 1).map(|i| format!("C-3 loosened: band_limit[{i}] 0 -> 900 by 192.168.1.5:50000")).collect();
+    assert_eq!(loose, want, "the 50 MHz band stays at 0 W: no loosening");
+}
+
 /// T-A1-95 (management part): GET_STATS lists every name of Table M-6 first, in table order,
 /// each at 0 on a fresh start, then the firmware's own, all in one reply of at most 1400 bytes;
 /// the excess of 25 requests in one second from one source is counted in mg_rate_drop and
