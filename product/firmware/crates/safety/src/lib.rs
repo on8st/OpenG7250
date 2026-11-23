@@ -16,5 +16,6 @@ pub mod logring;
 pub mod safe_state;
 pub mod supply;
 pub mod timekeep;
+pub mod tolerant;
 pub mod tx;
 pub mod txpath;

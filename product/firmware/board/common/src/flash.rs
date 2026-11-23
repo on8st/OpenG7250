@@ -16,11 +16,13 @@
 //! Reads are fault-tolerant (R0): a flash word left half-programmed or half-erased by a power
 //! loss can carry an invalid ECC, and a CPU read of it returns a bus error (RM0468, flash ECC:
 //! double error, DBECCERR1). [`read_tolerant`] reads with bus faults ignored (FAULTMASK set and
-//! SCB CCR.BFHFNMIGN, ARMv7-M) and reports such a word from FLASH_SR1, instead of a fault and a
-//! watchdog reset at every start. The store scan skips the word like a torn one; an image
-//! with one fails the image check (g7250_update::image).
+//! SCB CCR.BFHFNMIGN, ARMv7-M) and reports such a word from FLASH_SR1 and the BusFault status
+//! (g7250_safety::tolerant), instead of a fault and a watchdog reset at every start. The store
+//! scan skips the word like a torn one; an image with one fails the image check
+//! (g7250_update::image).
 
 use g7250_layout::{FLASH_BASE, FLASH_WORD, FlashGuard, Op, SECTOR_SIZE, Writer};
+use g7250_safety::tolerant::{self, CFSR_BFSR};
 use g7250_store::FlashIo;
 
 const FLASH_KEYR1: u32 = 0x5200_2004;
@@ -31,13 +33,12 @@ const IWDG1_KR: u32 = 0x5800_4800;
 /// FLASH_SR1 / FLASH_CCR1: SNECCERR1 bit 25 (single error, corrected), DBECCERR1 bit 26 (double
 /// error: the read returned a bus error).
 const SR_SNECC: u32 = 1 << 25;
-const SR_DBECC: u32 = 1 << 26;
+const SR_DBECC: u32 = tolerant::DBECCERR1;
 /// SCB CCR.BFHFNMIGN (bit 8): at priority -1 (FAULTMASK) a precise data bus fault is ignored.
 const SCB_CCR: u32 = 0xE000_ED14;
 const CCR_BFHFNMIGN: u32 = 1 << 8;
 /// SCB CFSR; the BusFault status is bits 8-15, cleared by writing ones.
 const SCB_CFSR: u32 = 0xE000_ED28;
-const CFSR_BFSR: u32 = 0x0000_FF00;
 /// FLASH_CR1: LOCK bit 0, PG bit 1, SER bit 2, START bit 7, SNB bits 10:8.
 const CR_LOCK: u32 = 1 << 0;
 const CR_PG: u32 = 1 << 1;
@@ -229,8 +230,8 @@ pub enum FlashError {
 }
 
 /// Read `buf.len()` bytes of flash at `addr` without faulting on an unreadable word: `Err(())` if
-/// any word read had a double ECC error (the bytes from it are not valid). Interrupts (and every
-/// fault but NMI) are held off for the copy only.
+/// any word read had a double ECC error or the read met a bus fault (the bytes are not valid).
+/// Interrupts (and every fault but NMI) are held off for the copy only.
 /// One instance (never inlined): `board/check-faultmask.py` checks that nothing between `cpsid f`
 /// and `cpsie f` calls or branches out of it.
 #[inline(never)]
@@ -239,7 +240,9 @@ pub fn read_tolerant(addr: u32, buf: &mut [u8]) -> Result<(), ()> {
     // SAFETY: on-chip flash, always mapped; the SCB and FLASH registers are the core's and the
     // flash interface's. FAULTMASK is set only around the copy and restored before returning.
     unsafe {
+        // Both statuses cleared first, so that what they say afterwards is of this read.
         wr(FLASH_CCR1 as *mut u32, SR_DBECC | SR_SNECC);
+        wr(SCB_CFSR as *mut u32, CFSR_BFSR);
         core::arch::asm!("cpsid f", options(nostack, preserves_flags));
         let ccr = rd(SCB_CCR as *const u32);
         wr(SCB_CCR as *mut u32, ccr | CCR_BFHFNMIGN);
@@ -251,16 +254,17 @@ pub fn read_tolerant(addr: u32, buf: &mut [u8]) -> Result<(), ()> {
             *b = rd(src.add(i));
         }
         cortex_m::asm::dsb();
+        // Both judged and cleared before anything else runs: an ignored fault's status must not
+        // be left for a later real fault, nor a later read's taken for this one's.
+        let sr1 = rd(FLASH_SR1 as *const u32);
+        let cfsr = rd(SCB_CFSR as *const u32);
+        wr(FLASH_CCR1 as *mut u32, SR_DBECC | SR_SNECC);
+        wr(SCB_CFSR as *mut u32, CFSR_BFSR);
         wr(SCB_CCR as *mut u32, ccr);
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
         core::arch::asm!("cpsie f", options(nostack, preserves_flags));
-        let bad = rd(FLASH_SR1 as *const u32) & SR_DBECC != 0;
-        wr(FLASH_CCR1 as *mut u32, SR_DBECC | SR_SNECC);
-        if bad {
-            // The ignored fault left its status in the BFSR; clear it so that a later real fault
-            // is reported alone.
-            wr(SCB_CFSR as *mut u32, CFSR_BFSR);
+        if tolerant::flash_unreadable(sr1, cfsr) {
             return Err(());
         }
     }
