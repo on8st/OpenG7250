@@ -386,8 +386,8 @@ pub const RESET_PROBE: std::time::Duration = std::time::Duration::from_secs(30);
 /// still set speaks against it, whatever the log says. The request is never sent again with a
 /// new challenge here: without that evidence the result is [`Failure::ResetNotShown`], with
 /// what was seen.
-/// After a `FACTORY_RESET` the retransmission meets a radio without a secret. The spec names no
-/// status for that; the reference model answers 32, so a 32 counts there like the 33.
+/// After a `FACTORY_RESET` the retransmission meets a radio without a secret, which answers 32
+/// (A1.4, A1.10; 0080), so a 32 counts there like the 33.
 /// A 33 or 32 to the first send is a plain refusal.
 pub fn resetting(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command, payload: &[u8]) -> Result<Resetting, Failure> {
     let a = reads::identify(client, to)?;

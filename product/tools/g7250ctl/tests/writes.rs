@@ -70,8 +70,8 @@ struct State {
     secret_kept: bool,
     /// READ_LOG gets no reply.
     log_silent: bool,
-    /// Status of an authenticated request while no secret is set (None: 32, as the reference
-    /// model answers; the spec names none).
+    /// Status of an authenticated request while no secret is set (None: 32, as A1.10 gives it
+    /// since 0080; set to 33 to test a radio built before it).
     no_secret_status: Option<u16>,
     /// RESTART clears the secret as well (another host's factory reset in the window).
     restart_clears_secret: bool,
@@ -566,6 +566,23 @@ fn an_answered_restart_followed_by_a_watchdog_reset_ends_the_wait_and_names_the_
     assert_eq!(out.status.code(), Some(g7250ctl::exit::OK as i32), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(text.contains("restart done") && text.contains("reset cause watchdog (tag 17), not software"), "{text}");
     assert!(t0.elapsed() < std::time::Duration::from_secs(10), "the wait ended at the restart, not at its limit");
+}
+
+#[test]
+fn a_32_with_no_secret_points_to_the_first_secret() {
+    // No secret set (A1.10 "No secret, no HMAC"; 0080): a write gets 32 once, is not sent again,
+    // and the text says how to set the first secret.
+    let (addr, st) = start(State { window_open: true, ..Default::default() });
+    let mut c = client();
+    let change = Config { default_level: Some(2), ..Default::default() };
+    let f = writes::set_config(&mut c, addr, &secret(OLD), &change).unwrap_err();
+    let t = f.to_string();
+    assert!(t.contains("status 32: authentication required") && t.contains("no secret is set") && t.contains("g7250ctl set-secret"), "{t}");
+    assert_eq!(st.lock().unwrap().seen.iter().filter(|s| s.cmd == 0x21).count(), 1, "one SET_CONFIG, no retransmission");
+    // A 33 carries no such hint.
+    let (addr, _st) = start(State { secret: Some(NEW), ..Default::default() });
+    let t = writes::set_config(&mut client(), addr, &secret(OLD), &change).unwrap_err().to_string();
+    assert!(t.contains("status 33") && !t.contains("set-secret"), "{t}");
 }
 
 #[test]

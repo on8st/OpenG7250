@@ -118,6 +118,14 @@ impl fmt::Display for Failure {
                         g7250_proto::mgmt::VERSION_MINOR
                     )?;
                 }
+                if a.status_code == 32 {
+                    // This tool sends every authenticated request with its HMAC trailer, so a 32
+                    // means no secret is set (A1.10 "No secret, no HMAC"; 0080).
+                    write!(
+                        f,
+                        " (no secret is set on the radio: set one with `g7250ctl set-secret` while the first-secret window is open, after the first start or a factory reset; A1.10)"
+                    )?;
+                }
                 Ok(())
             }
             Failure::Decode { from, what } => write!(f, "{from}: {what}"),

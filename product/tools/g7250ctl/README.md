@@ -85,6 +85,10 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   `config: C-3 lost, TX closed until rewritten`; 0072). The tool checks no limit itself. A 48
   to a `config set` with a C-3 item names the lost state as a possible cause: it ends only
   with one `config set` of every C-3 item (max TX time, every band, S2 and T3).
+- A 32 to an authenticated command means no secret is set (the tool always sends the HMAC;
+  A1.10, 0080): the text points to `set-secret` in the first-secret window. In the installer
+  the secret is kept in RAM, so a wrong secret there gets 33, as elsewhere. `stats` lists the
+  counters the radio sends, `mg_auth_required` (0080) included; it keeps no list of names.
 - `factory-reset` asks for confirmation unless `--yes`. `restart --wait` and
   `factory-reset --wait` wait until the radio answers with a lower uptime (30 s; 47 s after a
   factory reset, 0069).
@@ -133,9 +137,9 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   the evidence used. A secret still set is never a confirmed factory reset. Otherwise the 33
   (or the silence) is reported with what `IDENTIFY` and the log showed (uptime, cause, slot;
   "cause unknown" when tag 17 is 0), the request is not sent again, and the operator decides.
-  After a `FACTORY_RESET` the radio has no secret any more, and a retransmission may get 32
-  instead of 33 (the spec names no status for it): both are judged the same way, to a
-  retransmission only. One limit: if another host sends the same request in the same window,
+  After a `FACTORY_RESET` the radio has no secret any more, so a retransmission gets 32
+  instead of 33 (A1.4, 0080): both are judged the same way, to a retransmission only, and the
+  tool stops retransmitting at the first of either. One limit: if another host sends the same request in the same window,
   its log line is the same, and the tool cannot tell that reset from its own. After an
   answered request the request ran: any restart ends the wait, and a cause other than software
   is named. Once verified, an install never sends `UPDATE_ABORT`.
