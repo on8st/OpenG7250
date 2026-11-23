@@ -8,6 +8,7 @@
 pub mod ddc;
 pub mod dhcp_client;
 pub mod duc_fifo;
+pub mod gaps;
 pub mod calset;
 pub mod mgmt;
 pub mod record;

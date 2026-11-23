@@ -87,6 +87,10 @@ pub struct P2 {
     pub duc_iq_ignored: u64,
     pub duc_foreign: u64,
     pub duc_not_tx: u64,
+    /// Sequence-number gaps of the owner's packets on 1027 and 1029 in this or the last session
+    /// (B11.6; gap_1027, gap_1029).
+    pub gaps_1027: g7250_radio::gaps::Gaps,
+    pub gaps_1029: g7250_radio::gaps::Gaps,
     /// Register packets shorter than a register packet (Table B11-1), dropped (drop_7250).
     pub dropped_reg_short: u64,
     /// The key path was keyed after the last call (to empty and arm the FIFO on a change).
@@ -180,6 +184,8 @@ impl P2 {
             duc_iq_ignored: 0,
             duc_foreign: 0,
             duc_not_tx: 0,
+            gaps_1027: g7250_radio::gaps::Gaps::new(true),
+            gaps_1029: g7250_radio::gaps::Gaps::new(false),
             dropped_reg_short: 0,
             was_keyed: false,
             notice: None,
@@ -419,6 +425,8 @@ impl P2 {
                 }
                 Event::Started { owner, restart, takeover } => {
                     self.unasked_sent = false;
+                    self.gaps_1027.session_start();
+                    self.gaps_1029.session_start();
                     // Bit 17 is latched until the next session (Table B8-2); the start pushes
                     // below carry the value for this session's General packet.
                     self.regs.link_status &= !LINK_PORT_NOT_HONOURED;
@@ -599,6 +607,11 @@ impl P2 {
         self.events(chip, &ev, now);
         self.update_stream_status(chip);
         if self.session.owner() == Some(from) {
+            // The session's start packet included: it sets the start (B11.6). A short packet is
+            // discarded whole (B11.3) and not counted.
+            if let (CnC::HighPriority, true, [a, b, c, d, ..]) = (kind, p.len() >= kind.min_len(), p) {
+                self.gaps_1027.on(u32::from_be_bytes([*a, *b, *c, *d]));
+            }
             let mut rf = crate::BoardRf;
             match kind {
                 CnC::HighPriority if self.session.running() => {
@@ -822,6 +835,8 @@ impl P2 {
     pub fn duc_iq(&mut self, chip: &mut Chip, from: Addr, p: &[u8], now: u64) {
         if self.session.owner() != Some(from) {
             self.old_owner_packet(chip, from, now);
+        } else if let [a, b, c, d, ..] = *p {
+            self.gaps_1029.on(u32::from_be_bytes([a, b, c, d]));
         }
         let ok = self.session.owner() == Some(from)
             && !self.update_in_progress

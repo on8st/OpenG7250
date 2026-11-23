@@ -970,6 +970,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 server.stats.reg7250_drop = p2.dropped_reg_from_7250;
                 server.stats.duc_foreign = p2.duc_foreign;
                 server.stats.duc_not_tx = p2.duc_not_tx;
+                server.stats.gap_1027 = p2.gaps_1027.count;
+                server.stats.gap_1029 = p2.gaps_1029.count;
                 let (cw, fifo) = p2.duc_drops();
                 server.stats.duc_cw_drop = cw;
                 server.stats.duc_fifo_drop = fifo;
