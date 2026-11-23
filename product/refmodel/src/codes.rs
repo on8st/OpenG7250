@@ -14,9 +14,9 @@ pub mod port {
     pub const LEVEL1: [u16; 8] = [1024, 1025, 1026, 1027, 1029, 1035, 7250, 7251];
 }
 
-/// The counters of `GET_STATS`, Table M-6 (0074), in the order of the table.
-pub const COUNTERS: [&str; 45] = [
-    "mg_not_request", "mg_rate_drop", "mg_cap_drop", "disc_rate_drop", "disc_src1024", "setip_ignored",
+/// The counters of `GET_STATS`, Table M-6 (0074, 0080), in the order of the table.
+pub const COUNTERS: [&str; 46] = [
+    "mg_not_request", "mg_rate_drop", "mg_cap_drop", "mg_auth_required", "disc_rate_drop", "disc_src1024", "setip_ignored",
     "gen1024_ignored", "cap_rate_drop", "notowner_drop", "reg7250_drop", "takeovers", "icmp_unreach", "hp_rx",
     "hp_stale", "hp_resync", "hp_release", "gap_1027", "gap_1029", "duc_foreign", "duc_not_tx", "duc_cw_drop",
     "duc_fifo_drop", "cw_speed_clamped", "cw_hang_clamped", "ll_unprobed", "drop_1024", "drop_1025", "drop_1026",

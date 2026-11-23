@@ -126,7 +126,7 @@ fn table_m_6() {
     let mut b = Bench::new(Config::default());
     let s = b.stats();
     let names: Vec<&str> = s.iter().map(|x| x.0.as_str()).collect();
-    assert_eq!(names[..45], COUNTERS);
+    assert_eq!(names[..COUNTERS.len()], COUNTERS);
     assert!(names.iter().all(|n| n.len() <= 16 && n.is_ascii()));
     assert!(s[..45].iter().all(|x| x.1 == 0), "{s:?}");
     b.to(A, port::HIGH_PRIORITY, &hp(1, true));
@@ -547,4 +547,26 @@ fn c3_lost_without_a_set() {
     assert_eq!(b.req(A, SET_CONFIG, &every_c3(200_000, 800, None)).status, st::INVALID_CONFIG);
     assert_eq!(b.req(A, SET_CONFIG, &[9, 2, 1, 44]).status, st::INVALID_CONFIG); // 48 before 62
     assert!(b.r.c3_lost);
+}
+
+/// T-A1-99 (0080): status 32 with no secret set, whatever the trailer holds, and without a trailer.
+#[test]
+fn status_32() {
+    let mut b = Bench { r: Radio::new(Config::default(), 0), t: S, id: 1 };
+    for _ in 0..10 {
+        let c = b.plain(A, CHALLENGE, &[]).p;
+        assert_eq!(b.signed(A, SET_CONFIG, &TX_TIME, &c).status, st::AUTH_REQUIRED); // a trailer, no secret
+        assert_eq!(b.plain(A, RESTART, &[]).status, st::AUTH_REQUIRED); // no trailer
+    }
+    assert_eq!(b.stat("mg_auth_required"), 20);
+    assert_eq!(b.plain(A, FIRST, &SECRET).status, st::OK); // never 34, the window still open
+    // with a secret: no trailer 32, a wrong HMAC 33; a 32 leaves the challenge usable
+    let c = b.plain(A, CHALLENGE, &[]).p;
+    assert_eq!(b.plain(A, SET_CONFIG, &TX_TIME).status, st::AUTH_REQUIRED);
+    assert_eq!(b.signed(A, SET_CONFIG, &TX_TIME, &c).status, st::OK);
+    let c = b.plain(A, CHALLENGE, &[]).p;
+    let mut wrong = c.clone();
+    wrong[0] ^= 1;
+    assert_eq!(b.signed(A, SET_CONFIG, &TX_TIME, &wrong).status, st::AUTH_FAILED);
+    assert_eq!(b.stat("mg_auth_required"), 21);
 }
