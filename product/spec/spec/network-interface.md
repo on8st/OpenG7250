@@ -2,7 +2,7 @@
 
 - Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
 - Status: version 1.0 (tag `spec-v1.0`). Applies decisions 0001–0066, all accepted by ON8ST
-  (`product-handover.md`); after 1.0 also 0067–0079, accepted by ON8ST on 2026-11-22 (0072 and 0079 on 2026-11-23),
+  (`product-handover.md`); after 1.0 also 0067–0080, accepted by ON8ST on 2026-11-22 (0072, 0079 and 0080 on 2026-11-23),
   listed under "After 1.0" in `spec/CHANGELOG.md` (not yet a version). Complete for milestones M1–M5 except for the values that need the
   radio, which are named in Annex P with a safe placeholder each; level 2 (part C) waits for
   gate G6 (0011).
@@ -142,7 +142,7 @@ Table A1-1 — Management message header (0020 §27)
   stored reply once it has ended and not executed again; a host uses the first reply.
 - **Requests that end in a reset** (0074). A request that ends in a commanded reset
   (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`; A1.9) loses its stored reply
-  with the reset. A host that has no reply SHOULD stop retransmitting it at the first 33, or
+  with the reset. A host that has no reply SHOULD stop retransmitting it at the first 33 or 32 (0080), or
   once the radio answers `IDENTIFY` after a silence, and SHOULD learn from `IDENTIFY` whether
   the reset took place: uptime (tag 16) below the time since the request and last reset cause
   (tag 17) software; for `UPDATE_ACTIVATE` and `ROLLBACK` also the running slot (tag 23),
@@ -853,7 +853,7 @@ MUST be carried out in this order:
 3. send the reply (status 0) and store it (A1.4); a repeat of the accepted request (A1.4) that
    arrives during steps 1–2 is answered with status 1, and one that arrives after this step
    with the stored reply until the reset (0022 §87 item 3). After the reset the stored replies
-   and challenges are gone, so a retransmission gets status 33; a host confirms the reset from
+   and challenges are gone, so a retransmission gets status 33, or 32 when no secret is set any more (after a `FACTORY_RESET`; A1.10, 0080); a host confirms the reset from
    `IDENTIFY` (uptime, last reset cause; Annex M) (0039);
 4. relays to the state of A3.6 (A3.9a item 5);
 5. the reset.
@@ -906,6 +906,15 @@ A1.10 **Security on a LAN** (0008, Security):
   keyed by source IP address and UDP port, for up to 4 hosts; a fifth host evicts the least
   recently used. A new `GET_CHALLENGE` replaces that host's challenge. The challenge is used
   by the next authenticated request from the same IP address and port, and only once.
+- **No secret, no HMAC** (0080). A request for a command marked "yes" in the Auth column of
+  Table A1-2 MUST be answered with status 32 and not executed when it has no HMAC trailer (flag
+  bit 0 clear), or when no secret is set (factory state, after a factory reset), whatever its
+  trailer holds. Status 33 is sent only when a secret is set and the HMAC does not verify with
+  it, or the challenge is missing, spent or expired. A 32 is not an authentication failure: it
+  does not count toward the limit of status 34, it uses up no challenge, and it does not refresh
+  the write session. It is not logged one by one; it is counted (`mg_auth_required`, Table M-6).
+  In the installer (A1.8a item 3) the secret is the one it keeps in RAM (item 7), so there a
+  wrong HMAC gets 33 although `IDENTIFY` tag 11 reports no secret set.
 - **Secrets on the wire** (0022 §11). The secret is 32 bytes. `SET_FIRST_SECRET` carries it
   in the clear (known risk; S3, S6). `CHANGE_SECRET` MUST be authenticated with the old
   secret and carries the new secret masked as new secret XOR HMAC-SHA256(old secret, "G7NS"
@@ -4016,7 +4025,7 @@ Table M-5 — Calibration entries (A1.12)
 | id length (u8), id (ASCII) | a parameter id of Table P-1, for example "P-RF-2" |
 | value length (u16), value | the value; its encoding is fixed in Table P-1 when the parameter is set from measurements (Annex P) |
 
-Table M-6 — Counters of `GET_STATS` (0074). 45 names; every one listed, also at 0, first and
+Table M-6 — Counters of `GET_STATS` (0074). 46 names (0080); every one listed, also at 0, first and
 in this order (Table M-1). Every counter other than `fault_<code>`, `reset_<cause>` and
 `trip_count` starts at 0 at every start; those three groups are kept as A3.5 "Counters" says
 (0078).
@@ -4026,6 +4035,7 @@ in this order (Table M-1). Every counter other than `fault_<code>`, `reset_<caus
 | `mg_not_request` | management datagrams with the right magic and a type other than 1, dropped | A1.4 |
 | `mg_rate_drop` | management requests above 20 replies per second per source, dropped | A1.10; T-A1-26 |
 | `mg_cap_drop` | management requests above a total reply cap or the cap outside the subnet, dropped | A1.10 |
+| `mg_auth_required` | requests answered with status 32 | A1.10; 0080 |
 | `disc_rate_drop` | port 1024 requests above the rate limit, dropped | B3.2 |
 | `disc_src1024` | datagrams to port 1024 from source port 1024, dropped | B3.2 |
 | `setip_ignored` | Set IP to the unicast or directed broadcast address from outside the subnet, ignored | B3.9 |
@@ -4359,6 +4369,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-96 | With no calibration set, `GET_CONFIG` holds no tag 9 or 10 and `GET_CALIBRATION` returns 37 bytes (id zeros, date 0, source length 0, no entries); with a set holding S2 and T3, both tags are there (Table M-1, Table M-3; 0074). The reply to a `SET_CONFIG` with no set holds no tag 9 or 10 either (Table M-1; 0079). |
 | T-A1-97 | A log longer than one page: `READ_LOG` sets flag bit 1 on every page but the last and clears it on the last; an empty page has it clear; after a new entry, asking from the last sequence number + 1 returns it; every other reply has bit 1 clear (A1.7; 0074). |
 | T-A1-98 | After a `SET_CONFIG` that changes the address (answered first), a write from the former holder to the new address with the old challenge gets 33, one with a new challenge is accepted and opens a new session, and a write from another host is not refused with 35; a DHCP renewal with the same address leaves the write session, challenges and stored replies as they were (A1.10; 0074). |
+| T-A1-99 | With no secret set (factory state, and after a `FACTORY_RESET`), every command marked "yes" in the Auth column gets 32 with and without an HMAC trailer and is not executed; ten such requests within 10 s get 32 each, never 34, and a `SET_FIRST_SECRET` in the window after them gets 0; the retransmission of a `FACTORY_RESET` that arrives after its reset gets 32; `mg_auth_required` counts each 32. With a secret set, a write without an HMAC trailer gets 32 and one with a wrong HMAC 33; a 32 leaves the host's challenge usable. In the installer after the first sector erase (tag 11 = 0), an `UPDATE_BLOCK` with a wrong HMAC gets 33 and one with the secret kept in RAM 0 (reference model; A1.4, A1.9, A1.10, Table M-6; 0080). |
 | T-A1-88 | Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header, one of them an intact image with 32 bytes appended (header length and hash adjusted), which the log names `header`, not `integrity`. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending every block again with new request ids, in order, replaces the received data and the next verify succeeds; an `UPDATE_VERIFY` with the last block not sent (a block left out in the middle would make the next one 54, out of order) gets 55 with `missing-blocks` in the log, not `hash`, and sending that last block then lets the verify succeed (0067 addendum); with the store made full, an `UPDATE_BLOCK` gets 64, the log shows `store: room made (update)`, `UPDATE_STATUS` shows the transfer still receiving with the same blocks received, and the block sent again with a new request id is taken, while a repeat with the same id gets 64 again; a verify with the store full succeeds (0067 addendum, full store); a block sent again alone is accepted and written, and `UPDATE_STATUS` shows any blocks the radio counts as not received again (reference model or emulator; A1.8 "Image check", "`UPDATE_VERIFY`"; 0067). |
 | T-A1-89 | `IDENTIFY` tag 9 for the other slot: 1 after a good verify; 0 from the first erase of `UPDATE_BEGIN`, after `UPDATE_ABORT` and after a failed verify, also after a restart; 2 when one byte of a confirmed other image is changed and the radio restarts; `ROLLBACK` with the other slot at 0 or 2 gets 55 and changes nothing; after a trial that failed to confirm itself, tag 9 for that slot stays 1 and `ROLLBACK` to it is accepted and starts it as a trial (reference model or emulator; A1.8 "Integrity in `IDENTIFY`"; 0067). |
 | T-A1-90 | One byte of the staged image changed after a good verify and `UPDATE_ACTIVATE`: the boot stage does not start the trial slot, starts the previous image, logs `boot: slot B refused: integrity` (slot named by its letter) and the rollback, and tag 10 reports 2; one byte of the confirmed active image changed with a good other slot: the other slot starts without a trial and the log shows `boot: slot A refused: integrity` then `boot: fallback to slot B (active slot refused, no trial)` (0068 addendum); both slots changed: the boot stage holds the safe state and the radio does not answer (emulator; A1.8 "Boot-stage refusals"; 0067). |
