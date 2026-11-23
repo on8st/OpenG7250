@@ -383,7 +383,8 @@ class OldSecret(unittest.TestCase):
                      "C-3 is G's", "erases G-1's sector once", "C-3 takes the built-in values",
                      "cut at word 3 of the start's writes before the erase: the start after", "cut during the next compaction: the next start",
                      "after the next compaction: the start after", "words programmed into L before that erase",
-                     "then N committed with its commit word unreadable, cut during the start check's erase: the start after"):
+                     "then N committed with its commit word unreadable, cut during the start check's erase: the start after",
+                     "foreign data in both sectors, the start after that erase: no store erase"):
             self.assertIn(what, names)
 
     def test_parts_without_a_fixture(self):

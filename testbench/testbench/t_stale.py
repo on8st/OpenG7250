@@ -542,6 +542,10 @@ def foreign(ctx, st: State):
     st.lines(f"{label}, with a first generation", (UNREC,))
     st.gone(f"{label}, with a first generation", rest[0])
     ctx.eq(f"{label}: the secret is kept", accepts(ctx, new), 0)
+    # erased once: the start after it finds a store of this firmware in both sectors' place and erases nothing
+    er = which(st.secs, store_erases(st.restart("RESTART"), st.secs))
+    ctx.eq(f"{label}, the start after that erase: no store erase", er, [])
+    st.lines(f"{label}, the start after that erase", ())
 
 
 def older_generation(ctx, st: State):
