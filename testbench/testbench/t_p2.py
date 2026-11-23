@@ -351,18 +351,59 @@ def t_b5_01(ctx):
         ctx.eq("standby: discovery byte 4", d[0][4] if d else None, 2)
 
 
+WATCHDOG_MS, WD_MARGIN_MS = 1000, 100  # B5.6; the margin as the standby check (1100 ms)
+
+
+def judge_b5_02(entries: list, port: int) -> tuple[int | None, float | None]:
+    """From net.log (radio time): the status packets (1025) sent to the host port later than the last
+    C&C it received from that port + 1100 ms, and how far (ms) the register packets (7250) from that
+    port reach past that point. (None, None) without a C&C entry."""
+    mine = lambda x: str(x.get("peer", "")).endswith(f":{port}")
+    cc = [x["t_us"] for x in entries if x.get("dir") == "to_radio" and x.get("radio_port") in CC_PORTS and mine(x)]
+    if not cc:
+        return None, None
+    edge = max(cc) + (WATCHDOG_MS + WD_MARGIN_MS) * 1000
+    regs_ = [x["t_us"] for x in entries if x.get("dir") == "to_radio" and x.get("radio_port") == PORT_REG and mine(x)]
+    late = len([x for x in entries if x.get("dir") == "from_radio" and x.get("radio_port") == PORT_DDC and mine(x) and x["t_us"] > edge])
+    return late, ((max(regs_) - edge) / 1000 if regs_ else None)
+
+
 @test("T-B5-02")
 def t_b5_02(ctx):
+    """B5.6: memory-mapped packets do not feed the watchdog. Judged in radio time: from net.log where
+    offered, else after 1.5 s of radio time (time.wait), else on the host clock."""
+    from .t_a3 import wait_radio
     with host(ctx) as h:
+        netlog = netlog_on(ctx)
         h.start()
         # liveness first: a radio that answers nothing would pass the negative check below
         if not ctx.at_least("session started (status packets)", len(h.recv(0.2, PORT_DDC)), what="status packets in 0.2 s"):
             return
+        write = lambda: h.send(PORT_REG, regs([(KEYED_TIMEOUT, 500)]))
+        if netlog:
+            # register packets every 100 ms of radio time until they reach 300 ms past the last C&C + 1100 ms
+            reach = None
+            for _ in range(200):
+                wait_radio(ctx, 100)
+                write()
+                late, reach = judge_b5_02(netlog_entries(ctx), h.port)
+                if reach is not None and reach >= 300:
+                    break
+            h.drain(0.05)
+            late, reach = judge_b5_02(netlog_entries(ctx), h.port)
+            if not ctx.check("the register packets reach 300 ms past the watchdog window (net.log, radio time)",
+                             reach is not None and reach >= 300, f"{reach} ms past the last C&C + 1100 ms"):
+                return
+            ctx.eq("memory-mapped packets alone do not keep the session: no status packet later than 1100 ms after the last "
+                   "C&C (net.log, radio time)", late, 0)
+            return
         for _ in range(15):
-            time.sleep(0.1)
-            h.send(PORT_REG, regs([(KEYED_TIMEOUT, 500)]))
+            wait_radio(ctx, 100)  # radio time where time.wait is offered
+            write()
         h.drain(0.05)
         got = h.recv(0.3, PORT_DDC)
+        if "time.wait" not in ctx.endpoint.get("fixtures", []) and ctx.kind == "emulator":
+            ctx.notes.append("T-B5-02 on the host clock: no net.log and no time.wait (the emulator may run slower than the host)")
         ctx.eq("memory-mapped packets alone do not keep the session (status packets after 1.5 s)", len(got), 0)
 
 
