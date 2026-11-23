@@ -46,8 +46,28 @@ SECTIONS
    gap-free run of bytes from its start (g7250-imgtool refuses an image with a gap). */
 SECTIONS
 {
-  .pad_text : { BYTE(0xFF); FILL(0xFF); . = ALIGN(16); } > FLASH
+  .pad_text : { BYTE(0xFF); FILL(0xFF); . = ALIGN(32); } > FLASH
 } INSERT AFTER .text;
+/* The fault path of A3.6 (board/common stop.rs) on whole flash words: the pin code from a word
+   start, each fault vector's entry and its literal on one word of its own, so that the bound of
+   check-safe-margin.py does not move with the code around it. Gaps filled with 0xFF. */
+SECTIONS
+{
+  .fault_text : ALIGN(32)
+  {
+    FILL(0xFF);
+    KEEP(*(.text.g7250_fault_pins));
+    . = ALIGN(32);
+    KEEP(*(.text.g7250_fault_vector_3));
+    . = ALIGN(32);
+    KEEP(*(.text.g7250_fault_vector_4));
+    . = ALIGN(32);
+    KEEP(*(.text.g7250_fault_vector_5));
+    . = ALIGN(32);
+    KEEP(*(.text.g7250_fault_vector_6));
+    . = ALIGN(16);
+  } > FLASH
+} INSERT AFTER .pad_text;
 SECTIONS
 {
   .pad_rodata : { BYTE(0xFF); FILL(0xFF); . = ALIGN(16); } > FLASH

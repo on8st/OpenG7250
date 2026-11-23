@@ -42,8 +42,10 @@ macro_rules! fault_vector {
     ($name:ident, $vector:literal) => {
         /// A processor fault vector (A3.6 "Unexpected stop of the firmware"): a stack of known
         /// value first, then the pins, then [`fault_entry`] with the vector number.
+        /// On a flash word of its own with its literal (`.fault_text` in the memory scripts).
         #[unsafe(no_mangle)]
         #[unsafe(naked)]
+        #[unsafe(link_section = concat!(".text.g7250_fault_vector_", stringify!($vector)))]
         pub unsafe extern "C" fn $name() -> ! {
             core::arch::naked_asm!(
                 "ldr r0, ={stack}",
@@ -67,8 +69,10 @@ fault_vector!(UsageFault, 6);
 
 /// The pins of A3.6 at their safe levels: the reset-time code, inlined here, straight-line and
 /// returning, so that `board/check-safe-margin.py` bounds this path as it does the reset path.
+/// From the start of a flash word (`.fault_text` in the memory scripts).
 #[unsafe(no_mangle)]
 #[inline(never)]
+#[unsafe(link_section = ".text.g7250_fault_pins")]
 pub extern "C" fn g7250_fault_pins() {
     crate::safe::apply_at_reset();
 }
