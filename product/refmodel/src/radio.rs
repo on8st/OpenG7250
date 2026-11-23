@@ -364,6 +364,11 @@ pub struct Radio {
     pub flash_delay: (u64, u32),
     /// model fixture store.full: the next update request finds no room in the store (0067 addendum)
     pub store_full: bool,
+    /// C-3 lost (A1.6 "Lost"; 0072): kept over every reset, the factory reset included; only a
+    /// SET_CONFIG of every C-3 item ends it
+    pub c3_lost: bool,
+    /// model fixture c3.lose: the C-3 record cannot be read at the next start (0072)
+    pub c3_unreadable: bool,
     /// model fixture reset.flags: the reset flags of the next start (0068 addendum)
     pub next_flags: Option<Vec<String>>,
     pub hw: Hw,
@@ -495,6 +500,8 @@ impl Radio {
             reset_cause: 1,
             flash_delay: (0, 0),
             store_full: false,
+            c3_lost: false,
+            c3_unreadable: false,
             next_flags: None,
             hw: Hw::default(),
             scheduled: Vec::new(),
@@ -1991,6 +1998,20 @@ impl Radio {
         }
         if unexpected {
             self.logf("start: unexpected stop");
+        }
+        // A1.6 "C-3 at a start", "Lost" (0072): an unreadable C-3 record makes C-3 lost; while lost the
+        // power limit of every band is 0 W and the other C-3 items take their built-in values,
+        // logged once per start
+        if std::mem::take(&mut self.c3_unreadable) {
+            self.c3_lost = true;
+        }
+        if self.c3_lost {
+            self.persistent_limits = [self.cfg.builtin_tx_time_ms, self.cfg.builtin_fwd_power_mw, self.cfg.builtin_swr_s2,
+                                      self.cfg.builtin_pa_temp_t3_mc];
+            if let Some(m) = self.mgmt.as_mut() {
+                m.conf.band_limits = [0; 10];
+            }
+            self.logf("config: C-3 lost, TX closed until rewritten");
         }
     }
 }

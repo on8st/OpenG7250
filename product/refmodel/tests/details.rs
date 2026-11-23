@@ -478,3 +478,71 @@ fn fifty_mhz_and_the_set_config_reply() {
     assert!(tlvs(&r.p).iter().all(|(t, _)| *t != 9 && *t != 10), "{:?}", tlvs(&r.p));
     assert_eq!(r.p, b.plain(A, GET_CONFIG, &[]).p);
 }
+
+const LOST: &str = "config: C-3 lost, TX closed until rewritten";
+
+/// Every C-3 item: TX time, a power limit for each of the ten bands, and S2, T3 if wanted.
+fn every_c3(tx_ms: u32, w: u16, s2_t3: Option<(u16, u16)>) -> Vec<u8> {
+    let mut p = vec![7, 4];
+    p.extend_from_slice(&tx_ms.to_be_bytes());
+    for i in 0..10u8 {
+        let w = if i == 9 { 0 } else { w }; // 50 MHz: 0 W until P-PWR-2 (0079)
+        p.extend_from_slice(&[8, 3, i]);
+        p.extend_from_slice(&w.to_be_bytes());
+    }
+    if let Some((s2, t3)) = s2_t3 {
+        p.extend_from_slice(&[9, 2]);
+        p.extend_from_slice(&s2.to_be_bytes());
+        p.extend_from_slice(&[10, 2]);
+        p.extend_from_slice(&t3.to_be_bytes());
+    }
+    p
+}
+
+fn lines(b: &Bench, text: &str) -> usize {
+    b.r.log.iter().filter(|e| e.2 == text).count()
+}
+
+/// T-A1-87, A1.6 "Lost" (0072), with a complete simulated set: the C-3 record unreadable at a start.
+#[test]
+fn c3_lost() {
+    let mut b = Bench::new(Config { calibrated: true, ..Config::default() });
+    assert_eq!(b.req(A, SET_CONFIG, &[8, 3, 0, 0x01, 0xF4]).status, st::OK); // band 0 at 50 W
+    b.r.c3_unreadable = true;
+    b.r.reset("software", Some("restart: restart"));
+    assert_eq!(lines(&b, LOST), 1);
+    let band = |p: &[u8], i: u8| tlvs(p).into_iter().find(|(t, v)| *t == 8 && v[0] == i).map(|(_, v)| u16::from_be_bytes([v[1], v[2]]));
+    let g = b.plain(A, GET_CONFIG, &[]).p;
+    assert!((0..10).all(|i| band(&g, i) == Some(0)), "{:?}", tlvs(&g));
+    assert!(tlvs(&g).contains(&(7, 300_000u32.to_be_bytes().to_vec()))); // the built-in TX time
+    // some but not every C-3 item: 48, nothing changed; an item that is not C-3 is taken
+    assert_eq!(b.req(A, SET_CONFIG, &[8, 3, 0, 0x01, 0xF4]).status, st::INVALID_CONFIG);
+    assert_eq!(b.req(A, SET_CONFIG, &every_c3(200_000, 800, None)).status, st::INVALID_CONFIG);
+    assert_eq!(b.req(A, SET_CONFIG, &[5, 1, 1]).status, st::OK);
+    assert!((0..10).all(|i| band(&b.plain(A, GET_CONFIG, &[]).p, i) == Some(0)));
+    // kept over a RESTART and a factory reset, logged once per start
+    b.r.reset("software", Some("restart: restart"));
+    assert_eq!(lines(&b, LOST), 2);
+    b.r.reset("software", Some("restart: factory-reset"));
+    assert!(b.r.c3_lost);
+    // every C-3 item ends it
+    let r = b.req(A, SET_CONFIG, &every_c3(200_000, 800, Some((300, 700))));
+    assert_eq!(r.status, st::OK);
+    assert!(!b.r.c3_lost);
+    assert_eq!((band(&r.p, 0), band(&r.p, 8), band(&r.p, 9)), (Some(800), Some(800), Some(0)));
+    b.r.reset("software", Some("restart: restart"));
+    assert_eq!(lines(&b, LOST), 3); // no new line at this start
+    assert!(b.r.log.last().map_or(false, |e| e.2 != LOST));
+}
+
+/// T-A1-87 (0072 point G): lost with no set holding S2 and T3.
+#[test]
+fn c3_lost_without_a_set() {
+    let mut b = Bench::new(Config::default());
+    b.r.c3_unreadable = true;
+    b.r.reset("software", Some("restart: restart"));
+    assert_eq!(b.req(A, SET_CONFIG, &every_c3(200_000, 800, Some((300, 700)))).status, st::NEEDS_CALIBRATION);
+    assert_eq!(b.req(A, SET_CONFIG, &every_c3(200_000, 800, None)).status, st::INVALID_CONFIG);
+    assert_eq!(b.req(A, SET_CONFIG, &[9, 2, 1, 44]).status, st::INVALID_CONFIG); // 48 before 62
+    assert!(b.r.c3_lost);
+}

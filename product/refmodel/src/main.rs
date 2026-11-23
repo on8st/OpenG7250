@@ -116,7 +116,7 @@ fn main() {
         }
     });
 
-    let mut fixtures = vec!["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay", "store.full", "reset.flags", "stop.sim", "vendor.install"];
+    let mut fixtures = vec!["net.hosts", "power.cycle", "reset.wdt", "link.set", "hw.observe", "hw.trace", "hw.input", "state.dump", "key.log", "atu.sim", "net.inject", "time.wait", "time.advance", "trial.sim", "slot.corrupt", "log.corrupt", "flash.delay", "store.full", "reset.flags", "stop.sim", "vendor.install", "c3.lose"];
     if cfg.f1_open {
         fixtures.push("installer.state");
     }
@@ -416,6 +416,12 @@ fn control_op(r: &mut Radio, line: &str, now: u64) -> String {
                 let log = args.get("log").map_or(true, |v| *v != J::Bool(false));
                 r.stop(if log { Some("restart: stop 1") } else { None });
             }
+            ok(J::Null)
+        }
+        "c3.lose" => {
+            // model only: the C-3 record cannot be read from the next start on, as after a double ECC
+            // error in it (0072); C-3 is then lost until a SET_CONFIG of every C-3 item
+            r.c3_unreadable = true;
             ok(J::Null)
         }
         "store.full" => {

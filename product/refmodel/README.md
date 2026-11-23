@@ -36,6 +36,16 @@ The sequence numbers of B11.6 start again at a takeover, since a takeover starts
 (A2.3): spec, not a choice. The persistent power limit per band (C-3) is kept, checked and
 reported, but the keying model does not limit power by it, so a band at 0 W does not refuse arming
 in the model.
+C-3 that may be lost (0072): the model has no store generations, so only the lost state of A1.6
+"Lost" is modelled. The fixture `c3.lose {}` (model only) makes the C-3 record unreadable from the
+next start on, as a double ECC error in it would. From that start C-3 is lost: every band limit 0 W,
+the TX time, S2 and T3 at their built-in values, `config: C-3 lost, TX closed until rewritten` logged
+once per start, kept over `RESTART` and `FACTORY_RESET`. A `SET_CONFIG` with some but not every C-3 item
+gets 48 and changes nothing (also before 62), with no set holding S2 and T3 a request of every C-3
+item gets 62, and one of every C-3 item ends it (logged `config: C-3 rewritten by <source>` after the
+changes). `vendor.install {}` returns C-3 to the built-in values (option (i) of 0072). Not modelled:
+the compaction of every C-3 write, generation numbers, C-3 state records, fall-backs and cuts (no
+flash), and the closing of TX by a 0 W band in the keying model.
 
 ## Language (decisions 0033, 0037, proposed)
 

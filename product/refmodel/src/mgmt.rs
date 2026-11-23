@@ -1045,6 +1045,8 @@ impl Mgmt {
         let mut c = self.conf.clone();
         let mut limits = r.persistent_limits;
         let (mut bad, mut looser, mut needs_cal, mut c3) = (false, false, false, false);
+        // the C-3 items the request holds: bit 0 tag 7, bits 1-10 tag 8 per band, bits 11, 12 tags 9, 10
+        let mut seen = 0u16;
         let mut i = 0;
         while i < p.len() {
             if i + 2 > p.len() || i + 2 + p[i + 1] as usize > p.len() {
@@ -1054,6 +1056,13 @@ impl Mgmt {
             let (tag, val) = (p[i], &p[i + 2..i + 2 + p[i + 1] as usize]);
             i += 2 + val.len();
             let n = val.len();
+            seen |= match (tag, n) {
+                (7, 4) => 1,
+                (8, 3) if (val[0] as usize) < 10 => 2 << val[0],
+                (9, 2) => 1 << 11,
+                (10, 2) => 1 << 12,
+                _ => 0,
+            };
             match (tag, n) {
                 (1, 1) if val[0] <= 1 => c.addr_mode = val[0],
                 (2, 4) => c.addr.copy_from_slice(val),
@@ -1118,6 +1127,12 @@ impl Mgmt {
         if bad {
             return st::INVALID_CONFIG;
         }
+        // A1.6 "Lost" (0072): while C-3 is lost, a request with some but not every C-3 item gets 48
+        // and changes nothing; 48 comes before 62 (Table A1-3)
+        const EVERY_C3: u16 = (1 << 13) - 1;
+        if r.c3_lost && seen != 0 && seen != EVERY_C3 {
+            return st::INVALID_CONFIG;
+        }
         if looser {
             return st::NOT_ALLOWED;
         }
@@ -1141,6 +1156,10 @@ impl Mgmt {
         }
         r.persistent_limits = limits;
         self.conf = c;
+        if r.c3_lost && seen == EVERY_C3 {
+            r.c3_lost = false; // the loosening from 0 W is logged above (A1.6 C-3)
+            r.logf(&format!("config: C-3 rewritten by {src}"));
+        }
         r.logf(&format!("configuration changed by {src}"));
         st::OK
     }
