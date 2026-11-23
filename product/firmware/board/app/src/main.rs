@@ -364,7 +364,7 @@ unsafe fn CEC() {
 }
 
 /// Microseconds from the boot stage's start to the first TX path check (GET_STATS
-/// `tx_check_first_us`; 0066 addendum).
+/// `tx_check_1st_us`; 0066 addendum).
 pub static TX_CHECK_FIRST_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// The TX path check (A3.6b; 0066): every 5 ms while not armed and not keyed, the TX-side pins'

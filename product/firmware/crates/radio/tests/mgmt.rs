@@ -994,6 +994,12 @@ fn get_stats_lists_table_m6_first_t_a1_95() {
     assert!(got[..46].iter().all(|(n, v)| *v == 0 && n.len() <= 16), "{got:?}");
     assert!(names.len() > 46, "the firmware's own after them");
     assert!(!names[46..].iter().any(|n| M6.contains(n)), "no name twice");
+    // Every name, the firmware's own too, at most 16 ASCII characters (Table M-1 GET_STATS).
+    let long: Vec<_> = names.iter().filter(|n| n.len() > 16 || !n.is_ascii()).collect();
+    assert!(long.is_empty(), "{long:?}");
+    for n in g7250_radio::mgmt::STEP_NAMES {
+        assert!(n.len() <= 16, "{}", String::from_utf8_lossy(n));
+    }
     let answered = (0..25u32).filter(|i| w.call(&mut s, HOST, &req(100 + i, Command::Identify, &[]), 2000 + 10 * *i as u64).is_some()).count() as u64;
     assert!(answered < 25);
     let got = stats(&mut w, &mut s, 200, 5000);

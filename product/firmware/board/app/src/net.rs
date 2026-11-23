@@ -736,7 +736,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     let mut dropped_1024: u32 = 0;
     let mut answered: u32 = 0;
     let mut last_link = link;
-    // The longest pass that handled a P2 packet, µs (GET_STATS `net_busy_pass_max_us`): the
+    // The longest pass that handled a P2 packet, µs (GET_STATS `busy_pass_max_us`): the
     // margin of 0054 (High Priority packets 1 ms apart, two held by the CH394) needs every busy
     // pass well under 2 ms.
     let mut busy_pass_max_us: u64 = 0;
