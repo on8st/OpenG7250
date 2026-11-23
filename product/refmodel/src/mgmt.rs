@@ -789,9 +789,6 @@ impl Mgmt {
             std::thread::sleep(std::time::Duration::from_micros(r.flash_delay.0));
             r.now += r.flash_delay.0 * (MS / 1000);
         }
-        if status == st::AUTH_REQUIRED {
-            r.count("mg_auth_required"); // counted, not logged one by one (0080)
-        }
         let mut reply = header(rx.data, status, payload);
         reply[7] = (std::mem::take(&mut self.more) as u8) << 1;
         if store && rx.data.len() >= 18 {
@@ -802,6 +799,11 @@ impl Mgmt {
             }
         }
         if self.limits(r, rx, cmd, inside) {
+            if status == st::AUTH_REQUIRED {
+                // requests answered with 32: counted, not logged one by one (Table M-6; 0080); a reply
+                // the cap drops is not an answer
+                r.count("mg_auth_required");
+            }
             out.push(Tx { src_port: crate::codes::port::MGMT, dst: rx.src, data: reply });
         }
     }

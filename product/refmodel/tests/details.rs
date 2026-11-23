@@ -569,4 +569,15 @@ fn status_32() {
     wrong[0] ^= 1;
     assert_eq!(b.signed(A, SET_CONFIG, &TX_TIME, &wrong).status, st::AUTH_FAILED);
     assert_eq!(b.stat("mg_auth_required"), 21);
+    // a 32 whose reply the cap of 20 per second drops is not counted
+    let n0 = b.stat("mg_auth_required");
+    let (mut sent, mut answered) = (0, 0);
+    for _ in 0..30 {
+        let d = b.datagram(END, &[], None);
+        b.t += S / 100;
+        sent += 1;
+        answered += b.to(A, port::MGMT, &d).iter().filter(|t| t.src_port == port::MGMT).count() as u64;
+    }
+    assert!(answered < sent, "{answered} of {sent}");
+    assert_eq!(b.stat("mg_auth_required") - n0, answered);
 }
