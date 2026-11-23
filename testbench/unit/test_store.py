@@ -24,7 +24,8 @@ def word(kind: bytes, value: int = 0) -> bytes:
 class Store:
     """Words of 32 bytes: F first generation, H n compacted generation n, S then 32 bytes a secret,
     T a configuration value, X the C-3 TX time (written only by a compaction, 0072), B the boot counter,
-    C n the commit of generation n."""
+    C n the commit of generation n, Q n then R v a C-3 state record (the number of the generation it
+    judged, the value; 0072 "Keeping the judgment")."""
 
     def __init__(self, secret, broken=""):
         self.mem, self.ecc = {A: {}, B: {}}, set()
@@ -79,7 +80,7 @@ class Store:
             w, ok = m[k], x + k * W not in self.ecc
             c = w[:1]
             n = struct.unpack(">I", w[1:5])[0]
-            valid = ok and w[5:] == b"\0" * (W - 5) and c in b"FHSTBCX"
+            valid = ok and w[5:] == b"\0" * (W - 5) and c in b"FHSTBCXQR"
             if k - 1 in m and m[k - 1] == word(b"S") and x + (k - 1) * W not in self.ecc and k != 0:
                 if ok:
                     recs.append((b"S", w))
@@ -93,7 +94,7 @@ class Store:
                 gen = ("new", n)
             elif c == b"C":
                 gen, junk = (("committed", n), junk) if gen == ("new", n) else (gen, True)
-            elif c in b"TBX":
+            elif c in b"TBXQR":
                 recs.append((c, n))
             elif c == b"S" and k + 1 not in m:
                 junk = True
@@ -131,10 +132,53 @@ class Store:
             words = [word(b"F")] + words
         self.program(x, words)
 
+    # ---- C-3 (0072)
+    def numbers(self):
+        ns = []
+        for x in (A, B):
+            g, recs, _ = self.read(x)
+            ns += ([g[1]] if g else []) + [n for k, n in recs if k == b"Q"]
+        return ns
+
+    def c3(self):
+        """The live value: the newest state record of the live sector, else the live generation's."""
+        x = self.live()
+        recs = self.read(x)[1] if x is not None else []
+        r = [n for k, n in recs if k == b"R"] or [n for k, n in recs if k == b"X"]
+        return r[-1] if r else None
+
+    def counting(self, y):
+        """The number of a generation in sector y without a valid commit, above the live one's and the
+        state records' of the live sector; else None."""
+        x = self.live()
+        g = self.read(y)[0]
+        if x is None or x == y or not g or g[0] != "new":
+            return None
+        recs = self.read(x)[1]
+        n = g[1]
+        # a state record counts only whole (its number and its value readable): one cut while it is
+        # programmed leaves the sector as it was, and the next start judges again
+        whole = [q for i, (k, q) in enumerate(recs) if k == b"Q" and i + 1 < len(recs) and recs[i + 1][0] == b"R"]
+        return n if n > self.read(x)[0][1] and all(n > q for q in whole) else None
+
+    def keep_judgment(self, y):
+        """Before sector y is erased: a C-3 state record into the live sector, if y holds such a generation."""
+        n = self.counting(y)
+        if n is None or self.broken == "no-state-record":
+            return
+        v = self.c3()
+        failed = any(w[:1] == b"C" and y + k * W in self.ecc for k, w in self.mem[y].items())
+        own = [m for k, m in self.read(y)[1] if k == b"X"]
+        if failed and own and self.broken != "looser-after-fallback":
+            v = own[-1] if v is None else min(v, own[-1])  # a shorter TX time is the stricter value
+        if v is not None:
+            self.program(self.live(), [word(b"Q", n), word(b"R", v)])
+
     def compact(self, secret=None, c3=None):
         x, live = self.other(self.live()), self.live()
-        n = self.read(live)[0][1] + 1
-        secret, cfg, c3 = secret or self.secret, self.get(b"T"), c3 or self.get(b"X")
+        n = max(self.numbers()) + 1
+        self.keep_judgment(x)
+        secret, cfg, c3 = secret or self.secret, self.get(b"T"), c3 or self.c3()
         self.erase(x)
         if self.broken == "two-erases":
             self.erase(live)
@@ -166,6 +210,8 @@ class Store:
                 self.say("store: commit word unreadable, older generation used")
         bare = self.live() is None
         self.append([word(b"B", self.boots)])
+        if self.live() is not None:
+            self.keep_judgment(self.other(self.live()))
         self.check(bare)
         self.t += 5
         self.sock.append(dict(action="OPEN", port=7251, t_us=self.t))
@@ -288,9 +334,8 @@ def run(broken="", without=()):
         return r
 
     def compaction(ctx_, u, *a, **k):
-        st.compact()
         ctx_.__dict__["_reply"] = (1.0, 1)
-        return 1, 1
+        return (1, 1) if safely(lambda: st.compact()) else None  # a cut in its erase: the power is lost
 
     def first(ctx_, new):
         if st.secret is not None:
@@ -304,17 +349,21 @@ def run(broken="", without=()):
     new = dict(mg=mg, updating=updating, change_secret=change, compaction_writes=compaction, secret=lambda c: original,
                wait_reachable=lambda *a, **k: 0.0, sectors=lambda u: [A, B], store_range=lambda u: (A, B + SECTOR),
                first_secret=first, set_plain=config, plain=lambda u: st.get(b"T"),
-               set_tx_time=lambda u, ms, window=None: safely(lambda: st.compact(c3=ms)), tx_time=lambda u: st.get(b"X") or 300_000, accepts=lambda c, s: 0 if s == st.secret else 33,
+               set_tx_time=lambda u, ms, window=None: safely(lambda: st.compact(c3=ms)), tx_time=lambda u: st.c3() or 300_000, accepts=lambda c, s: 0 if s == st.secret else 33,
                ident=lambda c: {11: b"\1" if st.secret else b"\0", 12: b"\0" if st.secret else b"\1\1\x2c", 23: b"\1"},
                Mgmt=mock.MagicMock(), run_texts=lambda c: [e[2] for e in st.log[t_log.last_start(st.log):]])
+    ctx.runner_fault = None
     with mock.patch.multiple(t_stale, **new):
-        t_stale.t_a1_92(ctx)
+        try:
+            t_stale.t_a1_92(ctx)
+        except core.RunnerFault as e:  # a planned cut that never came: no pass, and the checks before it still count
+            ctx.runner_fault = e
     ctx.store = st
     return ctx
 
 
 def failed(ctx):
-    return [f"{c['name']}: {c['detail']}" for c in ctx.checks if not c["ok"]]
+    return [f"{c['name']}: {c['detail']}" for c in ctx.checks if not c["ok"]] + (["runner"] if ctx.runner_fault else [])
 
 
 class OldSecret(unittest.TestCase):
@@ -331,7 +380,10 @@ class OldSecret(unittest.TestCase):
         for what in ("a second start: nothing erased", "only the live secret is not erased", "foreign word at offset 0x1ffe0", "first word of the old secret: completed", "one word further on: completed", "cut at 0.1, not erased again", "cut at 0.9, not erased again",
                      "cut at word 1 ", "the old secret authenticates, the new one gets 33", "lost sector 6, the second start",
                      "the next start erases sector 6 once", "the next start erases the other sector", "the first generation kept",
-                     "C-3 is G's", "erases G-1's sector once", "C-3 takes the built-in values"):
+                     "C-3 is G's", "erases G-1's sector once", "C-3 takes the built-in values",
+                     "cut at word 3 of the start's writes before the erase: the start after", "cut during the next compaction: the next start",
+                     "after the next compaction: the start after", "words programmed into L before that erase",
+                     "then N committed with its commit word unreadable, cut during the start check's erase: the start after"):
             self.assertIn(what, names)
 
     def test_parts_without_a_fixture(self):
@@ -350,7 +402,9 @@ class OldSecret(unittest.TestCase):
                              ("counter-counts", "lost sector 6, the first start: sector 0x80c0000 not erased"),
                              ("config-does-not-count", "only configuration: the failed newer generation erased"),
                              ("whole-records-only", "cut at"), ("keeps-torn", "cut at the first word of the old secret, not erased again: no part of the old secret"),
-                             ("leaves-rest", "cut at the first word of the old secret, not erased again: no part of the old secret")):
+                             ("leaves-rest", "cut at the first word of the old secret, not erased again: no part of the old secret"),
+                             ("no-state-record", "a fall-back with a stricter C-3 record, cut at word 1 of the start's writes before the erase: the next start"),
+                             ("looser-after-fallback", "a fall-back with a stricter C-3 record: the next start: the stricter TX time")):
             try:
                 bad = failed(run(broken))
             except core.RunnerFault:
@@ -382,8 +436,8 @@ class OldSecret(unittest.TestCase):
 
     def test_planned_cuts_not_seen(self):
         with mock.patch.object(FakeCtx, "fixture", lambda self, op, /, _f=FakeCtx.fixture, **a: None if op == "power.cut" else _f(self, op, **a)):
-            with self.assertRaises(core.RunnerFault):
-                run()
+            ctx = run()
+        self.assertIsInstance(ctx.runner_fault, core.RunnerFault)  # run() keeps it, with the checks before it
 
 
 if __name__ == "__main__":

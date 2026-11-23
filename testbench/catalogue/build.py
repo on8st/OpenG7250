@@ -303,9 +303,10 @@ OVERRIDES: dict[str, dict] = {
                           "the erase cuts inside the old secret's record are placed from a dump as if the erase ran from the start "
                           "of the sector (an assumption that only places the cut; the verdict is what flash.log and the dump show)",
                           "the cases with flash.ecc do not cover 'without a fault or reset' on the emulator: " + ECC_LIMIT,
-                          "0072: foreign data in both sectors (built-in C-3, no lost line) and G-1's commit word unreadable with G "
-                          "live; the C-3 state record cases and G-1's number unreadable are parts, not run yet (places the "
-                          "firmware's choice)"]},
+                          "0072: foreign data in both sectors (built-in C-3, no lost line), G-1's commit word unreadable with G "
+                          "live, and the C-3 state record sequences (a power loss at each point, cuts by word count and erase "
+                          "fraction; the verdict is the stricter value at every following start); parts: the failed "
+                          "generation's C-3 record unreadable and G-1's number unreadable (places the firmware's choice)"]},
     "T-A1-93": {"target": "host", "also": [], "needs": [],
                 "notes": ["g7250ctl's own test against the reference model (0070); not run by this bench"]},
     "T-A1-83": {"target": "emulator", "also": [], "needs": ["power.cut", "time.advance", "flash.log", "hw.trace"]},

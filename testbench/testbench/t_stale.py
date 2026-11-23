@@ -200,8 +200,8 @@ def t_a1_92(ctx: Ctx):
     slot = ident(ctx).get(23, b"")[:1]
     if has(ctx, "sock.log"):
         ctx.fixture("sock.log", action="start")
-    cases = [stale_at_start, compaction, unrecognised_word, cut_erase, cut_compaction, fall_back, older_generation, lost_sector, foreign,
-             config_only]
+    cases = [stale_at_start, compaction, unrecognised_word, cut_erase, cut_compaction, fall_back, older_generation, stricter_record,
+             newer_than_record, lost_sector, foreign, config_only]
     broken = ""
     try:
         for case in cases:
@@ -581,6 +581,131 @@ def older_generation(ctx, st: State):
     ctx.part(f"{label}: the same with G-1's number unreadable in both places: not run, its places are the firmware's choice")
 
 
+def strict_setup(ctx, st: State, label: str, delta: int = 100):
+    """A C-3 write that tightens the TX time by `delta` commits N in the other sector; N's commit word
+    (the last word its compaction programmed) is given a double ECC error, so the next start falls back
+    with N a failed generation that counts (0072). (the stricter value, N's sector) or None."""
+    with mg(ctx, st.cur) as u:
+        tx = tx_time(u)
+        flog_start(ctx)
+        r = set_tx_time(u, tx - delta) if tx is not None else None
+        entries = flog(ctx)
+    if not ctx.eq(f"{label}: the tightening C-3 write: 0", r["status"] if r else None, 0):
+        return None
+    w, er = commit_word(entries, st.secs), which(st.secs, store_erases(entries, st.secs))
+    if w is None or len(er) != 1:
+        ctx.part(f"{label}: not run, the C-3 write is not one compaction (erases {[hex(x) for x in er]})")
+        return None
+    double_ecc(ctx, w)
+    return tx - delta, er[0]
+
+
+def strict_kept(ctx, st: State, label: str, strict: int, starts: int = 2):
+    """This start and the next have the stricter value, and no 'C-3 lost' line."""
+    for i in range(starts):
+        if i:
+            st.restart("a power cycle")
+        with mg(ctx, st.cur) as u:
+            ms = tx_time(u)
+        ctx.eq(f"{label}: {'the start after' if i else 'the next start'}: the stricter TX time {strict}", ms, strict)
+        ctx.check(f"{label}: no '{LOST_LINE}' line", not any(LOST_LINE in x for x in run_texts(ctx)), f"{run_texts(ctx)[-3:]}")
+
+
+def before_erase(entries: list[dict], secs: list[int], sector: int) -> tuple[list[int], int]:
+    """The words the start programmed outside `sector` before erasing it (the C-3 state record among
+    them), and the number of erases of `sector`."""
+    er = [e for e in store_erases(entries, secs) if in_range(e, sector, sector + SECTOR)]
+    head = entries[:entries.index(er[0])] if er else entries
+    return [w for w in program_words(head, secs) if not sector <= w < sector + SECTOR], len(er)
+
+
+def stricter_record(ctx, st: State):
+    """T-A1-92, 0072 "Keeping the judgment": a fall-back whose failed generation N holds a C-3 record
+    stricter than the live one, with a power loss at each point: while the C-3 state record is
+    programmed, during the start check's erase, after it before the next compaction, during that
+    compaction, after it. Every following start has the stricter value."""
+    label = "a fall-back with a stricter C-3 record"
+    with mg(ctx, st.cur) as u:
+        tx0 = tx_time(u)
+    got = strict_setup(ctx, st, label)
+    if got is None:
+        return None
+    strict, n_sec = got
+    pre, n_er = before_erase(st.restart("a power cycle"), st.secs, n_sec)
+    ctx.eq(f"{label}: the start erases N's sector once", n_er, 1)
+    # the boot counter is among them, so this shows only where the cuts go; the verdict is the stricter value
+    ctx.check(f"{label}: words programmed into the live sector before that erase (where the state record must be)", bool(pre), "none")
+    strict_kept(ctx, st, label, strict)
+    points = [(f"cut at word {k} of the start's writes before the erase", dict(after_flash_words=k)) for k in range(1, len(pre) + 1)]
+    points += [("cut during the start check's erase", dict(during_erase=0.5)), ("after the erase, before the next compaction", None),
+               ("cut during the next compaction", "compaction-cut"), ("after the next compaction", "compaction")]
+    for name, how in points:
+        lab = f"{label}, {name}"
+        got = strict_setup(ctx, st, lab)
+        if got is None:
+            return False
+        strict, n_sec = got
+        if isinstance(how, dict):
+            ctx.fixture("power.cut", **how)
+        entries = st.restart("a power cycle")
+        if isinstance(how, dict) and cut_entry(entries, "program" if "after_flash_words" in how else "erase") is None:
+            st.missing.append(f"{lab} (cut entries {[x for x in entries if x.get('result') == 'cut'][:2]})")
+            continue
+        if isinstance(how, str):
+            with mg(ctx, st.cur) as u:
+                lo, hi = store_range(u)
+                flog_start(ctx)
+                if how == "compaction-cut":
+                    ctx.fixture("power.cut", during_erase=0.5)
+                compaction_writes(ctx, u, 0, lo, hi)
+            if how == "compaction-cut":
+                wait_reachable(ctx, lab)
+                if cut_entry(flog(ctx), "erase") is None:
+                    st.missing.append(f"{lab} (no cut erase entry)")
+                    continue
+        strict_kept(ctx, st, lab, strict)
+    ctx.part(f"{label}, with the failed generation's C-3 record unreadable (TX closed at every point): not run, the place "
+             "of the C-3 record is the firmware's choice")
+    with mg(ctx, st.cur) as u:
+        if tx0 is not None:
+            set_tx_time(u, tx0)
+
+
+def newer_than_record(ctx, st: State):
+    """T-A1-92, 0072 point I: after a fall-back L holds a C-3 state record; a tightening SET_CONFIG commits
+    N in the other sector; N's commit word given a double ECC error. The next start takes N's stricter
+    value, not L's state record, and writes a new state record into L before N's sector is erased; a
+    power loss at each point of that keeps the stricter value."""
+    label = "a state record in L, then N committed with its commit word unreadable"
+    with mg(ctx, st.cur) as u:
+        tx0 = tx_time(u)
+    for name, how in [("", None), ("cut at word 1 of the start's writes before the erase", dict(after_flash_words=1)),
+                      ("cut during the start check's erase", dict(during_erase=0.5))]:
+        lab = f"{label}{', ' + name if name else ''}"
+        got = strict_setup(ctx, st, f"{lab} (the first fall-back)")
+        if got is None:
+            return None
+        st.restart("a power cycle")  # L now holds a state record
+        got = strict_setup(ctx, st, lab)
+        if got is None:
+            return False
+        strict, n_sec = got
+        if how:
+            ctx.fixture("power.cut", **how)
+        entries = st.restart("a power cycle")
+        if how and cut_entry(entries, "program" if "after_flash_words" in how else "erase") is None:
+            st.missing.append(f"{lab} (cut entries {[x for x in entries if x.get('result') == 'cut'][:2]})")
+            continue
+        if not how:
+            pre, n_er = before_erase(entries, st.secs, n_sec)
+            ctx.eq(f"{lab}: N's sector erased once", n_er, 1)
+            ctx.check(f"{lab}: words programmed into L before that erase (where the new state record must be)", bool(pre), "none")
+        strict_kept(ctx, st, lab, strict)
+    with mg(ctx, st.cur) as u:
+        if tx0 is not None:
+            set_tx_time(u, tx0)
+
+
 def config_only(ctx, st: State):
     """After a fall-back to a first generation that holds only configuration, the failed newer
     generation with its secret is erased. The first generation is made without a compaction (empty
@@ -632,6 +757,7 @@ def config_only(ctx, st: State):
 
 
 NEEDS = {unrecognised_word: ("flash.fill",), cut_erase: ("power.cut",), cut_compaction: ("power.cut",),
-         fall_back: ("flash.ecc", "power.cycle"), older_generation: ("flash.ecc", "power.cycle"), lost_sector: ("flash.ecc", "power.cycle"),
+         fall_back: ("flash.ecc", "power.cycle"), older_generation: ("flash.ecc", "power.cycle"),
+         stricter_record: ("flash.ecc", "power.cycle", "power.cut"), newer_than_record: ("flash.ecc", "power.cycle", "power.cut"), lost_sector: ("flash.ecc", "power.cycle"),
          foreign: ("flash.fill", "power.cycle"), config_only: ("flash.fill", "flash.ecc", "power.cycle")}
 WIPES = (lost_sector, foreign, config_only)
