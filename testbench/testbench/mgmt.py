@@ -320,7 +320,9 @@ def parse_log(payload: bytes) -> list[tuple[int, int, str]]:
 
 
 def stats(c: "Mgmt") -> dict[str, int] | None:
-    r = c.req("GET_STATS")
+    """GET_STATS with the host's retransmission of A1.4: a request that falls into a socket borrow (at most
+    2 s, A1.11) gets no answer, and the retransmission covers it."""
+    r = req_retransmit(c, "GET_STATS")
     return parse_stats(r["payload"]) if r and r.get("status") == 0 else None
 
 

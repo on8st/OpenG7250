@@ -251,3 +251,26 @@ class PackageFile(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatsRetransmit(unittest.TestCase):
+    """stats(): a GET_STATS lost in a socket borrow is covered by the A1.4 retransmission (T-A1-95)."""
+
+    def test_one_lost_reply(self):
+        from testbench import mgmt
+
+        class C:
+            clock, why, sends = None, "", 0
+
+            def next_id(self):
+                return 7
+
+            def raw(self, data, timeout):
+                self.sends += 1
+                if self.sends == 1:
+                    return []  # the borrow: no answer
+                payload = bytes([5]) + b"hp_rx" + (3).to_bytes(8, "big")
+                return [dict(status=0, payload=payload, id=7)]
+        c = C()
+        self.assertEqual(mgmt.stats(c), {"hp_rx": 3})
+        self.assertEqual(c.sends, 2)
