@@ -185,7 +185,15 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-18": {"scope": "after-G6"},
     "T-A1-45": {"scope": "after-G6", "target": "host"},
     "T-A1-57": {"target": "emulator", "also": ["host", "needs-radio"], "needs": ["ctrl.set"]},
-    "T-A1-58": {"target": "emulator", "also": ["host"], "needs": ["ctrl.set"]},
+    "T-A1-58": {"target": "emulator", "also": ["host"], "needs": ["ctrl.set"],
+                "notes": ["on the reference model with --f1 open: both installs; the controller part is a part there (no controller)"]},
+    "T-A1-54": {"target": "host", "also": ["emulator"], "pending": [], "needs": [],
+                "notes": ["reference model with --f1 open; the 59 case (forward power above P_rf_off) is a part: no RF in the model's "
+                          "installer path"]},
+    "T-A1-55": {"target": "host", "also": ["emulator"], "notes": ["reference model with --f1 open"]},
+    "T-A1-61": {"target": "host", "also": ["emulator"], "pending": [],
+                "notes": ["the gate-closed half on the emulator or the model without --f1 open, the gate-open half on the model "
+                          "with --f1 open"]},
     # A2: takeover tests are RX-side on the emulator; their TX parts ride on host/radio
     "T-A2-09": {"target": "emulator", "also": ["host"], "tx_part": True,
                 "notes": ["'neither can stay armed' needs TX unlocked: host only"]},

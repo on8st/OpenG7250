@@ -206,3 +206,160 @@ def t_a1_62(ctx: Ctx):
                 r = u.req("UPDATE_ABORT")
                 ctx.eq("UPDATE_ABORT: 0, restart needed 0", (r["status"], r["payload"]) if r else None, (0, b"\x00"))
             back_in_this_firmware(ctx, s, f"{case}, no RESTART sent", conf0, n0)
+
+
+def big() -> bytes:
+    """A foreign package one byte too large for sectors 1-7 (A1.8a item 3)."""
+    return header(7 * SECTOR + 1, hashlib.sha256(IMG).digest(), version=(0, 0, 0), slot=0)
+
+
+def restore(ctx) -> bytes:
+    """The vendor path back to this firmware, with a new secret set by the bench."""
+    return fresh(ctx)
+
+
+def unchanged(ctx, u: Updater, label: str, conf0: dict):
+    t = u.identify()
+    ctx.eq(f"{label}: nothing changed (this firmware, a secret set: tags 10, 11)", (t.get(10), t.get(11)), (b"\x00", b"\x01"))
+    ctx.eq(f"{label}: no update state (UPDATE_STATUS 0)", (u.status() or {}).get("state"), 0)
+    ctx.eq(f"{label}: the configuration unchanged", get_config(u.c), conf0)
+
+
+@test("T-A1-61", own_boot=True)
+def t_a1_61(ctx: Ctx):
+    """A1.8a item 3, "Gate" (0028): before the F1 gate is set a foreign UPDATE_BEGIN gets 56, 56 before 61;
+    after it is set the same request is accepted."""
+    s = secret(ctx)
+    gate = (ctx.endpoint.get("model") or {}).get("f1_gate")
+    with updating(ctx, s, restart_at_end=False) as u:
+        conf0, n0 = get_config(u.c), last_log_seq(u)
+        if gate != "open":
+            ctx.eq("before the gate: a foreign UPDATE_BEGIN that passes every other check: 56", st_of(u.begin(package(), FLAG_FOREIGN)), 56)
+            ctx.eq("before the gate: an oversized one: 56 (before 61)", st_of(u.begin(big(), FLAG_FOREIGN)), 56)
+            unchanged(ctx, u, "before the gate", conf0)
+            ctx.part("after the gate is set: only on the reference model started with --f1 open")
+            return
+    gate_open(ctx)
+    try:
+        with updating(ctx, s, restart_at_end=False) as u:
+            ctx.eq("after the gate: an oversized one: 61", st_of(u.begin(big(), FLAG_FOREIGN)), 61)
+            if not begin(ctx, u, "after the gate: the same request"):
+                return
+            r = u.req("UPDATE_ABORT")
+            ctx.eq("UPDATE_ABORT before the first erase: 0", st_of(r), 0)
+            back_in_this_firmware(ctx, s, "UPDATE_ABORT before the first erase", conf0, n0)
+        ctx.part("before the gate is set: shown on a run with the gate closed (the emulator, or the model without --f1 open)")
+    finally:
+        restore(ctx)
+
+
+@test("T-A1-55", own_boot=True)
+def t_a1_55(ctx: Ctx):
+    """A1.8a items 3, 5: the checks of a foreign image and its permanent activation."""
+    gate_open(ctx)
+    s = secret(ctx)
+    other = image(len(IMG), seed=601)
+    try:
+        with updating(ctx, s, restart_at_end=False) as u:
+            sha = hashlib.sha256(IMG).digest()
+            hw = header(len(IMG), sha, version=(0, 0, 0), slot=0, hw=0x00C9)
+            ctx.eq("another hardware id: 51", st_of(u.begin(hw, FLAG_FOREIGN)), 51)
+            ctx.eq("too large for sectors 1-7: 61", st_of(u.begin(big(), FLAG_FOREIGN)), 61)
+            # a hash in the header that is not the image's: everything taken, the verify 55
+            wrong = header(len(IMG), hashlib.sha256(other).digest(), version=(0, 0, 0), slot=0)
+            r = u.begin(wrong, FLAG_FOREIGN)
+            if not ctx.eq("a foreign UPDATE_BEGIN: 0", st_of(r), 0):
+                return
+            r = u.req("UPDATE_BLOCK", block_payload(0, IMG[:512], crc=1))
+            ctx.eq("a block with a bad CRC: 53", st_of(r), 53)
+            st = ctx.fixture("installer.state") or {}
+            ctx.eq("and it is not written (installer.state bytes_written, state)", (st.get("bytes_written"), st.get("state")), (0, "before-erase"))
+            ctx.eq("UPDATE_ACTIVATE without the foreign flag: 17", st_of(u.req("UPDATE_ACTIVATE", b"\x00")), 17)
+            ctx.eq("UPDATE_ACTIVATE with the flag before a good verify: 55", st_of(u.req("UPDATE_ACTIVATE", b"\x01")), 55)
+            ctx.eq("every block", blocks(u, 0, (len(IMG) + 511) // 512), 0)
+            ctx.eq("UPDATE_VERIFY with a hash other than the owner-supplied SHA-256: 55", st_of(u.req("UPDATE_VERIFY")), 55)
+            ctx.eq("then UPDATE_ACTIVATE with the flag: 55", st_of(u.req("UPDATE_ACTIVATE", b"\x01")), 55)
+        s = restore(ctx)
+        with updating(ctx, s, restart_at_end=False) as u:
+            if not begin(ctx, u, "a good image"):
+                return
+            ctx.eq("every block", blocks(u, 0, (len(IMG) + 511) // 512), 0)
+            ctx.eq("UPDATE_VERIFY: 0", st_of(u.req("UPDATE_VERIFY")), 0)
+            r = u.req("UPDATE_ACTIVATE", b"\x01")
+            ctx.eq("UPDATE_ACTIVATE with the flag after a good verify: 0, permanent (1)", (st_of(r), r["payload"] if r else None), (0, b"\x01"))
+        time.sleep(0.3)
+        has_state(ctx, "after the activation: the stock image runs, no trial boot and no way back", "stock")
+        with Mgmt(ctx.net) as c:
+            ctx.eq("nothing of this firmware answers (no trial boot, no rollback)", req_retransmit(c, "IDENTIFY"), None)
+    finally:
+        restore(ctx)
+
+
+@test("T-A1-54", own_boot=True)
+def t_a1_54(ctx: Ctx):
+    """A1.8a items 3, 6-8: the hand-over to the installer."""
+    gate_open(ctx)
+    s = secret(ctx)
+    from .p2 import PORT_DDC
+    try:
+        with Host(ctx.net) as h, updating(ctx, s, restart_at_end=False) as u:
+            conf0, n0 = get_config(u.c), last_log_seq(u)
+            h.start()
+            ctx.check("a P2 session runs before (status packets)", any(p == PORT_DDC for p, _, _ in h.recv_alive(0.4)), "none")
+            if not begin(ctx, u, "the hand-over"):  # with the one-way warning
+                return
+            h.recv(0.2)  # what was on its way before the hand-over
+            ctx.eq("the session ended, the streams stopped (no packet for 0.5 s of C&C)", len(h.recv_alive(0.5)), 0)
+            has_state(ctx, "handed over to the installer", "before-erase")
+            ctx.eq("IDENTIFY tag 10: 3 (the installer)", u.identify().get(10), b"\x03")
+            ctx.eq("the secret still in storage before the first erase", (ctx.fixture("installer.state") or {}).get("secret_stored"), True)
+            r = u.req("UPDATE_ABORT")
+            ctx.eq("UPDATE_ABORT before the first erase: 0", st_of(r), 0)
+            back_in_this_firmware(ctx, s, "UPDATE_ABORT", conf0, n0)
+        with updating(ctx, s, restart_at_end=False) as u:
+            texts = logs_since(u, n0)
+            ip = ctx.host_ip
+            ctx.check(f"the hand-over logged with its source ({ip}) and target", any(ip in x and ("installer" in x or "foreign" in x) for x in texts),
+                      f"{texts[-4:]}")
+            if not begin(ctx, u, "the hand-over again"):
+                return
+            ctx.eq("the first sector's blocks", blocks(u, 0, BLOCKS), 0)
+            st = ctx.fixture("installer.state") or {}
+            ctx.eq("the secret erased with the first sector (installer.state, IDENTIFY tag 11)",
+                   (st.get("secret_stored"), u.identify().get(11)), (False, b"\x00"))
+        ctx.part("with forward power held above P_rf_off, 59 and nothing changed: not run, the model has no RF here (A1.8a item 3 "
+                 "replies after RF is gone)")
+    finally:
+        restore(ctx)
+
+
+@test("T-A1-58", own_boot=True)
+def t_a1_58(ctx: Ctx):
+    """A1.8a "Installation paths" (0025 R2, 0028): this firmware's image and a foreign image through the
+    same management commands, neither waiting for the controller."""
+    gate_open(ctx)
+    from .t_update import activate_new
+    s = secret(ctx)
+    try:
+        a = activate_new(ctx, s, 580)
+        if not ctx.check("this firmware's image, staged in the other slot: UPDATE_BEGIN, the blocks, UPDATE_VERIFY, UPDATE_ACTIVATE",
+                         a is not None, ctx.__dict__.get("_upd_fail", "")):
+            return
+        advance(ctx, 11)
+        with updating(ctx, s, restart_at_end=False) as u:
+            t = u.identify()
+            ctx.eq("it runs, confirmed, from the other slot (tags 10, 23)", (t.get(10), t.get(23, b"")[:1]), (b"\x00", bytes([a[1]])))
+            if not begin(ctx, u, "then a foreign image through the same commands"):
+                return
+            ctx.eq("every block", blocks(u, 0, (len(IMG) + 511) // 512), 0)
+            ctx.eq("UPDATE_VERIFY: 0", st_of(u.req("UPDATE_VERIFY")), 0)
+            ctx.eq("UPDATE_ACTIVATE with the flag: 0", st_of(u.req("UPDATE_ACTIVATE", b"\x01")), 0)
+        time.sleep(0.3)
+        has_state(ctx, "the foreign image installed", "stock")
+        if has(ctx, "ctrl.set"):
+            ctx.part("'no step waits for, or sends anything to, the controller': not judged yet with ctrl.set")
+        else:
+            ctx.part("with the controller disconnected, 'no step waits for, or sends anything to, the controller': not shown, the "
+                     "model has no controller")
+    finally:
+        restore(ctx)

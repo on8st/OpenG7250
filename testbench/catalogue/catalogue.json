@@ -1124,15 +1124,12 @@
    "also": [
     "emulator"
    ],
-   "needs": [
-    "sensor.set"
-   ],
-   "pending": [
-    "P-RF-3"
-   ],
+   "needs": [],
+   "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "reference model with --f1 open; the 59 case (forward power above P_rf_off) is a part: no RF in the model's installer path"
    ]
   },
   {
@@ -1153,7 +1150,8 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "reference model with --f1 open"
    ]
   },
   {
@@ -1224,7 +1222,8 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "on the reference model with --f1 open: both installs; the controller part is a part there (no controller)"
    ],
    "covers": [
     "UP-02 (the own-image install through the management commands)"
@@ -1301,12 +1300,11 @@
     "emulator"
    ],
    "needs": [],
-   "pending": [
-    "P-SYS-5"
-   ],
+   "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "the gate-closed half on the emulator or the model without --f1 open, the gate-open half on the model with --f1 open"
    ]
   },
   {
