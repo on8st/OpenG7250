@@ -488,6 +488,45 @@ fn every_band_limit_is_answered_also_where_none_is_stored() {
     assert_eq!(w.call(&mut s, HOST, &req(3, Command::GetConfig, &[]), 0).unwrap().2, vec![8, 2, 0, 0]);
 }
 
+/// T-A1-28 (A1.6 C-3): a loosening toward the built-in value is accepted and logged in one entry
+/// per item with the old value, the new value and the source; a tightening and an unchanged value
+/// are not logged as a loosening.
+#[test]
+fn a_c3_loosening_is_logged_with_old_new_and_source_t_a1_28() {
+    use g7250_proto::mgmt::payload::Config;
+    let enc = |c: &Config| {
+        let mut b = [0u8; 256];
+        let n = c.encode(&mut b).unwrap();
+        b[..n].to_vec()
+    };
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let mut t = Config::factory();
+    t.max_tx_time_ms = Some(200_000);
+    t.band_limit[0] = Some(300);
+    t.band_limit[2] = Some(400);
+    w.config = enc(&t);
+    let mut c = Config { max_tx_time_ms: Some(250_000), ..Default::default() };
+    c.band_limit[0] = Some(500);
+    c.band_limit[1] = Some(200); // nothing stored: from the built-in value, a tightening
+    c.band_limit[2] = Some(400); // unchanged
+    let (st, _) = authed(&mut w, &mut s, HOST, 10, Command::SetConfig, &enc(&c), 1000);
+    assert_eq!(st, Status::Ok);
+    let log = w.call(&mut s, HOST, &req(20, Command::ReadLog, &[0, 0, 0, 0]), 2000).unwrap().2;
+    let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
+    let loose: Vec<_> = e.iter().filter(|t| t.starts_with("C-3 loosened")).cloned().collect();
+    assert_eq!(
+        loose,
+        ["C-3 loosened: max_tx_time_ms 200000 -> 250000 by 192.168.1.5:50000", "C-3 loosened: band_limit[0] 300 -> 500 by 192.168.1.5:50000"],
+        "{e:?}"
+    );
+    // The longest entry there can be (Table M-3: 16 bands, 0.1 W; the longest source) fits a
+    // log line whole.
+    let n = "C-3 loosened: band_limit[15] 1000 -> 1000 by 169.254.255.255:65535".len();
+    assert!(n <= g7250_safety::logring::TEXT, "{n}");
+}
+
 #[test]
 fn calibration_refused_during_a_p2_session() {
     let mut s = Server::new();

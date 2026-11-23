@@ -534,6 +534,28 @@ impl<W: Words> Server<W> {
         }
         let (a, bb, c, d) = ip(src.0);
         self.log.push(now, format_args!("configuration changed by {a}.{bb}.{c}.{d}:{}{}", src.1, if net_changed { " (network)" } else { "" }));
+        // A C-3 loosening toward the built-in value: one entry per item, with the old value, the
+        // new value and the source (A1.6 C-3; T-A1-28). Values as in Table M-3; the longest entry
+        // ("band_limit[15] 1000 -> 1000" with a 21-character source) fits the 72 bytes of a line.
+        let mut loosened = |item: core::fmt::Arguments<'_>, old: u32, new: u32| {
+            if new > old {
+                self.log.push(now, format_args!("C-3 loosened: {item} {old} -> {new} by {a}.{bb}.{c}.{d}:{}", src.1));
+            }
+        };
+        if let (Some(o), Some(n)) = (cur.max_tx_time_ms, new.max_tx_time_ms) {
+            loosened(format_args!("max_tx_time_ms"), o, n);
+        }
+        for i in 0..payload::MAX_BANDS {
+            if let (Some(o), Some(n)) = (cur.band_limit[i], new.band_limit[i]) {
+                loosened(format_args!("band_limit[{i}]"), o as u32, n as u32);
+            }
+        }
+        if let (Some(o), Some(n)) = (cur.swr_s2_x100, new.swr_s2_x100) {
+            loosened(format_args!("swr_s2_x100"), o as u32, n as u32);
+        }
+        if let (Some(o), Some(n)) = (cur.pa_temp_t3, new.pa_temp_t3) {
+            loosened(format_args!("pa_temp_t3"), o as u32, n as u32);
+        }
         (Status::Ok, r)
     }
 }
