@@ -75,6 +75,8 @@ struct State {
     no_secret_status: Option<u16>,
     /// RESTART clears the secret as well (another host's factory reset in the window).
     restart_clears_secret: bool,
+    /// C-3 is lost: a SET_CONFIG with some but not every C-3 item gets 48 (A1.6 "Lost"; 0072).
+    c3_lost: bool,
 }
 
 fn config_payload(c: &BTreeMap<(u8, u8), Vec<u8>>) -> Vec<u8> {
@@ -167,25 +169,35 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
             0x20 => r(0, &config_payload(&st.config)),
             0x21 => {
                 let mut next = st.config.clone();
+                let mut given = Vec::new();
                 let mut p = &payload[..];
                 while p.len() >= 2 {
                     let (t, l) = (p[0], p[1] as usize);
                     let v = p[2..2 + l].to_vec();
+                    given.push((t, if t == 8 { v[0] } else { 0 }));
                     next.insert((t, if t == 8 { v[0] } else { 0 }), v);
                     p = &p[2 + l..];
                 }
-                let out = r(0, &config_payload(&next));
-                // A change of address (tag 2) or netmask (tag 3) ends the write session and
-                // discards the challenges, after the reply (A1.10; 0074 item 9).
-                let moved = [2, 3].iter().any(|t| next.get(&(*t, 0)) != st.config.get(&(*t, 0)));
-                if !st.config_lies {
-                    st.config = next;
+                // While C-3 is lost: tag 7, tag 8 for every band the radio has, tags 9 and 10.
+                let mut every: Vec<(u8, u8)> = st.config.keys().filter(|k| k.0 == 8).copied().collect();
+                every.extend([(7, 0), (9, 0), (10, 0)]);
+                let some = given.iter().any(|k| (7..=10).contains(&k.0));
+                if st.c3_lost && some && !every.iter().all(|k| given.contains(k)) {
+                    r(48, &[])
+                } else {
+                    let out = r(0, &config_payload(&next));
+                    // A change of address (tag 2) or netmask (tag 3) ends the write session and
+                    // discards the challenges, after the reply (A1.10; 0074 item 9).
+                    let moved = [2, 3].iter().any(|t| next.get(&(*t, 0)) != st.config.get(&(*t, 0)));
+                    if !st.config_lies {
+                        st.config = next;
+                    }
+                    if moved {
+                        st.holder = None;
+                        st.challenges.clear();
+                    }
+                    out
                 }
-                if moved {
-                    st.holder = None;
-                    st.challenges.clear();
-                }
-                out
             }
             0x22 | 0x24 => {
                 if st.reset_status != 0 {
@@ -575,6 +587,42 @@ fn first_secret_in_the_window_and_after_it() {
     let f = writes::set_first_secret(&mut c, addr, &secret(NEW)).unwrap_err();
     assert!(f.to_string().contains("status 36"), "{f}");
     assert_eq!(st.lock().unwrap().secret, Some(OLD));
+}
+
+#[test]
+fn a_48_to_a_c3_write_names_the_lost_state() {
+    // C-3 lost (A1.6 "Lost"; 0072): some but not every C-3 item gets 48, and the text says how
+    // the lost state ends; every C-3 item at once is accepted; a 48 to a write with no C-3 item
+    // carries no such hint.
+    let mut config = BTreeMap::new();
+    for band in 0..2u8 {
+        config.insert((8, band), vec![band, 0, 0]);
+    }
+    let (addr, st) = start(State { secret: Some(OLD), config, c3_lost: true, ..Default::default() });
+    let dir = std::env::temp_dir().join(format!("g7250ctl-writes-c3-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("secret");
+    std::fs::write(&file, "11".repeat(32)).unwrap();
+    let run = |items: &[&str]| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_g7250ctl"))
+            .args(["config", "set", &addr.to_string(), "--secret-file", file.to_str().unwrap()])
+            .args(items)
+            .output()
+            .unwrap();
+        (out.status.code(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    };
+    let (code, text) = run(&["--band-limit", "0=50"]);
+    assert_ne!(code, Some(g7250ctl::exit::OK as i32), "{text}");
+    assert!(text.contains("status 48") && text.contains("config: C-3 lost, TX closed until rewritten"), "{text}");
+    assert!(text.contains("every C-3 item"), "{text}");
+    let (code, text) = run(&["--max-tx-time", "60000", "--band-limit", "0=50", "--band-limit", "1=0", "--swr-limit", "2.5", "--pa-temp-limit", "70"]);
+    assert_eq!(code, Some(g7250ctl::exit::OK as i32), "{text}");
+    assert!(text.contains("power tx_band[0]   50.0 W"), "{text}");
+    // A write with no C-3 item is not refused for the lost state.
+    let (code, text) = run(&["--default-level", "2"]);
+    assert_eq!(code, Some(g7250ctl::exit::OK as i32), "{text}");
+    assert_eq!(st.lock().unwrap().config.get(&(5, 0)), Some(&vec![2]));
 }
 
 #[test]

@@ -343,11 +343,34 @@ fn reset(json: bool, policy: g7250ctl::transport::Policy, addr: &str, s: &Secret
     }
 }
 
+/// A 48 to a write with a C-3 item may be the lost state (A1.6 "Lost"; 0072): C-3 could not be
+/// read at a start, every band is at 0 W, and only a `SET_CONFIG` of every C-3 item ends it.
+/// The tool cannot tell that from the status alone, so the text says where to look.
+fn config_failure(f: g7250ctl::reads::Failure, change: &Config) -> (u8, String) {
+    let c3 = change.max_tx_time_ms.is_some()
+        || change.band_limit.iter().any(Option::is_some)
+        || change.swr_s2_x100.is_some()
+        || change.pa_temp_t3.is_some();
+    let lost = c3 && matches!(&f, g7250ctl::reads::Failure::Status(a, Command::SetConfig) if a.status_code == 48);
+    let (code, text) = fail(f);
+    if !lost {
+        return (code, text);
+    }
+    (
+        code,
+        format!(
+            "{text}; if `g7250ctl logs` shows `config: C-3 lost, TX closed until rewritten`, give every C-3 item in one \
+             `config set`: --max-tx-time, --band-limit for every band `config get` lists, --swr-limit and --pa-temp-limit \
+             (A1.6 \"Lost\"; 0072)"
+        ),
+    )
+}
+
 pub fn config_set(json: bool, policy: g7250ctl::transport::Policy, a: &ConfigSetArgs) -> Outcome {
     let change = a.change().map_err(|e| (exit::USAGE, e))?;
     let s = a.secret.load()?;
     let (mut c, to) = open(policy, &a.addr)?;
-    let r = writes::set_config(&mut c, to, &s, &change).map_err(fail)?;
+    let r = writes::set_config(&mut c, to, &s, &change).map_err(|f| config_failure(f, &change))?;
     let shown = r.read_back.as_ref().unwrap_or(&r.after);
     if json {
         let at = match &r.whereabouts {

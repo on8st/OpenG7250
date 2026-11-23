@@ -80,6 +80,11 @@ self-contained but links the system libraries (libSystem), as every macOS binary
 - `config get` shows the SWR limit S2 and the PA temperature limit T3 as "not known" while
   the radio leaves tags 9 and 10 out (no S2 or T3 in the calibration set; Table M-3, 0074);
   `--json` gives null, never 0.
+- Band limits are shown as the radio reports them: 0 W at 50 MHz until P-PWR-2 (a limit
+  above 0 there gets 49; 0079), and 0 W on every band while C-3 is lost (log line
+  `config: C-3 lost, TX closed until rewritten`; 0072). The tool checks no limit itself. A 48
+  to a `config set` with a C-3 item names the lost state as a possible cause: it ends only
+  with one `config set` of every C-3 item (max TX time, every band, S2 and T3).
 - `factory-reset` asks for confirmation unless `--yes`. `restart --wait` and
   `factory-reset --wait` wait until the radio answers with a lower uptime (30 s; 47 s after a
   factory reset, 0069).
