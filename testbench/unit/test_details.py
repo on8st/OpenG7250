@@ -18,7 +18,8 @@ def failed(names, own=()):
 
 class Counters(unittest.TestCase):
     def test_table_m_6(self):
-        self.assertEqual(len(COUNTERS), 45)
+        self.assertEqual(len(COUNTERS), 46)  # 0080
+        self.assertEqual(COUNTERS[3], "mg_auth_required")
         self.assertEqual(failed(COUNTERS), [])
         self.assertEqual(failed(COUNTERS, ["net_busy_max_us"]), [])
 

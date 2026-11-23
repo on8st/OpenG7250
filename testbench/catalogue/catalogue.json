@@ -2134,7 +2134,8 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "the installer part only on the reference model started with --f1 open; the factory state only where vendor.install is offered, else after the FACTORY_RESET only; the FACTORY_RESET parts only from address mode DHCP"
    ]
   },
   {

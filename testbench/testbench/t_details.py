@@ -21,8 +21,8 @@ from .t_store import get_config, has
 
 MORE = 0x02  # reply flag bit 1, "more blocks follow" (Table A1-1)
 
-# Table M-6, in its order
-COUNTERS = """mg_not_request mg_rate_drop mg_cap_drop disc_rate_drop disc_src1024 setip_ignored gen1024_ignored
+# Table M-6, in its order (46 names, 0080)
+COUNTERS = """mg_not_request mg_rate_drop mg_cap_drop mg_auth_required disc_rate_drop disc_src1024 setip_ignored gen1024_ignored
 cap_rate_drop notowner_drop reg7250_drop takeovers icmp_unreach hp_rx hp_stale hp_resync hp_release gap_1027 gap_1029
 duc_foreign duc_not_tx duc_cw_drop duc_fifo_drop cw_speed_clamped cw_hang_clamped ll_unprobed drop_1024 drop_1025
 drop_1026 drop_1027 drop_1029 drop_7250 drop_7251 fault_2 fault_3 fault_9 fault_10 fault_16 fault_17 fault_18 fault_19

@@ -163,6 +163,10 @@ OVERRIDES: dict[str, dict] = {
                           "built: the commanded resets (two in a row, ring full, just wrapped), the lost reason line and start "
                           "entry, a word that names another entry, the trial's reset; on the model a stop (stop.sim); never a "
                           "pass until then"]},
+    "T-A1-99": {"target": "host", "also": ["emulator"], "pending": [],
+                "notes": ["the installer part only on the reference model started with --f1 open; the factory state only "
+                          "where vendor.install is offered, else after the FACTORY_RESET only; the FACTORY_RESET parts only from "
+                          "address mode DHCP"]},
     "T-A1-28": {"also": ["host"], "pending": [],
                 "notes": ["S2 and T3 (tags 9, 10) only with a calibration set that holds P-PWR-2; the FACTORY_RESET part only "
                           "from address mode DHCP (tag 1 = 0)",
