@@ -12,9 +12,10 @@ use std::sync::{Arc, Mutex};
 
 use common::*;
 use g7250_proto::mgmt::payload::Config;
-use g7250ctl::reads::{Failure, Observed};
+use g7250ctl::reads::{Failure, LogShown, Observed};
 use g7250ctl::secret::Secret;
-use g7250ctl::writes::{self, Whereabouts};
+use g7250ctl::writes::{self, ResetEvidence, ResetStart, Whereabouts};
+use g7250_proto::mgmt::Command;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
@@ -62,6 +63,13 @@ struct State {
     /// Tag 17 now, and after a commanded reset (None: 2, software).
     reset_cause: u8,
     reset_cause_after: Option<u8>,
+    /// The log after the reset instead of the log so far with the request's reason line and
+    /// "start after software: log kept".
+    log_after: Option<Vec<&'static str>>,
+    /// The reset keeps the secret: it was not the factory reset's own.
+    secret_kept: bool,
+    /// READ_LOG gets no reply.
+    log_silent: bool,
 }
 
 fn config_payload(c: &BTreeMap<(u8, u8), Vec<u8>>) -> Vec<u8> {
@@ -93,6 +101,9 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
     st.seen.push(Seen { from, cmd, auth_ok, raw: d.to_vec() });
     if let Some(r) = stored.get(&(from, id)) {
         return vec![r.clone()];
+    }
+    if cmd == 0x30 && st.log_silent {
+        return vec![];
     }
     let needs_auth = !matches!(cmd, 0x01 | 0x02 | 0x10 | 0x11 | 0x20 | 0x30 | 0x45 | 0x60);
     let r = |status: u16, p: &[u8]| reply(id, cmd.to_be_bytes(), status, p);
@@ -181,8 +192,11 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
                     st.challenges.clear();
                     st.log.push(if cmd == 0x22 { "restart: factory-reset" } else { "restart: restart" }.into());
                     st.log.push("start after software: log kept".into());
+                    if let Some(l) = &st.log_after {
+                        st.log = l.iter().map(|t| t.to_string()).collect();
+                    }
                     st.reset_cause = st.reset_cause_after.unwrap_or(2);
-                    if cmd == 0x22 {
+                    if cmd == 0x22 && !st.secret_kept {
                         st.secret = None;
                         st.window_open = true;
                     }
@@ -341,7 +355,7 @@ fn a_restart_with_its_reply_lost_is_told_from_identify_and_the_log_and_not_sent_
     // (uptime, cause software) and the log names it. No new challenge, no new RESTART.
     let (addr, st) = start(State { secret: Some(OLD), uptime: 50_000, reset_cause: 1, drop_first: Some(0x24), ..Default::default() });
     let r = writes::reset(&mut client(), addr, &secret(OLD), g7250_proto::mgmt::Command::Restart).unwrap();
-    assert_eq!(r, writes::ResetStart::Seen { reason: Some("restart: restart".into()) });
+    assert_eq!(r, writes::ResetStart::Seen { evidence: ResetEvidence::Log("restart: restart".into()) });
     let c = cmds(&st);
     assert_eq!(c.iter().filter(|x| **x == 0x10).count(), 1, "one challenge: {c:x?}");
     let restarts: Vec<Vec<u8>> = st.lock().unwrap().seen.iter().filter(|s| s.cmd == 0x24).map(|s| s.raw.clone()).collect();
@@ -354,9 +368,9 @@ fn a_restart_with_its_reply_lost_is_told_from_identify_and_the_log_and_not_sent_
 fn a_lost_reply_counts_only_with_cause_software_and_for_the_slot_commands_a_changed_slot() {
     // A1.4 (0074 item 10): uptime AND tag 17 = 2, and for UPDATE_ACTIVATE and ROLLBACK also a
     // changed tag 23. Any restart still ends the wait after an answered request.
-    let before = writes::Before { uptime_ms: 50_000, running_slot: 1, slot_changes: false, sent: std::time::Instant::now() };
+    let before = writes::Before { uptime_ms: 50_000, running_slot: 1, slot_changes: false, secret_set: true, sent: std::time::Instant::now() };
     std::thread::sleep(std::time::Duration::from_millis(50));
-    let o = |uptime_ms, reset_cause, running_slot| Observed { uptime_ms, reset_cause, running_slot };
+    let o = |uptime_ms, reset_cause, running_slot| Observed { uptime_ms, reset_cause, running_slot, secret_set: true };
     assert!(before.ran(&o(10, 2, 1)), "software, started after the request");
     for cause in [0, 1, 3, 4, 5] {
         assert!(!before.ran(&o(10, cause, 1)), "cause {cause} is not evidence that the request ran");
@@ -370,7 +384,7 @@ fn a_lost_reply_counts_only_with_cause_software_and_for_the_slot_commands_a_chan
     assert!(!slot.ran(&o(60_000, 2, 2)), "a changed slot without a start after the request");
     // An uptime below the time since the request, even above the one before (a request just
     // after a start): the radio started after it.
-    let early = writes::Before { uptime_ms: 5, running_slot: 1, slot_changes: false, sent: std::time::Instant::now() - std::time::Duration::from_secs(2) };
+    let early = writes::Before { uptime_ms: 5, running_slot: 1, slot_changes: false, secret_set: true, sent: std::time::Instant::now() - std::time::Duration::from_secs(2) };
     assert!(early.ran(&o(1_000, 2, 1)));
 }
 
@@ -384,6 +398,114 @@ fn a_lost_restart_reply_with_cause_unknown_is_not_told_as_done() {
     assert_eq!(f.exit_code(), g7250ctl::exit::STATUS);
     let c = cmds(&st);
     assert_eq!((c.iter().filter(|x| **x == 0x10).count(), c.iter().filter(|x| **x == 0x24).count()), (1, 2), "{c:x?}");
+}
+
+/// `cmd` with its reply lost, and a software reset after it that leaves `log` (None: the
+/// request's own lines): the result, and the radio's state. Nothing is sent again.
+fn lost(cmd: Command, st: State) -> (Result<ResetStart, Failure>, Arc<Mutex<State>>) {
+    let code = if cmd == Command::FactoryReset { 0x22 } else { 0x24 };
+    let (addr, st) = start(State { secret: Some(OLD), uptime: 50_000, reset_cause: 1, drop_first: Some(code), ..st });
+    let r = writes::reset(&mut client(), addr, &secret(OLD), cmd);
+    let c = cmds(&st);
+    assert_eq!(c.iter().filter(|x| **x == 0x10).count(), 1, "one challenge, no session end: {c:x?}");
+    let sent: Vec<Vec<u8>> = st.lock().unwrap().seen.iter().filter(|s| s.cmd == code).map(|s| s.raw.clone()).collect();
+    assert_eq!(sent.len(), 2, "the first send and one retransmission: {c:x?}");
+    assert_eq!(sent[0], sent[1], "the same datagram");
+    (r, st)
+}
+
+/// The log of a `ResetNotShown`, and its text.
+fn not_shown(r: Result<ResetStart, Failure>) -> (LogShown, String) {
+    let f = r.unwrap_err();
+    assert_eq!(f.exit_code(), g7250ctl::exit::STATUS, "{f}");
+    let t = f.to_string();
+    assert!(t.contains("status 33") && t.contains("Not confirmed") && t.contains("not sent again"), "{t}");
+    match f {
+        Failure::ResetNotShown { log: Some(l), seen: Some(_), .. } => (l, t),
+        f => panic!("{f:?}"),
+    }
+}
+
+#[test]
+fn an_unexpected_stop_in_the_window_is_not_told_as_done() {
+    // The request did not run; the firmware stopped by itself (0075, 0078): a software reset,
+    // and "start: unexpected stop" after the start entry, whatever the entry before it names.
+    for cmd in [Command::Restart, Command::FactoryReset] {
+        for before in ["restart: stop 7", "restart: restart", "restart: factory-reset"] {
+            let log = vec![before, "start after software: log kept", "boot: slot B refused: hash", "start: unexpected stop"];
+            let (r, _) = lost(cmd, State { log_after: Some(log), secret_kept: true, ..Default::default() });
+            let (l, t) = not_shown(r);
+            assert_eq!(l, LogShown::Unexpected { before: Some(before.into()) });
+            assert!(t.contains("start: unexpected stop"), "{t}");
+        }
+    }
+    // Also a factory reset that the secret seems to confirm: tag 11 counts only with the log lost.
+    let log = vec!["restart: stop 7", "start after software: log kept", "start: unexpected stop"];
+    let (r, _) = lost(Command::FactoryReset, State { log_after: Some(log), ..Default::default() });
+    assert!(not_shown(r).1.contains("no secret set, tag 11 = 0"));
+}
+
+#[test]
+fn a_log_lost_or_not_readable_confirms_no_restart_and_says_why() {
+    // With the log lost, a software reset is also an unexpected stop until P-SYS-9 is set.
+    for log in [vec!["start after software: log lost"], vec!["start after software: log lost", "start: unexpected stop"]] {
+        let (r, _) = lost(Command::Restart, State { log_after: Some(log), ..Default::default() });
+        let (l, t) = not_shown(r);
+        assert_eq!(l, LogShown::Lost);
+        assert!(t.contains("the log was lost at the reset") && t.contains("g7250ctl info") && t.contains("g7250ctl logs"), "{t}");
+    }
+    let (r, _) = lost(Command::Restart, State { log_silent: true, ..Default::default() });
+    let (l, t) = not_shown(r);
+    assert!(matches!(l, LogShown::Unreadable(_)) && t.contains("the log could not be read"), "{t}");
+    for (log, want) in [(vec![], LogShown::NoStart), (vec!["start after software: log kept"], LogShown::NoReason)] {
+        let (r, _) = lost(Command::Restart, State { log_after: Some(log), ..Default::default() });
+        assert_eq!(not_shown(r).0, want);
+    }
+}
+
+#[test]
+fn a_log_naming_another_request_is_not_told_as_done() {
+    for (cmd, line) in [
+        (Command::Restart, "restart: factory-reset"),
+        (Command::Restart, "restart: update-abandoned"),
+        (Command::FactoryReset, "restart: restart"),
+        (Command::Restart, "dhcp: address 192.0.2.1"),
+    ] {
+        // The request's own line earlier in the log is not the last entry before the start.
+        let own = if cmd == Command::Restart { "restart: restart" } else { "restart: factory-reset" };
+        let log = vec![own, "start after software: log kept", line, "start after software: log kept"];
+        let (r, _) = lost(cmd, State { log_after: Some(log), secret_kept: true, ..Default::default() });
+        let (l, t) = not_shown(r);
+        assert_eq!(l, LogShown::Other(line.into()));
+        assert!(t.contains(line) && t.contains("does not name this request"), "{t}");
+    }
+}
+
+#[test]
+fn a_lost_factory_reset_reply_is_judged_by_the_log_and_by_tag_11_when_the_log_is_lost() {
+    // The log names it, and the secret is gone.
+    let (r, _) = lost(Command::FactoryReset, State::default());
+    assert_eq!(r.unwrap(), ResetStart::Seen { evidence: ResetEvidence::Log("restart: factory-reset".into()) });
+    let lost_log = || Some(vec!["start after software: log lost", "start: unexpected stop"]);
+    // Log lost, no secret set any more: done, and the evidence is named.
+    let (r, _) = lost(Command::FactoryReset, State { log_after: lost_log(), ..Default::default() });
+    let ResetStart::Seen { evidence } = r.unwrap() else { panic!() };
+    assert_eq!(evidence, ResetEvidence::SecretCleared);
+    let t = evidence.to_string();
+    assert!(t.contains("the log was lost") && t.contains("the evidence used") && t.contains("tag 11 = 0"), "{t}");
+    // Log lost, a secret still set: it did not run.
+    let (r, _) = lost(Command::FactoryReset, State { log_after: lost_log(), secret_kept: true, ..Default::default() });
+    let (l, t) = not_shown(r);
+    assert_eq!(l, LogShown::Lost);
+    assert!(t.contains("a secret is set (tag 11 = 1)") && t.contains("it did not run") && t.contains("the log was lost"), "{t}");
+    // A secret still set is never a confirmed factory reset, even with its line in the log.
+    let (r, _) = lost(Command::FactoryReset, State { secret_kept: true, ..Default::default() });
+    let (l, t) = not_shown(r);
+    assert_eq!(l, LogShown::Names("restart: factory-reset".into()));
+    assert!(t.contains("a secret is set (tag 11 = 1)"), "{t}");
+    // Tag 11 confirms with the log lost, not with the log unreadable.
+    let (r, _) = lost(Command::FactoryReset, State { log_silent: true, ..Default::default() });
+    assert!(matches!(not_shown(r).0, LogShown::Unreadable(_)));
 }
 
 #[test]

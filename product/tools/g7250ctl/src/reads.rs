@@ -22,17 +22,60 @@ pub enum Failure {
     /// The reply does not decode as Annex M gives it.
     Decode { from: SocketAddr, what: String },
     /// A request that ends in a reset lost its reply (`failure`: the 33, or no reply), and
-    /// `IDENTIFY` does not show that it ran (A1.4 "Requests that end in a reset"): `seen` is the
-    /// restart it showed, if any. The request is not sent again; the operator decides.
-    ResetNotShown { failure: Box<Failure>, cmd: Command, seen: Option<Observed> },
+    /// `IDENTIFY` and the log do not show that it ran (A1.4 "Requests that end in a reset"):
+    /// `seen` is the restart `IDENTIFY` showed, if any; `log` what the log showed, read only when
+    /// `IDENTIFY` fits the request. The request is not sent again; the operator decides.
+    ResetNotShown { failure: Box<Failure>, cmd: Command, seen: Option<Observed>, log: Option<LogShown> },
 }
 
-/// What `IDENTIFY` showed after a restart: tags 16, 17 and 23.
+/// What the log shows about the last reset, for one request that ends in a reset (A1.7 "The
+/// reason before a commanded reset", "Unexpected stop"; 0068, 0075, 0078).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LogShown {
+    /// The last entry before the start entry names the request.
+    Names(String),
+    /// The last entry before the start entry does not name the request.
+    Other(String),
+    /// The start entry says "log kept", but no entry before it is there.
+    NoReason,
+    /// `start: unexpected stop` follows the start entry; `before` is the last entry before the
+    /// start entry, which may be the line of an earlier reset (0078).
+    Unexpected { before: Option<String> },
+    /// `log lost`: the log started empty at the reset. Judged before the unexpected stop, which
+    /// a software reset with the log lost always is as well (A1.7; until P-SYS-9 is set).
+    Lost,
+    /// No start entry in the log.
+    NoStart,
+    Unreadable(String),
+}
+
+impl fmt::Display for LogShown {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LogShown::Names(l) => write!(f, "the log says \"{l}\""),
+            LogShown::Other(l) => write!(f, "the last log entry before the start entry, \"{l}\", does not name this request"),
+            LogShown::NoReason => write!(f, "the log has no entry before the start entry"),
+            LogShown::Unexpected { before } => {
+                write!(f, "the log says \"start: unexpected stop\"")?;
+                match before {
+                    Some(l) => write!(f, " (last entry before the start entry: \"{l}\")"),
+                    None => Ok(()),
+                }
+            }
+            LogShown::Lost => write!(f, "the log was lost at the reset"),
+            LogShown::NoStart => write!(f, "the log has no start entry"),
+            LogShown::Unreadable(e) => write!(f, "the log could not be read ({e})"),
+        }
+    }
+}
+
+/// What `IDENTIFY` showed after a restart: tags 11, 16, 17 and 23.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Observed {
     pub uptime_ms: u32,
     pub reset_cause: u8,
     pub running_slot: u8,
+    pub secret_set: bool,
 }
 
 /// Tag 17 (Table M-2).
@@ -78,7 +121,25 @@ impl fmt::Display for Failure {
                 Ok(())
             }
             Failure::Decode { from, what } => write!(f, "{from}: {what}"),
-            Failure::ResetNotShown { failure, cmd, seen } => {
+            Failure::ResetNotShown { failure, cmd, seen: Some(o), log: Some(log) } => {
+                write!(
+                    f,
+                    "{failure}; its reply was lost. IDENTIFY shows a restart after it (reset cause {}, uptime {}, slot {} runs), but ",
+                    reset_cause_name(o.reset_cause),
+                    render::uptime(o.uptime_ms),
+                    crate::update::slot_name(o.running_slot)
+                )?;
+                match (cmd, o.secret_set) {
+                    (Command::FactoryReset, true) => write!(
+                        f,
+                        "a secret is set (tag 11 = 1), which a factory reset clears: it did not run, or a secret was set after it; {log}"
+                    )?,
+                    (Command::FactoryReset, false) => write!(f, "{log} (IDENTIFY shows no secret set, tag 11 = 0)")?,
+                    _ => write!(f, "{log}")?,
+                }
+                write!(f, ". Not confirmed that {cmd:?} ran. It is not sent again: check `g7250ctl info` and `g7250ctl logs` (A1.4)")
+            }
+            Failure::ResetNotShown { failure, cmd, seen, .. } => {
                 write!(f, "{failure}; its reply was lost, and IDENTIFY does not show that {cmd:?} ran")?;
                 match seen {
                     None => write!(f, " (no restart seen)")?,

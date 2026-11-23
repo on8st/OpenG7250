@@ -118,11 +118,16 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   started after it (uptime, tag 16, below the time since the request or below the one read
   just before it) AND the last reset cause (tag 17) is software; for `UPDATE_ACTIVATE` and
   `ROLLBACK` the running slot (tag 23) must have changed as well; the version is never
-  evidence. The log entry just before the start entry (`restart: restart`,
-  `restart: factory-reset`, `restart: update-activated ...`, `rollback commanded: ...`) is
-  shown as well. Otherwise the 33 (or the silence) is reported with what `IDENTIFY` showed
-  (uptime, cause, slot; "cause unknown" when tag 17 is 0), the request is not sent again, and
-  the operator decides. After an answered request the request ran: any restart ends the wait,
+  evidence. AND the log must say that it was this request: the last entry before the start
+  entry is `restart: restart`, `restart: factory-reset`, `restart: update-activated ...` or
+  `rollback commanded: ...`, and no `start: unexpected stop` follows the start entry (A1.7;
+  0075, 0078). With the log lost at the reset, or not readable, the request is not confirmed
+  and the tool says why; until P-SYS-9 is set that is the usual answer on a radio: check with
+  `info` and `logs`. One exception: with the log lost, a `FACTORY_RESET` is confirmed when a
+  secret was set before it and none is set after it (tag 11), and the tool says that this is
+  the evidence used. A secret still set is never a confirmed factory reset. Otherwise the 33
+  (or the silence) is reported with what `IDENTIFY` and the log showed (uptime, cause, slot;
+  "cause unknown" when tag 17 is 0), the request is not sent again, and the operator decides. After an answered request the request ran: any restart ends the wait,
   and a cause other than software is named. Once
   verified, an install never sends `UPDATE_ABORT`.
 - After `UPDATE_ACTIVATE` the tool waits for the reset and reads the result back: the new

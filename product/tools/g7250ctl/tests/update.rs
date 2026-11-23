@@ -111,7 +111,13 @@ struct Radio {
     /// UPDATE_ACTIVATE resets (software) but the same slot runs again (the reset was not the
     /// activation, as far as IDENTIFY can tell).
     activate_keeps_slot: bool,
-    old: ([u8; 4], u8),
+    /// The log after UPDATE_ACTIVATE or ROLLBACK (None: the request's reason line, then
+    /// "start after software: log kept").
+    log_after: Option<Vec<&'static str>>,
+    /// Lose the reply to ROLLBACK, as `drop_activate_reply`.
+    drop_rollback_reply: bool,
+    log: Vec<String>,
+    old:([u8; 4], u8),
     seen: Vec<Seen>,
 }
 
@@ -143,6 +149,14 @@ fn identify(r: &mut Radio) -> Vec<u8> {
     p
 }
 
+/// The log after a commanded reset whose reason line is `line` (A1.7; 0068).
+fn reset_log(r: &mut Radio, line: &str) {
+    r.log = match &r.log_after {
+        Some(l) => l.iter().map(|t| t.to_string()).collect(),
+        None => vec![line.into(), "start after software: log kept".into()],
+    };
+}
+
 fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Option<Vec<u8>> {
     if r.silent {
         return None;
@@ -157,7 +171,7 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
         return Some(s.clone());
     }
     let reply_of = |status: u16, p: &[u8]| reply(id, cmd.to_be_bytes(), status, p);
-    let needs_auth = !matches!(cmd, 0x01 | 0x10 | 0x45);
+    let needs_auth = !matches!(cmd, 0x01 | 0x10 | 0x30 | 0x45);
     if needs_auth {
         if !auth_ok {
             return Some(reply_of(33, &[]));
@@ -173,6 +187,11 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
             reply_of(0, &ch)
         }
         0x13 => reply_of(0, &[]),
+        0x30 => {
+            let first = u32::from_be_bytes(payload[..4].try_into().unwrap()) as usize;
+            let p: Vec<u8> = r.log.iter().enumerate().skip(first).flat_map(|(i, t)| log_entry(i as u32, 0, t)).collect();
+            reply_of(0, &p)
+        }
         0x40 => {
             if r.begin_status != 0 {
                 reply_of(r.begin_status, &[])
@@ -260,6 +279,7 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
                 }
                 r.uptime = r.reset_uptime;
                 r.reset_cause = 2;
+                reset_log(r, "restart: update-activated slot B 1.1.0");
                 if r.drop_activate_reply {
                     r.drop_activate_reply = false;
                     stored.clear();
@@ -297,6 +317,13 @@ fn handle(r: &mut Radio, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Opt
             r.update_state = 1;
             r.uptime = r.reset_uptime;
             r.reset_cause = 2;
+            reset_log(r, "rollback commanded: slot A 1.0.0");
+            if r.drop_rollback_reply {
+                r.drop_rollback_reply = false;
+                stored.clear();
+                r.challenges.clear();
+                return None;
+            }
             reply_of(0, &[])
         }
         _ => reply_of(16, &[]),
@@ -582,6 +609,44 @@ fn a_lost_activation_reply_with_a_software_reset_and_the_same_slot_is_not_told_a
     assert!(!c.contains(&0x44), "no abort: {c:x?}");
     let activations: Vec<Vec<u8>> = st.lock().unwrap().seen.iter().filter(|s| s.cmd == 0x43).map(|s| s.raw.clone()).collect();
     assert!(activations.iter().all(|a| *a == activations[0]), "only retransmissions of the one request");
+}
+
+#[test]
+fn a_lost_activation_reply_needs_the_log_to_name_the_activation() {
+    // The other slot runs after a software reset, but the log is lost, names another reset or
+    // shows an unexpected stop: not confirmed. No abort, no new request, and no "install
+    // --resume": the radio restarted, so no transfer is left.
+    for (log, want) in [
+        (vec!["start after software: log lost", "start: unexpected stop"], "the log was lost at the reset"),
+        (vec!["restart: trial-unconfirmed", "start after software: log kept"], "restart: trial-unconfirmed"),
+        (vec!["restart: update-activated slot B 1.1.0", "start after software: log kept", "start: unexpected stop"], "start: unexpected stop"),
+    ] {
+        let img = image(512 * 2);
+        let (addr, st) = start(Radio { drop_activate_reply: true, trial_identifies: 100, log_after: Some(log), ..radio(1) });
+        let mut ev = Vec::new();
+        let f = update::install(&mut client(), addr, &Secret(SECRET), &pair(&img), opts(), &mut |e| ev.push(e)).unwrap_err();
+        assert!(matches!(&f, Failure::ResetNotShown { seen: Some(Observed { reset_cause: 2, running_slot: 2, .. }), log: Some(_), .. }), "{f:?}");
+        let t = f.to_string();
+        assert!(t.contains(want) && t.contains("slot B runs") && t.contains("Not confirmed that UpdateActivate ran"), "{t}");
+        assert_eq!(f.exit_code(), g7250ctl::exit::STATUS);
+        assert!(!ev.iter().any(|e| matches!(e, Event::Activated | Event::ReplyLostResetSeen { .. } | Event::LeftForResume | Event::Confirmed)), "{ev:?}");
+        let c = cmds(&st);
+        assert!(!c.contains(&0x44), "no abort: {c:x?}");
+        assert_eq!(c.iter().filter(|x| **x == 0x43).count(), 2, "one request and its retransmission: {c:x?}");
+    }
+}
+
+#[test]
+fn a_lost_rollback_reply_is_judged_by_the_log_too() {
+    let (addr, _st) = start(Radio { drop_rollback_reply: true, ..radio(2) });
+    let mut ev = Vec::new();
+    update::rollback(&mut client(), addr, &Secret(SECRET), None, &mut |e| ev.push(e)).unwrap();
+    assert!(ev.contains(&Event::ReplyLostResetSeen { evidence: g7250ctl::writes::ResetEvidence::Log("rollback commanded: slot A 1.0.0".into()) }), "{ev:?}");
+    let log = vec!["restart: update-activated slot A 1.0.0", "start after software: log kept"];
+    let (addr, st) = start(Radio { drop_rollback_reply: true, log_after: Some(log), ..radio(2) });
+    let f = update::rollback(&mut client(), addr, &Secret(SECRET), None, &mut |_| {}).unwrap_err();
+    assert!(f.to_string().contains("Not confirmed that Rollback ran"), "{f}");
+    assert_eq!(cmds(&st).iter().filter(|x| **x == 0x46).count(), 2, "one request and its retransmission");
 }
 
 #[test]

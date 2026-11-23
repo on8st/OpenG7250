@@ -317,12 +317,8 @@ fn reset(json: bool, policy: g7250ctl::transport::Policy, addr: &str, s: &Secret
         writes::ResetStart::Answered(before) => before,
         // A1.4 "Requests that end in a reset": the reply was lost, the reset is seen; the
         // request is not sent again.
-        writes::ResetStart::Seen { reason } => {
-            let log = match reason {
-                Some(r) => format!("the log says \"{r}\""),
-                None => "no reason line found in the log".into(),
-            };
-            return done(json, &format!("{what} done: its reply was lost, and IDENTIFY shows the reset (uptime, reset cause software); {log}"));
+        writes::ResetStart::Seen { evidence } => {
+            return done(json, &format!("{what} done: its reply was lost, and IDENTIFY shows the reset (uptime, reset cause software); {evidence}"));
         }
     };
     if !wait {

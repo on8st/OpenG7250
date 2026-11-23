@@ -121,13 +121,9 @@ pub(crate) fn progress(json: bool) -> impl FnMut(Event) {
             Event::VerifyFailed { round } => eprintln!("verify failed; sending every block again (round {round})"),
             Event::Verified => eprintln!("verified"),
             Event::Activated => eprintln!("activated; the radio restarts into the new image"),
-            Event::ReplyLostResetSeen { reason } => eprintln!(
-                "the reply was lost, but IDENTIFY shows the reset (A1.4); {}",
-                match reason {
-                    Some(r) => format!("the log says \"{r}\""),
-                    None => "no reason line found in the log".into(),
-                }
-            ),
+            Event::ReplyLostResetSeen { evidence } => {
+                eprintln!("the reply was lost, but IDENTIFY shows the reset (A1.4); {evidence}")
+            }
             Event::Restarted { cause } => match cause {
                 Some(c) if c != g7250ctl::writes::RESET_CAUSE_SOFTWARE => {
                     eprintln!("the radio answers again; reset cause {} (tag 17), not software: see `g7250ctl logs`", g7250ctl::reads::reset_cause_name(c))

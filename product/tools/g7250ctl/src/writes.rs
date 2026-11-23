@@ -23,7 +23,7 @@ use g7250_proto::mgmt::payload::{Config, Identify};
 use g7250_proto::mgmt::{Command, MAX_REQUEST};
 use g7250_proto::mgmt_host;
 
-use crate::reads::{self, Calibration, Failure, Observed};
+use crate::reads::{self, Calibration, Failure, LogShown, Observed};
 use crate::secret::Secret;
 use crate::transport::{Answer, Client};
 
@@ -268,11 +268,11 @@ pub fn switch_level(client: &mut Client, to: SocketAddr, secret: &Secret, level:
 }
 
 /// How a reset request started: answered (wait for the reset from `Before`), or its reply was
-/// lost and the reset is already seen, with the log's reason line if found.
+/// lost and the reset is already seen, with the evidence that it was this request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResetStart {
     Answered(Before),
-    Seen { reason: Option<String> },
+    Seen { evidence: ResetEvidence },
 }
 
 /// `RESTART` (A1.9) or `FACTORY_RESET` (A1.6a): the reset ends the write session, so no
@@ -281,7 +281,7 @@ pub enum ResetStart {
 pub fn reset(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command) -> Result<ResetStart, Failure> {
     debug_assert!(matches!(cmd, Command::Restart | Command::FactoryReset));
     match resetting(client, to, secret, cmd, &[])? {
-        Resetting::ResetSeen { reason } => Ok(ResetStart::Seen { reason }),
+        Resetting::ResetSeen { evidence } => Ok(ResetStart::Seen { evidence }),
         Resetting::Answered(a, before) if a.ok() => Ok(ResetStart::Answered(before)),
         Resetting::Answered(a, _) => {
             if cmd == Command::FactoryReset && may_hold_session(a.status_code) {
@@ -303,6 +303,8 @@ pub struct Before {
     /// other slot runs, so a changed running slot also shows the reset.
     pub running_slot: u8,
     pub slot_changes: bool,
+    /// Tag 11: a factory reset clears a secret that was set.
+    pub secret_set: bool,
     /// When the request was sent: an uptime below the time since then shows a start after it.
     pub sent: Instant,
 }
@@ -313,7 +315,7 @@ pub const RESET_CAUSE_SOFTWARE: u8 = 2;
 impl Before {
     /// Taken now, from `IDENTIFY` just before the request.
     pub fn now(i: &Identify, slot_changes: bool) -> Before {
-        Before { uptime_ms: i.uptime_ms, running_slot: i.running_slot, slot_changes, sent: Instant::now() }
+        Before { uptime_ms: i.uptime_ms, running_slot: i.running_slot, slot_changes, secret_set: i.secret_set, sent: Instant::now() }
     }
 
     fn started_after(&self, i: &Observed) -> bool {
@@ -329,8 +331,8 @@ impl Before {
         self.started_after(i) || (self.slot_changes && i.running_slot != self.running_slot)
     }
 
-    /// Whether this `IDENTIFY` shows that the request ran, when its reply was lost (A1.4
-    /// "Requests that end in a reset"; 0074 item 10): the radio started after the request, the
+    /// Whether this `IDENTIFY` fits that the request ran, when its reply was lost (A1.4
+    /// "Requests that end in a reset"; 0074 item 10); which request it was, the log says: the radio started after the request, the
     /// last reset cause is software (tag 17 = 2, exactly), and for `UPDATE_ACTIVATE` and
     /// `ROLLBACK` the running slot changed as well. The version alone is no evidence.
     pub fn ran(&self, i: &Observed) -> bool {
@@ -344,10 +346,30 @@ pub enum Resetting {
     /// The reply came (any status); with what `IDENTIFY` showed just before the request, for
     /// [`wait_for_restart`].
     Answered(Answer, Before),
-    /// The reply was lost, but `IDENTIFY` shows the radio restarted: the request ran. `reason`
-    /// is the log's last `restart: ...` (or `rollback commanded: ...`) line before the start
-    /// entry, if found (A1.7 "The reason before a commanded reset").
-    ResetSeen { reason: Option<String> },
+    /// The reply was lost, but `IDENTIFY` shows the radio restarted, and `evidence` that it was
+    /// this request: it ran.
+    ResetSeen { evidence: ResetEvidence },
+}
+
+/// What showed, besides `IDENTIFY` ([`Before::ran`]), that a reset was the request's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResetEvidence {
+    /// The log's last entry before the start entry, which names the request (A1.7).
+    Log(String),
+    /// `FACTORY_RESET` with the log lost: the secret that was set before is gone (tag 11 = 0).
+    SecretCleared,
+}
+
+impl std::fmt::Display for ResetEvidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResetEvidence::Log(l) => write!(f, "the log says \"{l}\""),
+            ResetEvidence::SecretCleared => write!(
+                f,
+                "the log was lost at the reset; the evidence used is that IDENTIFY showed a secret set before the request and shows none now (tag 11 = 0)"
+            ),
+        }
+    }
 }
 
 /// How long [`resetting`] waits to see a reset after a lost reply.
@@ -359,9 +381,11 @@ pub const RESET_PROBE: std::time::Duration = std::time::Duration::from_secs(30);
 /// or gets no reply at all while the radio restarts. Either is ambiguous: the request may have
 /// run. By the host rule of A1.4 (0074 item 10) retransmitting stops at the first 33 (the
 /// first reply ends the exchange), and the radio is then asked with `IDENTIFY` whether it ran
-/// ([`Before::ran`]), and the log for the reason. The request is never sent again with a new
-/// challenge here: without that evidence the result is [`Failure::ResetNotShown`], with the
-/// restart `IDENTIFY` showed, if any.
+/// ([`Before::ran`]), and the log which request it was ([`log_shown`]): both must show it. With
+/// the log lost, a `FACTORY_RESET` is also shown by tag 11 going from set to not set; a secret
+/// still set speaks against it, whatever the log says. The request is never sent again with a
+/// new challenge here: without that evidence the result is [`Failure::ResetNotShown`], with
+/// what was seen.
 /// A 33 to the first send is a plain authentication failure.
 pub fn resetting(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command, payload: &[u8]) -> Result<Resetting, Failure> {
     let a = reads::identify(client, to)?;
@@ -376,37 +400,61 @@ pub fn resetting(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Comm
         return r.map(|a| Resetting::Answered(a, before));
     }
     let seen = wait_for_restart(client, to, before, RESET_PROBE).ok();
-    if seen.is_some_and(|o| before.ran(&o)) {
-        return Ok(Resetting::ResetSeen { reason: reset_reason(client, to, cmd) });
+    let mut log = None;
+    if let Some(o) = seen.filter(|o| before.ran(o)) {
+        let factory = cmd == Command::FactoryReset;
+        log = match log_shown(client, to, cmd) {
+            LogShown::Names(l) if !(factory && o.secret_set) => return Ok(Resetting::ResetSeen { evidence: ResetEvidence::Log(l) }),
+            LogShown::Lost if factory && before.secret_set && !o.secret_set => {
+                return Ok(Resetting::ResetSeen { evidence: ResetEvidence::SecretCleared });
+            }
+            other => Some(other),
+        };
     }
     let failure = match r {
         Ok(a) => Failure::Status(a, cmd),
         Err(f) => f,
     };
-    Err(Failure::ResetNotShown { failure: Box::new(failure), cmd, seen })
+    Err(Failure::ResetNotShown { failure: Box::new(failure), cmd, seen, log })
 }
 
-/// The log line that names the reset `cmd` asked for: the entry just before the last start
-/// entry, if it has the prefix of that request (A1.7 "The reason before a commanded reset":
-/// it is the last entry before the reset; 0068). `None` if the log cannot be read, was lost at
-/// the reset (before P-SYS-9), or names another reason.
-pub fn reset_reason(client: &mut Client, to: SocketAddr, cmd: Command) -> Option<String> {
-    let prefix = match cmd {
-        Command::Restart => "restart: restart",
-        Command::FactoryReset => "restart: factory-reset",
-        Command::UpdateActivate => "restart: update-activated",
-        Command::Rollback => "rollback commanded:",
-        _ => return None,
-    };
+/// What the log shows about the last reset, for `cmd`: the entry just before the last start
+/// entry (A1.7 "The reason before a commanded reset": the last entry before the reset; 0068),
+/// the start entry's own "log lost", and `start: unexpected stop` after it (0075, 0078).
+pub fn log_shown(client: &mut Client, to: SocketAddr, cmd: Command) -> LogShown {
     let mut lines = Vec::new();
-    reads::read_log(client, to, 0, &mut |e| {
+    let r = reads::read_log(client, to, 0, &mut |e| {
         if let reads::LogEvent::Entry(l) = e {
             lines.push(l.text)
         }
-    })
-    .ok()?;
-    let start = lines.iter().rposition(|t| t.starts_with("start after "))?;
-    lines[..start].last().filter(|t| t.starts_with(prefix)).cloned()
+    });
+    if let Err(e) = r {
+        return LogShown::Unreadable(e.to_string());
+    }
+    let Some(start) = lines.iter().rposition(|t| t.starts_with("start after ")) else { return LogShown::NoStart };
+    if lines[start].ends_with(": log lost") {
+        return LogShown::Lost;
+    }
+    let before = lines[..start].last().cloned();
+    if lines[start + 1..].iter().any(|t| t == "start: unexpected stop") {
+        return LogShown::Unexpected { before };
+    }
+    match before {
+        Some(l) if names(&l, cmd) => LogShown::Names(l),
+        Some(l) => LogShown::Other(l),
+        None => LogShown::NoReason,
+    }
+}
+
+/// Whether this log line is the reason line of `cmd` (A1.7; 0068).
+fn names(line: &str, cmd: Command) -> bool {
+    match cmd {
+        Command::Restart => line == "restart: restart",
+        Command::FactoryReset => line == "restart: factory-reset",
+        Command::UpdateActivate => line.starts_with("restart: update-activated "),
+        Command::Rollback => line.starts_with("rollback commanded:"),
+        _ => false,
+    }
 }
 
 /// After a reset: wait until the radio answers `IDENTIFY` again showing a restart of any cause
@@ -418,7 +466,7 @@ pub fn wait_for_restart(client: &mut Client, to: SocketAddr, before: Before, lim
         match reads::identify(client, to) {
             Ok(a) => {
                 let i = Identify::decode(&a.payload).expect("checked by reads::identify");
-                let o = Observed { uptime_ms: i.uptime_ms, reset_cause: i.reset_cause, running_slot: i.running_slot };
+                let o = Observed { uptime_ms: i.uptime_ms, reset_cause: i.reset_cause, running_slot: i.running_slot, secret_set: i.secret_set };
                 if before.restarted(&o) {
                     return Ok(o);
                 }

@@ -128,9 +128,9 @@ pub enum Event {
     VerifyFailed { round: u32 },
     Verified,
     Activated,
-    /// The reply to `UPDATE_ACTIVATE` or `ROLLBACK` was lost, and `IDENTIFY` shows the reset
-    /// (A1.4 "Requests that end in a reset"); with the log's reason line if found.
-    ReplyLostResetSeen { reason: Option<String> },
+    /// The reply to `UPDATE_ACTIVATE` or `ROLLBACK` was lost, and `IDENTIFY` and the
+    /// log show the reset and that it was this request (A1.4 "Requests that end in a reset").
+    ReplyLostResetSeen { evidence: writes::ResetEvidence },
     /// The radio answers again after the reset; with tag 17 when this wait saw the restart.
     Restarted { cause: Option<u8> },
     Trial,
@@ -374,8 +374,8 @@ pub fn install(
         verify(client, to, secret, file, opts.verify_retries, ev)?;
         verified = true;
         match writes::resetting(client, to, secret, Command::UpdateActivate, &mgmt_host::activate_request(false))? {
-            writes::Resetting::ResetSeen { reason } => {
-                ev(Event::ReplyLostResetSeen { reason });
+            writes::Resetting::ResetSeen { evidence } => {
+                ev(Event::ReplyLostResetSeen { evidence });
                 restart_from = None
             }
             writes::Resetting::Answered(a, before) if a.ok() => {
@@ -398,6 +398,9 @@ pub fn install(
             {
                 let _ = writes::end_session(client, to, secret);
             }
+        } else if matches!(f, Failure::ResetNotShown { seen: Some(_), .. }) {
+            // The radio restarted, so there is no transfer left to resume. The failure says
+            // what was seen; nothing more is sent.
         } else if verified {
             ev(Event::LeftForResume);
         } else if write_failure(&f) {
@@ -483,8 +486,8 @@ pub fn rollback(client: &mut Client, to: SocketAddr, secret: &Secret, wait: Opti
         s => return Err(other(format!("IDENTIFY reports running slot {s} (tag 23)"), to)),
     };
     let restart_from = match writes::resetting(client, to, secret, Command::Rollback, &[])? {
-        writes::Resetting::ResetSeen { reason } => {
-            ev(Event::ReplyLostResetSeen { reason });
+        writes::Resetting::ResetSeen { evidence } => {
+            ev(Event::ReplyLostResetSeen { evidence });
             None
         }
         writes::Resetting::Answered(a, before) if a.ok() => Some(before),
