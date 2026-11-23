@@ -82,6 +82,26 @@ pub fn set(c: &Counters) {
     kept::set(&mut Mem, c)
 }
 
+/// The commanded-reset word (A1.7; 0078): set as the last write before a commanded reset, after
+/// the reason line `seq`. The barrier makes the write reach the RAM (the kept RAM is not cached:
+/// the D-cache is never enabled in either image).
+pub fn set_commanded(seq: u32) {
+    kept::set_commanded(&mut Mem, seq);
+    cortex_m::asm::dsb();
+}
+
+/// Clear the commanded-reset word: one write of a whole word, no read (the boot stage at every
+/// start, the fault handler).
+pub fn clear_commanded() {
+    kept::clear_commanded(&mut Mem);
+    cortex_m::asm::dsb();
+}
+
+/// The sequence number a valid commanded-reset word names (only after a start with no power loss).
+pub fn read_commanded() -> Option<u32> {
+    kept::read_commanded(&Mem)
+}
+
 /// The trip count kept.
 pub fn trip_count() -> u32 {
     get().trip_count

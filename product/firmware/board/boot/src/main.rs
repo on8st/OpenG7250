@@ -47,6 +47,13 @@ pub unsafe extern "C" fn __pre_init() {
 
 #[entry]
 fn main() -> ! {
+    // The reset flags first, read once per start here and cleared (0068); then the commanded-reset
+    // word: read only at a start that is no power loss, and cleared at every start by one whole
+    // word written with no read, before any other work after the safe state (A3.6 "Evidence at
+    // the next start"; 0078). The start is judged from the value read.
+    let flags = reset::read_and_clear();
+    let word = if flags.power_lost() { None } else { g7250_board::persist::read_commanded() };
+    g7250_board::persist::clear_commanded();
     // The time base for the first TX path check (A3.6b: within 100 ms of the boot stage's start;
     // __pre_init's safe-state set-up, some us, comes before it).
     safe::start_cycle_count();
@@ -57,9 +64,6 @@ fn main() -> ! {
     early_init();
     console::clocks_hsi();
     console::init();
-    // The reset flags, read once per start here and cleared (0068).
-    let flags = reset::read_and_clear();
-
     println!("");
     println!(
         "OpenG7250 boot {}.{}.{}{} rev {} (G7250-P2, board type 200)",
@@ -79,7 +83,18 @@ fn main() -> ! {
         println!("{}", args);
         log.borrow_mut().log(safe::us_since_boot_stage() / 1000, args);
     };
+    // The evidence of a commanded reset (0075 point 4; 0078): the last entry kept, before this
+    // run's first.
+    let last = {
+        let r = log.borrow();
+        let (a, b) = r.range();
+        (b != a).then(|| r.entry(b.wrapping_sub(1))).flatten().map(|e| (e.seq, e))
+    };
+    let unexpected = g7250_safety::kept::unexpected_stop(flags, word, last.as_ref().filter(|_| kept).map(|(s, e)| (*s, e.text())));
     note(format_args!("start after {}: log {}", flags.cause().name(), if kept { "kept" } else { "lost" }));
+    if unexpected {
+        note(format_args!("start: unexpected stop"));
+    }
 
     if !safe::holds() {
         // The safe state could not be established: class 2 fault, stay here (0007 sub-decision 5).
@@ -153,7 +168,7 @@ fn main() -> ! {
             println!("boot: starting slot {}{} at {:#010x}", slot_name(s), trial, s.range().start);
             console::flush();
             // The TX path check goes on in the application, with what this one saw.
-            safe::boot_check_handover(flags);
+            safe::boot_check_handover(flags, unexpected);
             // SAFETY: the slot holds a sealed application linked for this address, checked above.
             unsafe { jump(s.range().start) }
         }
@@ -209,12 +224,9 @@ unsafe fn jump(base: u32) -> ! {
     }
 }
 
+/// A stop of the boot stage itself (A3.6 "Unexpected stop of the firmware"; 0075): pins, the
+/// commanded-reset word cleared, `restart: stop panic`, a reset. No panic text anywhere.
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    safe::apply();
-    println!("boot: PANIC {}", info);
-    // No refresh: the watchdog resets the MCU, and the reset brings the safe state back.
-    loop {
-        cortex_m::asm::nop();
-    }
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    g7250_board::stop::stop("panic")
 }

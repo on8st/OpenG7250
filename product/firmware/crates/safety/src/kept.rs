@@ -4,7 +4,8 @@
 //! (the board's persist.rs, which places it and reads it with bus faults ignored): what is taken
 //! from it and what is written to it, for host tests with words that cannot be read.
 //!
-//! [`WORDS`] 64-bit words: two counter slots of [`SLOT_WORDS`], then three of the handover.
+//! [`WORDS`] 64-bit words: two counter slots of [`SLOT_WORDS`], three of the handover, then the
+//! commanded-reset word (A1.7, A3.6 "Evidence at the next start"; 0078).
 
 use crate::counters::{Counters, SLOT_WORDS};
 use crate::logring::Words;
@@ -12,7 +13,57 @@ use crate::reset::Flags;
 
 /// The first word of the handover.
 pub const HANDOVER: usize = 2 * SLOT_WORDS;
-pub const WORDS: usize = HANDOVER + 3;
+/// The commanded-reset word (0078 point 1).
+pub const COMMANDED: usize = HANDOVER + 3;
+pub const WORDS: usize = COMMANDED + 1;
+
+/// The commanded-reset word holds the reason line's sequence number in its low half and that
+/// number, inverted and mixed with this, in its high half: 0 (the cleared state) and a half
+/// written word do not check; power-on content of the RAM is not read (power loss), and an ECC
+/// error on a read fails it too ([`Words::get`] gives `None`).
+const COMMANDED_MIX: u32 = 0x4737_434D; // "G7CM"
+
+fn commanded(seq: u32) -> u64 {
+    seq as u64 | ((!(seq ^ COMMANDED_MIX)) as u64) << 32
+}
+
+/// The last write before a commanded reset, after the reason line `seq` (A1.7; 0078). The
+/// caller makes sure it has reached the RAM (a barrier; the kept RAM is not cached).
+pub fn set_commanded(m: &mut impl Words, seq: u32) {
+    m.set(COMMANDED, commanded(seq));
+}
+
+/// Clear the word: one write of a whole word, no read (the fault handler; the boot stage at
+/// every start).
+pub fn clear_commanded(m: &mut impl Words) {
+    m.set(COMMANDED, 0);
+}
+
+/// The sequence number a valid word names.
+pub fn read_commanded(m: &impl Words) -> Option<u32> {
+    let w = m.get(COMMANDED)?;
+    (w == commanded(w as u32)).then_some(w as u32)
+}
+
+/// One of the reason lines A1.7 lists for a commanded reset (A1.7 "The reason before a commanded
+/// reset"; A3.6 "Evidence at the next start").
+pub fn is_reason_line(text: &[u8]) -> bool {
+    const WHOLE: [&[u8]; 5] = [b"restart: restart", b"restart: factory-reset", b"restart: update-abandoned", b"restart: installer-abandoned", b"restart: trial-unconfirmed"];
+    const PREFIX: [&[u8]; 2] = [b"restart: update-activated slot ", b"rollback commanded: slot "];
+    WHOLE.contains(&text) || PREFIX.iter().any(|p| text.len() > p.len() && text.starts_with(p))
+}
+
+/// The evidence at a start (A3.6 "Evidence at the next start"; 0075 point 4, 0078 point 1):
+/// a start whose flags name a software reset is a commanded reset only if the word read was
+/// valid, names the last entry kept, and that entry is a reason line; else an unexpected stop.
+/// `last` is the last entry kept (its sequence number and text), `None` with the log lost or
+/// empty. Power loss and every other cause are never an unexpected stop.
+pub fn unexpected_stop(flags: Flags, word: Option<u32>, last: Option<(u32, &[u8])>) -> bool {
+    if flags.power_lost() || flags.cause() != crate::reset::Cause::Software {
+        return false;
+    }
+    !matches!((word, last), (Some(w), Some((seq, text))) if w == seq && is_reason_line(text))
+}
 
 const HANDOVER_MAGIC: u32 = 0x4737_4842; // "G7HB"
 
@@ -29,13 +80,15 @@ pub struct Handover {
     pub open: Option<(u8, u32)>,
     /// The reset flags of this start, read once by the boot stage (0068).
     pub reset: Flags,
+    /// The boot stage judged this start an unexpected stop (0075 point 4; 0078).
+    pub unexpected_stop: bool,
 }
 
 /// The boot stage, just before the jump; the magic word last.
 pub fn write_handover(m: &mut impl Words, h: &Handover) {
     let f = h.fault.unwrap_or(0xFF) as u64;
     let (oi, os) = h.open.map_or((0xFFu64, 0u64), |(i, s)| (i as u64, s as u64));
-    let r = h.reset.bits() as u32;
+    let r = h.reset.bits() as u32 | (h.unexpected_stop as u32) << 8;
     m.set(HANDOVER + 2, r as u64 | (!r as u64) << 32);
     m.set(HANDOVER + 1, f | oi << 8 | os << 32);
     m.set(HANDOVER, HANDOVER_MAGIC as u64 | (h.first_check_us as u64) << 32);
@@ -56,6 +109,7 @@ pub fn take_handover(m: &mut impl Words) -> Option<Handover> {
         fault: b(w1 & 0xFF),
         open: b((w1 >> 8) & 0xFF).map(|i| (i, (w1 >> 32) as u32)),
         reset: Flags::from_bits(w2 as u8),
+        unexpected_stop: w2 & 0x100 != 0,
     })
 }
 
@@ -154,7 +208,58 @@ mod tests {
     }
 
     fn handover() -> Handover {
-        Handover { first_check_us: 17, fault: Some(0x83), open: Some((2, 41)), reset: Flags { software: true, pin: true, ..Flags::default() } }
+        Handover { first_check_us: 17, fault: Some(0x83), open: Some((2, 41)), reset: Flags { software: true, pin: true, ..Flags::default() }, unexpected_stop: true }
+    }
+
+    #[test]
+    fn the_commanded_reset_word_0078() {
+        let mut m = ram(0);
+        assert_eq!(read_commanded(&m), None, "the cleared state does not check");
+        set_commanded(&mut m, 41);
+        assert_eq!(read_commanded(&m), Some(41));
+        for seq in [0, 1, u32::MAX] {
+            set_commanded(&mut m, seq);
+            assert_eq!(read_commanded(&m), Some(seq));
+        }
+        // Half written, or one bit off: no.
+        for w in [commanded(41) & 0xFFFF_FFFF, commanded(41) & !0xFFFF_FFFF, commanded(41) ^ 1 << 40, commanded(41) ^ 1, u64::MAX] {
+            m.w[COMMANDED] = w;
+            assert_eq!(read_commanded(&m), None, "{w:#x}");
+        }
+        // Unreadable: no. Cleared by one write and no read.
+        set_commanded(&mut m, 41);
+        m.bad[COMMANDED] = true;
+        assert_eq!(read_commanded(&m), None);
+        let (r, w) = (m.reads.get(), m.writes.len());
+        clear_commanded(&mut m);
+        assert_eq!((m.reads.get() - r, m.writes.len() - w, read_commanded(&m)), (0, 1, None));
+        // The word is the last of the block, apart from the counters and the handover.
+        assert_eq!((COMMANDED, WORDS), (HANDOVER + 3, 16));
+    }
+
+    #[test]
+    fn reason_lines_of_a1_7() {
+        for t in ["restart: restart", "restart: factory-reset", "restart: update-abandoned", "restart: installer-abandoned", "restart: trial-unconfirmed", "restart: update-activated slot B 0.1.2", "rollback commanded: slot B 0.1.2 to slot A 0.1.1"] {
+            assert!(is_reason_line(t.as_bytes()), "{t}");
+        }
+        for t in ["restart: processor fault hard", "restart: stop panic", "start after software: log kept", "start: unexpected stop", "restart: restart2", "restart: update-activated slot ", "", "restart:"] {
+            assert!(!is_reason_line(t.as_bytes()), "{t}");
+        }
+    }
+
+    #[test]
+    fn evidence_at_the_next_start_0075_0078() {
+        let sw = Flags { software: true, pin: true, ..Flags::default() };
+        let reason: &[u8] = b"restart: restart";
+        assert!(!unexpected_stop(sw, Some(7), Some((7, reason))), "commanded");
+        assert!(unexpected_stop(sw, None, Some((7, reason))), "no valid word");
+        assert!(unexpected_stop(sw, Some(6), Some((7, reason))), "a word that names another entry");
+        assert!(unexpected_stop(sw, Some(7), Some((7, b"restart: processor fault bus"))), "no reason line");
+        assert!(unexpected_stop(sw, Some(7), None), "log lost");
+        // Power loss and the other causes: never.
+        for f in [Flags { power_on: true, software: true, ..Flags::default() }, Flags { brown_out: true, software: true, ..Flags::default() }, Flags::default(), Flags { pin: true, ..Flags::default() }, Flags { independent_watchdog: true, software: true, ..Flags::default() }] {
+            assert!(!unexpected_stop(f, None, None), "{f:?}");
+        }
     }
 
     #[test]

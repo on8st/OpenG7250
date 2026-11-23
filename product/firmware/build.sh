@@ -43,8 +43,11 @@ python3 board/check-faultmask.py "$out/g7250-boot.elf" "$out/g7250-app-a.elf" "$
 echo "== RAM kept over a reset: one address in every image (0068, A3.5)"
 python3 board/check-kept-ram.py "$out/g7250-boot.elf" "$out/g7250-app-a.elf" "$out/g7250-app-b.elf"
 
-echo "== safe state within 20 us of the boot stage's first instruction (0045)"
-python3 board/check-safe-margin.py "$out/g7250-boot.elf"
+echo "== every fault vector to the handler of A3.6 \"Unexpected stop of the firmware\" (0075)"
+python3 board/check-fault-vectors.py "$out/g7250-boot.elf" "$out/g7250-app-a.elf" "$out/g7250-app-b.elf"
+
+echo "== safe state within 20 us of the boot stage's first instruction and of a fault (0045, 0075)"
+python3 board/check-safe-margin.py --reset "$out/g7250-boot.elf" --fault "$out/g7250-boot.elf" "$out/g7250-app-a.elf" "$out/g7250-app-b.elf"
 
 echo "== seal and check"
 tool="cargo run --quiet -p g7250-imgtool --"

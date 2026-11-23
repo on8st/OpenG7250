@@ -961,3 +961,25 @@ fn get_stats_lists_table_m6_first_t_a1_95() {
     let v = |n: &str| got.iter().find(|(k, _)| k == n).unwrap().1;
     assert_eq!((v("mg_rate_drop"), v("drop_7251"), v("mg_cap_drop")), (25 - answered, 25 - answered, 0));
 }
+
+/// Every reason line this firmware writes before a commanded reset is one the boot stage takes as
+/// a commanded reset (A3.6 "Evidence at the next start"; 0078).
+#[test]
+fn every_reason_is_a_reason_line_0078() {
+    let reasons = [
+        Reason::Restart,
+        Reason::FactoryReset,
+        Reason::Activated { slot: 2, version: 0x0001_0002 },
+        Reason::Activated { slot: 1, version: 0x0001_0001 },
+        Reason::UpdateAbandoned,
+        Reason::TrialUnconfirmed,
+        Reason::Rollback(g7250_radio::mgmt::Rollback { from: (2, 0x0001_0002), to: (1, 0x0001_0001) }),
+    ];
+    for r in reasons {
+        let mut s = Server::new();
+        r.log(&mut s.log.0, 1);
+        let (_, b) = s.log.0.range();
+        let e = s.log.0.entry(b - 1).unwrap();
+        assert!(g7250_safety::kept::is_reason_line(e.text()), "{r:?}: {}", String::from_utf8_lossy(e.text()));
+    }
+}

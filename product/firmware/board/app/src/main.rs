@@ -170,9 +170,12 @@ async fn main(spawner: Spawner) {
     embassy_stm32::interrupt::InterruptExt::set_priority(embassy_stm32::interrupt::CEC, embassy_stm32::interrupt::Priority::P6);
     let safety = SAFETY_EXECUTOR.start(embassy_stm32::interrupt::CEC);
     safety.spawn(tx_path().unwrap());
-    // A processor watchdog reset seen at start-up: WDT_RESET_AT_START, class 1 (A3.5 "Entry";
-    // HIS-13); its third since power-on is escalated (counted over resets in persist.rs).
-    if flags.watchdog() {
+    // The log line of an unexpected stop carries this run's uptime (stop.rs).
+    g7250_board::stop::set_uptime(|| Instant::now().as_millis() as u32);
+    // A processor watchdog reset seen at start-up, or a start the boot stage judged an unexpected
+    // stop (0075 point 4; 0078): WDT_RESET_AT_START, class 1 (A3.5 "Entry"; HIS-13); its third
+    // since power-on is escalated (counted over resets in persist.rs).
+    if flags.watchdog() || handover.is_some_and(|h| h.unexpected_stop) {
         fault::raise(g7250_safety::fault::code::WDT_RESET_AT_START);
     }
 
@@ -329,9 +332,18 @@ pub fn trial_limit() {
 /// The reason, then the reset; the caller has put the relays in the A3.6 state.
 fn commanded_reset(reason: Reason) -> ! {
     let up = Instant::now().as_millis() as u32;
-    g7250_board::logmem::last(|r| reason.log(r, up));
+    let mut seq = None;
+    g7250_board::logmem::last(|r| {
+        reason.log(r, up);
+        seq = Some(r.range().1.wrapping_sub(1));
+    });
     println!("app: commanded reset ({:?})", reason);
     console::flush();
+    // The last write before the reset: the commanded-reset word naming the reason line (A1.7;
+    // 0078). Nothing may log after it.
+    if let Some(s) = seq {
+        g7250_board::persist::set_commanded(s);
+    }
     cortex_m::peripheral::SCB::sys_reset()
 }
 
@@ -480,14 +492,9 @@ async fn console_pump() {
     }
 }
 
+/// The application's own stop (A3.6 "Unexpected stop of the firmware"; 0075): pins, the
+/// commanded-reset word cleared, `restart: stop panic`, a reset within 10 ms. No panic text.
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    cortex_m::interrupt::disable();
-    safe::apply();
-    console::set_buffered(false); // what is buffered first, then the panic, blocking
-    println!("app: PANIC {}", info);
-    // No refresh: the watchdog resets the MCU, and the reset brings the safe state back.
-    loop {
-        cortex_m::asm::nop();
-    }
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    g7250_board::stop::stop("panic")
 }

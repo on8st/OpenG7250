@@ -16,6 +16,7 @@ pub mod persist;
 pub mod reset;
 pub mod safe;
 pub mod start_state;
+pub mod stop;
 pub mod supply;
 pub mod wdg;
 

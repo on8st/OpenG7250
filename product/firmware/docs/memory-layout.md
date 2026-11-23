@@ -118,6 +118,22 @@ barriers, the read and the CCR restore are there in this order, and that nothing
 branches out. Not covered: an unreadable word in the image that is running, or in the boot stage
 itself (both are only written by the vendor bootloader or a completed, verified update).
 
+**Unexpected stop** (A3.6; 0075, 0078; `board/common/src/stop.rs`). Every processor fault
+vector (HardFault, MemManage, BusFault, UsageFault) of both images is an entry that loads the
+stack pointer from a literal (the reset value; the old stack is not trusted), calls
+`g7250_fault_pins` (the reset-time pin code, straight-line), and goes on in `fault_entry`: the
+commanded-reset word cleared by one write, `restart: processor fault <kind>` (the kind from the
+vector, or for an escalated HardFault from CFSR) as the last log entry, a software reset. The
+panic handler of both images does the same with `restart: stop panic`, and prints no panic text.
+`board/check-fault-vectors.py` checks each vector and its entry; `board/check-safe-margin.py`
+bounds the path to the pins with the exception entry (19.3 us at most in this build, of 20; the
+panic path is not bounded). At a start the boot stage reads the reset flags, then, if the start is
+no power loss, the commanded-reset word, clears it, opens the log ring and judges: a software
+reset is commanded only if the word names the last entry kept and that entry is a reason line
+(`g7250_safety::kept::unexpected_stop`); else it logs `start: unexpected stop` after the start
+entry and hands that to the application, which enters `WDT_RESET_AT_START`. Not covered: a fault
+in the first 20 us, or during stacking (a lockup, ended by the watchdog; 0075 point 5).
+
 **Test build.** `out/test/g7250-compact.elf` (feature `test-compact-at-start`) compacts at every
 start, for the emulator run (`docs/emulator-run.md`, "Store").
 
@@ -127,7 +143,7 @@ start, for the emulator run (`docs/emulator-run.md`, "Store").
 |---|---|
 | 0x24000000–0x2401E6FF | AXI SRAM: `.data`, `.bss`, stack (128 KiB less 6400 bytes, present in every TCM/AXI option setting); the same for the boot stage |
 | 0x2401E700–0x2401FF7F | AXI SRAM: `.logring` (NOLOAD, 6272 bytes), the log ring of A1.7, kept over a reset without power loss (0068): header in two copies, 64 entries of 96 bytes, each with a check word (g7250_safety::logring). Opened and, after a power loss (or with no reset flag), written first by the boot stage, which writes the start entry; continued by the application. Same rules as `.persist`: never the Backup SRAM, whole 64-bit words, P-SYS-9. `board/check-kept-ram.py` checks both regions in every image |
-| 0x2401FF80–0x2401FFFF | AXI SRAM: `.persist` (NOLOAD, 128 bytes; the boot stage writes the handover, the application reads it and keeps the counters), kept over a reset without power loss: the counters of A3.5 (`TRIP_COUNT`, the fault entry counter per class 1 code, the reset counter per reset cause; g7250_safety::counters). Two slots of six 64-bit words `[magic | sequence, values, check]`, then the boot stage's handover (three words), all written in whole aligned 64-bit words (`strd`; the AXI SRAM's ECC word is 64 bits, [HIS] HIS 10, MEDIUM), the slots alternately, value and check first, magic last (g7250_safety::kept); read only when the reset flags show no power-on or brown-out reset (after a power loss it is written first, so no never-written SRAM word with a bad ECC is read, RM0468); a block overwritten by a previous stage fails the check and the count starts at 0. Not the Backup SRAM ([HIS] HIS 15 rule 4). **Pending hardware parameter P-SYS-9** (0050): whether this range survives the stage that runs before the boot stage at a reset is not known ([HIS] HIS 10, HIS 90, gate review 9, with its measurement; first-radio check RD-01, T-A3-60); part of the freeze rule |
+| 0x2401FF80–0x2401FFFF | AXI SRAM: `.persist` (NOLOAD, 128 bytes; the boot stage writes the handover, the application reads it and keeps the counters), kept over a reset without power loss: the counters of A3.5 (`TRIP_COUNT`, the fault entry counter per class 1 code, the reset counter per reset cause; g7250_safety::counters). Two slots of six 64-bit words `[magic | sequence, values, check]`, then the boot stage's handover (three words; with the reset flags and whether the boot stage judged the start an unexpected stop), then the commanded-reset word of A1.7 and A3.6 (0078: the reason line's sequence number and its inverted mix, so 0 and a half-written word do not check; set as the last write before every commanded reset, cleared by the fault handler and by the boot stage at every start with one write and no read, read only after a start with no power loss), all written in whole aligned 64-bit words (`strd`; the AXI SRAM's ECC word is 64 bits, [HIS] HIS 10, MEDIUM), the slots alternately, value and check first, magic last (g7250_safety::kept); read only when the reset flags show no power-on or brown-out reset (after a power loss it is written first, so no never-written SRAM word with a bad ECC is read, RM0468); a block overwritten by a previous stage fails the check and the count starts at 0. Not the Backup SRAM ([HIS] HIS 15 rule 4). **Pending hardware parameter P-SYS-9** (0050): whether this range survives the stage that runs before the boot stage at a reset is not known ([HIS] HIS 10, HIS 90, gate review 9, with its measurement; first-radio check RD-01, T-A3-60); part of the freeze rule |
 | 0x38000000–0x38003FFF | SRAM4 (D3): section `.sram4`, the **only** place for SPI6 DMA buffers. SPI6 is in D3 and can use only the BDMA, which reaches only D3 memory (RM0468); a BDMA buffer in AXI or D2 SRAM gives a transfer error. Today SPI6 runs without DMA. |
 | 0x38800000–0x38800FFF | Backup SRAM: never used ([HIS] HIS 15 rule 4); `g7250-imgtool` refuses any segment there |
 
