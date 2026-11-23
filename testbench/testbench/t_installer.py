@@ -363,3 +363,26 @@ def t_a1_58(ctx: Ctx):
                      "model has no controller")
     finally:
         restore(ctx)
+
+
+def foreign_59(ctx: Ctx):
+    """T-A1-59, the foreign half: other hardware 51 before anything is written or erased, a block with a
+    wrong CRC-32 53 and not written, a SHA-256 other than the header's 55 at UPDATE_VERIFY."""
+    s = secret(ctx)
+    other = image(len(IMG), seed=591)
+    try:
+        with updating(ctx, s, restart_at_end=False) as u:
+            sha = hashlib.sha256(IMG).digest()
+            ctx.eq("foreign: an image for other hardware: 51",
+                   st_of(u.begin(header(len(IMG), sha, version=(0, 0, 0), slot=0, hw=0x1234), FLAG_FOREIGN)), 51)
+            has_state(ctx, "foreign: before anything is written or erased", "own")
+            r = u.begin(header(len(IMG), hashlib.sha256(other).digest(), version=(0, 0, 0), slot=0), FLAG_FOREIGN)
+            if not ctx.eq("foreign: UPDATE_BEGIN with a SHA-256 that is not the image's: 0", st_of(r), 0):
+                return
+            ctx.eq("foreign: a block with a wrong CRC-32: 53", st_of(u.req("UPDATE_BLOCK", block_payload(0, IMG[:512], crc=1))), 53)
+            st = ctx.fixture("installer.state") or {}
+            ctx.eq("foreign: the bad block is not written (installer.state)", (st.get("bytes_written"), st.get("state")), (0, "before-erase"))
+            ctx.eq("foreign: every block", blocks(u, 0, (len(IMG) + 511) // 512), 0)
+            ctx.eq("foreign: UPDATE_VERIFY with a hash that differs from the header: 55", st_of(u.req("UPDATE_VERIFY")), 55)
+    finally:
+        restore(ctx)

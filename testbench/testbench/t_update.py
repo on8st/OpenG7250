@@ -173,8 +173,8 @@ def t_a1_78(ctx: Ctx):
 
 @test("T-A1-59")
 def t_a1_59(ctx: Ctx):
-    """The own-image part: a bad CRC gets 53, a SHA-256 that differs gets 55 at VERIFY, other
-    hardware gets 51 before anything is written. The foreign-image part comes with A1.8a."""
+    """A1.8, A1.8a (0025 R3): for an image of this firmware and for a foreign image alike, a bad CRC gets
+    53, a SHA-256 that differs gets 55 at VERIFY, other hardware gets 51 before anything is written."""
     s = secret(ctx)
     with updating(ctx, s) as u:
         run, other, ver, lay = facts(ctx, u)
@@ -198,7 +198,11 @@ def t_a1_59(ctx: Ctx):
             r = u.req("UPDATE_VERIFY")
             ctx.eq("UPDATE_VERIFY with a hash that differs from the header: 55", r["status"] if r else None, 55)
             u.req("UPDATE_ABORT")
-    ctx.notes.append("foreign-image part not run yet (A1.8a, phase 2)")
+    if (ctx.endpoint.get("model") or {}).get("f1_gate") == "open":
+        from .t_installer import foreign_59
+        foreign_59(ctx)
+    else:
+        ctx.part("the foreign-image half: only with the F1 gate open (the reference model started with --f1 open; P-SYS-5)")
 
 
 @test("T-A1-67")

@@ -206,7 +206,7 @@ def run(test_fn, broken="", gate=True):
 
 class Installer(unittest.TestCase):
     def test_correct_radio(self):
-        for fn in (t_installer.t_a1_54, t_installer.t_a1_55, t_installer.t_a1_58, t_installer.t_a1_61):
+        for fn in (t_installer.t_a1_54, t_installer.t_a1_55, t_installer.t_a1_58, t_installer.t_a1_61, t_installer.foreign_59):
             bad, ctx = run(fn)
             self.assertEqual(bad, [], fn.__name__)
             self.assertGreater(len(ctx.checks), 3, fn.__name__)
@@ -223,7 +223,9 @@ class Installer(unittest.TestCase):
                 (t_installer.t_a1_54, "no-session-end", True, "the session ended"),
                 (t_installer.t_a1_55, "not-permanent", True, "permanent (1)"),
                 (t_installer.t_a1_55, "crc-written", True, "a block with a bad CRC: 53"),
-                (t_installer.t_a1_58, "own-update-fails", True, "this firmware's image")):
+                (t_installer.t_a1_58, "own-update-fails", True, "this firmware's image"),
+                (t_installer.foreign_59, "hw-unchecked", True, "foreign: an image for other hardware: 51"),
+                (t_installer.foreign_59, "crc-written", True, "foreign: a block with a wrong CRC-32: 53")):
             bad, _ = run(fn, broken, gate)
             self.assertTrue(any(seen in b for b in bad), (fn.__name__, broken, bad[:4]))
 
