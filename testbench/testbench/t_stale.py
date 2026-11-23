@@ -319,8 +319,9 @@ def unrecognised_word(ctx, st: State):
         ctx.eq(f"{label}: the secret in force still authenticates", accepts(ctx, st.cur), 0)
 
 
-CUT_FROM_START = ("the erase cuts inside a record take the emulator's erase to run from the start of the sector (a model "
-                  "assumption): a cut at fraction f leaves what lies from f x 128 KiB on")
+CUT_FROM_START = ("the erase cuts inside a record are placed as if the emulator's erase ran from the start of the sector "
+                  "(an assumption, used only to choose the fraction): the verdict is what flash.log and the dump show after "
+                  "the next start")
 
 
 def cut_offset(data: bytes, s: bytes, words_in: int) -> int | None:
@@ -347,8 +348,8 @@ def cut_erase(ctx, st: State):
             return False
         old, new, live, _ = got
         stale = st.other(live)
-        sure = False  # bytes of the old secret are left for certain
-        if isinstance(frac, str):
+        inside = isinstance(frac, str)
+        if inside:
             if CUT_FROM_START not in ctx.notes:
                 ctx.notes.append(CUT_FROM_START)
             data = dump(ctx, stale)
@@ -356,7 +357,7 @@ def cut_erase(ctx, st: State):
             if at is None:
                 ctx.part(f"{label}: not run, no such word in the dump (the secret at offset {data.rfind(old)})")
                 continue
-            frac, sure = at / SECTOR, at < data.rfind(old) + len(old)
+            frac = at / SECTOR
         ctx.fixture("power.cut", during_erase=frac)
         entries = st.restart("RESTART")
         e = cut_entry(entries, "erase")
@@ -366,17 +367,19 @@ def cut_erase(ctx, st: State):
         done = e.get("fraction_done", frac)
         if abs(done - frac) * SECTOR >= WORD:
             ctx.part(f"{label}: the cut came at {done * SECTOR:.0f} bytes, {frac * SECTOR:.0f} planned")
-            sure = False
         er = store_erases(entries[entries.index(e) + 1:], st.secs)
         texts = run_texts(ctx)
         rest = any(x in t for t in texts for x in (STALE, UNREC))
-        if not er and not rest and not sure:
+        if not er and not rest:
             # nothing left, or only whole records with no secret but the live one, which a start leaves:
             # the bench cannot tell records apart, so without an erase only the old secret is looked for
             if st.known:
                 data = dump(ctx, stale)
+                left = any(old[i:i + 8] in data for i in range(len(old) - 7))
                 ctx.check(f"{label}, not erased again: no part of the old secret is left (8 bytes in a row)",
-                          not any(old[i:i + 8] in data for i in range(len(old) - 7)), "a part of the old secret is there")
+                          not left, "a part of the old secret is there")
+                if inside and not left:
+                    ctx.part(f"{label}: the cut left no part of the old secret, not shown here")
             else:
                 ctx.part(f"{label}: not erased again, what the cut left not judged (flash.dump)")
             continue

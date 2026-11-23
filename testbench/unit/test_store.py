@@ -344,8 +344,8 @@ class OldSecret(unittest.TestCase):
                              ("no-complete-rule", "lost sector 6, the first start: sector 0x80c0000 not erased"),
                              ("counter-counts", "lost sector 6, the first start: sector 0x80c0000 not erased"),
                              ("config-does-not-count", "only configuration: the failed newer generation erased"),
-                             ("whole-records-only", "cut at"), ("keeps-torn", "cut at the first word of the old secret: completed"),
-                             ("leaves-rest", "cut at the first word of the old secret: completed")):
+                             ("whole-records-only", "cut at"), ("keeps-torn", "cut at the first word of the old secret, not erased again: no part of the old secret"),
+                             ("leaves-rest", "cut at the first word of the old secret, not erased again: no part of the old secret")):
             try:
                 bad = failed(run(broken))
             except core.RunnerFault:
