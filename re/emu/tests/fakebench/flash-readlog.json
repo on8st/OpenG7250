@@ -18,5 +18,5 @@
    "timeout_s": 300
   }
  ],
- "note": "Run with G7250_FLASH_READLOG=0x080E0000-0x080E0FFF (m1_smoke step [13]). The image is firmware-tests/bench/net_test.c (its F commands on sector 7)."
+ "note": "Run with G7250_FLASH_READLOG=0x080E0000-0x080E0FFF G7250_FLASH_READLOG_BOOTS=1-2 (m1_smoke step [13]). The image is firmware-tests/bench/net_test.c (its F commands on sector 7)."
 }

@@ -1171,6 +1171,10 @@ def run_test(tid, ep):
         cmd(b"FR", again=True, wait=60.0)
         ctl.op("power.cycle")
         cmd(b"FR", again=True, wait=90.0)
+        # run with G7250_FLASH_READLOG_BOOTS=1-2: a third power-on, outside the window, writes no log
+        ctl.op("power.cycle")
+        b3 = cmd(b"FR", again=True, wait=90.0)
+        tdir = os.path.dirname(os.path.abspath(EP_PATH))
         r1, r2 = rl(1), rl(2)
 
         def first(es, i0, f):
@@ -1205,7 +1209,11 @@ def run_test(tid, ep):
                 check("CR1 writes logged (PG for the programs)",
                       any(e.get("op") == "cr1_write" and int(e["value"], 16) & 2 for e in r1), str([e for e in r1 if e.get("op") == "cr1_write"][:2])),
                 check("the software reset: a reset line and CR1 read after it",
-                      rs >= 0 and first(r1, rs, lambda e: e.get("op") == "cr1") > rs, str(r1[rs:rs + 3] if rs >= 0 else None))]
+                      rs >= 0 and first(r1, rs, lambda e: e.get("op") == "cr1") > rs, str(r1[rs:rs + 3] if rs >= 0 else None)),
+                check("the boot window 1-2: power-on 3 runs (its console and an answer) and writes no flash-reads-3.jsonl",
+                      b3 is not None and os.path.exists(os.path.join(tdir, "console-boot3.txt"))
+                      and not os.path.exists(os.path.join(tdir, "flash-reads-3.jsonl")) and bool(r2),
+                      "answer %s, files %s" % (b3 is not None, sorted(f for f in os.listdir(tdir) if f.startswith("flash-reads"))))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

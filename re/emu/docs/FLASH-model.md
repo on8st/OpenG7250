@@ -160,9 +160,14 @@ test). Each line is JSON with `t_us`, the emulated time since that power-on, and
   through them otherwise); reads between the two lines are not logged.
 
 Nothing of it reaches `flash.log`, the fixtures, the endpoint or the bench. It costs one
-watchpoint per aligned address and width (7680 for 4 KiB): keep the range small. The
-self-test T-EMU-30 (`tests/fakebench/flash-readlog.json`, m1_smoke step [13]) runs it on
-net_test's sector 7.
+watchpoint per aligned address and width (7680 for 4 KiB): keep the range small. Each program
+lifts and puts back all of them, about 12 s host per program for 4 KiB, so a boot that fills a
+store (about 2000 programs) takes hours. `G7250_FLASH_READLOG_BOOTS=<lo>-<hi>` (or `<n>`)
+limits the log to those power-ons of the test (1 is the first emulator start, as N above,
+taken from the console file name); the other power-ons run without it and write no file.
+Unset, every power-on is logged. With neither variable set, the start-up script is as before.
+The self-test T-EMU-30 (`tests/fakebench/flash-readlog.json`, m1_smoke step [13], window 1-2)
+runs it on net_test's sector 7 and checks that power-on 3 writes no file.
 
 ## Not modelled
 

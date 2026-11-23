@@ -276,12 +276,26 @@ def random_ram(out):
     return p
 
 
-def readlog_file(out):
+def readlog_file(out, boot_no=None):
     """flash-reads-N.jsonl: N is the power-on of the test (one file per emulator start)."""
+    if boot_no is not None:
+        return os.path.join(out, "flash-reads-%d.jsonl" % boot_no)
     n = 1
     while os.path.exists(os.path.join(out, "flash-reads-%d.jsonl" % n)):
         n += 1
     return os.path.join(out, "flash-reads-%d.jsonl" % n)
+
+
+def readlog_on(boot_no):
+    """The read log is on with G7250_FLASH_READLOG set; G7250_FLASH_READLOG_BOOTS=lo-hi (or n)
+    limits it to those power-ons of the test (1 is the first emulator start)."""
+    if not os.environ.get("G7250_FLASH_READLOG"):
+        return False
+    w = os.environ.get("G7250_FLASH_READLOG_BOOTS", "").strip()
+    if not w or boot_no is None:
+        return True
+    lo, _, hi = w.partition("-")
+    return int(lo) <= boot_no <= int(hi or lo)
 
 
 def erased_flash(out):
@@ -327,6 +341,10 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
                       "str": 'machine LoadPlatformDescriptionFromString "%s"', "cmd": "%s"}[kind] % val)
     ap_ = os.path.join(out, "agent.repl")
     base = os.path.basename(console)
+    # the power-on of the test, from the console file the runner names per emulator start
+    # (console.txt, then console-boot2.txt, ...)
+    m_ = re.match(r"console(?:-boot(\d+))?\.txt$", base)
+    boot_no = (int(m_.group(1)) if m_.group(1) else 1) if m_ else None
     timed = os.path.join(os.path.dirname(console), base.replace("console", "console-timed", 1) if base.startswith("console") else base + ".timed")
     open(ap_, "w").write(("agent: Antmicro.Renode.Peripherals.SPI.G7250BenchAgent @ spi1\n    agentPort: %d\n"
                           "    consoleTimedPath: \"%s\"\n\n"
@@ -349,8 +367,8 @@ def build_product_resc(elf, out, console, log, ch_port, agent_port, boot="standi
     ] + ['sysbus.spi1.agent ForceIdrAtBoot "%s" %d' % (p_, l_) for p_, l_ in (boot_forces or [])] + list(boot_lines or []) + (
         ['sysbus.flashtiming EraseMipsDivisor %d' % int(os.environ["G7250_ERASE_MIPS_DIV"])] if os.environ.get("G7250_ERASE_MIPS_DIV") else []) + (
         # diagnostics only, off by default: the flash read log of a range (docs/FLASH-model.md)
-        ['sysbus.flashtiming ReadLog "%s" "%s"' % (os.environ["G7250_FLASH_READLOG"], readlog_file(out))]
-        if os.environ.get("G7250_FLASH_READLOG") else []) + [
+        ['sysbus.flashtiming ReadLog "%s" "%s"' % (os.environ["G7250_FLASH_READLOG"], readlog_file(out, boot_no))]
+        if readlog_on(boot_no) else []) + [
         'sysbus.watchdog PowerOnBoot',
         'sysbus.spi1.agent ArmBootHook',
     ] + (['sysbus LogPeripheralAccess sysbus.flashController true', 'logLevel 0 sysbus.flashController']
