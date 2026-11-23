@@ -806,7 +806,8 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "the flash part (0069) needs flash.log, flash.timing, flash.fault and flash.dump"
+    "the flash part (0069) needs flash.log, flash.timing, flash.fault and flash.dump",
+    "the C-3 record unreadable at the FACTORY_RESET (0072): on the reference model (c3.lose); on the emulator a part, its place being the firmware's choice"
    ],
    "timeout_s": 300
   },

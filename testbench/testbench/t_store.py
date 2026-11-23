@@ -207,10 +207,48 @@ def t_a1_39(ctx: Ctx):
         ctx.eq("the C-3 limit put back toward its built-in value", r["status"] if r else None, 0)
     ctx.notes.append("not judged here: the TCI port (no management item reads it), the fault and reset counters (T-A3-60); "
                      "C-2 and C-6 have only their factory value in this version")
+    if has(ctx, "c3.lose"):
+        lost_at_reset(ctx, new)
+    else:
+        ctx.part("the C-3 record unreadable at the FACTORY_RESET: not run, its place is the firmware's choice (0072)")
     if not flash:
         ctx.notes.append("0069 part (flash) not run: no flash.log")
         return
     erased_reset(ctx, new)
+
+
+LOST = "config: C-3 lost, TX closed until rewritten"
+
+
+def lost_at_reset(ctx, s: bytes):
+    """0072 on the reference model (c3.lose): the C-3 record unreadable at the FACTORY_RESET. The next
+    start has TX closed (0 W on every band, the line of A1.6 "Lost") and the other items of Table A1-4
+    restored. The model is then put back by the vendor path (vendor.install), which returns C-3 to the
+    built-in values (0072 point 6)."""
+    ip = bytes(int(x) for x in ctx.endpoint["radio"]["ip"].split("."))
+    with updating(ctx, s, restart_at_end=False) as u:
+        r = u.req("SET_CONFIG", config_tlv((11, ip[:2] + b"\0\0" + b"\x10")))
+        if not ctx.eq("C-3 lost at the FACTORY_RESET: C-7 changed beforehand", r["status"] if r else None, 0):
+            return
+        n0 = max([e[0] for e in read_log(u.c)], default=-1)
+        ctx.fixture("c3.lose")
+        st, _, _ = factory_reset(ctx, u)
+        if not ctx.eq("C-3 lost at the FACTORY_RESET: FACTORY_RESET 0", st, 0):
+            return
+    with Mgmt(ctx.net) as c:
+        c.clock = RadioClock(ctx)
+        conf = get_config(c)
+        texts = [e[2] for e in read_log(c, n0 + 1)]
+        t = tlv((req_retransmit(c, "IDENTIFY") or {"payload": b""})["payload"])
+    ctx.check("C-3 lost at the FACTORY_RESET: the next start has TX closed (0 W on every band in GET_CONFIG)",
+              bool(conf[8]) and all(v == 0 for v in conf[8].values()), f"{conf[8]}")
+    ctx.eq(f"C-3 lost at the FACTORY_RESET: '{LOST}' logged at that start", texts.count(LOST), 1)
+    ctx.eq("C-3 lost at the FACTORY_RESET: the other items restored (C-1 DHCP, C-7 empty, no secret, the window open)",
+           (conf.get(1), conf.get(11), t.get(11), t.get(12, b"")[:1]), (b"\x00", b"", b"\x00", b"\x01"))
+    ctx.fixture("vendor.install")
+    ctx.endpoint.get("_learned", {}).pop("secret", None)
+    secret(ctx)
+    ctx.notes.append("after the C-3 case the model is put back by vendor.install: no secret, a new one set by the bench")
 
 
 def stretched(ctx):

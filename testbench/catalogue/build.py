@@ -291,7 +291,9 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-91": {"target": "emulator", "also": ["host"], "needs": ["time.advance"],
                 "notes": ["the corrupted entry needs log.corrupt (an emulator only when it knows the ring); the update parts need a real package"]},
     "T-A1-39": {"target": "emulator", "also": ["host"], "needs": [],
-                "notes": ["the flash part (0069) needs flash.log, flash.timing, flash.fault and flash.dump"]},
+                "notes": ["the flash part (0069) needs flash.log, flash.timing, flash.fault and flash.dump",
+                          "the C-3 record unreadable at the FACTORY_RESET (0072): on the reference model (c3.lose); on the "
+                          "emulator a part, its place being the firmware's choice"]},
     "T-A1-92": {"target": "emulator", "also": [], "needs": ["flash.log"],
                 "notes": ["what the sectors hold needs flash.dump; the cases of the 0069 addendum need flash.ecc, "
                           "power.cut and flash.fill",
