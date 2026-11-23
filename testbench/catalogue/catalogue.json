@@ -66,9 +66,7 @@
    "target": "emulator",
    "also": [],
    "needs": [],
-   "pending": [
-    "P-NET-2"
-   ],
+   "pending": [],
    "tx_part": false,
    "notes": [],
    "timeout_s": 90
@@ -995,9 +993,7 @@
    "needs": [
     "net.hosts"
    ],
-   "pending": [
-    "P-NET-2"
-   ],
+   "pending": [],
    "tx_part": false,
    "notes": []
   },
@@ -1380,9 +1376,7 @@
    "needs": [
     "sensor.set"
    ],
-   "pending": [
-    "P-PWR-2"
-   ],
+   "pending": [],
    "tx_part": false,
    "notes": [],
    "timeout_s": 90
@@ -1666,9 +1660,7 @@
     "dhcp.server",
     "power.cycle"
    ],
-   "pending": [
-    "P-NET-2"
-   ],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "MACRAW failing: macraw.fail where offered (proposed), else a runner without MACRAW; console line not checked"
@@ -1925,12 +1917,11 @@
     "flash.ecc",
     "power.cycle"
    ],
-   "pending": [
-    "P-PWR-2"
-   ],
+   "pending": [],
    "tx_part": false,
    "notes": [
-    "on the emulator 'without a fault or reset' is not covered: it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip gives on the read"
+    "on the emulator 'without a fault or reset' is not covered: it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip gives on the read",
+    "not blocked by P-PWR-2: S2 and T3 come from a simulated set (0072 point B)"
    ],
    "timeout_s": 300
   },
@@ -2137,9 +2128,7 @@
     "emulator"
    ],
    "needs": [],
-   "pending": [
-    "P-NET-2"
-   ],
+   "pending": [],
    "tx_part": false,
    "notes": [
     "spec marks it reference model; emulator only with the fixtures"
