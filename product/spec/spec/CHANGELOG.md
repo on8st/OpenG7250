@@ -112,7 +112,8 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   at 50 MHz is 0 W until P-PWR-2, so the record and `GET_CONFIG` carry 0 there and a C-3 limit
   above 0 gets 49; the `SET_CONFIG` reply gives the items as `GET_CONFIG` does (tags 9 and 10
   only with S2 and T3 in the calibration set). A1.6 C-3, A3.4c, B4.8 `tx_band`, Table M-1;
-  T-A1-28, T-A1-96 extended.
+  T-A1-28, T-A1-96 extended. Table A3-2, Forward-power row: 0 W at 50 MHz until P-PWR-2 (ON8ST,
+  2026-11-23).
 - 0072 (accepted 2026-11-23; a C-3 limit with no readable record): a lost tightening never
   comes back as a looser limit. A C-3 write always compacts into a new generation; the
   generation number is kept in two places; a failed newer generation counts and gives the
