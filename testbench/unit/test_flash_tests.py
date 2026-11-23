@@ -153,10 +153,12 @@ class FlashTestsTest(unittest.TestCase):
         self.assertEqual(run(t_flash.t_a1_86, FakeRadio()), [])
 
     def test_a1_86_never_passes_without_its_cuts(self):
-        """A planned cut that does not fire, or is lost, is an error, not a pass (fw-e518331)."""
+        """A planned cut that does not fire, or is lost, is never a pass (fw-e518331): a part, no pass."""
         for broken in ("nocut", "stale"):
-            with self.assertRaises(RunnerFault):
-                run(t_flash.t_a1_86, FakeRadio(broken=broken))
+            kept = []
+            run(lambda c: (kept.append(c), t_flash.t_a1_86(c)), FakeRadio(broken=broken))
+            self.assertTrue(kept[0].no_pass, broken)
+            self.assertTrue(any("no flash.log entry of the planned cut" in p for p in kept[0].parts), (broken, kept[0].parts))
 
     def test_a1_86_fails_on_a_mixed_value(self):
         self.assertTrue(run(t_flash.t_a1_86, FakeRadio(broken="mix")))

@@ -226,7 +226,7 @@ def t_a1_92(ctx: Ctx):
         put_back(ctx, st, original, snapshot)
     ctx.notes.append("the FACTORY_RESET whose second erase fails is judged in T-A1-39; 'other store writes at a start compact when the "
                      "live sector is full' is not judged (only the firmware knows its store's fill level)")
-    planned_cuts_seen(st.missing)
+    planned_cuts_seen(ctx, st.missing)
 
 
 def put_back(ctx, st: State, original: bytes, snapshot: dict | None):
@@ -649,8 +649,8 @@ def stricter_record(ctx, st: State):
         if got is None:
             return False
         strict, n_sec = got
-        if isinstance(how, dict):
-            ctx.fixture("power.cut", **how)
+        if isinstance(how, dict):  # armed for the start after the power cycle (a plain cut does not survive it)
+            ctx.fixture("power.cut", **how, at_power_on=True)
         entries = st.restart("a power cycle")
         if isinstance(how, dict) and cut_entry(entries, "program" if "after_flash_words" in how else "erase") is None:
             st.missing.append(f"{lab} (cut entries {[x for x in entries if x.get('result') == 'cut'][:2]})")
@@ -694,8 +694,8 @@ def newer_than_record(ctx, st: State):
         if got is None:
             return False
         strict, n_sec = got
-        if how:
-            ctx.fixture("power.cut", **how)
+        if how:  # armed for the start after the power cycle
+            ctx.fixture("power.cut", **how, at_power_on=True)
         entries = st.restart("a power cycle")
         if how and cut_entry(entries, "program" if "after_flash_words" in how else "erase") is None:
             st.missing.append(f"{lab} (cut entries {[x for x in entries if x.get('result') == 'cut'][:2]})")

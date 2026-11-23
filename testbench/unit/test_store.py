@@ -438,7 +438,9 @@ class OldSecret(unittest.TestCase):
     def test_planned_cuts_not_seen(self):
         with mock.patch.object(FakeCtx, "fixture", lambda self, op, /, _f=FakeCtx.fixture, **a: None if op == "power.cut" else _f(self, op, **a)):
             ctx = run()
-        self.assertIsInstance(ctx.runner_fault, core.RunnerFault)  # run() keeps it, with the checks before it
+        # never a pass: a part with the reason, and no pass for the test
+        self.assertTrue(ctx.no_pass)
+        self.assertTrue(any("no flash.log entry of the planned cut" in p for p in ctx.parts), ctx.parts)
 
 
 if __name__ == "__main__":

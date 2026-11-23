@@ -625,10 +625,12 @@ def cut_at_word(entries: list[dict], k: int) -> bool:
     return w is not None and (before + w in (k - 1, k) or w in (k - 1, k))
 
 
-def planned_cuts_seen(missing: list[str]):
-    """A planned cut without its own flash.log entry is an error of the run, never a pass."""
+def planned_cuts_seen(ctx, missing: list[str]):
+    """A planned cut without its own flash.log entry is never a pass: a part with its reason, and no pass
+    for the test (the cut did not come where planned, so the case says nothing either way)."""
     if missing:
-        raise RunnerFault("power.cut: no flash.log entry of the planned cut: " + "; ".join(missing))
+        ctx.part("power.cut: no flash.log entry of the planned cut, those cases not judged: " + "; ".join(missing))
+        ctx.no_pass = True
 
 
 @test("T-A1-86", whole=True)
@@ -717,7 +719,7 @@ def t_a1_86(ctx: Ctx):
         if old is not None:
             put_plain(u, old)
     c3_writes(ctx, s, missing)
-    planned_cuts_seen(missing)
+    planned_cuts_seen(ctx, missing)
 
 
 # ---------------- T-A1-86, 0072: C-3 writes ----------------
@@ -1088,7 +1090,7 @@ def t_a1_83(ctx: Ctx):
     with mg(ctx, s) as u:
         t = u.identify()
         if t.get(10) != b"\x01":
-            planned_cuts_seen(missing)
+            planned_cuts_seen(ctx, missing)
             raise PartSkip(f"the torn confirmation: the trial was no longer unconfirmed when reached (tag 10 {t.get(10)!r})")
         flog_start(ctx)
         ctx.fixture("power.cut", after_flash_words=1)
@@ -1104,7 +1106,7 @@ def t_a1_83(ctx: Ctx):
             ctx.check("the store is readable", plain_raw(u) is not None, "GET_CONFIG unanswered")
             from .t_update import rollback_logged
             rollback_logged(ctx, u, run)
-    planned_cuts_seen(missing)
+    planned_cuts_seen(ctx, missing)
 
 
 # ---------------- T-A1-77 ----------------
