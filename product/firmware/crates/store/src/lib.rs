@@ -208,8 +208,15 @@ impl<F: FlashIo> Store<F> {
         self.io
     }
 
-    /// Bytes still free in the live sector.
+    /// Bytes still free in the live sector for records other than the factory-reset mark: one
+    /// flash word is always kept for that mark ([`Self::wipe`]).
     pub fn free(&self) -> u32 {
+        let room = self.room();
+        if room > FLASH_WORD { room - FLASH_WORD } else { 0 }
+    }
+
+    /// Bytes not yet written in the live sector, the word kept for the mark included.
+    fn room(&self) -> u32 {
         STORE_SECTORS[self.live].end - self.end
     }
 
@@ -369,12 +376,13 @@ impl<F: FlashIo> Store<F> {
         Ok(addr)
     }
 
-    /// Store a new record of `kind`. Compacts first if it does not fit in the live sector.
+    /// Store a new record of `kind`. Compacts first if it does not fit in the live sector, with
+    /// one word left there for the factory-reset mark (a mark itself may take that word).
     pub fn put(&mut self, kind: Kind, version: u8, payload: &[u8]) -> Result<(), Error<F::Error>> {
         if payload.len() > MAX_PAYLOAD || kind == Kind::Commit {
             return Err(Error::TooLarge);
         }
-        if self.end + padded(payload.len()) > STORE_SECTORS[self.live].end {
+        if padded(payload.len()) > if kind == Kind::Wipe { self.room() } else { self.free() } {
             self.compact_keep(|_| true)?;
         }
         self.end = self.write_at(STORE_SECTORS[self.live], self.end, kind, version, payload)?;
@@ -415,11 +423,19 @@ impl<F: FlashIo> Store<F> {
     /// write `kind` new, as `remake` makes it from its live payload: two compactions, one erase
     /// each. The first does both, so that a cut leaves the old items or the new ones. A mark in the
     /// live sector, written first (no erase) and left out of the first compaction, lets the next
-    /// start finish what a failed erase or a power loss left undone.
+    /// start finish what a failed erase or a power loss left undone (A1.6a "Atomicity": the reset
+    /// has started; T-A1-39: finished at the next start). [`Self::put`] always leaves a word for
+    /// the mark. A live sector with no word left (written by an earlier firmware) gets the mark by
+    /// a compaction that keeps everything; the drop and the remake are then the second erase, and
+    /// the sector left with the dropped kinds is erased by the start check of the next start
+    /// ([`Self::stale`]), as 0069 allows no third erase. A cut in that first compaction leaves
+    /// the old items and no mark.
     pub fn wipe(&mut self, drop: impl Fn(Kind) -> bool, kind: Kind, remake: impl Fn(Option<&[u8]>, &mut [u8]) -> Option<usize>) -> Result<(), Error<F::Error>> {
-        if self.free() >= FLASH_WORD {
-            self.put(Kind::Wipe, 1, &[1])?;
+        if self.room() < FLASH_WORD {
+            self.compact_with(|_| true, Some((Kind::Wipe, 1, &[1])))?;
+            return self.finish_wipe(drop, kind, remake);
         }
+        self.put(Kind::Wipe, 1, &[1])?;
         self.finish_wipe(drop, kind, remake)?;
         self.compact()
     }
@@ -678,7 +694,7 @@ mod tests {
         let mut s = Store::open(Sim::new(), APP).unwrap();
         assert_eq!((s.live_sector(), s.generation()), (1, 0));
         assert_eq!(get(&mut s, Kind::Config), None);
-        assert_eq!(s.free(), SECTOR_SIZE);
+        assert_eq!(s.free(), SECTOR_SIZE - FLASH_WORD);
     }
 
     #[test]
@@ -1297,6 +1313,78 @@ mod tests {
                     check_reset(&mut s, &owner);
                 }
             }
+        }
+    }
+
+    /// The owner's store with the live sector filled by `put` as far as it goes, and with
+    /// `last_word` also its last word (a store written by a firmware that kept no word free).
+    fn full_owner_store(last_word: bool) -> Sim {
+        let mut s = Store::open(owner_store(), APP).unwrap();
+        while s.free() > 0 {
+            s.put(Kind::Staging, 1, &[]).unwrap();
+        }
+        assert_eq!((s.generation(), s.room()), (0, FLASH_WORD));
+        if last_word {
+            s.end = s.write_at(STORE_SECTORS[s.live], s.end, Kind::Staging, 1, &[]).unwrap();
+            assert_eq!(s.room(), 0);
+        }
+        s.release()
+    }
+
+    #[test]
+    fn a_factory_reset_of_a_full_store_is_marked_and_finished_a1_6a() {
+        let owner = owner_config();
+        // put leaves the word for the mark: two erases, and a cut at any word after the mark
+        // (none of the reset's records written yet, or some) is finished at the next start.
+        let mut p = Store::open(full_owner_store(false), APP).unwrap();
+        let (e, w) = (p.io.erases, p.io.programs);
+        reset(&mut p).unwrap();
+        assert_eq!(p.io.erases - e, 2, "at most two erases after the reply");
+        check_reset(&mut p, &owner);
+        for cut in 1..p.io.programs - w {
+            let mut s = Store::open(full_owner_store(false), APP).unwrap();
+            s.io.budget = Some(cut);
+            assert!(reset(&mut s).is_err());
+            let mut s = Store::open(s.release().power_on(), APP).unwrap();
+            // Marked until the first compaction commits; that compaction leaves the mark out.
+            assert!(s.wipe_pending().unwrap() || s.generation() == 1, "cut {cut}: marked");
+            assert_eq!(limits(&config_at_start(&mut s)), limits(&owner));
+            start(&mut s);
+            let mut s = Store::open(s.release(), APP).unwrap();
+            check_reset(&mut s, &owner);
+        }
+        // No word left: the mark comes with a first compaction, the drop with the second; the
+        // start check of the next start erases the sector left with the old secret.
+        let mut s = Store::open(full_owner_store(true), APP).unwrap();
+        let e = s.io.erases;
+        reset(&mut s).unwrap();
+        assert_eq!(s.io.erases - e, 2, "at most two erases after the reply");
+        let mut s = Store::open(s.release(), APP).unwrap();
+        assert!(!s.wipe_pending().unwrap());
+        assert!(start_check(&mut s), "the old secret erased at the next start");
+        check_reset(&mut s, &owner);
+        // A cut at every word: in the first compaction the old items stay and no mark (the
+        // accepted gap of a store with no word left); after its commit, marked and finished at
+        // the next start.
+        let mut p = Store::open(full_owner_store(true), APP).unwrap();
+        let w = p.io.programs;
+        reset(&mut p).unwrap();
+        for cut in 0..p.io.programs - w {
+            let mut s = Store::open(full_owner_store(true), APP).unwrap();
+            s.io.budget = Some(cut);
+            assert!(reset(&mut s).is_err());
+            let mut s = Store::open(s.release().power_on(), APP).unwrap();
+            assert_eq!(limits(&config_at_start(&mut s)), limits(&owner));
+            if s.generation() == 0 {
+                assert!(!s.wipe_pending().unwrap());
+                assert_eq!((get(&mut s, Kind::Secret).unwrap(), config_at_start(&mut s)), (OLD.to_vec(), owner), "cut {cut}");
+                continue;
+            }
+            assert!(s.wipe_pending().unwrap(), "cut {cut}: marked");
+            start(&mut s);
+            let mut s = Store::open(s.release(), APP).unwrap();
+            start_check(&mut s);
+            check_reset(&mut s, &owner);
         }
     }
 
