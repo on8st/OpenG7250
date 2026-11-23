@@ -1206,10 +1206,17 @@ def t_a1_90(ctx: Ctx):
         advance(ctx, 11)
         ctx.eq("confirmed", u.identify().get(10), b"\x00")
         n0 = last_log_seq(u)
+    # the running slot changed: it runs in place from flash, so the change acts on the running code at once.
+    # A1.8 "Boot-stage refusals" judges a start, so the radio is started afresh by a power cycle right after
+    # the change (on the reference model, which runs no code from the slot, by a RESTART)
     corrupt(ctx, a[1])
     try:
-        with updating(ctx, s) as u:
-            pass
+        if "power.cycle" in ctx.endpoint.get("fixtures", []) and "model" not in ctx.endpoint:
+            ctx.fixture("power.cycle")
+            wait_reachable(ctx, "a power cycle after the active slot changed")
+        else:
+            with updating(ctx, s) as u:
+                pass
         with updating(ctx, s, restart_at_end=False) as u:
             t = u.identify()
             ctx.eq("the active slot refused: the other slot starts without a trial (tag 23, tag 10 = 2)",
