@@ -77,6 +77,16 @@ through the erase; a second cut during the recovery from a first; each both with
 written and with it left torn (unreadable, R0); and check that a half-erased sector's old commit
 does not win (`crates/store`).
 
+**Start check** (A1.10 "Start check"; 0069). It erases the other sector only when the live sector
+held a complete generation at open, before anything the start writes. A compaction whose live
+sector held none (an erased store, or data that is not this firmware's: the boot counter of the
+first start into a full sector of foreign data) writes its begin record with format version 2
+(`BEGIN_FIRST`). That generation has a commit word, but it is the store's first generation and
+qualifies, like generation 0, only once it holds a checked secret, configuration or calibration
+record. So foreign data in both sectors gives one erase (the sector written into) and no
+start-check line; the other sector is erased at the start after the first such record. The boot
+stage's writes are covered the same way.
+
 **Factory reset** (A1.6a; 0069). A mark record (kind 8) is written in the live sector without an
 erase, then a compaction leaves out the secret and the mark and writes the factory configuration
 (erase one), then a second compaction erases the sector with the old secret (erase two). A start

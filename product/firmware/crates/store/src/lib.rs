@@ -64,7 +64,7 @@ pub enum Kind {
     Wipe = 8,
     /// First record of a compaction: the generation number and the address of its commit word
     /// (payload: number u32, address u32), the number's second place, programmed before the
-    /// commit (0072 point 2).
+    /// commit (0072 point 2). Format version [`BEGIN_FIRST`]: a first generation (see there).
     Begin = 9,
     /// The C-3 limits of a generation ([`Limits`]), written by every compaction and never
     /// appended (0072 point 1).
@@ -81,6 +81,14 @@ impl Kind {
         Self::DATA.iter().copied().chain([Kind::Commit, Kind::Begin, Kind::Limits, Kind::LimitsState]).find(|k| *k as u8 == v)
     }
 }
+
+/// Format version of a begin record whose compaction started from a live sector with no complete
+/// generation ([`Store::live_complete`]: data that is not this firmware's, or an erased sector):
+/// the store's first generation (A1.10 "Start check": "the store starts from Table A1-4 values,
+/// its first write erasing the sector it writes into"). It has a commit word, but qualifies the
+/// start check as a first generation does: only with a checked record of the closed list. A
+/// compaction from it once it holds such a record writes version 1 again.
+pub const BEGIN_FIRST: u8 = 2;
 
 /// Bands of the C-3 power limit (Table M-3 tag 8; at most 16 `tx_band` entries, B4.8).
 pub const LIMIT_BANDS: usize = 16;
@@ -297,13 +305,16 @@ pub struct Store<F> {
     judged: Judged,
     /// The highest generation number readable in either sector at open, or written since.
     number: u32,
+    /// The live sector held a complete generation at open ([`Self::live_complete`]), before
+    /// anything this start writes (A1.10 "Start check").
+    complete_at_open: bool,
 }
 
 impl<F: FlashIo> Store<F> {
     /// Scan both sectors and pick the live one. `writer` is who writes: the application or the
     /// boot stage.
     pub fn open(io: F, writer: Writer) -> Result<Self, Error<F::Error>> {
-        let mut s = Store { io, writer, live: 1, generation: 0, end: STORE_SECTORS[1].start, seq: 0, unreadable: 0, unreadable_at_open: 0, fell_back: false, limits: Limits::BUILTIN, judged: Judged::Factory, number: 0 };
+        let mut s = Store { io, writer, live: 1, generation: 0, end: STORE_SECTORS[1].start, seq: 0, unreadable: 0, unreadable_at_open: 0, fell_back: false, limits: Limits::BUILTIN, judged: Judged::Factory, number: 0, complete_at_open: false };
         let a = s.scan(STORE_SECTORS[0])?;
         let unreadable_a = s.unreadable;
         let b = s.scan(STORE_SECTORS[1])?;
@@ -329,6 +340,7 @@ impl<F: FlashIo> Store<F> {
         s.seq = a.seq.max(b.seq);
         s.unreadable_at_open = s.unreadable;
         s.judge()?;
+        s.complete_at_open = s.live_complete()?;
         Ok(s)
     }
 
@@ -735,21 +747,21 @@ impl<F: FlashIo> Store<F> {
     }
 
     /// The live sector holds a complete generation (A1.10; 0069 addendum): one with a readable
-    /// commit word, or the first generation (generation 0, which has none) with a checked record
-    /// of this closed list: secret, configuration, calibration. What a start writes before its
+    /// commit word, or the first generation (generation 0, which has none, or one whose begin
+    /// record is [`BEGIN_FIRST`]) with a checked record of this closed list: secret,
+    /// configuration, calibration. What a start writes before its
     /// start check (the boot counter, the boot record) does not count, nor do the staging and the
     /// wipe mark: with the commit of the only generation in sector 6 unreadable, an erased sector
     /// 7 is live as generation 0 and would soon hold those.
     fn live_complete(&mut self) -> Result<bool, Error<F::Error>> {
-        if self.generation > 0 {
-            return Ok(true);
-        }
         let mut counts = false;
+        let mut first = self.generation == 0;
         self.walk(STORE_SECTORS[self.live], |_, f| {
             counts |= matches!(f.kind, Kind::Secret | Kind::Config | Kind::Calibration);
+            first |= f.kind == Kind::Begin && f.version == BEGIN_FIRST;
             Ok(())
         })?;
-        Ok(counts)
+        Ok(!first || counts)
     }
 
     /// The start check (A1.10 "The old secret in flash"; 0069 and its addendum): what the sector
@@ -757,9 +769,12 @@ impl<F: FlashIo> Store<F> {
     /// than `live` (any, if the live sector has none) comes first; then any word, not erased, that
     /// is in no complete, checked record (torn, unreadable, foreign: some bytes of a secret may be
     /// there). Never without a complete generation in the live sector ([`Self::live_complete`]):
-    /// the other sector may then hold the only copy of the store.
+    /// the other sector may then hold the only copy of the store. That is judged as the store was
+    /// at open: nothing a start writes before its start check counts (A1.10), also not a record of
+    /// the list that finishing a factory reset writes then. (A compaction from a complete
+    /// generation writes one, so the live sector stays complete.)
     pub fn stale(&mut self, kind: Kind, live: Option<&[u8]>) -> Result<Stale, Error<F::Error>> {
-        if !self.live_complete()? {
+        if !self.complete_at_open {
             return Ok(Stale::Nothing);
         }
         let r = STORE_SECTORS[1 - self.live];
@@ -839,6 +854,8 @@ impl<F: FlashIo> Store<F> {
     /// A compaction: begin record, the kinds kept (or the new record), the C-3 record with
     /// `limits` (the judged ones, unless a C-3 write sets new ones), the commit (0072 points 1, 2).
     fn compact_full(&mut self, keep: impl Fn(Kind) -> bool, new: Option<(Kind, u8, &[u8])>, limits: Limits) -> Result<(), Error<F::Error>> {
+        // A first generation if the live sector holds no complete one (A1.10 "Start check").
+        let begin = if self.live_complete()? { 1 } else { BEGIN_FIRST };
         // (1) Erase the other sector. The live sector is not touched.
         let target = 1 - self.live;
         self.erase_stale()?;
@@ -859,7 +876,7 @@ impl<F: FlashIo> Store<F> {
         let mut b = [0u8; 8];
         b[..4].copy_from_slice(&g.to_le_bytes());
         b[4..].copy_from_slice(&commit_at.to_le_bytes());
-        let mut at = self.write_at(r, r.start, Kind::Begin, 1, &b)?;
+        let mut at = self.write_at(r, r.start, Kind::Begin, begin, &b)?;
         // (2) Copy the newest record of every kind kept from the live sector, or write the new one.
         for k in Kind::DATA {
             if let Some((_, v, p)) = new.filter(|n| n.0 == k) {
@@ -917,6 +934,8 @@ mod tests {
         budget: Option<usize>,
         erase_cut: bool,
         erases: usize,
+        /// Erases begun, by sector (6, 7).
+        erased: [usize; 2],
         programs: usize,
     }
 
@@ -930,7 +949,7 @@ mod tests {
     impl Sim {
         fn new() -> Self {
             let n = STORE.len() as usize;
-            Sim { mem: vec![0xFF; n], written: vec![false; n / 32], bad: vec![false; n / 32], ecc_on_cut: false, budget: None, erase_cut: false, erases: 0, programs: 0 }
+            Sim { mem: vec![0xFF; n], written: vec![false; n / 32], bad: vec![false; n / 32], ecc_on_cut: false, budget: None, erase_cut: false, erases: 0, erased: [0; 2], programs: 0 }
         }
         /// Power comes back: no more failures.
         fn power_on(mut self) -> Self {
@@ -985,6 +1004,7 @@ mod tests {
             assert!(addr == STORE_SECTORS[0].start || addr == STORE_SECTORS[1].start);
             let o = (addr - STORE.start) as usize;
             let n = SECTOR_SIZE as usize;
+            self.erased[(addr != STORE_SECTORS[0].start) as usize] += 1;
             if self.erase_cut {
                 // Half erased: the first half is 0xFF, the rest keeps its old content (and may
                 // still hold old commits).
@@ -2178,5 +2198,149 @@ mod tests {
             }
         }
         assert_eq!(seen, [true; 2]);
+    }
+
+    /// A start as the application makes it (board/app main.rs, mgmt_init.rs): open, the boot
+    /// counter, then the start check; the erases of that start by sector, and whether the start
+    /// check erased.
+    fn app_start(io: Sim) -> (Store<Sim>, [usize; 2], bool) {
+        let mut io = io.power_on();
+        io.erased = [0; 2];
+        let mut s = Store::open(io, APP).unwrap();
+        s.next_boot_counter().unwrap();
+        let checked = start_check(&mut s);
+        let erased = s.io.erased;
+        (s, erased, checked)
+    }
+
+    #[test]
+    fn the_lost_sector_6_after_a_set_config_t_a1_92() {
+        // The only committed generation in sector 6 (a first change of the secret, then the start
+        // check erased sector 7), its commit word made unreadable.
+        let mut s = Store::open(Sim::new(), APP).unwrap();
+        s.put(Kind::Config, 1, b"config v1").unwrap();
+        s.put(Kind::Secret, 1, &OLD).unwrap();
+        s.replace(Kind::Secret, 1, &NEW).unwrap();
+        let (mut s, _, checked) = app_start(s.release());
+        assert!(checked && !holds(&s.io, 1, &OLD) && !holds(&s.io, 1, &NEW));
+        let at = addr_of(&mut s, 0, Kind::Commit);
+        let mut io = s.release();
+        spoil(&mut io, at);
+        let sector6 = io.mem[..SECTOR_SIZE as usize].to_vec();
+        // Start 1: sector 7 live as generation 0; nothing erased, sector 6 unchanged.
+        let (mut s, erased, checked) = app_start(io);
+        assert_eq!((s.live_sector(), s.generation(), erased, checked), (1, 0, [0, 0], false));
+        assert_eq!(s.io.mem[..SECTOR_SIZE as usize], sector6[..]);
+        // A SET_CONFIG with no C-3 item, answered 0: appended to sector 7.
+        s.put(Kind::Config, 1, b"config v2").unwrap();
+        // Start 2: the start check erases sector 6, and only it; the configuration is kept.
+        let (mut s, erased, checked) = app_start(s.release());
+        assert_eq!((erased, checked), ([1, 0], true));
+        assert!(s.io.mem[..SECTOR_SIZE as usize].iter().all(|&b| b == 0xFF), "sector 6 fully erased");
+        assert!(!holds(&s.io, 0, &NEW) && !holds(&s.io, 1, &NEW));
+        assert_eq!((s.live_sector(), get(&mut s, Kind::Config).unwrap()), (1, b"config v2".to_vec()));
+        // Start 3: nothing more.
+        let (mut s, erased, checked) = app_start(s.release());
+        assert_eq!((erased, checked), ([0, 0], false));
+        assert_eq!(get(&mut s, Kind::Config).unwrap(), b"config v2".to_vec());
+    }
+
+    #[test]
+    fn foreign_data_in_both_sectors_gets_no_start_check_t_a1_92() {
+        // Both sectors filled with data that is not this firmware's store: the start writes its
+        // boot counter (sector 7 has no room: a compaction into sector 6, its one erase), the
+        // store's first generation; the start check does nothing, and sector 7 keeps its data
+        // (A1.10 "Start check").
+        let mut io = Sim::new();
+        io.mem.fill(0x5A);
+        io.written.fill(true);
+        let (mut s, erased, checked) = app_start(io);
+        assert_eq!((erased, checked), ([1, 0], false));
+        let foreign = |s: &Store<Sim>| s.io.mem[(SECTOR_SIZE as usize)..].iter().all(|&b| b == 0x5A);
+        assert!(foreign(&s), "sector 7 untouched");
+        assert_eq!((s.live_sector(), s.limits(), s.judged()), (0, Limits::BUILTIN, Judged::Factory));
+        // The next starts, with only boot counters: nothing erased, also after a compaction that
+        // keeps them (still a first generation).
+        for _ in 0..2 {
+            let (t, erased, checked) = app_start(s.release());
+            assert_eq!((erased, checked), ([0, 0], false));
+            assert!(foreign(&t));
+            s = t;
+        }
+        s.put(Kind::BootRecord, 1, &[0u8; 16]).unwrap();
+        s.put(Kind::Staging, 1, &[0xFF]).unwrap();
+        let (mut s, erased, checked) = app_start(s.release());
+        assert_eq!((erased, checked), ([0, 0], false));
+        // A compaction from the first generation is one too (the other sector then holds records
+        // of this store only, so the start check has nothing to erase either way).
+        let mut t = Store::open(s.io.clone(), APP).unwrap();
+        t.compact().unwrap();
+        assert!(!reopen(t).live_complete().unwrap(), "a first generation from a first generation");
+        // SET_FIRST_SECRET (a record of the closed list): the next start erases the other sector,
+        // with the foreign data, once; then nothing. The secret and the boot counter stay.
+        s.put(Kind::Secret, 1, &OLD).unwrap();
+        let n = u32::from_le_bytes(get(&mut s, Kind::BootCounter).unwrap().try_into().unwrap());
+        let (s, erased, checked) = app_start(s.release());
+        assert_eq!((erased, checked), ([0, 1], true));
+        assert!(s.io.mem[(SECTOR_SIZE as usize)..].iter().all(|&b| b == 0xFF));
+        let (mut s, erased, checked) = app_start(s.release());
+        assert_eq!((erased, checked), ([0, 0], false));
+        assert_eq!(get(&mut s, Kind::Secret).unwrap(), OLD);
+        assert_eq!(get(&mut s, Kind::BootCounter).unwrap(), (n + 2).to_le_bytes());
+        // A compaction from it is no first generation any more.
+        s.compact().unwrap();
+        let begin = addr_of_live(&mut s, Kind::Begin);
+        assert_eq!(s.io.mem[(begin - STORE.start) as usize + 5], 1);
+    }
+
+    #[test]
+    fn a_first_generation_needs_a_record_of_the_list_t_a1_92() {
+        // From an erased store: the first compaction (no record of the list) is a first
+        // generation; with a configuration record in it, or written by the compaction, it counts.
+        for k in [Kind::Config, Kind::Calibration, Kind::Secret] {
+            let mut s = Store::open(Sim::new(), APP).unwrap();
+            s.put(Kind::BootCounter, 1, &1u32.to_le_bytes()).unwrap();
+            s.compact().unwrap();
+            let mut s = reopen(s);
+            assert!(!s.live_complete().unwrap(), "{k:?}");
+            s.put(k, 1, &[0x22; 32]).unwrap();
+            assert!(reopen(s).live_complete().unwrap(), "{k:?}");
+            let mut s = Store::open(Sim::new(), APP).unwrap();
+            s.replace(k, 1, &[0x22; 32]).unwrap();
+            assert!(reopen(s).live_complete().unwrap(), "{k:?} by the compaction");
+        }
+        // A store with a generation of the owner: every compaction writes version 1.
+        let mut s = Store::open(with_secret(), APP).unwrap();
+        s.compact().unwrap();
+        let mut s = reopen(s);
+        assert!(s.live_complete().unwrap());
+        s.compact_without(|k| k == Kind::Secret || k == Kind::Config).unwrap();
+        assert!(reopen(s).live_complete().unwrap(), "a committed generation of the owner's store");
+    }
+    #[test]
+    fn what_a_start_writes_before_its_start_check_does_not_count_t_a1_92() {
+        // Sector 7 live as generation 0 with no record of the list, a factory-reset mark and a
+        // word that is no record. Finishing the reset before the start check (mgmt_init.rs) is a
+        // compaction into sector 6 with a configuration record: that start's check still does
+        // nothing, the next one erases sector 7.
+        let mut s = Store::open(Sim::new(), APP).unwrap();
+        s.put(Kind::BootCounter, 1, &5u32.to_le_bytes()).unwrap();
+        s.put(Kind::Wipe, 1, &[1]).unwrap();
+        let w = ((s.end - STORE.start) / FLASH_WORD) as usize + 3;
+        let mut io = s.release();
+        io.written[w] = true;
+        io.mem[w * 32] = 0x12;
+        let mut s = Store::open(io, APP).unwrap();
+        assert!(s.wipe_pending().unwrap());
+        s.finish_wipe(drops, Kind::Config, |_, b| {
+            b[..4].copy_from_slice(b"fact");
+            Some(4)
+        })
+        .unwrap();
+        assert_eq!(s.live_sector(), 0);
+        assert!(s.live_complete().unwrap());
+        assert!(!start_check(&mut s) && s.io.mem[w * 32] == 0x12);
+        let mut s = Store::open(s.release(), APP).unwrap();
+        assert!(start_check(&mut s) && s.io.mem[w * 32] == 0xFF);
     }
 }
