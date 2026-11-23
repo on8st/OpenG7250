@@ -10,6 +10,10 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - The 0067 addenda (log words; full store, status 64) and the 0068 addendum (build readings)
   accepted by ON8ST on 2026-11-22.
 - The 0069 addendum (start check) accepted by ON8ST on 2026-11-22, as it stands at `78aa233`.
+- 0072 (C-3 limits that may be lost) accepted in principle by ON8ST on 2026-11-22 and held
+  for the point with Table M-3 (ending the lost state before the calibration set holds S2 and
+  T3); the number is reserved, and none of its text is in the spec yet.
+- 0073, 0074, 0075, 0076, 0077, 0078 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
   "Image check" (record, slot, length, own integrity check, entry point and stack pointer,
@@ -72,6 +76,46 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   only the start check is limited (other start writes compact as A1.6 says); the erase of the
   lost sector after the owner's first `SET_CONFIG` is an accepted consequence; a first generation
   is recognised by having no commit word (a double fault accepted).
+- 0073 (accepted 2026-11-22; firmware question): time over flash work. Uptime and every limit
+  counted on it include flash work (within 1 ms per request); the trial's 60 s, the
+  first-secret window, the 10-minute abandonment, the write-session idle time and the
+  stored-reply time act within 100 ms after they fall due, or after the flash work they fall
+  due in, before queued management requests; a confirmation write started before 60 s counts;
+  the P2 watchdog is not on the list. B2.3 "time over flash work", A1.8, A1.10; T-B5-22,
+  T-A1-16 extended, T-A1-94 new.
+- 0074 (accepted 2026-11-22; g7250ctl runs M1 to M4): `UPDATE_ABORT` with no update state gets 0,
+  restart needed 0 (also in the installer before its first erase); write failure clarified;
+  `GET_CONFIG` leaves out tags 9 and 10 before S2 and T3; `GET_CALIBRATION` with no set is
+  37 bytes; Table M-6 names the 45 counters `GET_STATS` lists first, every place that requires
+  a count names its counter (B10.7 and B11.1: one total, the source or reason in the log);
+  `READ_LOG` flag bit 1; opening and ending the write session; an address change ends it; host
+  rule for requests that end in a reset. A1.4, A1.7, A1.8, A1.8a, A1.10, Tables M-1, M-3, M-6;
+  T-A1-15, T-A1-62, T-A1-80, T-A1-85, T-A1-93 extended, T-A1-95 to T-A1-98 new.
+- 0075 (accepted 2026-11-22; firmware question): unexpected stop of the firmware. On a processor
+  fault or the firmware's own stop, the RF control pins go to their safe levels within 20 µs,
+  a log line follows where it can, and a reset within 10 ms; during flash work the 20 µs count
+  from when the flash answers again. At the next start, a software reset without a reason line
+  of A1.7 counts as an unexpected stop (`WDT_RESET_AT_START`, class 1). In force before the
+  first build that can arm TX. A3.6, A3.5, A1.7; HIS-21; T-A3-62 new.
+- 0076 (accepted as text 2026-11-22; emulator finding): radio drill F3 and P-SYS-10, whether the
+  store reads a double-ECC word without a fault or reset on the radio. Kept RAM at power-on,
+  200 power cuts in store writes, the bus fault of 0075. The drill runs only with its own go
+  from ON8ST. Open: whether a second program of a flash word gives a double ECC error, to be
+  settled from RM0468 (not read). Annex P; T-A1-87, T-A3-62.
+- 0077 (accepted 2026-11-22; installer and testbench questions on A1.8a item 3): the write session
+  continues in the installer and `END_WRITE_SESSION` is answered there; the idle time does not
+  run during the holder's own request (in the installer and in this firmware; the one exception
+  to 0073); power lost with every sector written may leave an unchecked stock image; from the
+  first erase `IDENTIFY` reports no secret and no window, and `SET_FIRST_SECRET` gets 36.
+  A1.8a item 3, A1.10, B2.3; T-A1-60, T-A1-15 extended.
+- 0078 (accepted 2026-11-22; testbench questions on 0073 to 0077): the evidence of a commanded
+  reset is a commanded-reset word in kept RAM, set last on every commanded-reset path, cleared by
+  the fault handler and, at every start, by the boot stage; it names the reason line's sequence
+  number. Closes a hole of 0075 (a run that leaves nothing in the ring read as a commanded reset).
+  A read of kept RAM at start never stops the start. Test timings so that the limits fall due
+  during the flash work (T-A1-94, T-A1-15, T-A1-60). Counters: when they start at 0,
+  `reset_unknown`, counting in `drop_<port>` too, `cap_rate_drop` row reworded, the definition of
+  a gap. A1.7, A3.6, B11.1, B11.6, Table M-6, P-SYS-9; T-A1-95, T-A3-62 and T-B11-04 extended.
 - Lint L6 counts a test id as defined only in a table row whose first cell is the id, so that
   a row may cite another test; a second definition is still a finding (542 ids, as before).
 

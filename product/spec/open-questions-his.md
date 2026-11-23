@@ -293,6 +293,14 @@ Priority: **M1** = needed for milestone M1 (discovery, capability block, RX-IQ);
 - Question: is there a hardware random-number generator or an equivalent entropy source?
 - Why: challenges for the management channel (0008) and the per-session TX arm token (0007).
 
+### HIS-21 — A hardware TX drop when the MCU stops (0075)
+
+- Question: is there a path in the hardware (FPGA, PA board, controller) that drops the TX
+  path or SEND when the MCU stops driving its pins or stops a periodic signal, and if so with
+  what timing?
+- Why: decision 0075 (unexpected stop of the firmware) leaves two residuals to the hardware:
+  a fault while the handler runs (a lockup) and a fault inside the first 20 µs.
+
 ## Sources
 
 - [P2], [CH394], [G7250-MAN] and the other keys: see `sources.md`.

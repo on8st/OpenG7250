@@ -2,8 +2,8 @@
 
 - Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
 - Status: version 1.0 (tag `spec-v1.0`). Applies decisions 0001–0066, all accepted by ON8ST
-  (`product-handover.md`); after 1.0 also 0067–0071, accepted by ON8ST on 2026-11-22,
-  listed under "After 1.0" in `spec/CHANGELOG.md` (not yet a version). Complete for milestones M1–M5 except for the values that need the
+  (`product-handover.md`); after 1.0 also 0067–0071 and 0073–0078, accepted by ON8ST on 2026-11-22,
+  listed under "After 1.0" in `spec/CHANGELOG.md` (not yet a version); 0072 is accepted in principle and held, its text not yet applied. Complete for milestones M1–M5 except for the values that need the
   radio, which are named in Annex P with a safe placeholder each; level 2 (part C) waits for
   gate G6 (0011).
 - © 2026 ON8ST, CC BY 4.0 (see `LICENSE.md`).
@@ -140,8 +140,19 @@ Table A1-1 — Management message header (0020 §27)
   least 16 s, because the reply may take up to `t_flash_reply` = 15 s (B2.3 "Flash work";
   0069). Retransmissions that arrive during the flash work are repeats, answered from the
   stored reply once it has ended and not executed again; a host uses the first reply.
+- **Requests that end in a reset** (0074). A request that ends in a commanded reset
+  (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`; A1.9) loses its stored reply
+  with the reset. A host that has no reply SHOULD stop retransmitting it at the first 33, or
+  once the radio answers `IDENTIFY` after a silence, and SHOULD learn from `IDENTIFY` whether
+  the reset took place: uptime (tag 16) below the time since the request and last reset cause
+  (tag 17) software; for `UPDATE_ACTIVATE` and `ROLLBACK` also the running slot (tag 23),
+  which changes with the reset, and the update state (tag 10); the version alone is no
+  evidence, because both slots may hold the same one. The log entry `restart: <reason>` before
+  the start entry (A1.7, 0068) says which request it was. It MUST NOT send the request again
+  with a new challenge before it has done so. The radio cannot tell a retransmission from a
+  replay: those 33s count toward the limit of A1.10 and are logged.
 - A datagram with another magic MUST be dropped without reply. A datagram with the right
-  magic whose type (byte 6) is not 1 (request) MUST be dropped without reply and counted, so
+  magic whose type (byte 6) is not 1 (request) MUST be dropped without reply and counted (`mg_not_request`, Table M-6), so
   that two radios never answer each other's replies (0022 §73 item 20). A datagram with the right
   magic but shorter than 18 bytes, or whose length does not match *N*, MUST be answered with
   status 17 if bytes 8–11 are present (12 bytes or more), else dropped (0022 §20). A request with an unknown major version
@@ -322,7 +333,13 @@ a ring buffer of events with an uptime timestamp in ms, wall-clock time only if 
 knows it (HIS-17) (L-1). The log MUST record at least: resets and their cause, safety-core
 trips and faults, TX arm and disarm, host takeover, level changes, configuration changes with
 the source address (including P2 Set IP, B3.9), every update step, authentication failures and
-port conflicts (L-2; 0007, Consequences). It is read in pages by sequence number (L-3). Size
+port conflicts (L-2; 0007, Consequences). It is read in pages by sequence number (L-3). A `READ_LOG` reply sets flag bit 1 ("more blocks
+follow", Table A1-1) when entries after the last one in the page exist at the time of the
+reply, and clears it otherwise; a page with no entries has it clear. A first sequence number
+older than the oldest entry kept starts at the oldest. Bit 1 describes the log at the time of
+the reply only: entries added later are read by asking again from the next sequence number, so
+a host that follows the log keeps asking after a page with bit 1 clear. Flag bit 1 is 0 in
+every other reply (0074). Size
 and persistence: the log is kept in RAM, its size is a firmware choice, and it is lost at
 power loss (0035).
 
@@ -336,6 +353,10 @@ power loss (0035).
   here and for the counters of A3.5 means a start whose reset flags include power-on or
   brown-out, whatever cause the start entry names, or a start with no reset flag at all
   (0068 addendum, accepted 2026-11-22). Kept entries keep their uptime of the previous run.
+  A read of the kept RAM at start (the ring check, and the commanded-reset word of A3.6) MUST
+  NOT stop the start. An ECC error or a fault on such a read makes that entry, or the word, fail
+  its check, as if it held a bad check word. It is not in itself an unexpected stop of A3.6
+  (0078).
 - **The reason before a commanded reset** (0068). Before every reset it commands, after the
   unkey and RF gone (A1.9 step 4), the firmware MUST log the reason as its last entry:
   `restart: restart` (`RESTART`), `restart: factory-reset` (`FACTORY_RESET`),
@@ -346,6 +367,12 @@ power loss (0035).
   also logged as the last entry before the reset, not when the command is accepted (0068
   addendum).
   Slots and versions are written as A1.8 "Log names" says.
+  After the reason line, as its last write before the reset, the firmware MUST set the
+  commanded-reset word: one word in the RAM kept over a reset (the range of P-SYS-9), whose
+  value names the sequence number of that reason line and is made so that a partial write, the
+  cleared state and content left by a power-on cannot read as valid (encoding the firmware's
+  choice) (0078). A software reset the boot stage makes itself does the same. "Written" here and
+  for the log means: reached the kept RAM, not held in a cache or write buffer.
 - **The start entry** (0068). At every start the boot stage MUST write, as the first entry of
   the run, `start after <cause>: log kept` or `start after <cause>: log lost` ("lost": the ring
   started empty); it is the only writer of the start entry, and the application continues the
@@ -358,9 +385,14 @@ power loss (0035).
   started`, `boot: rollback to slot <s> (trial not confirmed)`, `boot: slot <s> refused:
   <check>`, `boot: fallback to slot <s> (active slot refused, no trial)` (A1.8 "Boot-stage
   refusals"; 0068 addendum).
+- **Unexpected stop** (0075). Before the reset of A3.6 "Unexpected stop of the firmware" the
+  firmware logs `restart: processor fault <kind>` or `restart: stop <code>` where it can; a
+  start judged an unexpected stop logs `start: unexpected stop` after the start entry.
 - **Pending hardware** (0068). Whether this RAM survives the stage before the boot stage is
   P-SYS-9 (HIS-13), measured by the same radio check as the counters. Until it is set the log
-  MAY start empty after a reset (`log lost`); nothing else depends on it.
+  MAY start empty after a reset (`log lost`); nothing else depends on it, except that a
+  software reset with the log lost then counts as an unexpected stop (`WDT_RESET_AT_START`,
+  class 1, clearable; A3.6, 0075).
 
 Packet, error and sequence-gap counters are read
 with `GET_STATS` (0020 §19, §28).
@@ -413,10 +445,12 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   (byte 5) other than 1 gets 56 (not supported in this firmware), in the place of 56 in the
   `UPDATE_BEGIN` order below.
 - **No transfer in progress** (0063). `UPDATE_BLOCK` with no transfer in progress (no accepted
-  `UPDATE_BEGIN`, or after `UPDATE_ABORT` or an activation) gets 54; `UPDATE_VERIFY` and
-  `UPDATE_ACTIVATE` with no transfer in progress get 55. For these three commands this is the
+  `UPDATE_BEGIN`, or after `UPDATE_ABORT` or an activation) gets 54; `UPDATE_VERIFY` and `UPDATE_ACTIVATE` with no transfer in progress get 55. For these three commands this is the
   first command-specific check (before 53 for a block); the general codes of Table A1-3 (17,
-  authentication, 58, 57, 50) still come first. Nothing changes.
+  authentication, 58, 57, 50) still come first. Nothing changes. `UPDATE_ABORT` with no update
+  state (no `UPDATE_BEGIN` accepted since the last start) gets 0 with "restart needed" = 0 and
+  changes nothing: no update state is entered, RX and the P2 session go on, no timer starts,
+  nothing is erased; it is logged (0074).
 - **Slot-linked images** (0043). An image of this firmware is linked for one slot; the
   package header names that slot (Table M-4 byte 52: 1 slot A, 2 slot B; 0 for an image that
   runs in either slot). Because an update is staged in the other slot, `UPDATE_BEGIN` with an
@@ -438,7 +472,11 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
 - **Write failure** (0043). If writing the staging slot fails, the G7250 MUST discard the
   transfer, answer the request that hit the failure with status 55, log the failure (A1.7) and
   leave the running image and the boot record unchanged; the host starts again with
-  `UPDATE_BEGIN`.
+  `UPDATE_BEGIN`. Afterwards no transfer is in progress (`UPDATE_STATUS` idle, "No transfer in
+  progress" applies), but the update state remains until a restart, as after `UPDATE_ABORT`;
+  the 10-minute rule runs from the last update command answered 0, 1 or 64 (the 55 does not
+  restart it). Unlike after `UPDATE_ABORT`, a new `UPDATE_BEGIN` is accepted. A failed
+  `UPDATE_VERIFY` (55) is not a write failure: its transfer stays open (0067, 0074).
 - Transfer in numbered blocks with a CRC-32 each, into the other image slot, which is the
   staging area; resumable; abandonable without effect on the running image (U-3). The foreign
   image of A1.8a item 3 is the exception: it has no staging area.
@@ -530,7 +568,8 @@ A1.8 **Firmware update** (authenticated) (0008, Functions, U-1 to U-10):
   **Self-confirmation** (0044): the image confirms itself, by writing the boot record, once it
   has run for at least 10 s with the network up (CH394 initialised and the management socket
   open), its main loop running and the watchdog serviced, and with no class 2 fault (A3.5). It
-  needs no host. If it has not confirmed itself 60 s after start, it MUST carry out a commanded
+  needs no host. If it has not confirmed itself 60 s after start (tolerance B2.3 "time over
+  flash work", 0073), it MUST carry out a commanded
   reset (A1.9) after which the boot stage starts the previous image. If the trial image resets
   for any other reason before it has confirmed itself (a crash, the watchdog, a power loss),
   the boot stage MUST also start the previous image at the next start, because the boot record
@@ -627,11 +666,22 @@ behaviour are not specified here (0025, "Clean room").
      ignores the local PTT and KEY inputs (0030), and MUST service the independent watchdog if it
      runs (its start mode is pending hardware, P-SYS-7). It answers only `IDENTIFY` (with the
      installer state and the sectors written), `GET_CHALLENGE`, `UPDATE_BLOCK`, `UPDATE_STATUS`,
-     `UPDATE_VERIFY`, `UPDATE_ACTIVATE` and `UPDATE_ABORT`, and a repeat of the accepted
-     `UPDATE_BEGIN`, which it answers from the stored reply (A1.4); every other management
-     command gets status 58. Discovery, the P2 ports and TCI are closed.
+     `UPDATE_VERIFY`, `UPDATE_ACTIVATE`, `UPDATE_ABORT` and `END_WRITE_SESSION` (0077), and a
+     repeat of the accepted `UPDATE_BEGIN`, which it answers from the stored reply (A1.4); every
+     other management command gets status 58. Discovery, the P2 ports and TCI are closed.
+     The write session of A1.10 continues in the installer: it is held by the host whose
+     foreign `UPDATE_BEGIN` was accepted, ends after 60 s idle as A1.10 says, and
+     `END_WRITE_SESSION` is answered as A1.10 says. Another host may then continue the transfer
+     with an authenticated request. Before the first erase the session also ends with the
+     restart (0077). From the first sector erase on, `IDENTIFY` reports no secret set (tag 11 =
+     0, item 7) and no first-secret window (tag 12); the installer opens none, so
+     `SET_FIRST_SECRET` gets 36 (Table A1-3 order: 36 before 58; before the first erase too,
+     with the secret still set), and the rest of the transfer is authenticated with the secret
+     the installer keeps in RAM (item 7). The installer state (tag 10) tells a host this apart
+     from factory state (0077).
    - **Before the first erase.** `UPDATE_ABORT` before the first sector erase restarts the main
-     unit into this firmware, with its secret and configuration unchanged; it is logged. The
+     unit into this firmware, with its secret and configuration unchanged; it is logged. Its reply
+     has restart needed = 0 (Table M-1; 0074). The
      10-minute rule of A1.8 applies until the first erase: 10 min without an update command
      other than `UPDATE_STATUS` restart the main unit into this firmware in the same way.
    - **Writing.** The installer receives the blocks over this channel and writes them to the
@@ -648,9 +698,10 @@ behaviour are not specified here (0025, "Clean room").
      `UPDATE_ABORT` is answered with status 60 (the reply says the transfer must be completed or
      the recovery path used). If the transfer breaks off after the first erase, the installer
      keeps waiting for blocks and never restarts by itself (the 10-minute rule of A1.8 no
-     longer applies); if power is lost, the
-     main unit has no valid application and the recovery path is the vendor path through the
-     controller (U-9; 0028 Decision 2), which the gate above has shown to work.
+     longer applies); if power is lost, the main unit may have no valid application, or, with every
+     sector written, a stock image that was not checked by `UPDATE_VERIFY` and that the vendor
+     bootloader may start; in either case the way to a checked image is the vendor path through
+     the controller (U-9; 0028 Decision 2), which the gate above has shown to work (0077).
    - Before the first erase, the reply to `UPDATE_BEGIN` MUST state that the installation is
      one-way and that a broken transfer needs the vendor path through the controller.
 4. **No vendor recovery mode** (0028 Decision 2; replaces 0024 Decision 4). No software entry
@@ -827,7 +878,8 @@ A1.10 **Security on a LAN** (0008, Security):
   reply. A tool SHOULD verify a write by reading the value back.
 - **First secret.** In factory state, during a one-time window after the first power-on or
   after a factory reset, the first host that sends a "set first secret" request sets it,
-  without confirmation on the controller. The window lasts 300 s of uptime from the moment
+  without confirmation on the controller. The window lasts 300 s of uptime (counting flash work;
+  tolerance B2.3 "time over flash work", 0073) from the moment
   the network is up; it is used up when it has run to its end or a secret is set, and a
   restart before that opens a fresh 300 s window (0020 §24; 0008 S3, "a few minutes"). The
   window MUST open only while no secret is set, MUST NOT reopen once used up without a
@@ -836,13 +888,13 @@ A1.10 **Security on a LAN** (0008, Security):
 - Requests MUST be answered only from the radio's own subnet and never from a broadcast
   source, except identification; authentication failures MUST be rate-limited and logged
   (S4). Replies MUST NOT exceed 20 per second per source IP address and port; requests above
-  that are dropped and counted (`GET_STATS`) (0022 §16).
+  that are dropped and counted (`mg_rate_drop`, Table M-6) (0022 §16).
 - **Total reply caps** (0022 §71). An identification reply can be up to 1400 bytes for an
   18-byte request (A1.4), so a spoofed source gains up to about 78 times the traffic. In
   addition to the per-source limit, the G7250 MUST send at most 100 management replies per
   second in total, of these at most 50 identification replies per second, and of those at
   most 10 per second to sources outside the radio's own subnet. Requests above a cap are
-  dropped without reply and counted (`GET_STATS`). A flood can therefore delay management
+  dropped without reply and counted (`mg_cap_drop`, Table M-6). A flood can therefore delay management
   for other hosts; it cannot touch TX (A1.9, A3.10).
 - **Authentication-failure limit and status 34** (0022 §73 item 21). After 5 authentication
   failures (status 33) from one source IP address within 10 s, every authenticated request
@@ -852,14 +904,25 @@ A1.10 **Security on a LAN** (0008, Security):
   counts against the reply limits above; a request above a reply limit or cap gets no reply
   at all.
 - One writer at a time: a write session is held by one host (address and port), opened by its
-  first authenticated write and ended by `END_WRITE_SESSION` or after 60 s idle (0020 §24);
-  others get status 35 ("busy") for writes and normal answers for reads (S5). Only an
+  first authenticated write (an authenticated write whose HMAC verifies opens the session
+  whatever its status, except 35 and the replies that come before authentication in Table
+  A1-3: 16 to 19, 32 to 34; `RESTART` is exempt as below, and `END_WRITE_SESSION` with no
+  session held opens none; 0074) and ended by `END_WRITE_SESSION` or after 60 s idle (0020
+  §24); `END_WRITE_SESSION` with no session held gets 0 and neither opens nor ends one, and from
+  a host that does not hold the session it gets 35 (0074); others get status 35 ("busy") for writes and normal answers for reads (S5). Only an
   authenticated request from the holder whose HMAC verifies refreshes the 60 s idle timer;
   reads (`GET_STATS`, `IDENTIFY` and the other unauthenticated commands), `GET_CHALLENGE`,
   any unauthenticated request and any request that fails authentication MUST NOT refresh it,
-  from the holder or from any other host (0022 §75). A repeated authenticated request that is
+  from the holder or from any other host (0022 §75). While a request from the holder is being
+  executed, from its receipt until its reply is sent, the idle time does not run; it runs again
+  from the reply. In the installer (A1.8a item 3) and in this firmware alike, a holder waiting
+  for a reply delayed by flash work therefore never loses the session (0077). A repeated authenticated request that is
   answered from the stored reply (A1.4) is not executed and MUST NOT refresh it either: only
-  the first execution of the request counts (0022 §86 item 7).
+  the first execution of the request counts (0022 §86 item 7). A change of the radio's address
+  or netmask (C-1) ends the write session and discards every challenge and stored reply; it is
+  logged (0074). A `SET_CONFIG` that causes the change is answered first, and the change
+  applied after the reply (A1.6). A DHCP renewal that keeps the same address and netmask
+  changes nothing (A1.11); one that gives a new address is a change.
 - **`RESTART` is exempt from the write session** (0022 §83 item 5). An authenticated
   `RESTART` whose HMAC verifies MUST be accepted from any host, also while another host
   holds the write session; it neither needs, opens nor refreshes a write session. The reset
@@ -1033,7 +1096,7 @@ while a level-1 session runs. The G7250 MUST handle it in this order (0022 §3):
 
 The new owner starts unarmed. Two hosts that both send C&C take the radio from each other at
 every packet ("ping-pong"); each takeover unkeys and disarms, so neither can transmit. The
-G7250 counts takeovers (`GET_STATS`) and logs them, at most one log entry per second per pair
+G7250 counts takeovers (`takeovers`, Table M-6) and logs them, at most one log entry per second per pair
 of hosts, with a count (0022 §3). Hosts SHOULD warn the user before taking over a radio that
 reports 0x03 in discovery byte 4 ([P2] Discovery reply byte 4 NOTE; 0007, Resolved 5). There
 is no radio-side protection against an auto-connecting host on level 1 (0007, Resolved 5).
@@ -1094,7 +1157,7 @@ set over the management channel (A1.6, C-2). A change of active level MUST drop 
 (`LEVEL_CHANGE`, 0007 drop event 10), and an arm is accepted only while level 1 is active
 (0007 rule 1). While level 2 is active a P2 host MUST NOT be able to take the RF chain: the
 P2 C&C ports have no socket on level 2, a P2 C&C packet starts no session and no takeover,
-a General packet on port 1024 (open for discovery) is ignored and counted (B11.1) and starts
+a General packet on port 1024 (open for discovery) is ignored and counted (`gen1024_ignored`, Table M-6; B11.1) and starts
 no set-up phase (B5.1a; 0022 §51), and the level changes only through the management channel (0021 §16; 0020 §25; 0008, Socket
 budget; Annex X1, D23).
 
@@ -1497,7 +1560,7 @@ A3.5 **Fault state** (0007, Decision 5):
   (0022 §5).
 - **Entry.** Any `FAULT` action of Table A3-2, 3 SWR `UNKEY` trips within 10 s (the only
   repeated-trip rule; 0020 §29), drop event 13, a processor watchdog reset seen at start-up
-  (HIS-13), a failed start-up self-test, or an internal error (0022 §5).
+  (HIS-13) or an unexpected stop (A3.6, 0075), a failed start-up self-test, or an internal error (0022 §5).
 - **Effect.** Unkey, drop the arm (`FAULT`), release SEND and the TUNER trigger, refuse arm
   requests. RX MUST continue, so that the host can still see the radio and the fault.
 - **Reporting.** `SAFETY_STATE`, `FAULT_CODE` (first cause), `FAULT_FLAGS` (latched bitmask
@@ -1519,8 +1582,8 @@ A3.5 **Fault state** (0007, Decision 5):
 - **Escalation** (0022 §27). The third entry of the same class-1 code since power-on MUST be
   handled as class 2: latched until reset, `FAULT_CLASS` 2, `FAULT_CLEAR` rejected with
   `NOT_CLEARABLE`.
-- **Counters** (0022 §27). The fault entry counter per code, a reset counter per reset cause
-  and `TRIP_COUNT` count since power-on. They MUST survive `RESTART` and every other reset
+- **Counters** (0022 §27). The fault entry counter per code (`fault_<code>`), a reset counter per
+  reset cause (`reset_<cause>`) and `TRIP_COUNT` (`trip_count`; Table M-6) count since power-on. They MUST survive `RESTART` and every other reset
   without loss of power and are cleared only at power-on (a start with a power-on or brown-out
   flag, or with no reset flag, counts as power-on: A1.7 "Kept over a reset"; 0068 addendum). They are kept in RAM; whether that RAM
   content survives a reset without power loss, including the vendor bootloader that runs
@@ -1569,6 +1632,58 @@ unkeys first and switches the relays of this state only after RF is gone (A3.9a 
 reset starts (0022 §40).
 What the hardware does between reset and the moment the firmware drives these pins is
 HIS-13; if the PA can key from floating lines, M4 waits for a mitigation (0007).
+
+**Unexpected stop of the firmware** (0075). This holds for any processor fault the firmware
+does not handle as part of its normal work (hard fault, bus fault, usage fault,
+memory-management fault, any exception without a handler of its own) and for a stop the
+firmware makes itself, a failed assertion or a panic, in the boot stage and in the image
+alike. The G7250 MUST put the RF control pins of A3.6 ([HIS] HIS 85; those checked are in
+Table A3-6b) at their safe-state levels no later than 20 µs after the fault is taken or the
+stop is called, before anything else, without relying on the stack, the RAM content or a
+peripheral state it cannot trust. It MUST then clear the commanded-reset word (A1.7, 0078) by
+one write, and then log the fault or stop as the last entry before the reset where it can, as
+`restart: processor fault <kind>` (<kind> one of `hard`, `bus`, `usage`, `memmanage`, `other`) or `restart: stop <code>` (<code> a short fixed code the firmware
+defines, lower-case letters, digits and hyphens, at most 16 characters, or a decimal number;
+never a file name, a path, a line of source or a panic text) (A1.7, 0068), and reset within
+10 ms, without waiting for the processor watchdog.
+
+**During flash work** the processor cannot fetch the handler while an erase or program runs
+(B2.3), so the 20 µs count from the moment the flash answers again, and the reset follows as
+soon as the operation has ended; meanwhile the pins hold their A3.6 levels (B2.3 "during
+flash work"), and flash work never overlaps an arm (0055).
+
+**Evidence at the next start** (0075, 0078). The reset of this rule is a software reset. The
+boot stage reads the reset flags first. At a start that is power loss (A1.7 "Kept over a
+reset": a power-on or brown-out flag, or no flag) it neither reads the commanded-reset word nor
+judges evidence. It still clears the word, by a write of whole ECC words that needs no read
+([HIS] HIS 90 reading, as P-SYS-9 gives it), so that content left by the power-on can never be
+judged at a later start. At every other start it reads the word and clears it the same way. The
+clear MUST reach the kept RAM before the ring check or any other work after the safe state of
+A3.6 (0045), and the start judges from the value it read (0078). A start whose reset flags name
+a software reset (A1.7 "The start entry") is a commanded reset only if that value is valid,
+names the sequence number of the last entry kept, and that entry is one of the reason lines
+A1.7 lists for a commanded reset (`restart: restart`, `restart: factory-reset`, `restart:
+update-activated slot <s> <version>`, `restart: update-abandoned`, `restart:
+installer-abandoned`, `restart: trial-unconfirmed`, and the `ROLLBACK` line). In every other
+case it is an unexpected stop: no valid word, a word that names another entry, a last entry that
+is no reason line, or the log lost (0078). An unexpected
+stop is entered as a processor watchdog reset seen at start-up is (A3.5 "Entry",
+`WDT_RESET_AT_START`, class 1; Table A3-1 event 5, drop reason `RESET`) and logged `start:
+unexpected stop`. A lost or damaged reason therefore errs to the safe side. A software reset
+the boot stage makes itself MUST log a reason line first and set the commanded-reset word. Power-on, brown-out or no flag is
+power loss (0068 addendum) and never an unexpected stop; a watchdog flag is judged as today.
+A software reset made by something other than this firmware (the vendor bootloader before the
+first start, or after the vendor path, A1.8a item 9) has no reason line either, so it counts
+once as an unexpected stop, class 1, clearable; it does not stop a trial from confirming
+(A1.8 asks for no class 2 fault).
+
+A trial image that stops before it confirms is rolled back (A1.8). A fault while the handler
+runs (a lockup) is left to the processor watchdog: the pins keep the safe-state levels already
+set, if the first step ran; a fault inside the first 20 µs is a residual (HIS-21). A fault inside
+the handler before its clear is a lockup and ends by the processor watchdog (a watchdog flag,
+A3.5; 0078). This MUST
+hold in every build in which TX can be armed (0036). That every fault vector of the image
+points to the handler of this rule is a firmware build check, not a conformance test.
 
 A3.6b **TX path check** (0066). While TX is not armed and not keyed, the TX path MUST be
 blocked as A3.6 sets it, and the firmware MUST check that it is, at least every 5 ms. **Start** (0066 addendum): the
@@ -2062,6 +2177,24 @@ holds may be lost, and a P2 session may end by its watchdog (B5.6) and be restar
   STB (PE9) and CMD (PE8) are driven low, the firmware ending any cycle before it starts an
   erase or a program, and after it the radio goes on as before. A3.10 has nothing to cover then, because
   flash work never overlaps an arm;
+- **time over flash work** (0073): uptime (`IDENTIFY` tag 16, the log's timestamps) and every
+  time limit counted on it MUST include the time spent in flash work, with interrupts off or
+  not. The time of the flash work of one request, of a start's own store writes and of the
+  trial self-confirmation MUST be counted to within 1 ms in total, whatever number of erase and
+  program operations it holds. These limits are: the trial limit of 60 s (A1.8), the
+  first-secret window of 300 s (A1.10), the 10-minute abandonment (A1.8, A1.8a), the 60 s write-session idle time (A1.10), which does not run during the holder's own request
+  (0077), and the stored-reply time (A1.4). Each MUST NOT act before
+  it falls due and MUST act within 100 ms after it falls due. One that falls due during flash
+  work MUST act within 100 ms after that work ends, before any management request received
+  during the work is handled; such a request is judged by the state when it is handled, so a
+  window or session that ended meanwhile does not stay open for it. A trial self-confirmation
+  whose boot-record write started before the 60 s and succeeds counts as confirmation; one
+  that starts at or after 60 s does not (A1.8). The P2 session watchdog (B5.6) is not on this
+  list: flash work never overlaps an arm, so over flash work it guards no TX; packets that
+  waited through the work MAY be read before it is judged, or the session MAY end by it, as
+  above, and B5.6's bound holds outside flash work. Limits of transmit (A3.4) are not affected
+  for the same reason. Work after the reply of a request that ends in a reset is followed by
+  that reset, which ends every timer;
 - **flash work that fails** (0065): an erase or program that ends with an error flag, or does
   not end within 2 × `t_erase_max`, has failed. The operation is abandoned: a firmware update
   as a write failure (A1.8, status 55), a store write with status 55, the store keeping the
@@ -2153,8 +2286,9 @@ host; bytes 5–59 are zero ([P2] Discovery packet). The G7250:
   bytes, to answer (B11.3; 0020 §28);
 - MUST answer every request with exactly one reply, within the rate limit of B11.14: at
   most 10 replies per second per source IP address and port and 50 per second in total;
-  requests above it are dropped and counted (0022 §16);
-- MUST NOT answer, and MUST drop and count, a datagram to port 1024 whose source port is 1024.
+  requests above it are dropped and counted (`disc_rate_drop`, Table M-6; 0022 §16);
+- MUST NOT answer, and MUST drop and count (`disc_src1024`, Table M-6), a datagram to port 1024 whose
+  source port is 1024.
   A G7250 discovery reply has byte 4 = 0x02 and comes from port 1024 (B3.3), so without this
   rule two radios could answer each other's replies without end. A host SHOULD NOT send
   discovery from local port 1024 (0022 §73 item 20).
@@ -2267,7 +2401,7 @@ B3.9 **Other port-1024 commands.**
   ([P2] Set IP Address packet, "MAC Address"). A Set IP sent to the unit's unicast address or
   to the subnet's directed broadcast address MUST be accepted under the same rules, but only
   from a source address inside the radio's own subnet; from any other source it MUST be
-  ignored and counted (0020 §21; 0022 §70; Annex X2, C13). A Set IP to the limited broadcast
+  ignored and counted (`setip_ignored`, Table M-6; 0020 §21; 0022 §70; Annex X2, C13). A Set IP to the limited broadcast
   255.255.255.255 is accepted from any source address, because a router does not forward it,
   so it comes from the radio's own link; a host with a wrong address set-up can therefore still
   correct the radio ([P2] Set IP Address packet, "Broadcast to Port 1024"; RFC 1812 section
@@ -2340,7 +2474,8 @@ B4.4 **When the record is sent** (0003 §2):
    General packet bytes 31–32, or to the owner's source port (A2.2) if those bytes are zero
    ([P2] General packet bytes 31–32; 0003 §2; 0020 §13). Answers to a host that is not the
    owner are rate-limited: at most once per 1 s per source IP address and port and 10 per
-   second in total; requests above that are dropped and counted (B11.14; 0022 §16).
+   second in total; requests above that are dropped and counted (`cap_rate_drop`, Table M-6;
+   B11.14; 0022 §16).
 4. **Retry** (0022 §83 item 6). A host that has no record 1 s after its `CAP_REQUEST` SHOULD
    send it again, at most once per second, the rate the G7250 answers a non-owner (item 3),
    and SHOULD tell the user after 5 tries without an answer. A request repeated sooner may be
@@ -2929,11 +3064,12 @@ host (B4.4). Every other write from a host that is not the owner, or while there
 session, MUST be rejected with `NOT_OWNER` and answered to the writer's source address and
 port; it MUST have no other effect: no takeover, no watchdog feed (0020 §12; 0007 rule 1 and
 Decision 5). `NOT_OWNER` answers MUST NOT exceed one per 100 ms per source IP address and
-port; further rejected writes are dropped without answer and counted (B11.14; 0022 §16). The
+port; further rejected writes are dropped without answer and counted (`notowner_drop`, Table M-6;
+B11.14; 0022 §16). The
 takeover notices to an old owner (A2.4, "Notice destination") are not `NOT_OWNER` answers and
 have their own limit (0022 §58). A memory-mapped packet from a non-owner whose source port is
 7250 MUST get no answer at all (no `NOT_OWNER`, no `CAP_REQUEST` answer) and is dropped and
-counted: register packets of another G7250 come from that port (B2.4a), and answering them
+counted (`reg7250_drop`, Table M-6): register packets of another G7250 come from that port (B2.4a), and answering them
 would let two radios answer each other without end. A host SHOULD NOT use local port 7250 as
 its source port (0022 §73 item 20).
 
@@ -3348,7 +3484,7 @@ G7250 reads the bit as follows, for KEY (hardware CW, B10.9) and for CWX (B10.5a
       element in progress ends with its trailing ramp and the keyer stops.
    3. With CW selected (byte 5 bit [1] set) the keyer alone forms the RF of the PTT
       transmission. DUC I&Q is not transmitted: the DUC FIFO is emptied at the key, DUC I&Q
-      received while keyed is dropped and counted (`GET_STATS`), and the underrun check of
+      received while keyed is dropped and counted (`duc_cw_drop`, Table M-6), and the underrun check of
       B10.5 is waived. The DUC gets the keyer's CW waveform, zero between elements, and the
       PEP estimate of A3.4c is computed on it. With CW not selected (bit [1] clear) KEY keys
       nothing (B10.9), the PTT transmission sends DUC I&Q as usual, and a CWX paddle edge in
@@ -3418,11 +3554,12 @@ B10.7 **TX IQ (DUC0).** In on port 1029, 192 ksps, 24-bit I and Q, 240 samples p
 NOTE2; 0004 point 2). Record `duc_format` (B4.8). TX IQ is accepted only while no refusal of
 B10.6 stands; the PA keys only under B10.2. A DUC I&Q packet whose source IP address and UDP
 port are not the owner's (A2.2), or that arrives while there is no session, MUST be discarded
-whole, MUST NOT enter the DUC FIFO and MUST have no other effect; it is counted per source in
-`GET_STATS` (B11.1). A host MUST therefore send DUC I&Q from its session socket (0022 §4;
+whole, MUST NOT enter the DUC FIFO and MUST have no other effect; it is counted in
+`GET_STATS` (`duc_foreign`, Table M-6; B11.1), and its source logged at most once per second
+per source (0074). A host MUST therefore send DUC I&Q from its session socket (0022 §4;
 Annex X1, D24). The G7250 MUST empty the DUC FIFO at every unkey, every session end and every
 takeover, so that a later key never sends stale I&Q (0022 §32). While record `tx` bit 1 or
-bit 4 is 0, DUC I&Q from the owner MUST also be discarded whole and counted in `GET_STATS`, and
+bit 4 is 0, DUC I&Q from the owner MUST also be discarded whole and counted in `GET_STATS` (`duc_not_tx`, Table M-6), and
 `STREAM_STATUS` DUC0 reads not running with reason 2 (TX not implemented) or 14 (TX not
 calibrated) (0039).
 
@@ -3430,7 +3567,7 @@ calibrated) (0039).
 While unkeyed, the G7250 MUST keep only the owner's most recent DUC I&Q, at most 4800 samples
 (25 ms at 192 ksps, 20 packets), and only samples received within the last 25 ms: a sample
 that would exceed the depth, or that has been in the FIFO for 25 ms, is dropped, oldest first,
-and counted (`GET_STATS`). The first sample transmitted at a key is therefore at most 25 ms
+and counted (`duc_fifo_drop`, Table M-6). The first sample transmitted at a key is therefore at most 25 ms
 old when the key comes, and a host that sends its I&Q with or shortly before its PTT edge has
 its first samples sent. While keyed the FIFO holds what the host sends up to its capacity,
 pending hardware (P-TIM-2; HIS-18); a full FIFO discards whole packets (B11.7). Dropping old samples while unkeyed is
@@ -3469,7 +3606,12 @@ point 7; 0020 §28). Values and reason codes are in B8 (Tables B8-2, B8-3).
 
 B11.1 **Principle.** A packet the G7250 does not act on MUST have no effect at all: it MUST NOT
 feed the watchdog, cause a takeover, start a session or change any state (0020 §28). Every
-discarded packet is counted per port and reason and can be read with `GET_STATS` over the
+discarded packet is counted per port (`drop_<port>`, Table M-6) (a packet discarded whole that has
+a counter of its own in Table M-6 counts in both (for example `cap_rate_drop` and `notowner_drop`
+in `drop_7250`, `mg_rate_drop` in `drop_7251`); counts of samples, releases, gaps, clamps,
+takeovers and ICMP messages are not packet discards and count only under their own name) (0078),
+the reason being logged at most
+once per second per port and reason (0074), and can be read with `GET_STATS` over the
 management channel (A1.4, Table A1-2; 0020 §19, §28). Where a host can be told, the reason is
 reported in a status register.
 
@@ -3521,9 +3663,16 @@ B11.5 **Register writes** (B8.4, B8.5; 0020 §11, §12):
 
 B11.6 **Sequence numbers and gaps.** The G7250 MUST NOT reject or reorder an incoming packet
 because of its sequence number (B2.7), except a High Priority packet as B11.6a states. It counts gaps in the sequence numbers received on
-ports 1027 and 1029 per session; the counts are read with `GET_STATS` (0020 §19). Outgoing:
+ports 1027 and 1029 per session; the counts are read with `GET_STATS` (`gap_1027`, `gap_1029`,
+Table M-6: from the start of the running session, or of the last one; 0020 §19, 0074). Outgoing:
 a packet the G7250 drops (B11.7) still uses its sequence number, so that the host sees the
-loss as a gap (0020 §19).
+loss as a gap (0020 §19). A gap is a packet whose sequence number is newer than the newest one
+received on that port in the session by a difference, modulo 2^32, from 2 to 2^31 − 1; it counts
+once, whatever the number of packets missing. A difference of 1 is no gap; 0 or 2^31 and above is
+not newer (32-bit serial-number arithmetic as in B11.6a) and is no gap. On port 1027, where 0 is
+never newer (B11.6a), the step from 0xFFFFFFFF to 1 is a difference of 1. The first packet of a
+session sets the start, on port 1027 the first with a non-zero number; a host that sends 0 in
+every High Priority packet produces no gap (0078).
 
 B11.6a **Stale High Priority packets** (0022 §35; Annex X1, D28). A reordered or duplicated
 High Priority packet can carry an old PTT or CWX value and so make a false 0→1 edge.
@@ -3549,9 +3698,9 @@ discarded under B11.1, B11.3) take part (0022 §35, §56).
   consecutive packets whose numbers are non-zero and each newer than the one before. Until
   then the unnumbered rule applies, also to the three packets.
 - **Numbered mode.** The G7250 MUST discard, with no effect (B11.1), every High Priority
-  packet whose number is not newer than the last one accepted, and count it (`GET_STATS`).
+  packet whose number is not newer than the last one accepted, and count it (`hp_stale`, Table M-6).
 - **Resynchronisation** (0022 §56). The G7250 MUST leave numbered mode, return to unnumbered
-  mode, log it (A1.7) and count it (`GET_STATS`) when a packet is the fifth in a row that
+  mode, log it (A1.7) and count it (`hp_resync`, Table M-6) when a packet is the fifth in a row that
   is not newer than the last one accepted, or when a packet is older than the last one
   accepted by more than 2¹⁶.
   That packet is not discarded: it is acted on, except that a 0→1 edge in it is ignored and
@@ -3560,7 +3709,7 @@ discarded under B11.1, B11.3) take part (0022 §35, §56).
   direction.
 - **Release in a discarded packet** (0022 §72). A discarded packet is otherwise not acted on,
   but if its PTT bit, or its CWX request (B10.5a), reads 0 while the radio is keyed by that
-  request, the G7250 MUST unkey (`TX_STATE` unkey reason 1, arm kept) and count it: a 0 is
+  request, the G7250 MUST unkey (`TX_STATE` unkey reason 1, arm kept) and count it (`hp_release`, Table M-6): a 0 is
   always taken as a release. After such an unkey the bit counts as 1 until an accepted packet
   reads 0, so keying again needs an accepted packet with the bit at 0 and a later 0→1 edge;
   a stale release therefore ends the transmission and never re-keys it. This is the same
@@ -3607,7 +3756,7 @@ B11.10 **Stale sessions and hosts.**
 - With the hardware timer disabled (allowed only while not armed) the session stays until a
   takeover, as [P2] allows ([P2] General packet byte 38; 0007, option 2F "Against"). An ICMP
   "port unreachable" for the owner's port ([CH394] section 7.1.7) MUST be logged and counted
-  and MUST NOT end the session (0020 §28).
+  (`icmp_unreach`, Table M-6) and MUST NOT end the session (0020 §28).
 - A management write session ends after 60 s without an authenticated, verified request from
   its holder (A1.10; 0020 §24; 0022 §75).
 
@@ -3685,12 +3834,12 @@ Table M-1 — Payloads of the management commands
 | Command | Request payload | Reply payload (status 0) |
 |---|---|---|
 | `IDENTIFY` 0x0001 | empty | TLV list of Table M-2 |
-| `GET_STATS` 0x0002 | empty | repeated: name length (u8), name (ASCII), value (u64) |
+| `GET_STATS` 0x0002 | empty | repeated: name length (u8), name (ASCII), value (u64). The counters of Table M-6 come first, in the order of the table, every one listed, also at 0; the firmware MAY add counters or timers of its own after them; a host ignores names it does not know, and does not rely on their order. The reply MUST fit one reply (1400 bytes, A1.4): names are at most 16 ASCII characters, so a counter takes at most 25 bytes (1 + 16 + 8); Table M-6 holds at most 48 names (1200 bytes), leaving the rest for the firmware's own; one of the firmware's own that does not fit is left out, a counter of Table M-6 never (0074) |
 | `GET_CHALLENGE` 0x0010 | empty | challenge, 16 bytes |
 | `SET_FIRST_SECRET` 0x0011 | secret, 32 bytes | empty |
 | `CHANGE_SECRET` 0x0012 | new secret XOR HMAC-SHA256(old secret, "G7NS" ‖ challenge), 32 bytes; the challenge is the one this request is authenticated with | empty |
 | `END_WRITE_SESSION` 0x0013 | empty | empty |
-| `GET_CONFIG` 0x0020 | empty | TLV list of Table M-3, every item |
+| `GET_CONFIG` 0x0020 | empty | TLV list of Table M-3, every item it has (tags 9 and 10 only once the calibration set holds S2 and T3; 0074) |
 | `SET_CONFIG` 0x0021 | TLV list of Table M-3, the items to change; validated as a whole (A1.6 C-4) | TLV list of Table M-3, every item, after the change |
 | `FACTORY_RESET` 0x0022, `RESTART` 0x0024 | empty | empty |
 | `SWITCH_LEVEL` 0x0023 | target level (u8: 1 or 2) | empty |
@@ -3700,11 +3849,11 @@ Table M-1 — Payloads of the management commands
 | `UPDATE_BLOCK` 0x0041 | block number (u32, from 0), CRC-32 [IEEE802.3] of the data (u32), data (512 bytes; the last block may be shorter) | block number (u32), blocks received so far (u32) |
 | `UPDATE_VERIFY` 0x0042 | empty | SHA-256 computed over the received or written image (32 bytes) |
 | `UPDATE_ACTIVATE` 0x0043 | flags (u8: bit 0 foreign image) | permanent (u8: 1 for a foreign image, no trial boot, A1.8a item 5) |
-| `UPDATE_ABORT` 0x0044 | empty | restart needed (u8: 1) |
+| `UPDATE_ABORT` 0x0044 | empty | restart needed (u8): 1 if a `RESTART` (A1.9) is needed to leave the update state (A1.8; the 10-minute rule otherwise restarts the radio); 0 if none is: no update state (A1.8, 0074), or the installer before the first erase, which restarts the main unit by itself after the reply (A1.8a item 3) |
 | `UPDATE_STATUS` 0x0045 | empty | state (u8: 0 idle, 1 receiving, 2 verified, 3 installer before the first erase, 4 installer writing), blocks received (u32), block count (u32), sectors written (u8) |
 | `ROLLBACK` 0x0046 | empty | empty |
 | `RETURN_TO_STOCK` 0x0050, `ENTER_VENDOR_RECOVERY` 0x0051 | empty | none: always status 56 (A1.8a items 2, 4) |
-| `GET_CALIBRATION` 0x0060 | empty | calibration set id (SHA-256 of the set, 32 bytes, zeros if none), date (u32, seconds since 1970-01-01 UTC), source length (u8), source (ASCII), then the entries of Table M-5 |
+| `GET_CALIBRATION` 0x0060 | empty | calibration set id (SHA-256 of the set, 32 bytes, zeros if none), date (u32, seconds since 1970-01-01 UTC), source length (u8), source (ASCII), then the entries of Table M-5; with no set: id all zeros, date 0, source length 0, no entries (37 bytes; 0074) |
 | `SET_CALIBRATION` 0x0061 | date (u32), source length (u8), source (ASCII), then the entries of Table M-5; replaces the stored set as a whole (A1.12) | calibration set id (32 bytes), TX calibrated (u8) |
 | `CLEAR_CALIBRATION` 0x0062 | empty | empty |
 
@@ -3755,7 +3904,9 @@ Table M-3 — Configuration items (A1.6)
 | 11 | var | C-7 TCI allow-list: 0 to 8 entries of address (4 bytes) and prefix length (u8) |
 
 A `SET_CONFIG` that writes tag 9 or 10 before the calibration set holds S2 or T3 (P-PWR-2)
-is refused with status 62 (A1.12; 0039).
+is refused with status 62 (A1.12; 0039). Before the calibration set holds S2 or T3, `GET_CONFIG`
+leaves out tag 9 or tag 10; an absent tag means that the limit is not known and TX is not
+calibrated (record `tx` bit 4 = 0). It is never sent as 0 (0074).
 
 Table M-4 — Package header (A1.8), the payload of `UPDATE_BEGIN` after the flags byte
 
@@ -3793,6 +3944,45 @@ Table M-5 — Calibration entries (A1.12)
 |---|---|
 | id length (u8), id (ASCII) | a parameter id of Table P-1, for example "P-RF-2" |
 | value length (u16), value | the value; its encoding is fixed in Table P-1 when the parameter is set from measurements (Annex P) |
+
+Table M-6 — Counters of `GET_STATS` (0074). 45 names; every one listed, also at 0, first and
+in this order (Table M-1). Every counter other than `fault_<code>`, `reset_<cause>` and
+`trip_count` starts at 0 at every start; those three groups are kept as A3.5 "Counters" says
+(0078).
+
+| Name | Counts | Where |
+|---|---|---|
+| `mg_not_request` | management datagrams with the right magic and a type other than 1, dropped | A1.4 |
+| `mg_rate_drop` | management requests above 20 replies per second per source, dropped | A1.10; T-A1-26 |
+| `mg_cap_drop` | management requests above a total reply cap or the cap outside the subnet, dropped | A1.10 |
+| `disc_rate_drop` | port 1024 requests above the rate limit, dropped | B3.2 |
+| `disc_src1024` | datagrams to port 1024 from source port 1024, dropped | B3.2 |
+| `setip_ignored` | Set IP to the unicast or directed broadcast address from outside the subnet, ignored | B3.9 |
+| `gen1024_ignored` | General packets on port 1024 at level 2, ignored | A2.5 |
+| `cap_rate_drop` | non-owner `CAP_REQUEST`s above the answer limit, dropped without an answer | B4.4 item 3 |
+| `notowner_drop` | rejected register writes above the `NOT_OWNER` answer limit, dropped | B8.5 |
+| `reg7250_drop` | register packets from a non-owner with source port 7250, dropped | B8.5 |
+| `takeovers` | takeovers | A2.4 |
+| `icmp_unreach` | ICMP port unreachable for the owner's port | B11.10 |
+| `hp_rx` | High Priority packets read from port 1027, any source, before the owner check | B2.3 (0058) |
+| `hp_stale` | High Priority packets not newer than the last one accepted, discarded in numbered mode | B11.6a |
+| `hp_resync` | resynchronisations out of numbered mode (the fifth packet in a row not newer, or one older by more than 2¹⁶), each also logged | B11.6a (0022 §56); T-B11-15 |
+| `hp_release` | releases taken from a discarded High Priority packet (unkey reason 1) | B11.6a (0022 §72) |
+| `gap_1027` | sequence-number gaps on port 1027, this or the last session | B11.6 |
+| `gap_1029` | sequence-number gaps on port 1029, this or the last session | B11.6 |
+| `duc_foreign` | DUC I&Q packets from another source or with no session, discarded | B10.7 |
+| `duc_not_tx` | DUC I&Q packets from the owner discarded while record `tx` bit 1 or 4 is 0 | B10.7 (0039) |
+| `duc_cw_drop` | DUC I&Q packets received while keyed in CW, dropped | B10.5b item 3 |
+| `duc_fifo_drop` | DUC I&Q samples dropped from the FIFO (depth or age) | B10.7 (0022 §63) |
+| `cw_speed_clamped` | DUC-specific packets with keyer speed above 60 | B10.5a |
+| `cw_hang_clamped` | DUC-specific packets with hang delay above 2000 ms | B10.5b |
+| `ll_unprobed` | link-local addresses taken without probe | A1.11 |
+| `drop_1024`, `drop_1025`, `drop_1026`, `drop_1027`, `drop_1029`, `drop_7250`, `drop_7251` | packets discarded, per receiving port of Table B2-1 (7 names) | B11.1 |
+| `fault_2`, `fault_3`, `fault_9`, `fault_10`, `fault_16`, `fault_17`, `fault_18`, `fault_19` | fault entries per code of Table B8-3 since power-on (8 names) | A3.5 "Counters" |
+| `reset_unknown`, `reset_software`, `reset_watchdog`, `reset_pin` | resets per cause since power-on (4 names; power-on and brown-out clear them); `reset_unknown` is always 0 while a start with no reset flag counts as power loss (A1.7, 0068 addendum) | A3.5 "Counters" |
+| `trip_count` | `TRIP_COUNT` | A3.5 |
+
+A later fault code or port adds its name here.
 
 ## Annex P — Pending hardware parameters
 
@@ -3864,13 +4054,49 @@ Table P-1 — Pending hardware parameters
 | P-SYS-6 | Power draw in idle, for a later standby (0029) | part A scope | — | quiet idle only |
 | P-SYS-7 | Start mode of the independent watchdog (IWDG1_SW option byte, [HIS] HIS 10, HIS 90) | A1.8a item 3 (installer), firmware | HIS-13 | the firmware and the installer service the watchdog whenever it may run |
 | P-SYS-8 | SEND and TUNER interfaces on the main unit: whether and how the firmware drives or reads them | A3.6, A3.7, B4.8 `atu` bit 4, `regmap_groups` bit 7 | HIS-09 | released (inactive) and not offered |
-| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`, and the log ring of A1.7, 0068), [HIS] HIS 10, HIS 90 (`72591aa`, range at `069ea0b`: a system reset does not clear SRAM and AXI SRAM has a 64-bit ECC word, both MEDIUM; whether the stage before 0x08020000 writes the firmware's persist block is not known). The persist block is a range of AXI SRAM that the firmware chooses (currently 0x2401FF80–0x2401FFFF, 128 bytes, the range [HIS] `069ea0b` names); it holds every counter named here. Radio check: test T-A3-60 (the counters kept over a `RESTART` and over a processor watchdog reset, cleared by a power cycle) | A3.5 "Counters", A1.7 "Kept over a reset", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters and the log are kept as far as the hardware keeps them, and nothing relies on them; the log may start empty (`log lost`) |
+| P-SYS-9 | Whether AXI SRAM content kept by the firmware survives a reset without power loss, through the vendor bootloader that runs before the boot stage (fault entry counters, reset counters, `TRIP_COUNT`, and the log ring of A1.7, 0068, and the commanded-reset word, 0078), [HIS] HIS 10, HIS 90 (`72591aa`, range at `069ea0b`: a system reset does not clear SRAM and AXI SRAM has a 64-bit ECC word, both MEDIUM; whether the stage before 0x08020000 writes the firmware's persist block is not known). The persist block is a range of AXI SRAM that the firmware chooses (currently 0x2401FF80–0x2401FFFF, 128 bytes, the range [HIS] `069ea0b` names); it holds every counter named here. Radio check: test T-A3-60 (the counters kept over a `RESTART` and over a processor watchdog reset, cleared by a power cycle) | A3.5 "Counters", A1.7 "Kept over a reset", Table A1-4, `TRIP_COUNT` | HIS-13, HIS-18 | part of the freeze rule: TX stays locked; the counters and the log are kept as far as the hardware keeps them, and nothing relies on them; the log may start empty (`log lost`) |
+| P-SYS-10 | Whether the store reads a word with a double ECC error without a fault and without a reset on the radio (0065; T-A1-87). Radio check: drill F3 (0076), below | A1.6 "Store writes" | — | pending hardware: on the radio, with a supply switch the bench controls; ON8ST's, no date. Until set, not proven: the store's read path is shown by review and by the emulator's flags only (the emulator raises no bus fault on a double ECC error) |
 | P-RX-1 | Physical receive paths behind the two receive tuning words ([HIS] HIS 80) | B2, B3, 0004 | HIS-02 | one DDC |
 | P-RX-2 | FPGA configuration frame (command 0x01, [HIS] HIS 80): meaning and safe values of the status byte 0 and of bytes 9–18 (per-rate calibration among them), position of the spectral-inversion flag; which tuning word (offset 1 or 5) is DDC0; I/Q order of the 0x04 samples; bus set-up, strobe width and turnaround. Set from the unit's factory calibration, confirmed on the radio ("P-RX-2 route" below; 0060). Encoding: flags (u8: bit 0 I and Q swapped, bit 1 spectrum inverted), tuning-word offset (u8: 1 or 5), the other receive tuning word (u32) and the word at offset 19 (u32), both from the capture at its lowest frequency and written unchanged, then per offered rate: rate index (u8), byte 0 (u8), bytes 9–18 (10 bytes). The flags act on the 0x04 samples, bit 0 first, then bit 1 (negate Q after any swap): both set give (Q, −I) | B6.1, B6.7, B4.8 `streams` | HIS-01, HIS-02 | DDC0 not offered (`streams` bit 0 = 0, `STREAM_STATUS` reason 2); no configuration frame written outside the A3.6 safe state |
 | P-TX-1 | The third tuning word as the transmit word ([HIS] HIS 80, HYPOTHESIS) | B10 (firmware) | HIS-02 | not applicable while TX is disabled |
 | P-L2-1 | Level 2: receiver bandwidth for `IF_LIMITS`, TCI `KEYER` jitter budget | part C C3, C4 | HIS-01, G6 | level 2 not offered before G6 |
 | P-L2-2 | Level 2: stream budget and socket buffer split | part C C6 | HIS-14, HIS-18, G6 | level 2 not offered before G6 |
 | P-L2-3 | Level 2: TX chain values of the on-board DSP | part C C8 | G6 | level 2 not offered before G6 |
+
+**Drill F3** (0076; P-SYS-10). Pending hardware: on the radio, with a supply switch the bench
+controls; ON8ST's, no date. The drill runs only with its own go from ON8ST. On the radio with
+RF in the safe state, a dummy load on both antenna ports and a supply switch the bench
+controls:
+
+0. Kept RAM: the first power-on of the image on the radio tests the RAM kept over resets
+   (A1.7 "Kept over a reset", 0068, P-SYS-9), which holds random content with random ECC at a
+   power-on. Record the start log (`start after power-on: log lost` expected) and that the
+   start completes without a fault or reset; count every power-on start of the drill (the
+   cold-start count) and check each the same way.
+1. 200 power cuts, each at a random point inside a store write: half inside a compaction (a
+   `SET_CONFIG` with C-1 and C-7 items), half inside appended writes (a `SET_CONFIG` of C-7
+   only, and the boot counter at start).
+2. After each cut the radio starts within the normal start time, with no reset loop (the reset
+   counter rises by one per cut, A3.5), the network up and RX working.
+3. Every item read back holds its old or its new value, never another (A1.6).
+4. Each start that logs an unreadable word (0065) is counted.
+5. The bus fault of A3.6 "Unexpected stop of the firmware" (0075): a build reading an unmapped
+   address, not keyed, with one RF control pin on a scope.
+
+F3 passes if (0), (2) and (3) hold for every start. If (4) counts none in 200 cuts, the drill
+shows that cuts are survived but not that a double ECC error is: it says so, and P-SYS-10
+stays unset until a cut or the fixed case below produces one; ON8ST then decides whether to
+accept that or to raise the count. Test builds are accepted for a radio drill (as for F1 and
+F2), not for a conformance test.
+
+**Open (0076): a fixed case for F3.** Whether programming a flash word a second time without
+an erase, in a test build and in a sector of the non-live generation, leaves a word whose data
+and ECC disagree and so reads with a double ECC error, is open. It is to be settled from the
+STM32H72x/H73x reference manual (RM0468, flash chapter) before drill F3; that manual has not
+been read for this spec, so no section is cited and nothing is claimed, and it enters
+`sources.md` only once read. If it holds, F3 gains a fixed case: one such word in the non-live
+sector and one in a record of the live generation, each read at the next start, with (2) and
+(3) holding. The random cuts stay as the survival test.
 
 **Tests.** Every test of Annex X3 and of part C runs against the reference model, with
 simulated values for the parameters of Table P-1 (0019). Against the radio, a test that keys
@@ -3981,8 +4207,8 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-12 | Requests from outside the subnet are not answered, except identification. |
 | T-A1-13 | Wrong magic is dropped; a short or length-mismatched request gets status 17; an unknown major version gets status 18; an unknown command gets status 16. |
 | T-A1-14 | A repeated request (same request id, command and payload) gets the stored reply and is not executed twice; a request with the same id but another command or payload is executed and gets its own reply (A1.4). |
-| T-A1-15 | A second host gets status 35 for writes while a write session is held; the session ends after 60 s idle; `GET_STATS`, `IDENTIFY`, `GET_CHALLENGE`, other unauthenticated requests and a request with a wrong HMAC from the holder every 30 s do not keep it open, an authenticated, verified request from the holder does (A1.10). |
-| T-A1-16 | The first-secret window closes 300 s after network up; a restart inside the window reopens it for 300 s. |
+| T-A1-15 | A second host gets status 35 for writes while a write session is held; the session ends after 60 s idle; `GET_STATS`, `IDENTIFY`, `GET_CHALLENGE`, other unauthenticated requests and a request with a wrong HMAC from the holder every 30 s do not keep it open, an authenticated, verified request from the holder does (A1.10). Host A's authenticated `SET_CONFIG` with an invalid configuration gets 48; a write from host B within 60 s gets 35; after A's `END_WRITE_SESSION`, B's write is accepted. `END_WRITE_SESSION` with no session held gets 0 and a write from another host straight after it is accepted; from a non-holder it gets 35 and the holder's session stays (0074). With a `SET_CONFIG` whose compaction has its erase at `t_erase_max` and its programs at their maximum, sent by the holder 57 s after its last request, the session does not lapse before the reply, and a write from host B straight after the reply gets 35; the same with an erase that hangs until it fails (55), sent 55 s after the last request (emulator; 0077, 0078). |
+| T-A1-16 | The first-secret window closes 300 s after network up; a restart inside the window reopens it for 300 s. With the erase of host A's `SET_FIRST_SECRET`, received 2 s before the window ends, hung until it fails (55): a `SET_FIRST_SECRET` from host B received during that work, and A's retry after the 55, both get 36 (emulator, every erase stretched to `t_erase_max`; B2.3 "time over flash work"; 0073). |
 | T-A1-17 | A region change (C-6) is refused with status 57 while a P2 session runs; the factory default is region 0, the ranges of Table A3-0 (0039). |
 | T-A1-18 | With a non-empty TCI allow-list, a TCI connection from an address outside it is refused and logged; the management port stays reachable. |
 | T-A1-19 | A request with the right magic and 12–17 bytes gets status 17; one below 12 bytes gets no reply. |
@@ -4026,9 +4252,9 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-57 | With the controller disconnected, and with a controller that does not respond, discovery, RX IQ on level 1 and the management channel work; identification reports the controller state (reference model; part A scope, A1.5 I-6; 0023). |
 | T-A1-58 | With the controller disconnected, an image of this firmware (staged in the other slot) and then a synthetic opaque stock image with the "foreign image" flag (streaming installer) are installed through the same management commands (`UPDATE_BEGIN`, `UPDATE_BLOCK`, `UPDATE_VERIFY`, `UPDATE_ACTIVATE`) and the same commanded-reset order; both succeed and no step waits for, or sends anything to, the controller (reference model; A1.8a "Installation paths"; 0025 R2, 0028). |
 | T-A1-59 | For an image of this firmware and for a foreign image alike, a block with a wrong CRC-32 gets status 53, an image whose SHA-256 differs from the header gets status 55 at `UPDATE_VERIFY`, and an image for other hardware gets status 51 before anything is written or erased (reference model; A1.8, A1.8a; 0025 R3). |
-| T-A1-60 | During a streaming installation (A1.8a item 3): `UPDATE_STATUS` reports the sectors written; `IDENTIFY` reports the installer state; any other management command than those listed gets 58, and discovery, P2 and TCI get no answer; the TX-side state of A3.6 is unchanged and toggling the local PTT and KEY inputs keys nothing; `UPDATE_ABORT` before the first erase restarts into this firmware with its secret and configuration unchanged, after it gets status 60; a transfer that stops for more than 10 min does not restart the main unit and resumes when blocks arrive again; sector 0 and the option bytes are never written, and no sector is written before all its blocks arrived with a good CRC (reference model; 0028). |
+| T-A1-60 | During a streaming installation (A1.8a item 3): `UPDATE_STATUS` reports the sectors written; `IDENTIFY` reports the installer state; any other management command than those listed gets 58, and discovery, P2 and TCI get no answer; the TX-side state of A3.6 is unchanged and toggling the local PTT and KEY inputs keys nothing; `UPDATE_ABORT` before the first erase restarts into this firmware with its secret and configuration unchanged, after it gets status 60; a transfer that stops for more than 10 min does not restart the main unit and resumes when blocks arrive again; sector 0 and the option bytes are never written, and no sector is written before all its blocks arrived with a good CRC (reference model; 0028). After the first erase: `IDENTIFY` tag 11 = 0 and tag 12 not open; `SET_FIRST_SECRET` gets 36, also before the first erase; a command outside item 3's list with no earlier code gets 58 (for example `GET_CONFIG`); the next `UPDATE_BLOCK` is still accepted with the old secret. Host A holds the session; host B's `UPDATE_BLOCK` gets 35; after A's `END_WRITE_SESSION` (0), and in a second run after 60 s with no request from A, B's blocks are accepted and B completes the transfer. With every sector erase stretched to `t_erase_max`, A sends the block that completes a sector 57 s after the previous reply, and the next block 57 s after that block's late reply; the session holds across both, and B gets 35 throughout (emulator; A1.8a item 3, A1.10; 0077, 0078). |
 | T-A1-61 | Before the F1 gate (P-SYS-5) is set, a foreign `UPDATE_BEGIN` that passes every other check gets status 56 and changes nothing (also an oversized one: 56 precedes 61); after it is set (reference model) the same request is accepted (A1.8a item 3, "Gate"; 0028). |
-| T-A1-62 | During a streaming installation, before the first sector erase, 10 min without an update command other than `UPDATE_STATUS` restart the main unit into this firmware with secret and configuration unchanged; a repeat of the accepted `UPDATE_BEGIN` is answered from the stored reply; `IDENTIFY` reports update state "installer" with the sectors written (reference model; A1.4, A1.5 I-3, A1.8a item 3). |
+| T-A1-62 | During a streaming installation, before the first sector erase, 10 min without an update command other than `UPDATE_STATUS` restart the main unit into this firmware with secret and configuration unchanged; a repeat of the accepted `UPDATE_BEGIN` is answered from the stored reply; `IDENTIFY` reports update state "installer" with the sectors written (reference model; A1.4, A1.5 I-3, A1.8a item 3). `UPDATE_ABORT` before the first erase: 0 with restart needed 0, then the restart into this firmware without a `RESTART` (0074). |
 | T-A1-63 | `SET_CALIBRATION` while a P2 session runs gets 57, while armed 50, during an update 58; with an unknown parameter id 48 and nothing changes; a complete set sets record `tx` bit 4 from the next session on and `IDENTIFY` tags 20 and 21 report it; `FACTORY_RESET` keeps the set; `CLEAR_CALIBRATION` clears bit 4 from the next session on (reference model; A1.12; 0039). |
 | T-A1-64 | A `SET_CONFIG` with the SWR limit (tag 9) or the PA temperature limit (tag 10) before the calibration set holds P-PWR-2 gets status 62; a P2 write of `LIMIT_SWR` or `LIMIT_PA_TEMP` gets write reject reason `NOT_CALIBRATED` (A1.12 item 4; 0039). |
 | T-A1-65 | A region other than 0 in `SET_CONFIG` (tag 6) gets status 48; with region 0 a DUC0 frequency at each edge of every range of Table A3-0 is inside, 1 Hz outside each edge is outside (reference model with a complete calibration set; A1.6 C-6; Table A3-0; 0039). |
@@ -4046,17 +4272,22 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-77 | During a complete update to an image of this firmware (`UPDATE_BEGIN` to the confirmed trial boot), and during an aborted one, flash.log shows no erase or write in sectors 6 and 7 other than store writes or compactions (whole store records of the store format, no erase of the only live store sector), and none outside the staging slot and the store; the staging slot and the store are the sectors `IDENTIFY` tag 25 reports (emulator, flash.log; A1.8 "Slot size and the store"; 0061). |
 | T-A1-78 | `UPDATE_BEGIN` for an image of this firmware, linked for the other slot, with a length one byte more than that slot (its size from `IDENTIFY` tag 25: number of sectors × 128 KiB) gets 61 and nothing is written; with a length equal to the slot size it is accepted; with the wrong hardware id it gets 51 and for the running slot 63, whatever its length; an image both too large and older than the running one, without the downgrade flag, gets 61 (order 51, 56, 63, 61, 52) (emulator or reference model; A1.8; 0043, 0061, 0062). |
 | T-A1-79 | `IDENTIFY` tag 25 is present with length 6; slots A and B and the store do not overlap, lie within sectors 2–7 (never sector 0 or 1) and do not change across restarts and updates of this firmware; the slot named by tag 23 is the one the running image occupies; a reader skips the tag if it does not know it (A1.5; Annex M; 0062). |
-| T-A1-80 | With no transfer in progress (after a restart, after `UPDATE_ABORT`, and after an activation): `UPDATE_BLOCK` gets 54, also with a bad CRC; `UPDATE_VERIFY` and `UPDATE_ACTIVATE` get 55; nothing is written and `UPDATE_STATUS` stays idle; with a malformed payload the reply is 17 (reference model or emulator; A1.8 "No transfer in progress"; 0063). |
+| T-A1-80 | With no transfer in progress (after a restart, after `UPDATE_ABORT`, and after an activation): `UPDATE_BLOCK` gets 54, also with a bad CRC; `UPDATE_VERIFY` and `UPDATE_ACTIVATE` get 55; nothing is written and `UPDATE_STATUS` stays idle; with a malformed payload the reply is 17 (reference model or emulator; A1.8 "No transfer in progress"; 0063). `UPDATE_ABORT` after a restart and in a trial image before confirmation, with no `UPDATE_BEGIN` since the start: 0 with restart needed 0; RX and the P2 session go on, `UPDATE_STATUS` stays idle, no restart after 10 min, and the trial confirms as usual (0074). |
 | T-A1-81 | `UPDATE_BEGIN` with a wrong magic, or with header version 2, gets 17 and nothing changes; with a readable header and component 2 it gets 56; with component 2 and the wrong hardware id, 51 (order 51, 56, 63, 61, 52) (reference model or emulator; A1.8 "Unreadable or unsupported header"; 0063). |
 | T-A1-82 | After `UPDATE_ABORT`, a stray `UPDATE_BLOCK` (54), `UPDATE_VERIFY` (55), `UPDATE_ACTIVATE` (55), `UPDATE_BEGIN` (58), `ROLLBACK` (58) and a second `UPDATE_ABORT` (0) sent every 60 s do not delay the restart: the radio restarts into the running image 10 min (± 5 s) after the reply to the first `UPDATE_ABORT`, logs it, and RX works afterwards; the same with a `RESTART` after 2 min restarts at once. During a transfer, a block refused with 53 every 60 s does not delay the abandonment either (reference model or emulator; A1.8 "What restarts the timer", "After `UPDATE_ABORT`"; 0063). |
 | T-A1-83 | A power loss during the boot stage's trial-attempt write starts the trial image as a trial at the next start (or the previous image), and one during the self-confirmation write starts the previous image, logged; in each case one bootable image starts and the store is readable (emulator; A1.8 "Torn boot-record writes"; 0064). |
 | T-A1-84 | Running a confirmed image with a good other slot, `ROLLBACK` replies 0, logs the rollback line, resets and starts the other image as a trial, which confirms itself; with the other slot empty or bad it gets 55; during a trial boot 58; while armed 50; the started image that fails to confirm returns to the image that sent `ROLLBACK` (reference model or emulator; A1.8 "`ROLLBACK`"; 0064). |
-| T-A1-85 | With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported; the 55 reply to an erase that does not end comes within 15 s of the request (emulator; B2.3 "Flash work"; 0065, 0069). |
+| T-A1-85 | With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported; the 55 reply to an erase that does not end comes within 15 s of the request (emulator; B2.3 "Flash work"; 0065, 0069). After the update's 55, `UPDATE_STATUS` reports idle, a run request gets reason 10, a new `UPDATE_BEGIN` is accepted, and with no further update command the radio restarts 10 min after the last command answered 0 (A1.8 "Write failure"; 0074). |
 | T-A1-86 | A power loss after each word of a store write, and at points during the erase of the other store sector in a compaction: after the restart each item holds its old or its new value, never a mix or an older value, a write answered 0 is kept, and the generation does not go back (emulator, flash.log; A1.6 "Store writes"; 0065). |
-| T-A1-87 | A double ECC error in a record of the live store sector, and one in the newest commit word: the store opens without a fault or reset, uses the older record or the previous generation, logs it, and later writes skip the word; an item with no readable record takes its Table A1-4 value (emulator, if it models flash ECC; A1.6 "Store writes"; 0065). |
+| T-A1-87 | A double ECC error in a record of the live store sector, and one in the newest commit word: the store opens without a fault or reset, uses the older record or the previous generation, logs it, and later writes skip the word; an item with no readable record takes its Table A1-4 value (emulator, if it models flash ECC; A1.6 "Store writes"; 0065). On the radio: drill F3 (P-SYS-10; 0076). |
 | T-A1-91 | Each commanded reset (`RESTART`, `FACTORY_RESET`, `UPDATE_ACTIVATE`, `ROLLBACK`, the trial's 60 s limit, the abandonment after `UPDATE_ABORT`) leaves its `restart:` line as the last entry before the start entry; after a trial that resets before confirming, `boot: rollback to slot <s> (trial not confirmed)` follows the start entry; a watchdog reset keeps the entries before it, followed by `start after watchdog: log kept`; a power cycle gives `start after power-on: log lost` with sequence numbers from 0; a kept ring with one entry corrupted keeps the entries before it and drops it and those after; with the oldest entry corrupted, or a start with no reset flag, or with the power-on flag set beside the software flag, the start entry reads `log lost` (`start after unknown: log lost` with no flag) with sequence numbers from 0 and the counters of A3.5 from 0; the `ROLLBACK` line is the last entry before the start entry, not followed by other entries of the old run (reference model or emulator; A1.7 "Kept over a reset"; 0068 and its addendum). |
 | T-A1-92 | On the emulator, after the reply to `CHANGE_SECRET` the flash dump shows the new secret only in the live store sector and the old secret only in the other, stale sector; after a `RESTART`, and after a power cycle, neither sector holds the old secret, and flash.log shows the stale sector erased before the management socket opens, with `store: stale secret erased` in the log; a non-live sector that holds only the live secret is not erased at start; after a `FACTORY_RESET` whose second erase was made to fail, the next start erases the sector with the old secret; a `SET_CONFIG` that needs a compaction before any restart erases the stale sector then; each reply within 15 s with one erase per request; with the new generation's commit word made unreadable before the restart, the store falls back, keeps the stale sector and logs it; the sector with the failed newer generation is erased at that start, `store: stale secret erased` is logged, the old secret authenticates and the new one gets 33; a stale-sector erase cut by a power loss so that part of a record is left is completed at the next start, logged `store: non-live sector erased (unrecognised data)`, and no byte of the old secret remains; with neither sector holding a complete generation of this firmware's store (sectors filled with foreign data), the start check erases nothing and the first store write works; with the only committed generation in sector 6, its commit word made unreadable and sector 7 erased, the start check erases nothing and the flash dump shows sector 6 unchanged, although that start writes its boot counter into sector 7, and the same holds at a second start (sector 7 then holding boot counters only), and after a `SET_CONFIG` the next start erases sector 6; after a fall-back to a first generation that holds only configuration, the failed newer generation with its secret is erased (A1.10 "The old secret in flash"; B2.3 "Flash work"; 0069). |
-| T-A1-93 | `g7250ctl` against the reference model: every command of Table A1-2 is sent; a lost reply is retransmitted with the same request id and payload every 500 ms, 5 times, and for a request that may do flash work for at least 16 s, while every new request gets a new id; each authenticated request uses one fresh challenge and `CHANGE_SECRET` sends the masked secret; an update picks the package for the slot not running (tag 23), after a failed verify sends every block again in order with new ids, and confirms the result with `IDENTIFY` after the reset; package files with a wrong length, magic, header version, signature length or hash are refused before `UPDATE_BEGIN` (reference model; A1.1a; Annex M "Package file"; 0070, 0071). |
+| T-A1-93 | `g7250ctl` against the reference model: every command of Table A1-2 is sent; a lost reply is retransmitted with the same request id and payload every 500 ms, 5 times, and for a request that may do flash work for at least 16 s, while every new request gets a new id; each authenticated request uses one fresh challenge and `CHANGE_SECRET` sends the masked secret; an update picks the package for the slot not running (tag 23), after a failed verify sends every block again in order with new ids, and confirms the result with `IDENTIFY` after the reset; package files with a wrong length, magic, header version, signature length or hash are refused before `UPDATE_BEGIN` (reference model; A1.1a; Annex M "Package file"; 0070, 0071). With the reply to `RESTART` and to `UPDATE_ACTIVATE` dropped, `g7250ctl` reports the reset as done from `IDENTIFY` (for `UPDATE_ACTIVATE` from tag 23, with the same version in both slots) and the log, sends no new request, and gets no 34 (A1.4 "Requests that end in a reset"; 0074). |
+| T-A1-94 | With every erase stretched to `t_erase_max` (emulator): in a trial kept unconfirmed by a class 2 fault injected at start, a `SET_CONFIG` with a stretched compaction (erase at `t_erase_max`, programs at their maximum) received 2 s before the 60 s, so that the limit falls due during its flash work, is answered, the trial's commanded reset follows within 100 ms after the reply, and the next start rolls back. During a transfer, an `UPDATE_BLOCK` whose erase hangs, received 9 min 55 s after the last update command, gets 55, and the abandonment restart follows within 100 ms after the reply (B2.3 "time over flash work"; A1.8; 0073, 0078). |
+| T-A1-95 | `GET_STATS` right after a power cycle lists every name of Table M-6, each at 0 where nothing has been counted, in one reply of at most 1400 bytes; the names of Table M-6 come first, in table order, and any further names follow them; after one High Priority packet `hp_rx` = 1; after 25 management requests in one second from one source `mg_rate_drop` rises by the excess; one DUC I&Q packet from another source raises `duc_foreign` and `drop_1029` by 1 each (reference model or emulator; Table M-1, Table M-6; 0074, 0078). |
+| T-A1-96 | With no calibration set, `GET_CONFIG` holds no tag 9 or 10 and `GET_CALIBRATION` returns 37 bytes (id zeros, date 0, source length 0, no entries); with a set holding S2 and T3, both tags are there (Table M-1, Table M-3; 0074). |
+| T-A1-97 | A log longer than one page: `READ_LOG` sets flag bit 1 on every page but the last and clears it on the last; an empty page has it clear; after a new entry, asking from the last sequence number + 1 returns it; every other reply has bit 1 clear (A1.7; 0074). |
+| T-A1-98 | After a `SET_CONFIG` that changes the address (answered first), a write from the former holder to the new address with the old challenge gets 33, one with a new challenge is accepted and opens a new session, and a write from another host is not refused with 35; a DHCP renewal with the same address leaves the write session, challenges and stored replies as they were (A1.10; 0074). |
 | T-A1-88 | Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header, one of them an intact image with 32 bytes appended (header length and hash adjusted), which the log names `header`, not `integrity`. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending every block again with new request ids, in order, replaces the received data and the next verify succeeds; an `UPDATE_VERIFY` with the last block not sent (a block left out in the middle would make the next one 54, out of order) gets 55 with `missing-blocks` in the log, not `hash`, and sending that last block then lets the verify succeed (0067 addendum); with the store made full, an `UPDATE_BLOCK` gets 64, the log shows `store: room made (update)`, `UPDATE_STATUS` shows the transfer still receiving with the same blocks received, and the block sent again with a new request id is taken, while a repeat with the same id gets 64 again; a verify with the store full succeeds (0067 addendum, full store); a block sent again alone is accepted and written, and `UPDATE_STATUS` shows any blocks the radio counts as not received again (reference model or emulator; A1.8 "Image check", "`UPDATE_VERIFY`"; 0067). |
 | T-A1-89 | `IDENTIFY` tag 9 for the other slot: 1 after a good verify; 0 from the first erase of `UPDATE_BEGIN`, after `UPDATE_ABORT` and after a failed verify, also after a restart; 2 when one byte of a confirmed other image is changed and the radio restarts; `ROLLBACK` with the other slot at 0 or 2 gets 55 and changes nothing; after a trial that failed to confirm itself, tag 9 for that slot stays 1 and `ROLLBACK` to it is accepted and starts it as a trial (reference model or emulator; A1.8 "Integrity in `IDENTIFY`"; 0067). |
 | T-A1-90 | One byte of the staged image changed after a good verify and `UPDATE_ACTIVATE`: the boot stage does not start the trial slot, starts the previous image, logs `boot: slot B refused: integrity` (slot named by its letter) and the rollback, and tag 10 reports 2; one byte of the confirmed active image changed with a good other slot: the other slot starts without a trial and the log shows `boot: slot A refused: integrity` then `boot: fallback to slot B (active slot refused, no trial)` (0068 addendum); both slots changed: the boot stage holds the safe state and the radio does not answer (emulator; A1.8 "Boot-stage refusals"; 0067). |
@@ -4138,6 +4369,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A3-59 | With a simulated supply-configuration mismatch, and with a time-out, the boot stage keeps the A3.6 safe state, holds CH394 RST# low, writes no flash, answers no discovery or management request, and sends `G7250 FAULT SUPPLY <8 upper-case hex digits> MISMATCH` (or `TIMEOUT`) with CR LF on USART1 at 115200 8N1 once per second (emulator or reference model; A3.5a; 0040). |
 | T-A3-60 | Needs the radio (P-SYS-9): after two `SWR_REPEATED` entries, a `RESTART` and then a processor watchdog reset leave the fault entry counter and `TRIP_COUNT` unchanged, so the third entry is class 2; a power cycle clears them. Before P-SYS-9 is set the arm is rejected with `NOT_CALIBRATED` (A3.5; Annex P; 0050). |
 | T-A3-61 | Not armed: forcing the level at each pin of Table A3-6b (PF4, PF6, PC7, PH11, PA10, PB14) to the other level from outside (output register unchanged), and, separately, changing a pin's output register or making it an input: each held for 20 ms or more gives `FAULT_CODE` 16 `TX_PATH_NOT_BLOCKED`, class 2, within 20 ms of its start; a pulse of 5 ms gives no fault; RX goes on; the log names the pin and the comparison; after a `RESTART` with the force removed the fault is gone, with it kept it comes back at start-up; armed with the TX path open, no fault with a pin of Table A3-6b forced from power-on, the fault is raised within 120 ms of the boot stage's first instruction (emulator; A3.6b; 0066). The DAC rows: a value other than 0 recorded as written to channel 2, 7 or 8 gives the fault (host test of the check, until the firmware has a DAC driver; then also on the emulator). |
+| T-A3-62 | Unexpected stop (emulator, pending the fault fixture that raises an undefined instruction in the running, unchanged image at a chosen emulated time; the fixture's entry latency is not cycle true, and its stacked PC is a stub). Unarmed, with a P2 session and RX running, the fault is raised once in thread mode and once inside an interrupt handler, in separate runs. In each: (1) no pin of Table A3-6b leaves its safe level, and no write to the PA bias DAC is made, from the fault to the end of the next start (unarmed, every pin of Table A3-6b is already at its safe level while RX runs, so no pin has to move); (2) a reset follows within 10 ms of the handler's entry, and the reset cause (RCC_RSR) is a software reset, not the independent watchdog; (3) after the restart `READ_LOG` holds, before the start entry, a line beginning `restart: processor fault` with a kind of A3.6, judged on that prefix and the kind only, never on a fault address; (4) the next start logs `start: unexpected stop`, has `WDT_RESET_AT_START` and `TX_ARM_STATE` drop reason 5 `RESET`, and RX and the management channel work after it. Also: after a `RESTART`, no unexpected stop at the next start; after a software reset with the last kept entry made invalid (kept RAM changed between reset and start), `start: unexpected stop`; after the trial's `restart: trial-unconfirmed`, no unexpected stop. No unexpected stop after two `RESTART`s in a row, after a `RESTART` with the log ring full, and after one with the ring just wrapped (0078). An unexpected stop in each of these cases (emulator; 0078): a `RESTART`, then the next run's start entry made invalid in kept RAM, then a software reset; a fault raised in the boot stage before its clear of the word, and one raised right after it; the boot stage's clear cut after each of its bytes reaches kept RAM, where the emulator can cut a write; a commanded reset whose word write is cut the same way; a valid word that names an entry other than the last kept one. After each `RESTART`, `READ_LOG` still holds the reason line. With a fault raised during a stretched erase, when the fixture can: (1) holds throughout and (2) counts from the end of the operation. Keyed part, pending with the other TX tests (needs a calibration set; `NOT_CALIBRATED` until then): the same, armed and keyed; the pins of Table A3-6b reach their safe levels within 20 µs of the handler's entry (emulated time to the last pin change), and the transmission ends. Coverage: the 20 µs are unproven until the keyed part. Not covered: bus faults, faults during exception stacking, MemManage unless the emulator shows it, lockup (not modelled; no result may rest on it), the first-20-µs residual; those stay with review, the firmware build check and drill F3, whose step (5) is one bus fault on the radio (A3.6 "Unexpected stop of the firmware"; A1.7; A3.5; 0075, 0076, 0078). |
 
 ### Discovery (B3)
 
@@ -4227,7 +4459,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B5-19 | Host A with General bytes 31–32 = 50000 stops (run = 0) and restarts with a High Priority packet with run = 1 only: the unasked capability record arrives at port 50000 at the session start, unless an unasked record went there less than 1 s before (B4.4 item 2, B5.4). |
 | T-B5-20 | On port 1027: two High Priority packets back to back at wire speed, run = 1 then run = 0, and the reverse, with no third packet within 2 ms: both are processed, so the session ends (or starts) as the last one says; a sequence of 20 High Priority packets 1 ms apart: none is lost; in each case `GET_STATS` `hp_rx` rises by exactly the number of packets sent (emulator, at the SPI clock known to work, with no management write, store compaction or firmware update in progress; B2.3 "High Priority bursts", Table B2-2; 0053, 0054, 0058). |
 | T-B5-21 | While armed: `SET_FIRST_SECRET`, `CHANGE_SECRET`, `FACTORY_RESET` (as a commanded reset, A1.9) and `SET_CALIBRATION` get status 50 or first unkey and disarm as their rules say, and no flash work starts while TX is armed or keyed; unarmed, a `SET_CONFIG` is answered only after its flash write has ended (emulator; B2.3 "Flash work"; 0055). |
-| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run ("idle"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on; a pin of Table A3-6b forced to the other level during a stretched erase gives `TX_PATH_NOT_BLOCKED` no later than 20 ms after the erase ends, and one forced and released within the erase gives no fault unless the firmware's samples in its wait loop saw it for 10 ms Reply time (0069): with every word program also at its maximum, a host that retransmits every 500 ms for 16 s completes an update, a `SET_CONFIG` with a compaction and an installer sector; each reply comes within 15 s of the request, each request is executed once although its retransmissions arrive during the erase, and flash.log shows at most one sector erase per request (B2.3 "Flash work"; A1.4; A3.6b; 0065, 0066, 0069). |
+| T-B5-22 | With every erase stretched to `t_erase_max` (emulator): during a `SET_CONFIG` with compaction and during an update, no watchdog reset, the RF control pins keep their A3.6 levels, no FPGA bus cycle is open across an erase: with the bus gate closed the emulator's FPGA bus model shows no MCU drive on PE0–PE10 for the whole run ("idle"); with it open (reference model) STB and CMD are driven low at every erase start and stay low until it ends, and after it RX, discovery and the management channel go on; a pin of Table A3-6b forced to the other level during a stretched erase gives `TX_PATH_NOT_BLOCKED` no later than 20 ms after the erase ends, and one forced and released within the erase gives no fault unless the firmware's samples in its wait loop saw it for 10 ms Reply time (0069): with every word program also at its maximum, a host that retransmits every 500 ms for 16 s completes an update, a `SET_CONFIG` with a compaction and an installer sector; each reply comes within 15 s of the request, each request is executed once although its retransmissions arrive during the erase, and flash.log shows at most one sector erase per request (B2.3 "Flash work"; A1.4; A3.6b; 0065, 0066, 0069). Time over flash work (0073): after N requests with flash work, uptime is behind the emulator's time by no more than N ms. |
 
 ### Streams (B6)
 
@@ -4364,7 +4596,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-B11-01 | Each packet type shorter than Table B11-1 is discarded with no effect (no watchdog feed, no takeover). |
 | T-B11-02 | A truncated High Priority packet with PTT set does not key. |
 | T-B11-03 | Unknown command bytes on port 1024 get no reply and change nothing. |
-| T-B11-04 | Packets with arbitrary or repeated sequence numbers are accepted; gaps on ports 1027 and 1029 are counted in `GET_STATS`. |
+| T-B11-04 | Packets with arbitrary or repeated sequence numbers are accepted; gaps on ports 1027 and 1029 are counted in `GET_STATS`. On port 1029, numbers 10, 11, 14, 13, 15 give one gap; 0xFFFFFFFF then 0 gives none; on port 1027, numbering 0xFFFFFFFF then 1 gives none (B11.6; 0078). |
 | T-B11-05 | Under forced RX overrun only whole DDC0 packets are lost, the gap shows in the sequence numbers, and status byte 30 bit [0] is set. |
 | T-B11-06 | DUC I&Q arriving faster than 192 ksps loses whole packets only. |
 | T-B11-07 | A DDC0 frequency outside `rx_range` is tuned without refusal. |
