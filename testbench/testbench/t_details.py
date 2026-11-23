@@ -155,6 +155,13 @@ def t_a1_15(ctx: Ctx):
         idle_pause(ctx, ck, a, b, s, end, config_tlv((11, allow)))
 
 
+def c3_rewrite(conf: dict) -> bytes | None:
+    """A SET_CONFIG payload of the TX time (a C-3 item) at its current value: by 0072 it is written by a compaction
+    whether or not the value changes (A1.6 C-3), so it is a request with one store erase. None without tag 7."""
+    tx = conf.get(7)
+    return config_tlv((7, tx)) if tx is not None and len(tx) == 4 else None
+
+
 def over_60(ctx, ck, a, b, s: bytes, value: bytes, label: str, wait_s: float, want: int, prepare, hit) -> bool:
     """0077, 0078: the holder's SET_CONFIG `wait_s` after its last request, its flash work over the 60 s:
     it is answered `want`, and host B's write straight after the reply gets 35. `prepare` runs before
@@ -198,8 +205,7 @@ def idle_pause(ctx, ck, a, b, s, end, tx):
     if not (has(ctx, "flash.timing") and has(ctx, "flash.log")):
         ctx.part("the stretched compaction (0077) not run: no flash.timing or flash.log")
         return
-    from .t_flash import (PROGRAM_MAX_US, TAG_PLAIN, in_range, is_erase, flog, flog_start, near_compaction, plain_entry, plain_raw,
-                          put_plain, store_range, stretch)
+    from .t_flash import PROGRAM_MAX_US, in_range, is_erase, flog, flog_start, store_range, stretch
     from .t_update import restart
     from .update import Updater
     ft = ctx.endpoint.get("flash_timing") or {}
@@ -208,21 +214,24 @@ def idle_pause(ctx, ck, a, b, s, end, tx):
         return
     u = Updater(a, s)
     lo, hi = store_range(u)
-    allow0 = plain_raw(u)
+    write = c3_rewrite(get_config(a))
+    if write is None:
+        ctx.part("the flash-work parts: not run, GET_CONFIG gives no TX time")
+        return
 
-    def case(label: str, v: int, wait_s: float, want: int, prepare, hit):
-        """Up to 5 tries, each with a new value, until the store's erase was in the request."""
+    def case(label: str, wait_s: float, want: int, prepare, hit) -> bool:
+        """A C-3 write (always one compaction, one store erase; 0072), up to 5 tries until that erase was in
+        the request."""
         back = stretch(ctx, ft["t_erase_max_us"], ft.get("t_program_max_us") or PROGRAM_MAX_US)
         try:
             for _ in range(5):
-                v += 1
-                if over_60(ctx, ck, a, b, s, config_tlv((TAG_PLAIN, plain_entry(v))), label, wait_s, want, prepare, hit):
-                    return v, True
+                if over_60(ctx, ck, a, b, s, write, label, wait_s, want, prepare, hit):
+                    return True
                 prepare = flog_start_only
         finally:
             back()
-        ctx.part(f"{label}: not shown, no store erase in 5 writes")
-        return v, False
+        ctx.part(f"{label}: not shown, no store erase in 5 C-3 writes")
+        return False
 
     def flog_start_only():
         flog_start(ctx)
@@ -231,32 +240,19 @@ def idle_pause(ctx, ck, a, b, s, end, tx):
         flog_start(ctx)
         ctx.fixture("flash.fault", op="erase", never_end=True)
 
-    def near(label: str, v: int):
-        v = near_compaction(ctx, u, lo, hi, v)
-        if v is None:
-            ctx.part(f"{label}: not shown: {ctx.__dict__.get('_near', '')}")
-        return v
-
     failed = False
     try:
         label = "a compaction at the maximum from 57 s"
-        v = near(label, 200_000)
-        if v is None:
-            return
-        v, _ = case(label, v, 57, 0, flog_start_only, lambda st: any(is_erase(e) and in_range(e, lo, hi) for e in flog(ctx)))
+        case(label, 57, 0, flog_start_only, lambda st: any(is_erase(e) and in_range(e, lo, hi) for e in flog(ctx)))
         label = "an erase that hangs, from 55 s"
         if not has(ctx, "flash.fault"):
             ctx.part(f"{label}: not run: no flash.fault")
             return
-        v = near(label, v + 10)
-        if v is None:
-            return
         failed = True  # the fault is armed, and the flash stays busy until a reset
-        case(label, v, 55, 55, hang, lambda st: st != 0)
+        case(label, 55, 55, hang, lambda st: st != 0)
     finally:
         if failed:
             restart(ctx, u)
-        put_plain(u, allow0)
         end(a)
 
 

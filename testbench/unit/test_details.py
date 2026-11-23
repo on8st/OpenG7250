@@ -218,3 +218,14 @@ class FaultRecord(unittest.TestCase):
         from testbench.t_details import entry_t_us
         self.assertEqual(entry_t_us({"entry": {"t_us": 12345}, "injected": {"t_us": 12300}}), 12345)
         self.assertIsNone(entry_t_us({"injected": {"t_us": 1}}))
+
+
+class C3Rewrite(unittest.TestCase):
+    """T-A1-15's flash-work parts need a store erase: a C-3 write of the TX time as it is (0072)."""
+
+    def test_payload(self):
+        from testbench.t_details import c3_rewrite
+        tx = (250_000).to_bytes(4, "big")
+        self.assertEqual(c3_rewrite({7: tx, 11: b""}), bytes([7, 4]) + tx)
+        self.assertIsNone(c3_rewrite({11: b""}))
+        self.assertIsNone(c3_rewrite({7: b"\x01"}))
