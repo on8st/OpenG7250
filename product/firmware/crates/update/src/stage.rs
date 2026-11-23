@@ -180,7 +180,13 @@ impl Stager {
     /// after `UPDATE_ABORT` and after `UPDATE_VERIFY` without `UPDATE_ACTIVATE`): the caller
     /// discards, logs and restarts into the running image (A1.8; T-A1-34, T-A1-46).
     pub fn abandoned(&self, now: u64) -> bool {
-        matches!(self.phase, Phase::Receiving | Phase::Verified | Phase::Discarded) && now.saturating_sub(self.last_ms) >= ABANDON_MS
+        self.abandon_due().is_some_and(|due| now >= due)
+    }
+
+    /// When the update is abandoned if no update command comes first, `None` without one in
+    /// progress: the caller wakes then, so that the limit acts within 100 ms (0073 point 2).
+    pub fn abandon_due(&self) -> Option<u64> {
+        matches!(self.phase, Phase::Receiving | Phase::Verified | Phase::Discarded).then_some(self.last_ms + ABANDON_MS)
     }
 
     /// `UPDATE_BEGIN`. Nothing is written here (U-2). Returns the block count. The same package

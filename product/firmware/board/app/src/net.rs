@@ -70,8 +70,9 @@ fn flash_failures(server: &mut Server<g7250_board::logmem::Mem>) {
     }
 }
 
-/// Longest idle sleep of the net loop with no session (INT# wakes it at once): the link check,
-/// the trial's 10 s confirmation (checked once a second) and the 10 min update abandonment.
+/// Longest idle sleep of the net loop with no session (INT# wakes it at once): the link check and
+/// the trial's 10 s confirmation (tried once a second). The trial's 60 s and the 10 min update
+/// abandonment wake it at their own time (0073 point 2).
 const IDLE_MAX_MS: u64 = 1000;
 /// Record the time of a pass step (GET_STATS step_*_us).
 fn step(steps: &mut [u64; g7250_radio::mgmt::STEPS], i: usize, t: Instant) {
@@ -790,6 +791,10 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 }
             }
         }
+        // The listed limits that act on their own, before this pass reads a management request:
+        // one that fell due during the flash work of the previous request acts first (0073 point
+        // 2). The trial's 60 s (A1.8): as in the main task.
+        crate::trial_limit();
         // An update without an update command for 10 min is abandoned (A1.8; T-A1-34, T-A1-46):
         // staging discarded, logged, restart into the running image (no RF in this build).
         if mgmt.update.stager.abandoned(Instant::now().as_millis()) {
@@ -1156,13 +1161,20 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 if chip.rx_pending(0xFF).map_or(true, |m| m == 0) {
                     // Sleep until INT# or the next due deadline: 2 ms while P2 needs its tick
                     // (a session's 50 ms status packet and its timers); else the DHCP client's
-                    // next step, at most IDLE_MAX_MS (link check, trial confirmation, update
-                    // abandonment, IP conflict also raises INT#). WFE in between.
+                    // next step, the trial's limit or the update abandonment (0073 point 2), at most
+                    // IDLE_MAX_MS (link check, trial confirmation; IP conflict also raises INT#).
+                    // WFE in between.
                     let now = Instant::now().as_millis();
                     let due = if p2.needs_tick() {
                         now + 2
                     } else {
-                        let d = dhcpc.as_ref().map_or(u64::MAX, |d| d.next_due());
+                        let mut d = dhcpc.as_ref().map_or(u64::MAX, |d| d.next_due());
+                        if crate::update::trial_pending() {
+                            d = d.min(g7250_update::trial::LIMIT_MS);
+                        }
+                        if let Some(a) = mgmt.update.stager.abandon_due() {
+                            d = d.min(a);
+                        }
                         d.clamp(now + 1, now + IDLE_MAX_MS)
                     };
                     crate::wakes::note(crate::wakes::Task::Net, woke.elapsed().as_micros());

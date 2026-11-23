@@ -383,6 +383,7 @@ fn abort_and_abandonment() {
     g.block(&mut s, &run, 0, true, &b[..512], 2000).unwrap();
     assert!(!g.abandoned(2000 + stage::ABANDON_MS - 1));
     assert!(g.abandoned(2000 + stage::ABANDON_MS));
+    assert_eq!(g.abandon_due(), Some(2000 + stage::ABANDON_MS), "the wake time (0073)");
     g.abort(5000);
     assert_eq!(g.phase(), Phase::Discarded);
     assert!(g.in_progress()); // the update state lasts until a restart
@@ -390,6 +391,8 @@ fn abort_and_abandonment() {
     assert_eq!(g.block(&mut s, &run, 1, true, &b[512..1024], 0), Err(Refusal::OutOfOrder));
     // The 10-minute rule also runs after an abort (T-A1-46).
     assert!(g.abandoned(5000 + stage::ABANDON_MS));
+    assert_eq!(g.abandon_due(), Some(5000 + stage::ABANDON_MS));
+    assert_eq!(Stager::new().abandon_due(), None, "no update in progress: no wake");
     // A discarded transfer is never activated; slot B is not bootable.
     assert!(!valid(&mut s, Slot::B));
     assert_eq!(boot(&mut s), Choice::Boot(Slot::A));

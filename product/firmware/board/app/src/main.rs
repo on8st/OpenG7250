@@ -258,19 +258,23 @@ async fn main(spawner: Spawner) {
 
     let mut n: u64 = 0;
     let mut tick = Ticker::every(Duration::from_secs(1));
+    // The trial's limit wakes this task at its time, not at the next tick (0073 point 2).
+    let limit = Instant::from_millis(g7250_update::trial::LIMIT_MS);
     loop {
-        tick.next().await;
+        if update::trial_pending() && Instant::now() < limit {
+            if let embassy_futures::select::Either::Second(()) = embassy_futures::select::select(tick.next(), Timer::at(limit)).await {
+                trial_limit();
+                continue;
+            }
+        } else {
+            tick.next().await;
+        }
         let t0 = Instant::now();
         wakes::roll();
         n += 1;
-        // A trial not confirmed 60 s after its start: commanded reset, the boot stage starts the
-        // previous image (A1.8 U-6; 0044). Here, not in the network task, so that it also holds
-        // when the network never comes up. Nothing is keyed in this build (no RF to wait for).
-        if update::trial_pending() && g7250_update::trial::expired(Instant::now().as_millis()) {
-            println!("app: FAULT trial image not confirmed 60 s after start; restarting into the previous image");
-            safe::reassert();
-            commanded_reset(Reason::TrialUnconfirmed);
-        }
+        // Here too, not only in the network task, so that it also holds when the network never
+        // comes up.
+        trial_limit();
         if n % 10 == 0 {
             println!("app: alive {} s", Instant::now().as_secs());
         }
@@ -307,6 +311,19 @@ pub fn safe_reset(mgmt: &mut mgmt_init::MgmtInit, reason: Reason) -> ! {
         }
     }
     commanded_reset(reason)
+}
+
+/// A trial not confirmed 60 s after its start: commanded reset, the boot stage starts the
+/// previous image (A1.8 U-6; 0044). Called by the main task at the limit and once a second, and
+/// by the network task on every pass before it reads a management request, so that a limit that
+/// fell due during flash work acts before a request received meanwhile (0073 point 2). Nothing
+/// is keyed in this build (no RF to wait for).
+pub fn trial_limit() {
+    if update::trial_pending() && g7250_update::trial::expired(Instant::now().as_millis()) {
+        println!("app: FAULT trial image not confirmed 60 s after start; restarting into the previous image");
+        safe::reassert();
+        commanded_reset(Reason::TrialUnconfirmed);
+    }
 }
 
 /// The reason, then the reset; the caller has put the relays in the A3.6 state.
