@@ -127,9 +127,13 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   secret was set before it and none is set after it (tag 11), and the tool says that this is
   the evidence used. A secret still set is never a confirmed factory reset. Otherwise the 33
   (or the silence) is reported with what `IDENTIFY` and the log showed (uptime, cause, slot;
-  "cause unknown" when tag 17 is 0), the request is not sent again, and the operator decides. After an answered request the request ran: any restart ends the wait,
-  and a cause other than software is named. Once
-  verified, an install never sends `UPDATE_ABORT`.
+  "cause unknown" when tag 17 is 0), the request is not sent again, and the operator decides.
+  After a `FACTORY_RESET` the radio has no secret any more, and a retransmission may get 32
+  instead of 33 (the spec names no status for it): both are judged the same way, to a
+  retransmission only. One limit: if another host sends the same request in the same window,
+  its log line is the same, and the tool cannot tell that reset from its own. After an
+  answered request the request ran: any restart ends the wait, and a cause other than software
+  is named. Once verified, an install never sends `UPDATE_ABORT`.
 - After `UPDATE_ACTIVATE` the tool waits for the reset and reads the result back: the new
   version runs in the target slot, as a trial, until it has confirmed itself (0044), or the
   rollback is reported. `--no-wait` skips this.

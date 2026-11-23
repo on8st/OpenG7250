@@ -386,12 +386,14 @@ pub const RESET_PROBE: std::time::Duration = std::time::Duration::from_secs(30);
 /// still set speaks against it, whatever the log says. The request is never sent again with a
 /// new challenge here: without that evidence the result is [`Failure::ResetNotShown`], with
 /// what was seen.
-/// A 33 to the first send is a plain authentication failure.
+/// After a `FACTORY_RESET` the retransmission meets a radio without a secret. The spec names no
+/// status for that; the reference model answers 32, so a 32 counts there like the 33.
+/// A 33 or 32 to the first send is a plain refusal.
 pub fn resetting(client: &mut Client, to: SocketAddr, secret: &Secret, cmd: Command, payload: &[u8]) -> Result<Resetting, Failure> {
     let a = reads::identify(client, to)?;
     let before = Before::now(&Identify::decode(&a.payload).expect("checked by reads::identify"), matches!(cmd, Command::UpdateActivate | Command::Rollback));
     let ambiguous = |r: &Result<Answer, Failure>| match r {
-        Ok(a) => a.status_code == 33 && a.sends > 1,
+        Ok(a) => a.sends > 1 && (a.status_code == 33 || (a.status_code == 32 && cmd == Command::FactoryReset)),
         Err(Failure::Transport(crate::transport::Error::NoReply { .. })) => true,
         Err(_) => false,
     };

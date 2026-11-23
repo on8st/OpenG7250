@@ -70,6 +70,11 @@ struct State {
     secret_kept: bool,
     /// READ_LOG gets no reply.
     log_silent: bool,
+    /// Status of an authenticated request while no secret is set (None: 32, as the reference
+    /// model answers; the spec names none).
+    no_secret_status: Option<u16>,
+    /// RESTART clears the secret as well (another host's factory reset in the window).
+    restart_clears_secret: bool,
 }
 
 fn config_payload(c: &BTreeMap<(u8, u8), Vec<u8>>) -> Vec<u8> {
@@ -110,6 +115,8 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
     let mut did_reset = false;
     let out = if needs_auth && flags & 1 == 0 {
         r(32, &[])
+    } else if needs_auth && st.secret.is_none() {
+        r(st.no_secret_status.unwrap_or(32), &[])
     } else if needs_auth && !auth_ok {
         st.challenges.remove(&from);
         r(33, &[])
@@ -196,7 +203,7 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
                         st.log = l.iter().map(|t| t.to_string()).collect();
                     }
                     st.reset_cause = st.reset_cause_after.unwrap_or(2);
-                    if cmd == 0x22 && !st.secret_kept {
+                    if (cmd == 0x22 && !st.secret_kept) || st.restart_clears_secret {
                         st.secret = None;
                         st.window_open = true;
                     }
@@ -419,7 +426,7 @@ fn not_shown(r: Result<ResetStart, Failure>) -> (LogShown, String) {
     let f = r.unwrap_err();
     assert_eq!(f.exit_code(), g7250ctl::exit::STATUS, "{f}");
     let t = f.to_string();
-    assert!(t.contains("status 33") && t.contains("Not confirmed") && t.contains("not sent again"), "{t}");
+    assert!((t.contains("status 33") || t.contains("status 32")) && t.contains("Not confirmed") && t.contains("not sent again"), "{t}");
     match f {
         Failure::ResetNotShown { log: Some(l), seen: Some(_), .. } => (l, t),
         f => panic!("{f:?}"),
@@ -506,6 +513,28 @@ fn a_lost_factory_reset_reply_is_judged_by_the_log_and_by_tag_11_when_the_log_is
     // Tag 11 confirms with the log lost, not with the log unreadable.
     let (r, _) = lost(Command::FactoryReset, State { log_silent: true, ..Default::default() });
     assert!(matches!(not_shown(r).0, LogShown::Unreadable(_)));
+}
+
+#[test]
+fn a_factory_reset_retransmission_may_get_32_or_33_and_a_first_32_is_a_refusal() {
+    // Found against the reference model: after a factory reset no secret is set, and the
+    // retransmission gets 32, not 33. Both are judged by IDENTIFY and the log.
+    for code in [32, 33] {
+        let (r, _) = lost(Command::FactoryReset, State { no_secret_status: Some(code), ..Default::default() });
+        assert_eq!(r.unwrap(), ResetStart::Seen { evidence: ResetEvidence::Log("restart: factory-reset".into()) }, "{code}");
+        let log = vec!["restart: stop 1", "start after software: log kept", "start: unexpected stop"];
+        let (r, _) = lost(Command::FactoryReset, State { no_secret_status: Some(code), log_after: Some(log), ..Default::default() });
+        let (l, t) = not_shown(r);
+        assert!(matches!(l, LogShown::Unexpected { .. }) && t.contains(&format!("status {code}")), "{t}");
+    }
+    // A 32 to the first send: refused, nothing more is looked at.
+    let (addr, st) = start(State { uptime: 50_000, ..Default::default() });
+    let f = writes::reset(&mut client(), addr, &secret(OLD), Command::FactoryReset).unwrap_err();
+    assert!(matches!(&f, Failure::Status(a, Command::FactoryReset) if a.status_code == 32 && a.sends == 1), "{f:?}");
+    assert_eq!(cmds(&st), vec![0x01, 0x10, 0x22]);
+    // For RESTART a 32 to the retransmission stays a refusal.
+    let (r, _) = lost(Command::Restart, State { restart_clears_secret: true, ..Default::default() });
+    assert!(matches!(r.unwrap_err(), Failure::Status(a, Command::Restart) if a.status_code == 32 && a.sends == 2));
 }
 
 #[test]
