@@ -55,6 +55,18 @@ through the erase; a second cut during the recovery from a first; each both with
 written and with it left torn (unreadable, R0); and check that a half-erased sector's old commit
 does not win (`crates/store`).
 
+**Factory reset** (A1.6a; 0069). A mark record (kind 8) is written in the live sector without an
+erase, then a compaction leaves out the secret and the mark and writes the factory configuration
+(erase one), then a second compaction erases the sector with the old secret (erase two). A start
+that finds the mark finishes the first compaction before the management socket opens. `put` always
+leaves one flash word free in the live sector for the mark (`Store::free` reports the room without
+it), so the mark is written however full the store is. **Known limit:** a store whose live sector
+has no word left at all can only come from a build before 4154fca (pre-0.1.1; no such image has
+run on a radio). There the mark comes with a first compaction that keeps everything, the drop is
+the second erase, and the sector left with the old secret is erased by the start check of the next
+start, not before the reset; a cut in that first compaction leaves the old items and no mark, so
+the reset is not finished at the next start.
+
 **Erase and program from RAM.** A 128 KiB sector erase can outlast the 2 s IWDG, and the CPU
 cannot fetch from the bank being erased or programmed (RM0468). `board/common/src/flash.rs`
 (boot stage and application) erases with `flash_erase_from_ram` and programs a flash word with
