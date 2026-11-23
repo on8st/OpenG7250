@@ -291,16 +291,34 @@ def erased_reset(ctx, s: bytes):
     if not has(ctx, "flash.fault"):
         ctx.notes.append("a failed erase after the reply not run: no flash.fault")
         return
+    STALE, UNREC = "store: stale secret erased", "store: non-live sector erased (unrecognised data)"
     with updating(ctx, second, restart_at_end=False) as u:
+        holders = where(ctx, secs, second) if known else []
+        flash = has(ctx, "flash.log")
+        if flash:
+            flog_start(ctx)
         ctx.fixture("flash.fault", op="erase", after=1, flag="PGSERR")  # the second erase of the request
         st, _, _ = factory_reset(ctx, u)
         ctx.eq("FACTORY_RESET whose second erase fails: 0 (it fails after the reply)", st, 0)
         texts = [e[2] for e in read_log(u.c)]
         i = [k for k, x in enumerate(texts) if x.startswith("restart: factory-reset")]
-        # the failed erase may have left the old secret's record whole or in part (0069 addendum)
-        ctx.check("finished at the next start: one of the start check's lines in this run's log", bool(i) and
-                  any("store: stale secret erased" in x or "store: non-live sector erased (unrecognised data)" in x
-                      for x in texts[i[-1]:]), f"{texts[-5:]}")
+        run = texts[i[-1]:] if i else []
+        # the line that is due: the failed erase's flash.log entry says which sector it hit and how much it
+        # erased; on the sector that held the old secret and with nothing erased, the record is whole
+        failed = [e for e in (flog(ctx) if flash else []) if is_erase(e) and str(e.get("result", "")).startswith("error")]
+        hit = [x for x in holders if failed and in_range(failed[0], x, x + SECTOR)]
+        whole = bool(hit) and not failed[0].get("fraction_done")
+        if whole:
+            ctx.check(f"finished at the next start: '{STALE}' (the failed erase left the old secret's record whole: flash.dump "
+                      "before, flash.log of the erase)", any(STALE in x for x in run), f"{texts[-5:]}")
+        else:
+            # whole or in part (0069 addendum): either line
+            ctx.check("finished at the next start: one of the start check's lines in this run's log",
+                      any(STALE in x or UNREC in x for x in run), f"{texts[-5:]}")
+            ctx.notes.append("the failed erase: which line is due not decided (" + (
+                "no flash.log" if not flash else "no failed erase in flash.log" if not failed else
+                "the secret's sector not known" if not holders else "not the secret's sector" if not hit else
+                f"{failed[0].get('fraction_done')} of the sector erased") + "): either start-check line taken")
         if known:
             ctx.eq("neither store sector holds the old secret (failed erase finished)", where(ctx, secs, second), [])
     ctx.eq("SET_FIRST_SECRET", first_secret(ctx, os.urandom(32)), 0)
