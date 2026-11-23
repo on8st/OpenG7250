@@ -18,9 +18,11 @@ use g7250_proto::netcfg;
 pub const WRITE_SESSION_MS: u64 = 60_000;
 /// Built-in maximum continuous TX time, ms (0007 Resolved 3).
 const BUILTIN_TX_TIME_MS: u32 = 300_000;
-/// Built-in maximum power per band, 0.1 W (Table A3-0: 100 W).
-const BUILTIN_BAND_POWER: u16 = 1000;
-const TX_BANDS: usize = 10;
+/// Built-in maximum power of band `i`, 0.1 W: the maximum power of its `tx_band` entry (0079;
+/// B4.8), so 0 at 50 MHz until P-PWR-2. `None` for an index with no band.
+fn builtin_band_power(i: usize) -> Option<u16> {
+    crate::record::TX_BANDS.get(i).map(|b| b.2)
+}
 
 /// The configuration as `GET_CONFIG` and `SET_CONFIG` answer it (Table M-3, every item): the
 /// stored items, and tag 8 for every `tx_band` the stored record does not tighten, with the
@@ -475,10 +477,8 @@ impl<W: Words> Server<W> {
         }
         for (i, l) in m.band_limit.iter().enumerate() {
             if let Some(l) = l {
-                if i >= TX_BANDS {
-                    return (Status::InvalidConfig, 0);
-                }
-                if *l > BUILTIN_BAND_POWER {
+                let Some(max) = builtin_band_power(i) else { return (Status::InvalidConfig, 0) };
+                if *l > max {
                     return (Status::NotAllowed, 0);
                 }
             }

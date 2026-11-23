@@ -376,6 +376,15 @@ fn set_config_validated_as_a_whole() {
     let fx = s.take_effects();
     assert!(matches!(fx[0], Effect::SetConfig(_)));
     assert_eq!(fx[1], Effect::ApplyNetwork);
+    // A band limit against the built-in value of its band (0079): 100 W on HF, 0 W at 50 MHz
+    // until P-PWR-2; an index with no band is invalid.
+    let band = |i: usize, l: u16| Config { band_limit: core::array::from_fn(|j| (j == i).then_some(l)), ..Default::default() };
+    let cases = [(0, 1001, Status::NotAllowed), (8, 1001, Status::NotAllowed), (9, 1, Status::NotAllowed), (9, 500, Status::NotAllowed), (10, 0, Status::InvalidConfig), (8, 1000, Status::Ok), (9, 0, Status::Ok)];
+    for (k, (i, l, want)) in cases.into_iter().enumerate() {
+        let id = 60 + 2 * k as u32;
+        assert_eq!(authed(&mut w, &mut s, HOST, id, Command::SetConfig, &enc(&band(i, l)), 1000 + 1000 * k as u64).0, want, "band {i} limit {l}");
+        s.take_effects();
+    }
 }
 
 /// T-A1-28: GET_CONFIG and SET_CONFIG answer every item of Table M-3, so tag 8 holds one TLV
