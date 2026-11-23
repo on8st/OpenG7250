@@ -827,12 +827,42 @@ def c3_writes(ctx, s: bytes, missing: list[str]):
                 continue
             ctx.eq(f"{label}: the C-3 item as before", c3_c1(u)[0], tx)
             ctx.eq(f"{label}: no '{LOST_LINE}' line", lost_lines(ctx, u, n0 + 1), 0)
+    s = start_check_cuts(ctx, s, tx, missing)
     with mg(ctx, s) as u:
         r = set_c3_c1(u, tx0, gw0)
         ctx.eq("the TX time and the gateway put back", r["status"] if r else None, 0)
     ctx.part("the C-3 cases of T-A1-86 that need a store where C-3 was never written (a boot-counter or C-1 write cut, "
-             "the first generation live), the start check's erase cut, and a sector left by a compaction cut before its "
-             "commit word with a stricter C-3 record: not run yet")
+             "the first generation live): not run yet, they need the wiped store of T-A1-92's cases")
+    ctx.part("a sector left by a compaction cut before its commit word, with a stricter C-3 record, then a cut in its erase: "
+             "not run, the start right after the first cut erases it, and no second cut can be armed between")
+
+
+def start_check_cuts(ctx, s: bytes, tx: int, missing: list[str]) -> bytes:
+    """Cuts at 0.1, 0.5, 0.9 of the start check's erase of the stale sector a CHANGE_SECRET leaves (A1.10):
+    the C-3 item as before, no 'C-3 lost' line. The secret in force afterwards."""
+    import os
+    from .t_store import change_secret
+    for frac in (0.1, 0.5, 0.9):
+        label = f"the start check's erase cut at {frac}"
+        with mg(ctx, s) as u:
+            new = os.urandom(32)
+            r = change_secret(ctx, u, new)
+            if not ctx.eq(f"{label}: a CHANGE_SECRET first (a stale sector): 0", r["status"] if r else None, 0):
+                return s
+            s = new
+            n0 = log_end(u)
+            flog_start(ctx)
+            ctx.fixture("power.cut", during_erase=frac)
+            u.req("RESTART", window=3.0)
+        wait_reachable(ctx, label)
+        with mg(ctx, s) as u:
+            e = cut_entry(flog(ctx), "erase")
+            if e is None:
+                missing.append(f"{label} (no cut erase entry)")
+                continue
+            ctx.eq(f"{label}: the C-3 item as before", c3_c1(u)[0], tx)
+            ctx.eq(f"{label}: no '{LOST_LINE}' line", lost_lines(ctx, u, n0 + 1), 0)
+    return s
 
 
 LOST = "config: C-3 lost, TX closed until rewritten"

@@ -319,8 +319,8 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-85": {"target": "emulator", "also": [], "needs": ["flash.fault"]},
     "T-A1-86": {"target": "emulator", "also": [], "needs": ["flash.log", "power.cut"],
                 "notes": ["0072: the commit word of a C-3 write is taken as the last word it programs; the cases that need a "
-                          "store where C-3 was never written, the start check's erase cut and a sector left by a cut compaction "
-                          "are parts, not run yet"]},
+                          "store where C-3 was never written are a part (not run yet), and a sector left by a cut compaction "
+                          "then cut in its erase is a part (the start after the first cut erases it)"]},
     "T-A1-87": {"target": "emulator", "also": ["host"], "needs": ["flash.log", "flash.ecc", "power.cycle"], "pending": [],
                 "notes": ["on the emulator 'without a fault or reset' is not covered: " + ECC_LIMIT,
                           "not blocked by P-PWR-2: S2 and T3 come from a simulated set (0072 point B)",

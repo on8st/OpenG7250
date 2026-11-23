@@ -16,7 +16,7 @@ STORE, N, BUILT_IN = 0x080C0000, 6, 300_000  # N words per generation, the last 
 class C3Radio:
     def __init__(self, broken=None):
         self.tx, self.gw, self.broken = 250_000, bytes(4), broken
-        self.log, self.cut, self.addr, self.appended = [], None, STORE, 0
+        self.log, self.cut, self.addr, self.appended, self.stale = [], None, STORE, 0, False
 
     def fixture(self, op, **a):
         if op == "flash.log":
@@ -52,6 +52,12 @@ class C3Radio:
                 self.tx = BUILT_IN
             return True
         return False
+
+    def restart(self):
+        """The start check erases the stale sector a CHANGE_SECRET left (A1.10)."""
+        if self.stale:
+            self.stale = False
+            self.erase()
 
     def set_config(self, p: bytes):
         its, i = {}, 0
@@ -89,6 +95,9 @@ class FakeU:
         if cmd == "SET_CONFIG":
             st = self.r.set_config(payload)
             return None if st is None else dict(status=st, payload=b"")
+        if cmd == "RESTART":
+            self.r.restart()
+            return None
         if cmd == "GET_CONFIG":
             return dict(status=0, payload=bytes([4, 4]) + self.r.gw + bytes([7, 4]) + struct.pack(">I", self.r.tx))
         return dict(status=0, payload=b"")
@@ -105,6 +114,13 @@ def run(broken=None):
     @contextmanager
     def mg(ctx_, s):
         yield FakeU(r)
+    from testbench import t_store
+    saved_change = t_store.change_secret
+
+    def change(ctx_, u, new, window=16.0):
+        r.stale = True
+        return dict(status=0)
+    t_store.change_secret = change
     saved = {k: getattr(t_flash, k) for k in ("mg", "wait_reachable", "lost_lines", "log_end")}
     t_flash.mg, t_flash.wait_reachable = mg, (lambda *a, **k: 0.0)
     t_flash.lost_lines, t_flash.log_end = (lambda ctx_, u, first: 0), (lambda u: 0)
@@ -114,6 +130,7 @@ def run(broken=None):
     finally:
         for k, v in saved.items():
             setattr(t_flash, k, v)
+        t_store.change_secret = saved_change
     return [c["name"] for c in ctx.checks if not c["ok"]], missing, ctx
 
 
@@ -123,6 +140,7 @@ class C3Writes(unittest.TestCase):
         self.assertEqual((bad, missing), ([], []))
         self.assertEqual(sum("cut at word" in c["name"] for c in ctx.checks), N + 1)
         self.assertTrue(ctx.parts)
+        self.assertEqual(sum("start check's erase cut" in c["name"] and "as before" in c["name"] for c in ctx.checks), 3)
 
     def test_broken_stores(self):
         for broken, seen in (("c3-appends", "one store erase"), ("commit-c1-new", "C-1 old"),
