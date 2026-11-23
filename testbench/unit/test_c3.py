@@ -151,3 +151,27 @@ class C3Writes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CutPlaced(unittest.TestCase):
+    """cut_placed: a cut found by its word count, or by its torn word being the k-th of the reference."""
+    REF = [STORE + 32 * i for i in range(7)] + [STORE + 0x200]  # the commit word elsewhere
+
+    def test_by_count(self):
+        log = [dict(op="program", address=STORE, len=224, result="ok"),
+               dict(op="program", address=STORE + 0x200, len=32, result="cut", words_written=0)]
+        self.assertEqual(t_flash.cut_placed(log, 8, self.REF), (True, ""))
+
+    def test_by_the_torn_word(self):
+        # the count disagrees (one word logged elsewhere), the torn word is the reference's 8th
+        log = [dict(op="program", address=STORE, len=192, result="ok"),
+               dict(op="program", address=STORE + 0x200, len=32, result="cut", words_written=0, torn=hex(STORE + 0x200))]
+        self.assertEqual(t_flash.cut_placed(log, 8, self.REF)[0], True)
+
+    def test_not_placed_says_why(self):
+        log = [dict(op="program", address=STORE, len=192, result="ok"),
+               dict(op="program", address=STORE + 0xC0, len=32, result="cut", words_written=0)]
+        placed, why = t_flash.cut_placed(log, 8, self.REF)
+        self.assertFalse(placed)
+        self.assertIn("words before the cut 6", why)
+        self.assertIn(hex(STORE + 0x200), why)

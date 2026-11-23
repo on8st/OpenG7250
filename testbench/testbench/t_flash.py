@@ -625,6 +625,39 @@ def cut_at_word(entries: list[dict], k: int) -> bool:
     return w is not None and (before + w in (k - 1, k) or w in (k - 1, k))
 
 
+def torn_address(e: dict) -> int | None:
+    """The word a program cut tore: the entry's 'torn' field, else its address + words_written words."""
+    a = e.get("torn")
+    if a is None and e.get("address") is not None and e.get("words_written") is not None:
+        b = e["address"]
+        a = (int(b, 0) if isinstance(b, str) else b) + 32 * int(e["words_written"])
+    return int(a, 0) if isinstance(a, str) else a
+
+
+def word_addresses(entries: list[dict], lo: int, hi: int) -> list[int]:
+    """The addresses of the words programmed in [lo, hi), in order."""
+    out = []
+    for e in entries:
+        if e.get("op") == "program" and in_range(e, lo, hi) and e.get("result") == "ok":
+            a = int(e["address"], 0) if isinstance(e["address"], str) else e["address"]
+            out += [a + 32 * i for i in range(words(e))]
+    return out
+
+
+def cut_placed(entries: list[dict], k: int, ref: list[int]) -> tuple[bool, str]:
+    """A program cut in the k-th word: by the word count (cut_at_word), or by the torn word being the
+    k-th word of an uncut reference write of the same kind (ref). (placed, what the entry shows)."""
+    e = cut_entry(entries, "program")
+    if e is None:
+        return False, f"cut entries {[x for x in entries if x.get('result') == 'cut'][:2]}"
+    torn = torn_address(e)
+    if cut_at_word(entries, k) or (torn is not None and len(ref) >= k and torn == ref[k - 1]):
+        return True, ""
+    before = sum(words(x) for x in entries[:entries.index(e)] if x.get("op") == "program" and x.get("result") == "ok")
+    return False, (f"words before the cut {before}, words_written {e.get('words_written')}, torn "
+                   f"{torn if torn is None else hex(torn)}, word {k} of the reference at {hex(ref[k - 1]) if len(ref) >= k else None}")
+
+
 def planned_cuts_seen(ctx, missing: list[str]):
     """A planned cut without its own flash.log entry is never a pass: a part with its reason, and no pass
     for the test (the cut did not come where planned, so the case says nothing either way)."""
@@ -783,6 +816,7 @@ def c3_writes(ctx, s: bytes, missing: list[str]):
             er = [e for e in entries if is_erase(e) and in_range(e, lo, hi)]
             ctx.eq(f"{label}: one store erase, a new generation (flash.log)", len(er), 1)
             n_words = sum(words(e) for e in entries if e.get("op") == "program" and in_range(e, lo, hi))
+            ref = word_addresses(entries, lo, hi)
             ctx.eq(f"{label}: both items read back new", c3_c1(u), (tx, gw))
     if not n_words:
         ctx.part("the cuts of a C-3 write: not run, flash.log shows no program of it")
@@ -802,8 +836,9 @@ def c3_writes(ctx, s: bytes, missing: list[str]):
         with mg(ctx, s) as u:
             got = c3_c1(u)
             entries = flog(ctx)
-        if not cut_at_word(entries, k):
-            missing.append(f"{label} (cut entry {[e for e in entries if e.get('result') == 'cut'][:1]})")
+        placed, why = cut_placed(entries, k, ref)
+        if not placed:
+            missing.append(f"{label} ({why})")
             continue
         if commit:
             want = (min(old[0], new[0]), old[1])  # a shorter TX time is the stricter value
@@ -820,7 +855,10 @@ def c3_writes(ctx, s: bytes, missing: list[str]):
             n0 = log_end(u)
             flog_start(ctx)
             ctx.fixture("power.cut", during_erase=frac)
-            compaction_writes(ctx, u, 0, lo, hi, write=c1_write)
+            res = compaction_writes(ctx, u, 0, lo, hi, write=c1_write)
+            if res is None and cut_entry(flog(ctx), "erase") is None:
+                # no erase came (a write without a reply, e.g. no challenge under load): the cut is still armed
+                compaction_writes(ctx, u, 1000, lo, hi, write=c1_write)
         wait_reachable(ctx, label)
         with mg(ctx, s) as u:
             e = cut_entry(flog(ctx), "erase")
