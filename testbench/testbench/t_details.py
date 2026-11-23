@@ -799,7 +799,20 @@ def fault_line_ok(text: str | None) -> bool:
 
 
 def rec_get(rec: dict, name: str):
-    return rec.get(name, rec.get(name.lower(), rec.get(name.upper())))
+    """A field of the cpu.fault record, at its top or in its entry (value.entry), in any case."""
+    for d in (rec, rec.get("entry") if isinstance(rec.get("entry"), dict) else {}):
+        for k in (name, name.lower(), name.upper()):
+            if k in d:
+                return d[k]
+    return None
+
+
+def entry_t_us(rec: dict) -> int | None:
+    """value.entry.t_us: the emulated time of the fault handler's first instruction (us since power-on, the clock
+    of at_us and the hw.trace events)."""
+    e = rec.get("entry")
+    t = e.get("t_us") if isinstance(e, dict) else None
+    return int(t) if t is not None else None
 
 
 def in_mode(rec: dict, mode: str) -> bool | None:
@@ -836,13 +849,13 @@ def fault_case(ctx, s: bytes, mode: str, judge):
     m = in_mode(rec, mode)
     ctx.check(f"{label}: the fault came in {mode} mode (cpu.fault IPSR)", m is not False, f"{rec}")
     # (2) a software reset within 10 ms of the handler's entry
-    entry, boot = rec_get(rec, "t_us"), boot_t_us(ctx)
+    entry, boot = entry_t_us(rec), boot_t_us(ctx)  # the reset: the hw.trace boot event after the fault
     if entry is None or not boot:
         ctx.part(f"{label}: '(2) a reset within 10 ms of the handler's entry' not judged: "
-                 + ("cpu.fault's record gives no entry time" if entry is None else "no hw.trace boot event"))
+                 + ("cpu.fault's record gives no entry.t_us" if entry is None else "no hw.trace boot event"))
     else:
-        ctx.check(f"{label}: (2) the reset within 10 ms of the handler's entry (emulated time)", 0 < boot - int(entry) <= 10_000,
-                  f"{(boot - int(entry)) / 1000:.2f} ms")
+        ctx.check(f"{label}: (2) the reset within 10 ms of the handler's entry (emulated time: boot event - entry.t_us)",
+                  0 < boot - entry <= 10_000, f"{(boot - entry) / 1000:.3f} ms (boot {boot}, entry {entry} us)")
     with Mgmt(ctx.net) as c:
         r = req_retransmit(c, "IDENTIFY")
         cause = tlv(r["payload"]).get(17) if r and r["status"] == 0 else None

@@ -212,3 +212,9 @@ class FaultRecord(unittest.TestCase):
         self.assertTrue(in_mode({"ipsr": 47}, "handler"))
         self.assertFalse(in_mode({"ipsr": 0}, "handler"))
         self.assertIsNone(in_mode({}, "handler"))
+        self.assertTrue(in_mode({"entry": {"ipsr": 3}}, "handler"))
+
+    def test_entry_time(self):
+        from testbench.t_details import entry_t_us
+        self.assertEqual(entry_t_us({"entry": {"t_us": 12345}, "injected": {"t_us": 12300}}), 12345)
+        self.assertIsNone(entry_t_us({"injected": {"t_us": 1}}))

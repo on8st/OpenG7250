@@ -943,9 +943,10 @@ def t_b5_20(ctx):
     # information, not judged (the spec sets no figure)
     with mg as c:
         st = stats(c)
-    v = (st or {}).get("net_busy_pass_max_us")
-    ctx.check("information (not judged): GET_STATS net_busy_pass_max_us after the bursts", True,
-              f"{v} us" if v is not None else ("GET_STATS has no net_busy_pass_max_us" if st is not None else "no GET_STATS answer"))
+    # the firmware's own names are its choice (Table M-6 names come first, 0074): every one with "busy" in it
+    busy = {k: v for k, v in (st or {}).items() if "busy" in k}
+    ctx.check("information (not judged): GET_STATS names with 'busy' after the bursts", True,
+              ", ".join(f"{k}={v}" for k, v in sorted(busy.items())) if busy else ("none" if st is not None else "no GET_STATS answer"))
     ctx.check("information (not judged): GET_STATS after the last burst, all counters", True,
               ", ".join(f"{k}={st[k]}" for k in sorted(st)) if st else "no GET_STATS answer")
 
