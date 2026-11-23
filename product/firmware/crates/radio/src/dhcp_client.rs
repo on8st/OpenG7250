@@ -15,14 +15,18 @@ use g7250_proto::netcfg::{Ip, Mode, NetConfig};
 /// Longest borrow of the management socket by one exchange (0041: at most 2 s, since a host
 /// gives up after about 2.5 s), the close of port 7251 and its reopen included (T-A1-66).
 pub const BORROW_MS: u64 = 2_000;
+/// What a borrow is made to last: 200 ms under [`BORROW_MS`], so that a slower clock or a slow
+/// pass of the net loop does not bring it to the bound (emulator run of adb8f45: a borrow of
+/// 1.98 s; openg7250, 2026-11-23).
+pub const BORROW_TARGET_MS: u64 = 1_800;
 /// What follows the end of the wait before 7251 is open again: the net loop polls the client
 /// at most every 2 ms while it borrows the socket, then the close of 68 and the open of 7251
 /// (a few CH394 commands over SPI, well under 1 ms each).
 pub const RETURN_MS: u64 = 20;
 /// The wait for a reply, from the first send (made right after the socket was taken): the
-/// borrow ends by BORROW_MS with RETURN_MS to spare. An exchange not finished by then is
+/// borrow ends by BORROW_TARGET_MS with RETURN_MS to spare. An exchange not finished by then is
 /// abandoned and retried at the next interval.
-pub const WAIT_MS: u64 = BORROW_MS - RETURN_MS;
+pub const WAIT_MS: u64 = BORROW_TARGET_MS - RETURN_MS;
 const BACKOFF_MS: [u64; 5] = [4_000, 8_000, 16_000, 32_000, 64_000];
 /// After a DHCPDECLINE (RFC 2131 section 3.1 item 5).
 pub const DECLINE_WAIT_MS: u64 = 10_000;

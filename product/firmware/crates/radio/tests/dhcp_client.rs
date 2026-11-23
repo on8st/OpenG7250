@@ -2,7 +2,7 @@
 //! DHCP client (A1.11, A1.11a; RFC 2131).
 use g7250_proto::dhcp;
 use g7250_proto::netcfg::{self, Mode, NetConfig};
-use g7250_radio::dhcp_client::{Action, BORROW_MS, Client, Msg, RETURN_MS, State, WAIT_MS};
+use g7250_radio::dhcp_client::{Action, BORROW_MS, BORROW_TARGET_MS, Client, Msg, RETURN_MS, State, WAIT_MS};
 
 const MAC: [u8; 6] = [2, 0, 0, 0, 0x72, 0x50];
 const SERVER: [u8; 4] = [192, 168, 1, 1];
@@ -169,12 +169,13 @@ fn one_borrow_lasts_at_most_2_s_decision_0041() {
     let mut c = Client::new(MAC, 100, ll(), None, 0);
     assert!(matches!(c.poll(4_000), Action::Send { .. }));
     let x = c.xid;
-    assert!(matches!(c.on_reply(&reply(dhcp::OFFER, x, [192, 168, 1, 77], 3600), 5_900), Action::Send { .. }));
+    assert!(matches!(c.on_reply(&reply(dhcp::OFFER, x, [192, 168, 1, 77], 3600), 5_700), Action::Send { .. }));
     assert!(c.listening());
-    assert_eq!(c.poll(6_000), Action::None);
-    assert!(!c.listening(), "abandoned 2 s after the first send");
+    assert_eq!(c.poll(4_000 + WAIT_MS), Action::None);
+    assert!(!c.listening(), "abandoned 1.78 s after the first send");
     assert!(matches!(c.state, State::Init { .. }), "retried at the next interval");
-    assert_eq!(WAIT_MS + RETURN_MS, BORROW_MS);
+    assert_eq!(WAIT_MS + RETURN_MS, BORROW_TARGET_MS);
+    assert!(BORROW_TARGET_MS + 200 <= BORROW_MS, "200 ms under the bound of 0041");
 }
 
 #[test]
@@ -194,8 +195,8 @@ fn the_whole_borrow_close_and_reopen_included_is_at_most_2_s() {
             c.poll(t);
         }
         let end = t + REOPEN_MAX_MS;
-        assert!(end - t0 <= BORROW_MS, "borrow {} ms", end - t0);
-        assert!(end - t0 > BORROW_MS - 50, "not much shorter either: {} ms", end - t0);
+        assert!(end - t0 <= BORROW_TARGET_MS && BORROW_TARGET_MS < BORROW_MS, "borrow {} ms", end - t0);
+        assert!(end - t0 > BORROW_TARGET_MS - 50, "not much shorter either: {} ms", end - t0);
     }
 }
 
