@@ -306,9 +306,12 @@ OVERRIDES: dict[str, dict] = {
                 "notes": ["needs slot.corrupt; the both-slots case only on an emulator"]},
     "T-A1-85": {"target": "emulator", "also": [], "needs": ["flash.fault"]},
     "T-A1-86": {"target": "emulator", "also": [], "needs": ["flash.log", "power.cut"]},
-    "T-A1-87": {"target": "emulator", "also": [], "needs": ["flash.log", "flash.ecc", "power.cycle"], "pending": [],
+    "T-A1-87": {"target": "emulator", "also": ["host"], "needs": ["flash.log", "flash.ecc", "power.cycle"], "pending": [],
                 "notes": ["on the emulator 'without a fault or reset' is not covered: " + ECC_LIMIT,
-                          "not blocked by P-PWR-2: S2 and T3 come from a simulated set (0072 point B)"]},
+                          "not blocked by P-PWR-2: S2 and T3 come from a simulated set (0072 point B)",
+                          "on the reference model the lost state of 0072 only, through its fixture c3.lose; on the emulator "
+                          "the C-3 parts are not run yet: where the C-3 record and the generation number lie is the "
+                          "firmware's choice"]},
     "T-A1-77": {"target": "emulator", "also": [], "needs": ["flash.log"],
                 "notes": ["needs the update client (Table M-4 package) in the bench and the slot layout; flash.log v1.8"]},
     "T-A1-78": {"target": "emulator", "also": ["host"],

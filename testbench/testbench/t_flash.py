@@ -718,10 +718,97 @@ def t_a1_86(ctx: Ctx):
     planned_cuts_seen(missing)
 
 
+LOST = "config: C-3 lost, TX closed until rewritten"
+U16, U32 = (lambda v: struct.pack(">H", v)), (lambda v: struct.pack(">I", v))
+
+
+def lost_on_model(ctx):
+    """T-A1-87, A1.6 "Lost" (0072) on the reference model, whose fixture c3.lose makes the C-3 record
+    unreadable from the next start on: with a complete simulated set (0072 point B), and with none."""
+    from .mgmt import SavedCalibration
+    from .t_store import get_config
+    s = secret(ctx)
+    with mg(ctx, s) as u:
+        saved = SavedCalibration(ctx, u.c)
+        conf0 = get_config(u.c)
+        if not ctx.check("GET_CONFIG lists the TX time and a power limit per band", 7 in conf0 and bool(conf0[8]), f"{conf0}"):
+            return
+        try:
+            for with_set in (True, False):
+                if not lost_case(ctx, u, conf0, with_set):
+                    break
+        finally:
+            saved.restore(s)
+            back = [(7, conf0[7])] + [(8, bytes([i]) + U16(v)) for i, v in sorted(conf0[8].items())]
+            back += [(k, conf0[k]) for k in (9, 10) if k in conf0]
+            r = u.req("SET_CONFIG", config_tlv(*back))
+            ctx.eq("the C-3 limits put back as they were", r["status"] if r else None, 0)
+    ctx.part("the double ECC error in the C-3 record of the live generation, and the fall-backs: on the emulator only")
+    ctx.notes.append("on the model 'TX is closed on every band' is judged by the 0 W limits of GET_CONFIG only: its keying "
+                     "model does not apply the band limits")
+
+
+def lost_case(ctx, u, conf0: dict, with_set: bool) -> bool:
+    from .mgmt import read_log
+    from .t_mgmt import simulated_set
+    from .t_store import get_config
+    from .t_update import restart
+    label = "C-3 lost with a complete simulated set" if with_set else "C-3 lost with no calibration set"
+    st = lambda *items: (lambda r: r["status"] if r else None)(u.req("SET_CONFIG", config_tlv(*items)))
+    r = u.req("CLEAR_CALIBRATION")
+    if not ctx.eq(f"{label}: CLEAR_CALIBRATION 0", r["status"] if r else None, 0):
+        return False
+    if with_set:
+        r = u.req("SET_CALIBRATION", simulated_set())
+        if not ctx.eq(f"{label}: the simulated set accepted", r["status"] if r else None, 0):
+            return False
+    ctx.fixture("c3.lose")
+
+    def start(what: str) -> list[str]:
+        n0 = max([e[0] for e in read_log(u.c, complete=True)], default=-1)
+        restart(ctx, u)
+        return [e[2] for e in read_log(u.c, n0 + 1, complete=True)]
+
+    texts = start(label)
+    ctx.eq(f"{label}: '{LOST}' logged once at the start", texts.count(LOST), 1)
+    conf = get_config(u.c)
+    zero = lambda c: bool(c[8]) and all(v == 0 for v in c[8].values())
+    ctx.check(f"{label}: GET_CONFIG reports 0 W for every band", zero(conf), f"{conf[8]}")
+    # every C-3 item: the TX time, every band (0 where it was 0 before, the 50 MHz band of 0079), S2 and T3
+    every = [(7, U32(250_000))] + [(8, bytes([i]) + U16(900 if v else 0)) for i, v in sorted(conf0[8].items())]
+    s2t3 = [(9, conf[9]), (10, conf[10])] if with_set else [(9, U16(300)), (10, U16(700))]
+    ctx.eq(f"{label}: a SET_CONFIG of one band limit: 48", st(every[1]), 48)
+    ctx.eq(f"{label}: a SET_CONFIG of every C-3 item but S2 and T3: 48", st(*every), 48)
+    ctx.check(f"{label}: they changed nothing (0 W on every band)", zero(get_config(u.c)), f"{get_config(u.c)[8]}")
+    if with_set:
+        texts = start(f"{label}, a RESTART")
+        ctx.check(f"{label}: after a RESTART still 0 W on every band, '{LOST}' logged again",
+                  zero(get_config(u.c)) and texts.count(LOST) == 1, f"{texts[-3:]}")
+    else:
+        ctx.eq(f"{label}: a SET_CONFIG of one band limit and S2: 48 (48 before 62)", st(every[1], s2t3[0]), 48)
+        ctx.eq(f"{label}: a SET_CONFIG of every C-3 item: 62", st(*every, *s2t3), 62)
+        r = u.req("SET_CALIBRATION", simulated_set())
+        if not ctx.eq(f"{label}: then a complete simulated set accepted", r["status"] if r else None, 0):
+            return False
+        conf = get_config(u.c)
+        ctx.check(f"{label}: after the set GET_CONFIG still reports 0 W for every band", zero(conf), f"{conf[8]}")
+        s2t3 = [(9, conf.get(9, b"")), (10, conf.get(10, b""))]
+    ctx.eq(f"{label}: a SET_CONFIG of every C-3 item: 0", st(*every, *s2t3), 0)
+    conf = get_config(u.c)
+    want = {i: int.from_bytes(v[1:], "big") for _, v in every[1:] for i in [v[0]]}
+    ctx.eq(f"{label}: GET_CONFIG reports the written limits", (conf.get(7), conf[8]), (U32(250_000), want))
+    texts = start(f"{label}, rewritten")
+    ctx.eq(f"{label}: after it, a start without '{LOST}'", texts.count(LOST), 0)
+    return True
+
+
 @test("T-A1-87")
 def t_a1_87(ctx: Ctx):
     """A1.6 "Store writes" (0065): a double ECC error in a store record and in the newest commit
-    word. Not covered on the emulator: ECC_LIMIT."""
+    word. Not covered on the emulator: ECC_LIMIT. On the reference model the lost state of 0072 only
+    (c3.lose)."""
+    if "c3.lose" in ctx.endpoint.get("fixtures", []):
+        return lost_on_model(ctx)
     need(ctx, "flash.log", "flash.ecc", "power.cycle")
     s = secret(ctx)
     from .t_update import restart
@@ -774,6 +861,8 @@ def t_a1_87(ctx: Ctx):
         if old is not None:
             put_plain(u, old)
     ctx.notes.append("'logged once per start' and 'an item with no readable record takes its Table A1-4 value' not judged yet")
+    ctx.part("the C-3 parts of 0072 (the C-3 record of the live generation unreadable, the lost state, fall-backs with C-3, the "
+             "generation number): not run on the emulator, the place of the C-3 record and of the number is the firmware's choice")
 
 
 @test("T-A1-83", whole=True)

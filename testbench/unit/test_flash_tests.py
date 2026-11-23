@@ -177,7 +177,9 @@ class FlashTestsTest(unittest.TestCase):
             t_flash.t_a1_87(ctx)
         self.assertEqual(run(keep, FakeRadio(broken="ecc-late")), [])
         self.assertTrue(kept[0].no_pass)
-        self.assertEqual(len(kept[0].parts), 1)  # the first case not judged, the second not run
+        # the first case not judged, the second not run; and the C-3 parts of 0072 not run on the emulator
+        self.assertEqual(len(kept[0].parts), 2, kept[0].parts)
+        self.assertIn("not judged", kept[0].parts[0])
 
 
 class CompactionTest(unittest.TestCase):

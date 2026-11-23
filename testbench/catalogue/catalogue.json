@@ -1911,7 +1911,9 @@
    ],
    "scope": "v1.0",
    "target": "emulator",
-   "also": [],
+   "also": [
+    "host"
+   ],
    "needs": [
     "flash.log",
     "flash.ecc",
@@ -1921,7 +1923,8 @@
    "tx_part": false,
    "notes": [
     "on the emulator 'without a fault or reset' is not covered: it shows a double ECC error only in the flash flags and cannot deliver the bus fault the chip gives on the read",
-    "not blocked by P-PWR-2: S2 and T3 come from a simulated set (0072 point B)"
+    "not blocked by P-PWR-2: S2 and T3 come from a simulated set (0072 point B)",
+    "on the reference model the lost state of 0072 only, through its fixture c3.lose; on the emulator the C-3 parts are not run yet: where the C-3 record and the generation number lie is the firmware's choice"
    ],
    "timeout_s": 300
   },
