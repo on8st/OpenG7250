@@ -145,7 +145,8 @@ def mg(ctx, s):
     return updating(ctx, s, restart_at_end=False)
 
 
-def compaction_writes(ctx, u: Updater, start_ms: int, lo: int, hi: int, limit: int = 5000, window: float | None = None):
+def compaction_writes(ctx, u: Updater, start_ms: int, lo: int, hi: int, limit: int = 5000, window: float | None = None,
+                      write=None):
     """SET_CONFIG with increasing values until flash.log shows an erase of a store sector (a
     compaction); (last value written, number of writes) or None, with the reason in
     ctx._compaction. A write that gets no reply, or another status, still looks at flash.log: the
@@ -157,7 +158,7 @@ def compaction_writes(ctx, u: Updater, start_ms: int, lo: int, hi: int, limit: i
     for n in range(limit):
         v += 1
         w0, t0 = time.monotonic(), clock.now() if clock is not None else 0.0
-        r = set_plain(u, v, window)
+        r = (write or set_plain)(u, v, window)
         st = r["status"] if r else None
         wall = time.monotonic() - w0
         worst = max(worst, clock.now() - t0 if clock is not None else wall)
@@ -715,7 +716,123 @@ def t_a1_86(ctx: Ctx):
     with mg(ctx, s) as u:
         if old is not None:
             put_plain(u, old)
+    c3_writes(ctx, s, missing)
     planned_cuts_seen(missing)
+
+
+# ---------------- T-A1-86, 0072: C-3 writes ----------------
+TAG_GW = 4  # the C-1 item of the mixed writes: the gateway, which ends no session (A1.6 C-1)
+LOST_LINE = "config: C-3 lost, TX closed until rewritten"
+
+
+def items(u: Updater) -> dict:
+    from .mgmt import req_retransmit
+    r = req_retransmit(u.c, "GET_CONFIG") if isinstance(u, Updater) else u.c.req("GET_CONFIG")
+    return tlv(r["payload"]) if r and r.get("status") == 0 else {}
+
+
+def c3_c1(u: Updater) -> tuple:
+    """(TX time, gateway) as GET_CONFIG gives them."""
+    c = items(u)
+    tx = c.get(TAG_TX_TIME)
+    return (struct.unpack(">I", tx)[0] if tx and len(tx) == 4 else None), c.get(TAG_GW)
+
+
+def set_c3_c1(u: Updater, ms: int, gw: bytes | None, window: float | None = None):
+    its = [(TAG_TX_TIME, struct.pack(">I", ms))] + ([(TAG_GW, gw)] if gw is not None else [])
+    return u.req("SET_CONFIG", config_tlv(*its), window=window)
+
+
+def lost_lines(ctx, u: Updater, first: int) -> int:
+    from .mgmt import read_log
+    return sum(e[2] == LOST_LINE for e in read_log(u.c, first))
+
+
+def log_end(u: Updater) -> int:
+    from .mgmt import read_log
+    return max([e[0] for e in read_log(u.c)], default=-1)
+
+
+def c3_writes(ctx, s: bytes, missing: list[str]):
+    """T-A1-86, A1.6 "C-3 at a start" (0072): a C-3 write is one compaction (one store erase); a power
+    loss at each word of a SET_CONFIG with C-3 and C-1 items: before its commit word both old, with
+    the commit word cut C-1 old and each C-3 item the stricter of old and new, after it both new;
+    and cuts during the erase of a C-1 compaction leave C-3 as it was, with no 'C-3 lost' line. The
+    commit word is taken as the last word the write programs (its place is the firmware's choice)."""
+    with mg(ctx, s) as u:
+        lo, hi = store_range(u)
+        tx0, gw0 = c3_c1(u)
+        ip = bytes(int(x) for x in ctx.endpoint["radio"]["ip"].split("."))
+    if tx0 is None or gw0 is None or len(gw0) != 4:
+        ctx.part(f"the C-3 writes of 0072: not run, GET_CONFIG gives no TX time or gateway ({tx0}, {gw0!r})")
+        return
+    gws = (gw0, ip if gw0 != ip else ip[:3] + bytes([ip[3] ^ 1]))
+    tx, gw = tx0 - 1000, gw0
+    n_words = None
+    for label, its in (("a C-3 write", None), ("a SET_CONFIG with C-3 and C-1 items", gws[1])):
+        with mg(ctx, s) as u:
+            flog_start(ctx)
+            tx -= 1
+            r = set_c3_c1(u, tx, its)
+            gw = its if its is not None else gw
+            entries = flog(ctx)
+            if not ctx.eq(f"{label}: 0", r["status"] if r else None, 0):
+                return
+            er = [e for e in entries if is_erase(e) and in_range(e, lo, hi)]
+            ctx.eq(f"{label}: one store erase, a new generation (flash.log)", len(er), 1)
+            n_words = sum(words(e) for e in entries if e.get("op") == "program" and in_range(e, lo, hi))
+            ctx.eq(f"{label}: both items read back new", c3_c1(u), (tx, gw))
+    if not n_words:
+        ctx.part("the cuts of a C-3 write: not run, flash.log shows no program of it")
+        return
+    ctx.notes.append(f"a SET_CONFIG with C-3 and C-1 items programs {n_words} words; the last is taken as its commit word")
+    cases = [(k, -1) for k in range(1, n_words + 1)] + [(n_words, +1)]  # tightened at each word; loosened at the commit word
+    for k, way in cases:
+        old = (tx, gw)
+        new = (tx + 10 * way, gws[0] if gw == gws[1] else gws[1])
+        commit = k == n_words
+        label = f"a mixed SET_CONFIG ({'loosening' if way > 0 else 'tightening'} C-3) cut at word {k} of {n_words}" +                 (" (its commit word)" if commit else "")
+        with mg(ctx, s) as u:
+            flog_start(ctx)
+            ctx.fixture("power.cut", after_flash_words=k)
+            set_c3_c1(u, *new, window=3.0)  # the power is cut: no reply is expected
+        wait_reachable(ctx, label)
+        with mg(ctx, s) as u:
+            got = c3_c1(u)
+            entries = flog(ctx)
+        if not cut_at_word(entries, k):
+            missing.append(f"{label} (cut entry {[e for e in entries if e.get('result') == 'cut'][:1]})")
+            continue
+        if commit:
+            want = (min(old[0], new[0]), old[1])  # a shorter TX time is the stricter value
+            ctx.eq(f"{label}: C-1 old, the C-3 item the stricter of old and new", got, want)
+        else:
+            ctx.eq(f"{label}: both items old", got, old)
+        tx, gw = got if None not in got else old
+    # cuts during the erase of a C-1 compaction: C-3 as it was, no 'C-3 lost' line
+    def c1_write(u, v, window=None):
+        return u.req("SET_CONFIG", config_tlv((TAG_GW, gws[v % 2])), window=window)
+    for frac in (0.1, 0.5, 0.9):
+        label = f"a C-1 compaction cut during its erase at {frac}"
+        with mg(ctx, s) as u:
+            n0 = log_end(u)
+            flog_start(ctx)
+            ctx.fixture("power.cut", during_erase=frac)
+            compaction_writes(ctx, u, 0, lo, hi, write=c1_write)
+        wait_reachable(ctx, label)
+        with mg(ctx, s) as u:
+            e = cut_entry(flog(ctx), "erase")
+            if e is None or not in_range(e, lo, hi):
+                missing.append(f"{label} (entry {e}; {ctx.__dict__.get('_compaction', '')})")
+                continue
+            ctx.eq(f"{label}: the C-3 item as before", c3_c1(u)[0], tx)
+            ctx.eq(f"{label}: no '{LOST_LINE}' line", lost_lines(ctx, u, n0 + 1), 0)
+    with mg(ctx, s) as u:
+        r = set_c3_c1(u, tx0, gw0)
+        ctx.eq("the TX time and the gateway put back", r["status"] if r else None, 0)
+    ctx.part("the C-3 cases of T-A1-86 that need a store where C-3 was never written (a boot-counter or C-1 write cut, "
+             "the first generation live), the start check's erase cut, and a sector left by a compaction cut before its "
+             "commit word with a stricter C-3 record: not run yet")
 
 
 LOST = "config: C-3 lost, TX closed until rewritten"
