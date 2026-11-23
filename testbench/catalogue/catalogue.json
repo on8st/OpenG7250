@@ -1537,7 +1537,8 @@
    "notes": [
     "spec marks it reference model; emulator only with the fixtures",
     "timing in radio time from eth.log (RFC 3927 section 9 bounds, 50 ms slack); 'closed for at most 10 s' and 'only then answers' from sock.log; the start-up bound from the radio's first frame, which comes after link up"
-   ]
+   ],
+   "timeout_s": 300
   },
   {
    "id": "T-A1-71",
@@ -1561,7 +1562,8 @@
    "tx_part": false,
    "notes": [
     "timing in radio time from eth.log (RFC 3927 section 9 bounds, 50 ms slack); 'closed for at most 10 s' and 'only then answers' from sock.log; the start-up bound from the radio's first frame, which comes after link up"
-   ]
+   ],
+   "timeout_s": 300
   },
   {
    "id": "T-A1-72",
@@ -1586,7 +1588,8 @@
    "tx_part": false,
    "notes": [
     "timing in radio time from eth.log (RFC 3927 section 9 bounds, 50 ms slack); 'closed for at most 10 s' and 'only then answers' from sock.log; the start-up bound from the radio's first frame, which comes after link up"
-   ]
+   ],
+   "timeout_s": 1200
   },
   {
    "id": "T-A1-73",
@@ -1611,7 +1614,8 @@
    "tx_part": false,
    "notes": [
     "a static address with no previous configuration is a part: the bench cannot remove it"
-   ]
+   ],
+   "timeout_s": 600
   },
   {
    "id": "T-A1-74",
@@ -1707,7 +1711,8 @@
    ],
    "covers": [
     "UP-02 (flash.log: sectors 6 and 7 only as store writes)"
-   ]
+   ],
+   "timeout_s": 900
   },
   {
    "id": "T-A1-78",

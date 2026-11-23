@@ -492,6 +492,8 @@ UNCOVERED = [
 TIMEOUTS: dict[str, int] = {
     # a real package is about 275 blocks, two datagrams each at 18 per second: 30 s per update
     "T-A1-34": 700, "T-A1-46": 1400, "T-A1-82": 1500, "T-A1-68": 900, "T-A1-09": 900, "T-A1-84": 600, "T-A1-83": 900,
+    "T-A1-77": 900,  # a complete update to the confirmed trial boot, then an aborted one (as T-A1-83, -09)
+    "T-A1-70": 300, "T-A1-71": 300, "T-A1-72": 1200, "T-A1-73": 600,  # link-local: power-on probes; 10 conflicts and the 60 s wait
     "T-A1-88": 900, "T-A1-89": 900, "T-A1-90": 900, "T-A1-67": 300, "T-A1-80": 1000,
     "T-A1-05": 120, "T-A1-33": 120, "T-A1-23": 120, "T-A1-59": 120, "T-A1-78": 120, "T-A1-79": 120, "T-A1-81": 120,
     "T-B8-10": 120, "T-A1-91": 1500, "T-A1-28": 240, "T-A1-39": 300, "T-A1-92": 2700,
