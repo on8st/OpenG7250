@@ -46,6 +46,7 @@
 
 - Spec A1.6 C-3 bullet; A3.4c (the built-in value); B4.8 `tx_band` row; Table M-1 `SET_CONFIG`
   reply.
+- Spec Table A3-2, Forward-power row: "0 W until P-PWR-2 (0079)" (ON8ST, 2026-11-23).
 - Tests T-A1-28 and T-A1-96 extended.
 
 ## Sources

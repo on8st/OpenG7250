@@ -109,8 +109,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0077 | Streaming installer: the write session continues there with `END_WRITE_SESSION`; the idle time pauses during the holder's own request; power loss with every sector written; `SET_FIRST_SECRET` gets 36 | accepted (2026-11-22) |
 | 0078 | Evidence of a commanded reset: a commanded-reset word in kept RAM; reads of kept RAM never stop the start; test timings; counter details and the definition of a gap | accepted (2026-11-22) |
 | 0079 | Built-in power limit at 50 MHz 0 W until P-PWR-2 (a limit above 0 gets 49); the `SET_CONFIG` reply gives the items as `GET_CONFIG` does | accepted (2026-11-23) |
+| 0080 | Status 32 for an authenticated command without an HMAC trailer or with no secret set; 33 only with a secret set (installer: the secret in RAM); a 32 is no authentication failure; counter `mg_auth_required` | accepted (2026-11-23) |
 
-All numbers 0001–0079 are now in use.
+All numbers 0001–0080 are now in use.
 
 ## Open questions for ON8ST
 
