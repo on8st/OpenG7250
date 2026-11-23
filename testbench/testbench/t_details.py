@@ -316,15 +316,14 @@ def t_a1_94(ctx: Ctx):
 
 def due_trial(ctx, s: bytes, t_max: int):
     from .t_a3 import boot_t_us
-    from .t_flash import PROGRAM_MAX_US, TAG_PLAIN, near_compaction, plain_entry, plain_raw, put_plain, store_range, stretch
+    from .t_flash import PROGRAM_MAX_US, flog, flog_start, in_range, is_erase, store_range, stretch
     from .t_log import entries, judge_run, letter, newest
     from .t_update import activate_new, advance, updating
     with updating(ctx, s, restart_at_end=False) as u:
         lo, hi = store_range(u)
-        old = plain_raw(u)
-        v = near_compaction(ctx, u, lo, hi, 200_000, left=60)
-    if v is None:
-        ctx.part(f"trial: no compaction placed: {ctx.__dict__.get('_near', '')}")
+        write = c3_rewrite(get_config(u.c))  # a C-3 write: always one compaction (0072)
+    if write is None:
+        ctx.part("trial: not run, GET_CONFIG gives no TX time")
         return
     a = activate_new(ctx, s, 940)
     if not ctx.check("trial: an update activated", a is not None, ctx.__dict__.get("_upd_fail") or "the update did not complete"):
@@ -334,21 +333,26 @@ def due_trial(ctx, s: bytes, t_max: int):
     back = stretch(ctx, t_max, (ctx.endpoint.get("flash_timing") or {}).get("t_program_max_us") or PROGRAM_MAX_US)
     try:
         with updating(ctx, s, restart_at_end=False) as u:
-            v = near_compaction(ctx, u, lo, hi, v + 1)
             n0 = newest(ctx)
             now = (ctx.fixture("hw.observe") or {}).get("t_us", 0)
             at = start + 60_000_000 - 2_000_000  # so that the limit falls due during its flash work (0078)
-            if v is None or now > at - 8_000_000:
-                ctx.part(f"trial: the compaction could not be placed at the limit: {ctx.__dict__.get('_near', '')}")
+            if now > at - 8_000_000:
+                ctx.part(f"trial: the compaction could not be placed at the limit: {(at - now) / 1e6:.1f} s left before it")
             else:
                 advance(ctx, (at - now) / 1e6 - 5)
                 ctx.eq("trial: not confirmed (tag 10 = 1)", u.identify().get(10), b"\x01")
-                data = signed(u.c, "SET_CONFIG", s, config_tlv((TAG_PLAIN, plain_entry(v + 1))))
+                logged = has(ctx, "flash.log")
+                if logged:
+                    flog_start(ctx)
+                data = signed(u.c, "SET_CONFIG", s, write)
                 now = (ctx.fixture("hw.observe") or {}).get("t_us", 0)
                 if data is not None and now < at:
                     ctx.fixture("time.wait", _timeout=120, us=at - now) if has(ctx, "time.wait") else advance(ctx, (at - now) / 1e6)
                 st = send_judged(ctx, u, data, "trial: a SET_CONFIG with a stretched compaction at the 60 s limit", start + 60_000_000)
                 ctx.eq("trial: the SET_CONFIG is answered 0", st, 0)
+                if logged:
+                    ctx.check("trial: that SET_CONFIG erased a store sector (its compaction, flash.log)",
+                              any(is_erase(e) and in_range(e, lo, hi) for e in flog(ctx)), "no store erase")
                 t = u.identify()
                 ctx.eq("trial: the next start rolls back (tag 10 = 2, the previous slot)", (t.get(10), t.get(23, b"")[:1]),
                        (b"\x02", bytes([a[0]])))
@@ -358,7 +362,7 @@ def due_trial(ctx, s: bytes, t_max: int):
         back()
         ctx.fixture("gpio.force", pin="PF4", level=None, target="idr")
         with updating(ctx, s) as u:  # the RESTART also clears the class 2 fault
-            put_plain(u, old)
+            pass
 
 
 def due_abandon(ctx, s: bytes, t_max: int):
