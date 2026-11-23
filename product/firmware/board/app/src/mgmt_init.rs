@@ -103,8 +103,6 @@ impl MgmtInit {
                 let _ = store_notes.push(if s.erase_stale().is_ok() { done } else { failed });
             }
         }
-        let mut get = |k: Kind, buf: &mut [u8]| store.as_mut().and_then(|s| s.get(k, buf).ok().flatten()).map(|(_, n)| n);
-
         // C-3 from the store's own record, as judged at open (0072): logged once per start when
         // lost or taken from a failed generation.
         let limits = store.as_ref().map_or(Limits::BUILTIN, |s| s.limits());
