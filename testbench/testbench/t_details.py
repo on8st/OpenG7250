@@ -88,15 +88,16 @@ def t_a1_15(ctx: Ctx):
     ck = Clock(ctx)
     with m(ctx) as a, m(ctx) as b:
         a.pace = b.pace = 18
-        tx = get_config(a).get(7, b"")
-        if not ctx.check("GET_CONFIG tag 7 (the value the writes repeat)", len(tx) == 4, repr(tx)):
+        # the allow-list (C-7, tag 11) as it is: a write with no C-3 item, which needs no compaction (0072)
+        allow = get_config(a).get(11)
+        if not ctx.check("GET_CONFIG tag 11 (the value the writes repeat)", allow is not None, f"tags {sorted(get_config(a))}"):
             return
 
         def st(c, cmd, payload=b"", **kw):
             r = c.authed(cmd, s, payload, **kw)
             return r["status"] if r else None
 
-        wr = lambda c: st(c, "SET_CONFIG", config_tlv((7, tx)))
+        wr = lambda c: st(c, "SET_CONFIG", config_tlv((11, allow)))
         end = lambda c: st(c, "END_WRITE_SESSION")
 
         def held(label: str, t_sent: float):
@@ -129,7 +130,7 @@ def t_a1_15(ctx: Ctx):
             ck.wait(at - (ck.now() - t))
             for cmd in ("GET_STATS", "IDENTIFY", "GET_CHALLENGE", "UPDATE_STATUS"):
                 req_retransmit(a, cmd)
-            ctx.eq(f"A's request with a wrong HMAC ({i + 1}): 33", st(a, "SET_CONFIG", config_tlv((7, tx)), mangle=True), 33)
+            ctx.eq(f"A's request with a wrong HMAC ({i + 1}): 33", st(a, "SET_CONFIG", config_tlv((11, allow)), mangle=True), 33)
             if i == 0:
                 held("28 s after A's write", t)
         ck.wait(60.5 - (ck.now() - t_reply))
@@ -151,7 +152,7 @@ def t_a1_15(ctx: Ctx):
         if dt < 60:
             ctx.eq("and the holder's session stays: A's write 35", got, 35)
         ctx.eq("the holder's END_WRITE_SESSION: 0", end(b), 0)
-        idle_pause(ctx, ck, a, b, s, end, tx)
+        idle_pause(ctx, ck, a, b, s, end, config_tlv((11, allow)))
 
 
 def over_60(ctx, ck, a, b, s: bytes, value: bytes, label: str, wait_s: float, want: int, prepare, hit) -> bool:
@@ -165,14 +166,14 @@ def over_60(ctx, ck, a, b, s: bytes, value: bytes, label: str, wait_s: float, wa
         return True
     ck.wait(wait_s - (ck.now() - t0))
     prepare()
-    data = signed(a, "SET_CONFIG", s, config_tlv((7, value)))
+    data = signed(a, "SET_CONFIG", s, value)
     if data is None:
         ctx.part(f"{label}: not sent: {a.why}")
         return True
     t2 = ck.now()
     r = send_retransmit(a, data, FLASH_WINDOW_S, "SET_CONFIG")
     t3 = ck.now()
-    other = (b.authed("SET_CONFIG", s, config_tlv((7, value))) or {}).get("status")
+    other = (b.authed("SET_CONFIG", s, value) or {}).get("status")
     st = r["status"] if r else None
     if not hit(st):
         return False
@@ -197,7 +198,8 @@ def idle_pause(ctx, ck, a, b, s, end, tx):
     if not (has(ctx, "flash.timing") and has(ctx, "flash.log")):
         ctx.part("the stretched compaction (0077) not run: no flash.timing or flash.log")
         return
-    from .t_flash import PROGRAM_MAX_US, in_range, is_erase, flog, flog_start, near_compaction, set_tx_time, store_range, stretch
+    from .t_flash import (PROGRAM_MAX_US, TAG_PLAIN, in_range, is_erase, flog, flog_start, near_compaction, plain_entry, plain_raw,
+                          put_plain, store_range, stretch)
     from .t_update import restart
     from .update import Updater
     ft = ctx.endpoint.get("flash_timing") or {}
@@ -206,6 +208,7 @@ def idle_pause(ctx, ck, a, b, s, end, tx):
         return
     u = Updater(a, s)
     lo, hi = store_range(u)
+    allow0 = plain_raw(u)
 
     def case(label: str, v: int, wait_s: float, want: int, prepare, hit):
         """Up to 5 tries, each with a new value, until the store's erase was in the request."""
@@ -213,7 +216,7 @@ def idle_pause(ctx, ck, a, b, s, end, tx):
         try:
             for _ in range(5):
                 v += 1
-                if over_60(ctx, ck, a, b, s, struct.pack(">I", v), label, wait_s, want, prepare, hit):
+                if over_60(ctx, ck, a, b, s, config_tlv((TAG_PLAIN, plain_entry(v))), label, wait_s, want, prepare, hit):
                     return v, True
                 prepare = flog_start_only
         finally:
@@ -253,7 +256,7 @@ def idle_pause(ctx, ck, a, b, s, end, tx):
     finally:
         if failed:
             restart(ctx, u)
-        set_tx_time(u, int.from_bytes(tx, "big"))
+        put_plain(u, allow0)
         end(a)
 
 
@@ -317,12 +320,12 @@ def t_a1_94(ctx: Ctx):
 
 def due_trial(ctx, s: bytes, t_max: int):
     from .t_a3 import boot_t_us
-    from .t_flash import PROGRAM_MAX_US, near_compaction, set_tx_time, store_range, stretch, tx_time
+    from .t_flash import PROGRAM_MAX_US, TAG_PLAIN, near_compaction, plain_entry, plain_raw, put_plain, store_range, stretch
     from .t_log import entries, judge_run, letter, newest
     from .t_update import activate_new, advance, updating
     with updating(ctx, s, restart_at_end=False) as u:
         lo, hi = store_range(u)
-        old = tx_time(u)
+        old = plain_raw(u)
         v = near_compaction(ctx, u, lo, hi, 200_000, left=60)
     if v is None:
         ctx.part(f"trial: no compaction placed: {ctx.__dict__.get('_near', '')}")
@@ -344,7 +347,7 @@ def due_trial(ctx, s: bytes, t_max: int):
             else:
                 advance(ctx, (at - now) / 1e6 - 5)
                 ctx.eq("trial: not confirmed (tag 10 = 1)", u.identify().get(10), b"\x01")
-                data = signed(u.c, "SET_CONFIG", s, config_tlv((7, struct.pack(">I", v + 1))))
+                data = signed(u.c, "SET_CONFIG", s, config_tlv((TAG_PLAIN, plain_entry(v + 1))))
                 now = (ctx.fixture("hw.observe") or {}).get("t_us", 0)
                 if data is not None and now < at:
                     ctx.fixture("time.wait", _timeout=120, us=at - now) if has(ctx, "time.wait") else advance(ctx, (at - now) / 1e6)
@@ -359,8 +362,7 @@ def due_trial(ctx, s: bytes, t_max: int):
         back()
         ctx.fixture("gpio.force", pin="PF4", level=None, target="idr")
         with updating(ctx, s) as u:  # the RESTART also clears the class 2 fault
-            if old is not None:
-                set_tx_time(u, old)
+            put_plain(u, old)
 
 
 def due_abandon(ctx, s: bytes, t_max: int):

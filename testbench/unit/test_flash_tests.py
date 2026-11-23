@@ -103,10 +103,11 @@ class FakeU:
 
     def req(self, cmd, payload=b"", window=None):
         if cmd == "SET_CONFIG":
-            st = self.r.write(struct.unpack(">I", payload[2:6])[0])
+            assert payload[:3] == bytes([11, 5, 10]), payload  # the plain item (0072)
+            st = self.r.write(int.from_bytes(payload[3:6], "big"))
             return None if st is None else dict(status=st, payload=b"")
         if cmd == "GET_CONFIG":
-            return dict(status=0, payload=bytes([7, 4]) + struct.pack(">I", self.r.value))
+            return dict(status=0, payload=bytes([11, 5, 10]) + (self.r.value & 0xFFFFFF).to_bytes(3, "big") + bytes([32]))
         return dict(status=0, payload=b"")
 
     def identify(self):

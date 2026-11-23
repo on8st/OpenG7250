@@ -78,6 +78,41 @@ def in_range(e: dict, lo: int, hi: int) -> bool:
     return a is not None and lo <= a < hi
 
 
+# The item of an ordinary, appended store write: the TCI allow-list (C-7, tag 11) with one entry
+# 10.x.y.z/32 that carries a number. It holds no C-3 item, and a C-3 write always compacts (0072),
+# so the TX time (tag 7) no longer serves for store mechanics.
+TAG_PLAIN = 11
+
+
+def plain_entry(v: int) -> bytes:
+    return bytes([10]) + (v & 0xFFFFFF).to_bytes(3, "big") + bytes([32])
+
+
+def plain_raw(u: Updater) -> bytes | None:
+    """The allow-list as GET_CONFIG gives it (to put it back), or None."""
+    from .mgmt import req_retransmit
+    r = req_retransmit(u.c, "GET_CONFIG") if isinstance(u, Updater) else u.c.req("GET_CONFIG")
+    if not r or r.get("status") != 0:
+        return None
+    return tlv(r["payload"]).get(TAG_PLAIN)
+
+
+def plain(u: Updater) -> int | None:
+    """The number of the plain item, or None (not one entry of this form)."""
+    v = plain_raw(u)
+    return int.from_bytes(v[1:4], "big") if v and len(v) == 5 and v[0] == 10 and v[4] == 32 else None
+
+
+def set_plain(u: Updater, v: int, window: float | None = None):
+    return u.req("SET_CONFIG", config_tlv((TAG_PLAIN, plain_entry(v))), window=window)
+
+
+def put_plain(u: Updater, raw: bytes | None):
+    """Put the allow-list back as it was."""
+    if raw is not None:
+        u.req("SET_CONFIG", config_tlv((TAG_PLAIN, raw)))
+
+
 def tx_time(u: Updater) -> int | None:
     from .mgmt import req_retransmit
     r = req_retransmit(u.c, "GET_CONFIG") if isinstance(u, Updater) else u.c.req("GET_CONFIG")
@@ -122,7 +157,7 @@ def compaction_writes(ctx, u: Updater, start_ms: int, lo: int, hi: int, limit: i
     for n in range(limit):
         v += 1
         w0, t0 = time.monotonic(), clock.now() if clock is not None else 0.0
-        r = set_tx_time(u, v, window)
+        r = set_plain(u, v, window)
         st = r["status"] if r else None
         wall = time.monotonic() - w0
         worst = max(worst, clock.now() - t0 if clock is not None else wall)
@@ -150,7 +185,7 @@ def near_compaction(ctx, u: Updater, lo: int, hi: int, start_ms: int, left: int 
     it asks flash.log for the erase). The last value written, or None with the reason in ctx._near."""
     def one(v):
         n0 = len(flog(ctx))
-        r = set_tx_time(u, v)
+        r = set_plain(u, v)
         progs = [e for e in flog(ctx, n0) if e.get("op") == "program" and in_range(e, lo, hi)]
         return (r["status"] if r else None), progs
     flog_start(ctx)
@@ -172,7 +207,7 @@ def near_compaction(ctx, u: Updater, lo: int, hi: int, start_ms: int, left: int 
             break
     for k in range(n):
         v += 1
-        r = set_tx_time(u, v)
+        r = set_plain(u, v)
         if not r or r["status"] != 0:
             ctx.__dict__["_near"] = f"write {k + 1} of {n} answered {r['status'] if r else None}"
             return None
@@ -266,7 +301,7 @@ def flash_work(ctx, s: bytes, t_max: int):
     from .t_update import facts, newer, pkg, restart, rx_works
     with mg(ctx, s) as u:
         lo, hi = store_range(u)
-        old = tx_time(u)
+        old = plain_raw(u)
         flog_start(ctx)
         up0 = (u.identify().get(16) or b"\0\0\0\0")
         obs = "hw.observe" in ctx.endpoint.get("fixtures", [])
@@ -339,7 +374,7 @@ def flash_work(ctx, s: bytes, t_max: int):
         ctx.check("no reset at all: uptime went on", struct.unpack(">I", up1)[0] > struct.unpack(">I", up0)[0],
                   f"uptime {struct.unpack('>I', up0)[0]} -> {struct.unpack('>I', up1)[0]} ms")
         if old is not None:
-            set_tx_time(u, old)
+            put_plain(u, old)
     with mg(ctx, s) as u:
         restart(ctx, u)
         ctx.check("after it the management channel goes on", bool(u.identify()), f"no IDENTIFY: {u.c.why}")
@@ -515,11 +550,11 @@ def t_a1_85(ctx: Ctx):
     s = secret(ctx)
     from .t_update import facts, newer, pkg, restart, rx_works
     with mg(ctx, s) as u:
-        old = tx_time(u)
+        old = plain_raw(u)
         ctx.fixture("flash.fault", op="program", flag="PGSERR")
-        r = set_tx_time(u, 200_001)
+        r = set_plain(u, 200_001)
         ctx.eq("a store write whose flash write ends with an error flag: SET_CONFIG 55", r["status"] if r else None, 55)
-        ctx.eq("the configuration read back is the old one", tx_time(u), old)
+        ctx.eq("the configuration read back is the old one", plain_raw(u), old)
         ff = fault_flags(ctx)
         ctx.check("INTERNAL_ERROR (class 2) raised: FAULT_FLAGS bit 19", ff is not None and ff >> INTERNAL_ERROR & 1, f"FAULT_FLAGS {ff}")
         ctx.check("RX goes on", rx_works(ctx), "no status packet")
@@ -537,7 +572,7 @@ def t_a1_85(ctx: Ctx):
     after_write_failure(ctx, s)
     with mg(ctx, s) as u:
         run, other, ver, lay = facts(ctx, u)
-        old = tx_time(u)
+        old = plain_raw(u)
         ctx.fixture("flash.fault", op="erase", never_end=True)
         img = image(2148, seed=852)
         u.c.timed = True
@@ -556,7 +591,7 @@ def t_a1_85(ctx: Ctx):
         reset = ff is not None and ff >> WDT_RESET_AT_START & 1
         if reset:
             ctx.check("the watchdog reset the processor: WDT_RESET_AT_START reported", True, f"FAULT_FLAGS {ff}")
-            ctx.eq("the store as before (configuration)", tx_time(u), old)
+            ctx.eq("the store as before (configuration)", plain_raw(u), old)
             ctx.eq("the boot record as before (running slot)", t.get(23, b"")[:1], bytes([run]))
         else:
             ctx.eq("no watchdog reset: the update gets 55 as a write failure", st, 55)
@@ -602,11 +637,11 @@ def t_a1_86(ctx: Ctx):
     need(ctx, "flash.log", "power.cut")
     s = secret(ctx)
     with mg(ctx, s) as u:
-        old = tx_time(u)
+        old = plain_raw(u)
     v = 210_000
     accepted = v
     with mg(ctx, s) as u:
-        r = set_tx_time(u, v)
+        r = set_plain(u, v)
         if not ctx.eq("a first write answered 0", r["status"] if r else None, 0):
             return
     rows, missing, armed, whole = [], [], False, False
@@ -615,11 +650,11 @@ def t_a1_86(ctx: Ctx):
         with mg(ctx, s) as u:
             flog_start(ctx)
             ctx.fixture("power.cut", after_flash_words=k)  # tears the k-th word after the call (v1.8)
-            r = set_tx_time(u, v, window=3.0)  # the power is cut: no reply is expected
+            r = set_plain(u, v, window=3.0)  # the power is cut: no reply is expected
             answered0 = r is not None and r["status"] == 0
         wait_reachable(ctx, f"power cut after word {k}")
         with mg(ctx, s) as u:
-            got = tx_time(u)
+            got = plain(u)
             entries = flog(ctx)
         cut = any(e.get("result") == "cut" for e in entries)
         rows.append((k, answered0, cut, got))
@@ -649,11 +684,11 @@ def t_a1_86(ctx: Ctx):
         v += 1
         with mg(ctx, s) as u:
             flog_start(ctx)
-            set_tx_time(u, v, window=3.0)
+            set_plain(u, v, window=3.0)
         wait_reachable(ctx, "the cut left armed")
         with mg(ctx, s) as u:
             armed = not any(e.get("result") == "cut" for e in flog(ctx))
-            got = tx_time(u)
+            got = plain(u)
             ctx.check("after the cut left armed: old or new value", got in (accepted, v), f"read {got}, {accepted} or {v}")
             accepted = got if got in (accepted, v) else accepted
     if armed:
@@ -667,7 +702,7 @@ def t_a1_86(ctx: Ctx):
             last = ctx.__dict__.get("_last_ok", accepted)
         wait_reachable(ctx, f"power cut during a compaction erase at {frac}")
         with mg(ctx, s) as u:
-            got = tx_time(u)
+            got = plain(u)
             e = cut_entry(flog(ctx), "erase")
             done = (e or {}).get("fraction_done")
             if e is None or done is None or abs(done - frac) > 0.02 or not in_range(e, lo, hi):
@@ -679,7 +714,7 @@ def t_a1_86(ctx: Ctx):
                 accepted = got
     with mg(ctx, s) as u:
         if old is not None:
-            set_tx_time(u, old)
+            put_plain(u, old)
     planned_cuts_seen(missing)
 
 
@@ -691,16 +726,16 @@ def t_a1_87(ctx: Ctx):
     s = secret(ctx)
     from .t_update import restart
     with mg(ctx, s) as u:
-        old = tx_time(u)
+        old = plain_raw(u)
         lo, hi = store_range(u)
 
     def newest_write(base: int):
         """Write base, then base + 1 bracketed in flash.log (v1.8: the program entries between
         a read before the command and one after its answer); (first word, commit word)."""
         with mg(ctx, s) as u:
-            set_tx_time(u, base)
+            set_plain(u, base)
             flog_start(ctx)
-            set_tx_time(u, base + 1)
+            set_plain(u, base + 1)
             progs = [e for e in flog(ctx) if e.get("op") == "program" and in_range(e, lo, hi)]
         if not progs:
             return None
@@ -723,7 +758,7 @@ def t_a1_87(ctx: Ctx):
         ctx.fixture("power.cycle")
         wait_reachable(ctx, f"ECC error in {where}")
         with mg(ctx, s) as u:
-            got = tx_time(u)
+            got = plain(u)
             ctx.eq(f"{where} unreadable: the store opens and uses the older record or generation", got, base)
             ff = fault_flags(ctx)
             ctx.check(f"{where}: FAULT_FLAGS 0 (no bus fault is delivered by the emulator, so not 'without a fault or reset')",
@@ -731,13 +766,13 @@ def t_a1_87(ctx: Ctx):
             ecc = [e for e in flog(ctx) if e.get("op") == "ecc"]
             ctx.check(f"{where}: the ECC error was seen by the radio", bool(ecc), f"{len(ecc)} ecc entries")
             flog_start(ctx)
-            set_tx_time(u, base + 5)
+            set_plain(u, base + 5)
             skipped = all((int(e["address"], 0) if isinstance(e["address"], str) else e["address"]) != addr
                           for e in flog(ctx) if e.get("op") == "program" and "address" in e)
             ctx.check(f"{where}: later writes skip the word", skipped, f"address {addr:#x}")
     with mg(ctx, s) as u:
         if old is not None:
-            set_tx_time(u, old)
+            put_plain(u, old)
     ctx.notes.append("'logged once per start' and 'an item with no readable record takes its Table A1-4 value' not judged yet")
 
 
@@ -799,7 +834,7 @@ def t_a1_83(ctx: Ctx):
             slot = t.get(23, b"")[:1]
             ctx.check("one bootable image starts: the trial image as a trial, or the previous image",
                       (slot == bytes([other]) and t.get(10) == b"\x01") or slot == bytes([run]), f"slot {slot!r}, tag 10 {t.get(10)!r}")
-            ctx.check("the store is readable", tx_time(u) is not None, "GET_CONFIG unanswered")
+            ctx.check("the store is readable", plain_raw(u) is not None, "GET_CONFIG unanswered")
     advance(ctx, 11)
     # a power loss during the self-confirmation write
     with mg(ctx, s) as u:
@@ -829,7 +864,7 @@ def t_a1_83(ctx: Ctx):
             t = u.identify()
             ctx.eq("a torn confirmation: the previous image starts (rolled back, tag 10 = 2)", (t.get(23, b"")[:1], t.get(10)),
                    (bytes([run]), b"\x02"))
-            ctx.check("the store is readable", tx_time(u) is not None, "GET_CONFIG unanswered")
+            ctx.check("the store is readable", plain_raw(u) is not None, "GET_CONFIG unanswered")
             from .t_update import rollback_logged
             rollback_logged(ctx, u, run)
     planned_cuts_seen(missing)

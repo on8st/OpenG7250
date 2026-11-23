@@ -301,7 +301,7 @@ def run(broken="", without=()):
         return dict(status=0)
     new = dict(mg=mg, updating=updating, change_secret=change, compaction_writes=compaction, secret=lambda c: original,
                wait_reachable=lambda *a, **k: 0.0, sectors=lambda u: [A, B], store_range=lambda u: (A, B + SECTOR),
-               first_secret=first, set_tx_time=config, tx_time=lambda u: st.get(b"T"), accepts=lambda c, s: 0 if s == st.secret else 33,
+               first_secret=first, set_plain=config, plain=lambda u: st.get(b"T"), accepts=lambda c, s: 0 if s == st.secret else 33,
                ident=lambda c: {11: b"\1" if st.secret else b"\0", 12: b"\0" if st.secret else b"\1\1\x2c", 23: b"\1"},
                Mgmt=mock.MagicMock(), run_texts=lambda c: [e[2] for e in st.log[t_log.last_start(st.log):]])
     with mock.patch.multiple(t_stale, **new):

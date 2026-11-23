@@ -22,7 +22,7 @@ from .core import Ctx, PartSkip, RadioClock, test
 from .mgmt import Mgmt, identify
 from .p2 import wait_reachable
 from .t_flash import (REPLY_S, SECTOR, compaction_writes, cut_at_word, cut_entry, double_ecc, flog, flog_start, in_range, is_erase, mg, need,
-                      planned_cuts_seen, set_tx_time, store_range, tx_time, words)
+                      plain, planned_cuts_seen, set_plain, store_range, words)
 from .t_store import address, change_secret, first_secret, has, keep_secret, sectors, where
 from .t_update import secret, updating
 from .update import Updater
@@ -486,7 +486,7 @@ def lost_sector(ctx, st: State):
     st.use(new)
     with mg(ctx, new) as u:
         flog_start(ctx)
-        r = set_tx_time(u, 210_000)
+        r = set_plain(u, 210_000)  # no C-3 item (T-A1-92: a SET_CONFIG with no C-3 item)
         ctx.eq(f"{label}: a SET_CONFIG answered 0", r["status"] if r else None, 0)
         ops = flog(ctx)
         ctx.check(f"{label}: the SET_CONFIG itself erased nothing in sector 6", six not in which(st.secs, store_erases(ops, st.secs)), f"{ops[:2]}")
@@ -497,7 +497,7 @@ def lost_sector(ctx, st: State):
               f"{texts[-4:]}")
     st.gone(f"{label}, after a SET_CONFIG", six, got[1])
     with mg(ctx, new) as u:
-        ctx.eq(f"{label}: the SET_CONFIG is kept", tx_time(u), 210_000)
+        ctx.eq(f"{label}: the SET_CONFIG is kept", plain(u), 210_000)
 
 
 def foreign(ctx, st: State):
@@ -558,7 +558,7 @@ def config_only(ctx, st: State):
     secret_words, erases = program_words(entries, st.secs), store_erases(entries, st.secs)
     with mg(ctx, first) as u:
         flog_start(ctx)
-        r = set_tx_time(u, 205_000)
+        r = set_plain(u, 205_000)
         if not ctx.eq(f"{label}: SET_CONFIG 0", r["status"] if r else None, 0):
             return False
         entries = flog(ctx)
@@ -579,9 +579,9 @@ def config_only(ctx, st: State):
     er = which(st.secs, store_erases(st.restart("a power cycle"), st.secs))
     t = ident(ctx)
     with Mgmt(ctx.net) as c:
-        ms = tx_time(Updater(c, b""))
+        ms = plain(Updater(c, b""))
     if (t.get(11), ms) != (b"\x00", 205_000):
-        ctx.part(f"{label}: not judged, the state is not there (tag 11 {t.get(11)!r}, TX time {ms}): the live generation must hold the "
+        ctx.part(f"{label}: not judged, the state is not there (tag 11 {t.get(11)!r}, allow-list number {ms}): the live generation must hold the "
                  "configuration and no secret")
         return None
     ctx.eq(f"{label}: the failed newer generation erased once, the first generation kept", er, [live])

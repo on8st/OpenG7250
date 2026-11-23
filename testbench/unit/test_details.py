@@ -147,13 +147,13 @@ class NearCompaction(unittest.TestCase):
         lo, hi = 0x080C0000, 0x08100000
         log, radio = [], dict(at=lo + used, n=0)
 
-        def set_tx_time(u, v, window=None):
+        def set_plain(u, v, window=None):
             radio["n"] += 1
             log.append(dict(op="program", address=radio["at"], len=96))
             radio["at"] += 96
             return dict(status=status)
-        saved = {k: getattr(t_flash, k) for k in ("flog", "flog_start", "set_tx_time")}
-        t_flash.flog, t_flash.flog_start, t_flash.set_tx_time = (lambda c, first=0: log[first:]), (lambda c: None), set_tx_time
+        saved = {k: getattr(t_flash, k) for k in ("flog", "flog_start", "set_plain")}
+        t_flash.flog, t_flash.flog_start, t_flash.set_plain = (lambda c, first=0: log[first:]), (lambda c: None), set_plain
         ctx = Ctx({})
         try:
             v = t_flash.near_compaction(ctx, None, lo, hi, 200_000, left)
