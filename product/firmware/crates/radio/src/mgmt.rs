@@ -508,7 +508,7 @@ impl<W: logring::Words> Server<W> {
                 p[..16].copy_from_slice(&c);
                 (Status::Ok, 16)
             }
-            Command::GetConfig => copy(p, ctx.config),
+            Command::GetConfig => write::config_reply(ctx.config, p).map_or((Status::TooLarge, 0), |n| (Status::Ok, n)),
             Command::GetCalibration => copy(p, ctx.calibration),
             Command::SetFirstSecret => self.set_first_secret(src, req.payload, ctx),
             Command::ReadLog => self.read_log(req.payload, p),

@@ -104,11 +104,13 @@ struct World {
     p2: bool,
     armed: bool,
     up: Model,
+    /// The stored configuration (Table M-3 TLVs).
+    config: Vec<u8>,
 }
 
 impl World {
     fn new() -> Self {
-        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false, armed: false, up: Model::default() }
+        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false, armed: false, up: Model::default(), config: vec![1, 1, 0] }
     }
     fn call(&mut self, srv: &mut Server, src: ([u8; 4], u16), d: &[u8], now: u64) -> Option<(u32, Status, Vec<u8>)> {
         let mut n = self.n;
@@ -122,7 +124,7 @@ impl World {
             own_ip: OWN,
             own_mask: MASK,
             identify: &self.id,
-            config: &[1, 1, 0],
+            config: &self.config,
             calibration: &[0u8; 37],
             rng: &mut rng,
             secret: self.secret.as_ref(),
@@ -166,7 +168,8 @@ fn identify_from_anywhere_reads_from_own_subnet_only() {
 fn reads_return_their_payloads() {
     let mut s = Server::new();
     let mut w = World::new();
-    assert_eq!(w.call(&mut s, HOST, &req(1, Command::GetConfig, &[]), 0).unwrap().2, vec![1, 1, 0]);
+    let c = mgmt::payload::Config::decode(&w.call(&mut s, HOST, &req(1, Command::GetConfig, &[]), 0).unwrap().2).unwrap();
+    assert_eq!(c.address_mode, Some(0));
     assert_eq!(w.call(&mut s, HOST, &req(2, Command::GetCalibration, &[]), 0).unwrap().2.len(), 37);
     let st = w.call(&mut s, HOST, &req(3, Command::GetStats, &[]), 0).unwrap();
     let names: Vec<_> = mgmt::payload::stats(&st.2).map(|e| e.unwrap().0.to_vec()).collect();
@@ -373,6 +376,52 @@ fn set_config_validated_as_a_whole() {
     let fx = s.take_effects();
     assert!(matches!(fx[0], Effect::SetConfig(_)));
     assert_eq!(fx[1], Effect::ApplyNetwork);
+}
+
+/// T-A1-28: GET_CONFIG and SET_CONFIG answer every item of Table M-3, so tag 8 holds one TLV
+/// per `tx_band` with its persistent value: the built-in maximum where nothing tightens it (A3.4
+/// rule 1), the tightened value where something does. The stored record is not changed by this.
+#[test]
+fn every_band_limit_is_answered_also_where_none_is_stored() {
+    use g7250_proto::mgmt::payload::{Config, MAX_BANDS};
+    use g7250_radio::record::TX_BANDS;
+    let enc = |c: &Config| {
+        let mut b = [0u8; 256];
+        let n = c.encode(&mut b).unwrap();
+        b[..n].to_vec()
+    };
+    let builtin: Vec<Option<u16>> = (0..MAX_BANDS).map(|i| TX_BANDS.get(i).map(|b| b.2)).collect();
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.config = enc(&Config::factory());
+    let tags8 = |p: &[u8]| g7250_proto::mgmt::tlv::iter(p).filter(|t| t.unwrap().0 == 8).count();
+    let p = w.call(&mut s, HOST, &req(1, Command::GetConfig, &[]), 0).unwrap().2;
+    let c = Config::decode(&p).unwrap();
+    assert_eq!(c.band_limit.to_vec(), builtin, "factory configuration: every band, built-in");
+    assert_eq!(tags8(&p), TX_BANDS.len(), "one TLV per band");
+    assert_eq!((c.max_tx_time_ms, c.address_mode), (Some(300_000), Some(0)), "the other items as stored");
+    // A tightened band keeps its value; the rest stay built-in.
+    let mut t = Config::factory();
+    t.band_limit[4] = Some(500);
+    w.config = enc(&t);
+    let c = Config::decode(&w.call(&mut s, HOST, &req(2, Command::GetConfig, &[]), 0).unwrap().2).unwrap();
+    let mut want = builtin.clone();
+    want[4] = Some(500);
+    assert_eq!(c.band_limit.to_vec(), want);
+    // SET_CONFIG of another item answers the same; what it stores has only the tightened band.
+    w.secret = Some([7; 32]);
+    s.take_effects();
+    let (st, p) = authed(&mut w, &mut s, HOST, 10, Command::SetConfig, &enc(&Config { default_level: Some(1), ..Default::default() }), 0);
+    assert_eq!(st, Status::Ok);
+    assert_eq!(Config::decode(&p).unwrap().band_limit.to_vec(), want);
+    let fx = s.take_effects();
+    let Effect::SetConfig(v) = &fx[0] else { panic!("{fx:?}") };
+    let stored = Config::decode(v).unwrap();
+    assert_eq!(stored.band_limit.iter().filter(|l| l.is_some()).count(), 1, "the store holds what was written");
+    assert_eq!(stored.band_limit[4], Some(500));
+    // A stored record that does not decode is answered as it is.
+    w.config = vec![8, 2, 0, 0];
+    assert_eq!(w.call(&mut s, HOST, &req(3, Command::GetConfig, &[]), 0).unwrap().2, vec![8, 2, 0, 0]);
 }
 
 #[test]

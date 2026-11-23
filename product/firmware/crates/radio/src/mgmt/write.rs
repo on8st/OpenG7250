@@ -22,6 +22,27 @@ const BUILTIN_TX_TIME_MS: u32 = 300_000;
 const BUILTIN_BAND_POWER: u16 = 1000;
 const TX_BANDS: usize = 10;
 
+/// The configuration as `GET_CONFIG` and `SET_CONFIG` answer it (Table M-3, every item): the
+/// stored items, and tag 8 for every `tx_band` the stored record does not tighten, with the
+/// persistent value, which is then the built-in maximum of the capability record (A3.4 rule 1:
+/// "equal to the built-in value unless tightened"; [`crate::record::TX_BANDS`], SSB/CW/FM). Only
+/// the answer: the stored record keeps what was written. A record that does not decode is answered
+/// as it is.
+pub(super) fn config_reply(stored: &[u8], p: &mut [u8]) -> Option<usize> {
+    let Ok(mut c) = Config::decode(stored) else {
+        return (stored.len() <= p.len()).then(|| {
+            p[..stored.len()].copy_from_slice(stored);
+            stored.len()
+        });
+    };
+    for (i, band) in crate::record::TX_BANDS.iter().enumerate() {
+        if c.band_limit[i].is_none() {
+            c.band_limit[i] = Some(band.2);
+        }
+    }
+    c.encode(p)
+}
+
 /// What the board must do after a request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
@@ -483,6 +504,7 @@ impl<W: Words> Server<W> {
         }
         let mut b = [0u8; 256];
         let Some(n) = m.encode(&mut b) else { return (Status::InvalidConfig, 0) };
+        let Some(r) = config_reply(&b[..n], p) else { return (Status::TooLarge, 0) };
         let net_changed = (m.address_mode, m.address, m.netmask, m.gateway) != (cur.address_mode, cur.address, cur.netmask, cur.gateway);
         let mut v = heapless::Vec::new();
         let _ = v.extend_from_slice(&b[..n]);
@@ -496,7 +518,6 @@ impl<W: Words> Server<W> {
         }
         let (a, bb, c, d) = ip(src.0);
         self.log.push(now, format_args!("configuration changed by {a}.{bb}.{c}.{d}:{}{}", src.1, if net_changed { " (network)" } else { "" }));
-        p[..n].copy_from_slice(&b[..n]);
-        (Status::Ok, n)
+        (Status::Ok, r)
     }
 }
