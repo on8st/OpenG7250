@@ -193,3 +193,22 @@ class Addresses(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FaultRecord(unittest.TestCase):
+    """T-A3-62 with cpu.fault: the fault line of A3.6 and the mode of the record."""
+
+    def test_fault_line(self):
+        from testbench.t_details import fault_line_ok
+        for ok in ("restart: processor fault usage", "restart: processor fault hard at 0x08021234", "restart: processor fault other"):
+            self.assertTrue(fault_line_ok(ok), ok)
+        for bad in ("restart: processor fault", "restart: processor fault undefined", "restart: stop 1", None, "restart: restart"):
+            self.assertFalse(fault_line_ok(bad), bad)
+
+    def test_mode(self):
+        from testbench.t_details import in_mode
+        self.assertTrue(in_mode({"ipsr": 0}, "thread"))
+        self.assertFalse(in_mode({"IPSR": "0x2f"}, "thread"))
+        self.assertTrue(in_mode({"ipsr": 47}, "handler"))
+        self.assertFalse(in_mode({"ipsr": 0}, "handler"))
+        self.assertIsNone(in_mode({}, "handler"))

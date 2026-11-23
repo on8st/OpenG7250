@@ -788,6 +788,83 @@ def until_dropped(ctx, u, n_max: int | None = None):
         return made, False
 
 
+FAULT_KINDS = ("hard", "bus", "usage", "memmanage", "other")  # A3.6 "Unexpected stop of the firmware"
+
+
+def fault_line_ok(text: str | None) -> bool:
+    """T-A3-62 (3): a line beginning `restart: processor fault` with a kind of A3.6; judged on that prefix and
+    the kind only, never on a fault address."""
+    p = "restart: processor fault "
+    return bool(text) and text.startswith(p) and text[len(p):].split(" ")[0] in FAULT_KINDS
+
+
+def rec_get(rec: dict, name: str):
+    return rec.get(name, rec.get(name.lower(), rec.get(name.upper())))
+
+
+def in_mode(rec: dict, mode: str) -> bool | None:
+    """The cpu.fault record's IPSR: 0 in thread mode, the exception number in a handler; None if not given."""
+    ipsr = rec_get(rec, "ipsr")
+    if ipsr is None:
+        return None
+    ipsr = int(ipsr, 0) if isinstance(ipsr, str) else int(ipsr)
+    return (ipsr & 0x1FF == 0) if mode == "thread" else (ipsr & 0x1FF != 0)
+
+
+def fault_case(ctx, s: bytes, mode: str, judge):
+    """T-A3-62, unarmed with a P2 session and RX running: an undefined-instruction fault (cpu.fault) in
+    thread mode or inside an interrupt handler, and points (1) to (4)."""
+    from .p2 import value
+    from .t_a3 import boot_t_us
+    from .t_log import entries, last_start
+    from .t_tx_locked import safe
+    from .t_update import rx_works
+    label = f"a processor fault in {mode} mode (unarmed, RX running)"
+    with Host(ctx.net) as h:
+        h.start()
+        if not ctx.at_least(f"{label}: RX running before it", len(h.recv(0.3, PORT_DDC)), what="status packets in 0.3 s"):
+            return
+        ctx.fixture("cpu.fault", in_us=300_000, mode=mode, within_us=5_000_000)
+        h.recv_alive(2.0)  # the session goes on until the fault and the reset
+        h.stop(settle=0)
+    time.sleep(0.3)
+    wait_reachable(ctx, label, 40)
+    rec = ctx.fixture("cpu.fault", read=True) or {}
+    if rec.get("missed") or rec.get("dropped"):
+        ctx.part(f"{label}: not judged, the fault was {'missed' if rec.get('missed') else 'dropped by a reset first'} (cpu.fault read)")
+        return
+    m = in_mode(rec, mode)
+    ctx.check(f"{label}: the fault came in {mode} mode (cpu.fault IPSR)", m is not False, f"{rec}")
+    # (2) a software reset within 10 ms of the handler's entry
+    entry, boot = rec_get(rec, "t_us"), boot_t_us(ctx)
+    if entry is None or not boot:
+        ctx.part(f"{label}: '(2) a reset within 10 ms of the handler's entry' not judged: "
+                 + ("cpu.fault's record gives no entry time" if entry is None else "no hw.trace boot event"))
+    else:
+        ctx.check(f"{label}: (2) the reset within 10 ms of the handler's entry (emulated time)", 0 < boot - int(entry) <= 10_000,
+                  f"{(boot - int(entry)) / 1000:.2f} ms")
+    with Mgmt(ctx.net) as c:
+        r = req_retransmit(c, "IDENTIFY")
+        cause = tlv(r["payload"]).get(17) if r and r["status"] == 0 else None
+    ctx.eq(f"{label}: (2) the reset cause a software reset, not the watchdog (IDENTIFY tag 17)", cause, b"\x02")
+    # (3) the fault line before the start entry
+    log = entries(ctx)
+    k = last_start(log)
+    before = log[k - 1][2] if k else None
+    ctx.check(f"{label}: (3) before the start entry a line 'restart: processor fault <kind>' (A3.6)", fault_line_ok(before), f"{before!r}")
+    # (4) the next start: the unexpected stop, WDT_RESET_AT_START, drop reason 5, RX and management working
+    judge(label, True)
+    with Host(ctx.net) as h:
+        h.start()
+        h.recv_alive(0.2)
+        st = value(h.write([(0x0202, 0)]), 0x0202)  # TX_ARM_STATE
+        h.stop()
+    ctx.eq(f"{label}: (4) TX_ARM_STATE drop reason 5 RESET", None if st is None else (st >> 16) & 0xFF, 5)
+    ctx.check(f"{label}: (4) RX and the management channel work after it", rx_works(ctx) and bool(entries(ctx)), "no status packet or no log")
+    # (1) every pin of Table A3-6b at its safe level, no PA bias write: from the test's start through the next start
+    safe(ctx, f"{label}: (1)")
+
+
 @test("T-A3-62")
 def t_a3_62(ctx: Ctx):
     """A3.6 "Evidence at the next start" (0075, 0078), the parts that need no processor fault: after a
@@ -896,8 +973,15 @@ def t_a3_62(ctx: Ctx):
             judge("after the trial's restart: trial-unconfirmed", False, "restart: trial-unconfirmed")
     else:
         ctx.part("the trial's restart not run: needs trial.sim or ch394.silent")
-    raise PartSkip("pending: the unexpected stop itself, also in the boot stage before and after its clear of the word (the emulator's "
-                   "fault fixture), the cut writes of the word (the emulator cannot cut a write to kept RAM), and the keyed part (TX)")
+    if has(ctx, "cpu.fault"):
+        for mode in ("thread", "handler"):
+            fault_case(ctx, s, mode, judge)
+        pending = "a fault in the boot stage before and right after its clear of the word (the bench cannot place that clear), " \
+                  "a fault during a stretched erase"
+    else:
+        pending = "the unexpected stop itself, also in the boot stage before and after its clear of the word (cpu.fault not offered)"
+    raise PartSkip(f"pending: {pending}, the cut writes of the word (the emulator cannot cut a write to kept RAM), and the keyed "
+                   "part (TX)")
 
 
 # ---------------- T-B11-04 ----------------
