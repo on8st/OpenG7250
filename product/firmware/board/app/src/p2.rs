@@ -81,8 +81,14 @@ pub struct P2 {
     pub dropped_reg_from_7250: u64,
     pub dropped_not_owner: u64,
     /// DUC I&Q discarded whole before the FIFO (B10.7: not the owner's, no session, record
-    /// `tx` bit 1 or 4 = 0, a DUC-specific refusal standing; `GET_STATS`).
+    /// `tx` bit 1 or 4 = 0, a DUC-specific refusal standing, an update; `GET_STATS` drop_1029),
+    /// and of these those from another source or with no session (duc_foreign), and those from
+    /// the owner while record `tx` bit 1 or 4 is 0 (duc_not_tx; Table M-6).
     pub duc_iq_ignored: u64,
+    pub duc_foreign: u64,
+    pub duc_not_tx: u64,
+    /// Register packets shorter than a register packet (Table B11-1), dropped (drop_7250).
+    pub dropped_reg_short: u64,
     /// The key path was keyed after the last call (to empty and arm the FIFO on a change).
     was_keyed: bool,
     notice: Option<Notice>,
@@ -172,6 +178,9 @@ impl P2 {
             dropped_reg_from_7250: 0,
             dropped_not_owner: 0,
             duc_iq_ignored: 0,
+            duc_foreign: 0,
+            duc_not_tx: 0,
+            dropped_reg_short: 0,
             was_keyed: false,
             notice: None,
             record_due: false,
@@ -627,6 +636,7 @@ impl P2 {
     pub fn register_packet(&mut self, chip: &mut Chip, from: Addr, p: &[u8], now: u64) {
         let owner = self.session.owner() == Some(from);
         if p.len() < 10 {
+            self.dropped_reg_short += 1;
             return; // Table B11-1
         }
         if !owner && from.1 == regmap::PORT {
@@ -820,10 +830,21 @@ impl P2 {
             && !self.key.duc().refused();
         if !ok {
             self.duc_iq_ignored += 1;
+            if self.session.owner() != Some(from) {
+                self.duc_foreign += 1;
+            } else if !self.tx.record_tx_bit1() || !self.tx.record_tx_bit4() {
+                self.duc_not_tx += 1;
+            }
             return;
         }
         // A full FIFO while keyed, or I&Q while the keyer forms the RF: counted in the FIFO.
         let _ = duc(|f| f.push(p, now));
+    }
+
+    /// DUC I&Q packets dropped while keyed in CW, and samples dropped from the FIFO by depth or
+    /// age (Table M-6 duc_cw_drop, duc_fifo_drop).
+    pub fn duc_drops(&self) -> (u64, u64) {
+        duc(|f| (f.dropped_cw, f.dropped_old + f.dropped_full))
     }
 
     /// The radio's address changes (Set IP, B3.9; A1.6 C-1): a running session ends, the arm

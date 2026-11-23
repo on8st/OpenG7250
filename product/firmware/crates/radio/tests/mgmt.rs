@@ -932,3 +932,32 @@ fn c3_lost_ends_only_with_every_item_0072() {
     assert_eq!(st, Status::Ok);
     assert!(matches!(fx.as_slice(), [Effect::SetConfig(_, false)]), "{fx:?}");
 }
+
+/// T-A1-95 (management part): GET_STATS lists every name of Table M-6 first, in table order,
+/// each at 0 on a fresh start, then the firmware's own, all in one reply of at most 1400 bytes;
+/// the excess of 25 requests in one second from one source is counted in mg_rate_drop and
+/// drop_7251, not in mg_cap_drop (T-A1-26; 0074).
+#[test]
+fn get_stats_lists_table_m6_first_t_a1_95() {
+    const M6: [&str; 46] = [
+        "mg_not_request", "mg_rate_drop", "mg_cap_drop", "mg_auth_required", "disc_rate_drop", "disc_src1024", "setip_ignored", "gen1024_ignored", "cap_rate_drop", "notowner_drop", "reg7250_drop", "takeovers", "icmp_unreach", "hp_rx", "hp_stale", "hp_resync", "hp_release", "gap_1027", "gap_1029", "duc_foreign", "duc_not_tx", "duc_cw_drop", "duc_fifo_drop", "cw_speed_clamped", "cw_hang_clamped", "ll_unprobed", "drop_1024", "drop_1025", "drop_1026", "drop_1027", "drop_1029", "drop_7250", "drop_7251", "fault_2", "fault_3", "fault_9", "fault_10", "fault_16", "fault_17", "fault_18", "fault_19", "reset_unknown", "reset_software", "reset_watchdog", "reset_pin", "trip_count",
+    ];
+    let stats = |w: &mut World, s: &mut Server, id: u32, now: u64| {
+        let r = w.call(s, HOST, &req(id, Command::GetStats, &[]), now).unwrap();
+        assert!(mgmt::HEADER_LEN + r.2.len() <= 1400);
+        mgmt::payload::stats(&r.2).map(|e| e.unwrap()).map(|(n, v)| (String::from_utf8(n.to_vec()).unwrap(), v)).collect::<Vec<_>>()
+    };
+    let mut s = Server::new();
+    let mut w = World::new();
+    let got = stats(&mut w, &mut s, 1, 0);
+    let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(&names[..46], &M6[..], "Table M-6 first, in its order");
+    assert!(got[..46].iter().all(|(n, v)| *v == 0 && n.len() <= 16), "{got:?}");
+    assert!(names.len() > 46, "the firmware's own after them");
+    assert!(!names[46..].iter().any(|n| M6.contains(n)), "no name twice");
+    let answered = (0..25u32).filter(|i| w.call(&mut s, HOST, &req(100 + i, Command::Identify, &[]), 2000 + 10 * *i as u64).is_some()).count() as u64;
+    assert!(answered < 25);
+    let got = stats(&mut w, &mut s, 200, 5000);
+    let v = |n: &str| got.iter().find(|(k, _)| k == n).unwrap().1;
+    assert_eq!((v("mg_rate_drop"), v("drop_7251"), v("mg_cap_drop")), (25 - answered, 25 - answered, 0));
+}

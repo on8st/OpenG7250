@@ -964,6 +964,19 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                 server.stats.cw_hang_clamped = p2.key.cw_hang_clamped;
                 server.stats.cw_speed_clamped = p2.key.cw_speed_clamped;
                 server.stats.takeovers = p2.takeovers;
+                // Table M-6 (0074): the P2 side's counters, and the discards per port.
+                server.stats.cap_rate_drop = p2.dropped_record;
+                server.stats.notowner_drop = p2.dropped_not_owner;
+                server.stats.reg7250_drop = p2.dropped_reg_from_7250;
+                server.stats.duc_foreign = p2.duc_foreign;
+                server.stats.duc_not_tx = p2.duc_not_tx;
+                let (cw, fifo) = p2.duc_drops();
+                server.stats.duc_cw_drop = cw;
+                server.stats.duc_fifo_drop = fifo;
+                server.stats.trip_count = p2.regs.trip_count as u64;
+                server.stats.drop_port[0] = dropped_1024 as u64 + server.stats.discovery_dropped_rate;
+                server.stats.drop_port[4] = p2.duc_iq_ignored + cw;
+                server.stats.drop_port[5] = p2.dropped_reg_from_7250 + p2.dropped_not_owner + p2.dropped_record + p2.dropped_reg_short;
                 // Management channel, socket 7 (not while lent to DHCP). While the unasked record
                 // goes out in parts, a request waits in its socket (two or three passes), so that
                 // no flash write delays a part beyond 50 ms (0059).

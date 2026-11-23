@@ -33,8 +33,8 @@ pub const FIRST_SECRET_WINDOW_MS: u64 = 300_000;
 const AUTH_FAIL_WINDOW_MS: u64 = 10_000;
 const AUTH_FAIL_LIMIT: u8 = 5;
 
-/// `GET_STATS` counters (Table M-1: name, u64). Names are this firmware's; Annex M fixes only the
-/// layout.
+/// `GET_STATS` counters (Table M-1: name, u64): first those of Table M-6 in its order, every one
+/// also at 0 (0074), then this firmware's own.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     pub mgmt_requests: u64,
@@ -82,7 +82,51 @@ pub struct Stats {
     pub hp_rx: u64,
     /// The longest time of each step of a net-loop pass since start, us ([`STEP_NAMES`]).
     pub steps: [u64; STEPS],
+    /// Table M-6 (0074) counters not kept above. Management requests above a total reply cap
+    /// (`IDENTIFY` in all, or from outside the subnet), dropped.
+    pub mgmt_dropped_cap: u64,
+    /// General packets on port 1024 at level 2: 0 in this version (no level 2).
+    pub gen1024_ignored: u64,
+    /// Non-owner `CAP_REQUEST`s above the answer limit (B4.4 item 3); rejected register writes
+    /// above the `NOT_OWNER` limit; register packets from a non-owner with source port 7250 (B8.5).
+    pub cap_rate_drop: u64,
+    pub notowner_drop: u64,
+    pub reg7250_drop: u64,
+    /// Not counted yet by this firmware (always 0): ICMP port unreachable (B11.10), the numbered
+    /// mode of port 1027 (B11.6a), sequence gaps (B11.6).
+    pub icmp_unreach: u64,
+    pub hp_stale: u64,
+    pub hp_resync: u64,
+    pub hp_release: u64,
+    pub gap_1027: u64,
+    pub gap_1029: u64,
+    /// DUC I&Q discarded (B10.7): from another source or with no session; from the owner while
+    /// record `tx` bit 1 or 4 is 0. Received while keyed in CW; samples dropped from the FIFO.
+    pub duc_foreign: u64,
+    pub duc_not_tx: u64,
+    pub duc_cw_drop: u64,
+    pub duc_fifo_drop: u64,
+    /// Packets discarded per receiving port of Table B2-1 ([`DROP_PORTS`]).
+    pub drop_port: [u64; 7],
+    /// `TRIP_COUNT` (A3.5).
+    pub trip_count: u64,
 }
+
+/// The ports of the `drop_<port>` counters, in the order of Table M-6.
+pub const DROP_PORTS: [u16; 7] = [1024, 1025, 1026, 1027, 1029, 7250, 7251];
+/// The fault codes of the `fault_<code>` counters (Table B8-3), in the order of Table M-6, and the
+/// index into [`Stats::fault_entries`] of the three kept over resets (A3.5 "Counters"); the
+/// others are not kept yet (always 0).
+const FAULT_NAMES: [(&[u8], Option<usize>); 8] = [
+    (b"fault_2", Some(0)),
+    (b"fault_3", Some(1)),
+    (b"fault_9", None),
+    (b"fault_10", None),
+    (b"fault_16", None),
+    (b"fault_17", Some(2)),
+    (b"fault_18", None),
+    (b"fault_19", None),
+];
 
 /// Steps of the net loop timed for `GET_STATS` (`step_<name>_us`): the loop's tick, the DHCP
 /// client, one datagram (read and handled) of each P2 socket, discovery, management, and inside
@@ -103,34 +147,79 @@ pub const STEP_NAMES: [&[u8]; STEPS] = [
 ];
 
 impl Stats {
+    /// The names and values of Table M-6, in its order (0074; 46 names, 0080).
+    pub fn table_m6(&self) -> [(&'static [u8], u64); 46] {
+        let d = &self.drop_port;
+        let f = |i: usize| FAULT_NAMES[i].1.map_or(0, |k| self.fault_entries[k]);
+        [
+            (b"mg_not_request", self.mgmt_dropped_not_request),
+            (b"mg_rate_drop", self.mgmt_dropped_rate),
+            (b"mg_cap_drop", self.mgmt_dropped_cap),
+            (b"mg_auth_required", self.mg_auth_required),
+            (b"disc_rate_drop", self.discovery_dropped_rate),
+            (b"disc_src1024", self.discovery_from_port_1024),
+            (b"setip_ignored", self.set_ip_ignored),
+            (b"gen1024_ignored", self.gen1024_ignored),
+            (b"cap_rate_drop", self.cap_rate_drop),
+            (b"notowner_drop", self.notowner_drop),
+            (b"reg7250_drop", self.reg7250_drop),
+            (b"takeovers", self.takeovers),
+            (b"icmp_unreach", self.icmp_unreach),
+            (b"hp_rx", self.hp_rx),
+            (b"hp_stale", self.hp_stale),
+            (b"hp_resync", self.hp_resync),
+            (b"hp_release", self.hp_release),
+            (b"gap_1027", self.gap_1027),
+            (b"gap_1029", self.gap_1029),
+            (b"duc_foreign", self.duc_foreign),
+            (b"duc_not_tx", self.duc_not_tx),
+            (b"duc_cw_drop", self.duc_cw_drop),
+            (b"duc_fifo_drop", self.duc_fifo_drop),
+            (b"cw_speed_clamped", self.cw_speed_clamped),
+            (b"cw_hang_clamped", self.cw_hang_clamped),
+            (b"ll_unprobed", self.ll_unprobed),
+            (b"drop_1024", d[0]),
+            (b"drop_1025", d[1]),
+            (b"drop_1026", d[2]),
+            (b"drop_1027", d[3]),
+            (b"drop_1029", d[4]),
+            (b"drop_7250", d[5]),
+            (b"drop_7251", d[6]),
+            (FAULT_NAMES[0].0, f(0)),
+            (FAULT_NAMES[1].0, f(1)),
+            (FAULT_NAMES[2].0, f(2)),
+            (FAULT_NAMES[3].0, f(3)),
+            (FAULT_NAMES[4].0, f(4)),
+            (FAULT_NAMES[5].0, f(5)),
+            (FAULT_NAMES[6].0, f(6)),
+            (FAULT_NAMES[7].0, f(7)),
+            // Causes since power-on (A3.5 "Counters"): unknown is 0 while a start with no flag
+            // counts as power loss (0068 addendum); watchdog is the independent and the window one.
+            (b"reset_unknown", 0),
+            (b"reset_software", self.resets[1]),
+            (b"reset_watchdog", self.resets[2] + self.resets[3]),
+            (b"reset_pin", self.resets[0]),
+            (b"trip_count", self.trip_count),
+        ]
+    }
+
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 39] = [
+        let mut at = 0;
+        // Table M-6 first; it always fits (at most 48 names of at most 25 bytes, Table M-1).
+        for (n, v) in self.table_m6() {
+            at = mgmt::payload::stat(out, at, n, v).unwrap_or(at);
+        }
+        // Then this firmware's own; one that does not fit is left out.
+        let items: [(&[u8], u64); 21] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
-            (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
             (b"mgmt_dropped_source", self.mgmt_dropped_source),
-            (b"mgmt_dropped_rate", self.mgmt_dropped_rate),
             (b"mgmt_repeats", self.mgmt_repeats),
             (b"mgmt_auth_failures", self.mgmt_auth_failures),
-            (b"mg_auth_required", self.mg_auth_required),
             (b"discovery_answered", self.discovery_answered),
-            (b"discovery_dropped_rate", self.discovery_dropped_rate),
-            (b"discovery_from_port_1024", self.discovery_from_port_1024),
-            (b"set_ip_ignored", self.set_ip_ignored),
-            (b"cw_hang_clamped", self.cw_hang_clamped),
-            (b"cw_speed_clamped", self.cw_speed_clamped),
-            (b"takeovers", self.takeovers),
             (b"net_busy_pass_max_us", self.net_busy_pass_max_us),
             (b"net_send_dropped", self.net_send_dropped),
-            (b"ll_unprobed", self.ll_unprobed),
             (b"tx_check_first_us", self.tx_check_first_us),
-            (b"entries_swr_repeated", self.fault_entries[0]),
-            (b"entries_pa_overtemp", self.fault_entries[1]),
-            (b"entries_wdt_reset_at_start", self.fault_entries[2]),
-            (b"resets_pin", self.resets[0]),
-            (b"resets_software", self.resets[1]),
-            (b"resets_independent_watchdog", self.resets[2]),
-            (b"resets_window_watchdog", self.resets[3]),
             (b"resets_low_power", self.resets[4]),
             (b"wakes_net_per_s", self.wakes_per_s[0]),
             (b"wakes_tx_path_per_s", self.wakes_per_s[1]),
@@ -143,9 +232,7 @@ impl Stats {
             (b"busy_console_us_per_s", self.busy_us_per_s[3]),
             (b"busy_main_us_per_s", self.busy_us_per_s[4]),
             (b"console_dropped", self.console_dropped),
-            (b"hp_rx", self.hp_rx),
         ];
-        let mut at = 0;
         for (n, v) in items {
             at = mgmt::payload::stat(out, at, n, v).unwrap_or(at);
         }
@@ -286,6 +373,23 @@ impl<W: logring::Words> Server<W> {
                 console_dropped: 0,
                 hp_rx: 0,
                 steps: [0; STEPS],
+                mgmt_dropped_cap: 0,
+                gen1024_ignored: 0,
+                cap_rate_drop: 0,
+                notowner_drop: 0,
+                reg7250_drop: 0,
+                icmp_unreach: 0,
+                hp_stale: 0,
+                hp_resync: 0,
+                hp_release: 0,
+                gap_1027: 0,
+                gap_1029: 0,
+                duc_foreign: 0,
+                duc_not_tx: 0,
+                duc_cw_drop: 0,
+                duc_fifo_drop: 0,
+                drop_port: [0; 7],
+                trip_count: 0,
             },
             writer: None,
             reset_pending: false,
@@ -352,9 +456,13 @@ impl<W: logring::Words> Server<W> {
     pub fn handle(&mut self, src: Addr, d: &[u8], ctx: &mut Ctx<'_>, out: &mut [u8; mgmt::MAX_REPLY]) -> Option<usize> {
         let now = ctx.now_ms;
         let req = match mgmt::check(d) {
-            Incoming::Drop => return None,
+            Incoming::Drop => {
+                self.stats.drop_port[6] += 1;
+                return None;
+            }
             Incoming::DropNotRequest => {
                 self.stats.mgmt_dropped_not_request += 1;
+                self.stats.drop_port[6] += 1;
                 return None;
             }
             Incoming::Answer { request_id, command, status } => {
@@ -437,14 +545,22 @@ impl<W: logring::Words> Server<W> {
             && (identify || (netcfg::valid_mask(ctx.own_mask) && netcfg::in_subnet(ctx.own_ip, ctx.own_mask, src.0)));
         if !ok {
             self.stats.mgmt_dropped_source += 1;
+            self.stats.drop_port[6] += 1;
         }
         ok
     }
 
     fn rate_ok(&mut self, src: Addr, identify: bool, ctx: &Ctx<'_>) -> bool {
         let now = ctx.now_ms;
-        let mut ok = self.per_source.allow(src.0, src.1, now);
-        if ok && identify {
+        // 20 replies per second per source (mg_rate_drop), then the caps on IDENTIFY in all and
+        // from outside the subnet (mg_cap_drop; A1.10; Table M-6).
+        if !self.per_source.allow(src.0, src.1, now) {
+            self.stats.mgmt_dropped_rate += 1;
+            self.stats.drop_port[6] += 1;
+            return false;
+        }
+        let mut ok = true;
+        if identify {
             ok = self.identify_all.allow([0; 4], 0, now);
             let inside = netcfg::valid_mask(ctx.own_mask) && netcfg::in_subnet(ctx.own_ip, ctx.own_mask, src.0);
             if ok && !inside {
@@ -452,7 +568,8 @@ impl<W: logring::Words> Server<W> {
             }
         }
         if !ok {
-            self.stats.mgmt_dropped_rate += 1;
+            self.stats.mgmt_dropped_cap += 1;
+            self.stats.drop_port[6] += 1;
         }
         ok
     }
