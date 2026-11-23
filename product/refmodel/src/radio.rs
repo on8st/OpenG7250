@@ -369,6 +369,8 @@ pub struct Radio {
     pub c3_lost: bool,
     /// model fixture c3.lose: the C-3 record cannot be read at the next start (0072)
     pub c3_unreadable: bool,
+    /// a start with C-3 lost has set the band limits to 0 W where the management state was out
+    c3_zero_due: bool,
     /// model fixture reset.flags: the reset flags of the next start (0068 addendum)
     pub next_flags: Option<Vec<String>>,
     pub hw: Hw,
@@ -502,6 +504,7 @@ impl Radio {
             store_full: false,
             c3_lost: false,
             c3_unreadable: false,
+            c3_zero_due: false,
             next_flags: None,
             hw: Hw::default(),
             scheduled: Vec::new(),
@@ -948,7 +951,7 @@ impl Radio {
                 let mut m = self.mgmt.take().expect("management state");
                 m.tick(self, &mut out);
                 m.on_request(self, rx, &mut out);
-                self.mgmt = Some(m);
+                self.put_mgmt(m);
                 return out;
             }
             port::DISCOVERY => self.on_1024(rx, &mut out),
@@ -1062,7 +1065,7 @@ impl Radio {
         };
         let mut m = self.mgmt.take().expect("management state");
         m.set_address(self, new);
-        self.mgmt = Some(m);
+        self.put_mgmt(m);
     }
 
     fn on_cc(&mut self, rx: &Rx, kind: CcKind, out: &mut Vec<Tx>) {
@@ -1828,7 +1831,7 @@ impl Radio {
         out.extend(due);
         let mut m = self.mgmt.take().expect("management state");
         m.tick(self, &mut out);
-        self.mgmt = Some(m);
+        self.put_mgmt(m);
         // ATU tune cycle (A3.9b item 6; 0047): ended by itself, or by the ATU tune time
         if let Some((start, end_at, _)) = self.atu.cycle {
             if self.tx.keyed && self.tx.source == SRC_ATU {
@@ -1886,6 +1889,21 @@ impl Radio {
     }
 
     /// The management state, outside a management request or tick.
+    /// Put the management state back after a request or tick, and apply what a start did meanwhile.
+    fn put_mgmt(&mut self, m: Mgmt) {
+        self.mgmt = Some(m);
+        self.apply_c3_lost();
+    }
+    /// A start with C-3 lost: the power limit of every band is 0 W (A1.6 "Lost"; 0072). The limits
+    /// live in the management state, which a reset from inside a request finds taken out.
+    fn apply_c3_lost(&mut self) {
+        if self.c3_zero_due {
+            if let Some(m) = self.mgmt.as_mut() {
+                m.conf.band_limits = [0; 10];
+                self.c3_zero_due = false;
+            }
+        }
+    }
     pub fn mgmt(&self) -> &Mgmt {
         self.mgmt.as_ref().expect("management state")
     }
@@ -2008,9 +2026,8 @@ impl Radio {
         if self.c3_lost {
             self.persistent_limits = [self.cfg.builtin_tx_time_ms, self.cfg.builtin_fwd_power_mw, self.cfg.builtin_swr_s2,
                                       self.cfg.builtin_pa_temp_t3_mc];
-            if let Some(m) = self.mgmt.as_mut() {
-                m.conf.band_limits = [0; 10];
-            }
+            self.c3_zero_due = true;
+            self.apply_c3_lost();
             self.logf("config: C-3 lost, TX closed until rewritten");
         }
     }

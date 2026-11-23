@@ -521,8 +521,10 @@ fn c3_lost() {
     assert_eq!(b.req(A, SET_CONFIG, &[5, 1, 1]).status, st::OK);
     assert!((0..10).all(|i| band(&b.plain(A, GET_CONFIG, &[]).p, i) == Some(0)));
     // kept over a RESTART and a factory reset, logged once per start
-    b.r.reset("software", Some("restart: restart"));
+    // a RESTART request: the reset comes from inside the management channel
+    assert_eq!(b.req(A, RESTART, &[]).status, st::OK);
     assert_eq!(lines(&b, LOST), 2);
+    assert!((0..10).all(|i| band(&b.plain(A, GET_CONFIG, &[]).p, i) == Some(0)));
     b.r.reset("software", Some("restart: factory-reset"));
     assert!(b.r.c3_lost);
     // every C-3 item ends it
