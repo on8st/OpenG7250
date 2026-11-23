@@ -103,6 +103,7 @@ struct World {
     secret: Option<[u8; 32]>,
     p2: bool,
     armed: bool,
+    c3_lost: bool,
     up: Model,
     /// The stored configuration (Table M-3 TLVs).
     config: Vec<u8>,
@@ -110,7 +111,7 @@ struct World {
 
 impl World {
     fn new() -> Self {
-        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false, armed: false, up: Model::default(), config: vec![1, 1, 0] }
+        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false, armed: false, c3_lost: false, up: Model::default(), config: vec![1, 1, 0] }
     }
     fn call(&mut self, srv: &mut Server, src: ([u8; 4], u16), d: &[u8], now: u64) -> Option<(u32, Status, Vec<u8>)> {
         let mut n = self.n;
@@ -130,6 +131,7 @@ impl World {
             secret: self.secret.as_ref(),
             p2_session: self.p2,
             armed: self.armed,
+            c3_lost: self.c3_lost,
             update: &mut self.up,
         };
         let mut out = [0u8; mgmt::MAX_REPLY];
@@ -427,7 +429,7 @@ fn set_config_validated_as_a_whole() {
     assert_eq!(back.address_mode, Some(1));
     assert_eq!(back.netmask, Some([255, 255, 255, 0]), "every item after the change");
     let fx = s.take_effects();
-    assert!(matches!(fx[0], Effect::SetConfig(_)));
+    assert!(matches!(fx[0], Effect::SetConfig(..)));
     assert_eq!(fx[1], Effect::ApplyNetwork);
     // A band limit against the built-in value of its band (0079): 100 W on HF, 0 W at 50 MHz
     // until P-PWR-2; an index with no band is invalid.
@@ -477,7 +479,7 @@ fn every_band_limit_is_answered_also_where_none_is_stored() {
     assert_eq!(st, Status::Ok);
     assert_eq!(Config::decode(&p).unwrap().band_limit.to_vec(), want);
     let fx = s.take_effects();
-    let Effect::SetConfig(v) = &fx[0] else { panic!("{fx:?}") };
+    let Effect::SetConfig(v, _) = &fx[0] else { panic!("{fx:?}") };
     let stored = Config::decode(v).unwrap();
     assert_eq!(stored.band_limit.iter().filter(|l| l.is_some()).count(), 1, "the store holds what was written");
     assert_eq!(stored.band_limit[4], Some(500));
@@ -733,11 +735,11 @@ fn t_b5_21_no_flash_work_while_armed() {
     assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::SetConfig, &b[..n], 300).0, Status::Ok);
     let e = s.take_effects();
     assert_eq!(e[0], Effect::DisarmForMaintenance);
-    assert!(matches!(e[1], Effect::SetConfig(_)));
+    assert!(matches!(e[1], Effect::SetConfig(..)));
     // Unarmed: no disarm.
     w.armed = false;
     assert_eq!(authed(&mut w, &mut s, HOST, 40, Command::SetConfig, &b[..n], 400).0, Status::Ok);
-    assert!(matches!(s.take_effects().as_slice(), [Effect::SetConfig(_)]));
+    assert!(matches!(s.take_effects().as_slice(), [Effect::SetConfig(..)]));
 }
 
 #[test]
@@ -883,4 +885,50 @@ fn store_full_64_is_logged_and_a_repeat_gets_it_again() {
     let log = w.call(&mut s, HOST, &req(40, Command::ReadLog, &[0, 0, 0, 0]), 3000).unwrap().2;
     let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
     assert_eq!(e.iter().filter(|t| *t == "store: room made (update)").count(), 1, "{e:?}");
+}
+
+/// T-A1-87 (radio part): while C-3 is lost, a SET_CONFIG of some C-3 items gets 48 and changes
+/// nothing; with no calibration set a write of every C-3 item gets 62, one without tags 9 and 10
+/// gets 48; a write with no C-3 item is stored as usual. The effect says whether a C-3 item was
+/// written, for the compaction of 0072 point 1.
+#[test]
+fn c3_lost_ends_only_with_every_item_0072() {
+    use g7250_radio::mgmt::Effect;
+    use g7250_proto::mgmt::payload::Config;
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let enc = |c: &Config| {
+        let mut b = [0u8; 256];
+        let n = c.encode(&mut b).unwrap();
+        b[..n].to_vec()
+    };
+    let bands = g7250_radio::record::TX_BANDS.len();
+    let all_but_calibrated = Config { max_tx_time_ms: Some(60_000), band_limit: core::array::from_fn(|i| (i < bands).then_some(0)), ..Default::default() };
+    let every = Config { swr_s2_x100: Some(200), pa_temp_t3: Some(700), ..all_but_calibrated };
+    let one_band = Config { band_limit: core::array::from_fn(|i| (i == 0).then_some(500)), ..Default::default() };
+    let c1 = Config { default_level: Some(1), ..Default::default() };
+    // Not lost: a C-3 item is flagged, a C-1 write is not.
+    let mut k = 0u32;
+    let mut send = |w: &mut World, s: &mut Server, c: &Config| {
+        k += 1;
+        let r = authed(w, s, HOST, 10 * k, Command::SetConfig, &enc(c), 1000 * k as u64).0;
+        (r, s.take_effects())
+    };
+    let (st, fx) = send(&mut w, &mut s, &one_band);
+    assert_eq!(st, Status::Ok);
+    assert!(matches!(fx.as_slice(), [Effect::SetConfig(_, true)]), "{fx:?}");
+    let (st, fx) = send(&mut w, &mut s, &c1);
+    assert_eq!(st, Status::Ok);
+    assert!(matches!(fx.as_slice(), [Effect::SetConfig(_, false)]), "{fx:?}");
+    // Lost.
+    w.c3_lost = true;
+    for (c, want) in [(&one_band, Status::InvalidConfig), (&all_but_calibrated, Status::InvalidConfig), (&every, Status::NeedsCalibration)] {
+        let (st, fx) = send(&mut w, &mut s, c);
+        assert_eq!(st, want, "{c:?}");
+        assert!(fx.is_empty(), "changes nothing");
+    }
+    let (st, fx) = send(&mut w, &mut s, &c1);
+    assert_eq!(st, Status::Ok);
+    assert!(matches!(fx.as_slice(), [Effect::SetConfig(_, false)]), "{fx:?}");
 }

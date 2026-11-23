@@ -37,7 +37,29 @@ Single bank, 1 MiB, eight sectors of 128 KiB ([HIS] HIS 15, `9d10e72`, part MEDI
 programmed once; header (magic "G7ST", kind, payload version, length, sequence number, CRC-32)
 and payload, padded with 0xFF. The newest valid record of a kind wins; a torn record fails its CRC
 and is skipped. Kinds: boot record (1), boot counter (2), configuration (3, Table M-3 TLVs),
-calibration set (4, the `SET_CALIBRATION` payload), management secret (5), commit (6).
+calibration set (4, the `SET_CALIBRATION` payload), management secret (5), commit (6), staging
+(7), factory-reset mark (8), begin (9), C-3 limits (10), C-3 state record (11).
+
+**C-3** (A1.6 "C-3 at a start", "Keeping the judgment", "Lost"; 0072). The C-3 items are not in
+the configuration record (the application strips them) but in their own record (kind 10: a flag
+for "lost", the TX time, 16 band limits, S2, T3; all ones = not tightened), which only a
+compaction writes: every compaction writes the C-3 in force, and a `SET_CONFIG` with any C-3
+item is written by one (`Store::write_limits`), with its other items in the same generation.
+Every compaction starts with a begin record (kind 9: the generation number and the address of
+its commit word), so the number is in two places and a **failed generation** can be told: its
+commit word is neither erased nor a valid commit of that number. A new generation takes a number
+above every readable one. At open (boot stage and application) the store judges C-3 in the
+order of the spec: a failed generation whose number is above the live generation's (0 if not
+committed) and every state record's gives the stricter of it and the live value, or lost if its
+C-3 record cannot be read; else the newest state record; else the committed generation's C-3
+record, or lost if unreadable; else the built-in values. Before a sector is erased that holds a
+generation without a valid commit and with such a number, a state record (kind 11: number and
+C-3 as judged) is written into the live sector and read back; `put` keeps room for two. While
+lost, the application reports 0 W for every band and the built-in values for the other C-3
+items, logs `config: C-3 lost, TX closed until rewritten` once per start, and the management
+server refuses a `SET_CONFIG` of some but not every C-3 item with 48. A store written before
+0072 has no C-3 record: its committed generation reads as lost, and the owner sets the limits
+again (0072, Consequences).
 
 **Generations.** A commit record (payload: generation) marks a sector as complete. The live sector
 is the one whose newest commit has the highest generation; with no commit anywhere (a fresh unit,

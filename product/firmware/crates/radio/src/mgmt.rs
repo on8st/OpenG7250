@@ -177,6 +177,8 @@ pub struct Ctx<'a> {
     pub p2_session: bool,
     /// TX armed or keyed on any level (status 50).
     pub armed: bool,
+    /// C-3 is lost (A1.6 "Lost"; 0072 point 5): only a `SET_CONFIG` of every C-3 item ends it.
+    pub c3_lost: bool,
     /// The update path (A1.8).
     pub update: &'a mut dyn Updater,
 }

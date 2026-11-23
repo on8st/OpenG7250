@@ -45,6 +45,16 @@ pub(super) fn config_reply(stored: &[u8], p: &mut [u8]) -> Option<usize> {
     c.encode(p)
 }
 
+/// The request holds a C-3 item (A1.6 C-3: tags 7 to 10).
+fn has_c3(c: &Config) -> bool {
+    c.max_tx_time_ms.is_some() || c.band_limit.iter().any(|l| l.is_some()) || c.swr_s2_x100.is_some() || c.pa_temp_t3.is_some()
+}
+
+/// The request holds every C-3 item: the TX time, the power limit of every band, S2 and T3.
+fn every_c3(c: &Config) -> bool {
+    c.max_tx_time_ms.is_some() && c.band_limit[..crate::record::TX_BANDS.len()].iter().all(|l| l.is_some()) && c.swr_s2_x100.is_some() && c.pa_temp_t3.is_some()
+}
+
 /// What the board must do after a request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
@@ -53,8 +63,9 @@ pub enum Effect {
     DisarmForMaintenance,
     /// Store the secret (before the reply).
     SetSecret([u8; 32]),
-    /// Store the configuration, the full Table M-3 TLV list (before the reply).
-    SetConfig(heapless::Vec<u8, 256>),
+    /// Store the configuration, the full Table M-3 TLV list (before the reply); `true` if the
+    /// request held a C-3 item, which is then written by a compaction (A1.6 C-3; 0072 point 1).
+    SetConfig(heapless::Vec<u8, 256>, bool),
     /// Apply the stored network items (C-1) after the reply.
     ApplyNetwork,
     /// Store the calibration set (`SET_CALIBRATION` payload, before the reply).
@@ -438,6 +449,11 @@ impl<W: Words> Server<W> {
         if new.region.is_some_and(|r| Some(r) != cur.region) && ctx.p2_session {
             return (Status::P2SessionRuns, 0);
         }
+        // While C-3 is lost, only a write of every C-3 item ends it; one of some gets 48, before
+        // the 62 of S2 and T3 (A1.6 "Lost"; 0072 points 5, A, G).
+        if ctx.c3_lost && has_c3(&new) && !every_c3(&new) {
+            return (Status::InvalidConfig, 0);
+        }
         // S2 and T3 need the calibration set (Table M-3 note; A1.12).
         if new.touches_calibrated_limits() {
             return (Status::NeedsCalibration, 0);
@@ -512,7 +528,7 @@ impl<W: Words> Server<W> {
         if ctx.armed {
             let _ = self.effects.push(Effect::DisarmForMaintenance);
         }
-        let _ = self.effects.push(Effect::SetConfig(v));
+        let _ = self.effects.push(Effect::SetConfig(v, has_c3(&new)));
         if net_changed {
             let _ = self.effects.push(Effect::ApplyNetwork);
         }

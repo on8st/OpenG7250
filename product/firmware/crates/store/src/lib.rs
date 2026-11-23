@@ -62,15 +62,123 @@ pub enum Kind {
     Staging = 7,
     /// A factory reset was begun (A1.6a): the next start finishes it (0069).
     Wipe = 8,
+    /// First record of a compaction: the generation number and the address of its commit word
+    /// (payload: number u32, address u32), the number's second place, programmed before the
+    /// commit (0072 point 2).
+    Begin = 9,
+    /// The C-3 limits of a generation ([`Limits`]), written by every compaction and never
+    /// appended (0072 point 1).
+    Limits = 10,
+    /// A C-3 state record (A1.6 "Keeping the judgment"; payload: number u32, then [`Limits`]),
+    /// appended to the live sector before a newer uncommitted generation is erased.
+    LimitsState = 11,
 }
 
 impl Kind {
     /// The kinds that carry data (copied by a compaction).
     pub const DATA: [Kind; 7] = [Kind::BootRecord, Kind::BootCounter, Kind::Config, Kind::Calibration, Kind::Secret, Kind::Staging, Kind::Wipe];
     fn from_u8(v: u8) -> Option<Kind> {
-        Self::DATA.iter().copied().chain([Kind::Commit]).find(|k| *k as u8 == v)
+        Self::DATA.iter().copied().chain([Kind::Commit, Kind::Begin, Kind::Limits, Kind::LimitsState]).find(|k| *k as u8 == v)
     }
 }
+
+/// Bands of the C-3 power limit (Table M-3 tag 8; at most 16 `tx_band` entries, B4.8).
+pub const LIMIT_BANDS: usize = 16;
+/// Bytes of an encoded [`Limits`].
+pub const LIMITS_LEN: usize = 1 + 4 + 2 * LIMIT_BANDS + 2 + 2;
+
+/// The C-3 items (A1.6 C-3) as the store keeps them, or "lost" (0072 point 5). `None` is "not
+/// tightened": the built-in value. Every item is a maximum, so the stricter of two values is the
+/// smaller, and "not tightened" (stored as all ones) is looser than any value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    pub lost: bool,
+    pub max_tx_time_ms: Option<u32>,
+    pub band: [Option<u16>; LIMIT_BANDS],
+    pub swr_s2_x100: Option<u16>,
+    pub pa_temp_t3: Option<u16>,
+}
+
+impl Limits {
+    /// The factory state: nothing tightened.
+    pub const BUILTIN: Limits = Limits { lost: false, max_tx_time_ms: None, band: [None; LIMIT_BANDS], swr_s2_x100: None, pa_temp_t3: None };
+    pub const LOST: Limits = Limits { lost: true, ..Limits::BUILTIN };
+
+    pub fn encode(&self) -> [u8; LIMITS_LEN] {
+        let mut b = [0xFFu8; LIMITS_LEN];
+        b[0] = self.lost as u8;
+        if let Some(t) = self.max_tx_time_ms {
+            b[1..5].copy_from_slice(&t.to_le_bytes());
+        }
+        for (i, l) in self.band.iter().enumerate() {
+            if let Some(l) = l {
+                b[5 + 2 * i..7 + 2 * i].copy_from_slice(&l.to_le_bytes());
+            }
+        }
+        if let Some(v) = self.swr_s2_x100 {
+            b[37..39].copy_from_slice(&v.to_le_bytes());
+        }
+        if let Some(v) = self.pa_temp_t3 {
+            b[39..41].copy_from_slice(&v.to_le_bytes());
+        }
+        b
+    }
+
+    /// `None` for a payload of another length or flag: such a record is not readable.
+    pub fn decode(b: &[u8]) -> Option<Limits> {
+        if b.len() != LIMITS_LEN || b[0] > 1 {
+            return None;
+        }
+        let u16_at = |i: usize| Some(u16::from_le_bytes([b[i], b[i + 1]])).filter(|&v| v != u16::MAX);
+        let t = u32::from_le_bytes([b[1], b[2], b[3], b[4]]);
+        let l = Limits {
+            lost: b[0] == 1,
+            max_tx_time_ms: Some(t).filter(|&t| t != u32::MAX),
+            band: core::array::from_fn(|i| u16_at(5 + 2 * i)),
+            swr_s2_x100: u16_at(37),
+            pa_temp_t3: u16_at(39),
+        };
+        Some(if l.lost { Limits::LOST } else { l })
+    }
+
+    /// Each item the stricter of the two; lost if either is (0072 point 3).
+    pub fn stricter(&self, o: &Limits) -> Limits {
+        fn min<T: Ord + Copy>(a: Option<T>, b: Option<T>) -> Option<T> {
+            match (a, b) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, None) => x,
+                (None, y) => y,
+            }
+        }
+        if self.lost || o.lost {
+            return Limits::LOST;
+        }
+        Limits {
+            lost: false,
+            max_tx_time_ms: min(self.max_tx_time_ms, o.max_tx_time_ms),
+            band: core::array::from_fn(|i| min(self.band[i], o.band[i])),
+            swr_s2_x100: min(self.swr_s2_x100, o.swr_s2_x100),
+            pa_temp_t3: min(self.pa_temp_t3, o.pa_temp_t3),
+        }
+    }
+}
+
+/// How C-3 was judged at open (A1.6 "C-3 at a start"), for the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Judged {
+    /// (1) A failed generation counted: each item the stricter of it and the live value.
+    FailedGeneration,
+    /// (2) A C-3 state record of the live sector.
+    StateRecord,
+    /// (3) The C-3 record of the committed live generation.
+    Committed,
+    /// (4) No committed generation live: the built-in values.
+    Factory,
+}
+
+/// Room kept in the live sector for C-3 state records (A1.6 "Keeping the judgment": "The store
+/// MUST always have room"): two, so that a second one fits after a first left the sector full.
+const STATE_ROOM: u32 = 2 * (((HEADER + 4 + LIMITS_LEN) as u32 + FLASH_WORD - 1) / FLASH_WORD) * FLASH_WORD;
 
 /// Flash access for the store: addresses are absolute. The board implements it on the HAL flash
 /// driver (erase from RAM, watchdog refreshed); tests on a RAM model with write-once words.
@@ -111,6 +219,8 @@ pub enum Error<E> {
     /// The guard refused the operation (a bug: the store only works inside its sectors).
     Guard(Refusal),
     TooLarge,
+    /// A C-3 state record did not read back as written: the erase it was to protect is not done.
+    ReadBack,
 }
 
 fn padded(len: usize) -> u32 {
@@ -139,6 +249,25 @@ struct SectorScan {
     any: bool,
 }
 
+/// What one sector says about its generation (0072 point 2; A1.6 "C-3 at a start").
+#[derive(Clone, Copy, Debug, Default)]
+struct GenInfo {
+    /// The readable number of its begin record, and the address of its commit word.
+    begin: Option<(u32, u32)>,
+    /// A valid commit record.
+    committed: bool,
+    /// The begin record's commit word is neither erased nor a valid commit of its number: a failed
+    /// generation (0065 point 5).
+    failed: bool,
+    /// The newest readable C-3 record.
+    limits: Option<Limits>,
+    /// The highest readable number: begin, commit and state records.
+    max_number: u32,
+    /// The highest number of a readable C-3 state record, and the newest such record's limits.
+    state_max: Option<u32>,
+    state_newest: Option<Limits>,
+}
+
 /// What the sector that is not live holds that the start check must erase ([`Store::stale`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stale {
@@ -163,13 +292,18 @@ pub struct Store<F> {
     /// The count after the scans of open: logged once per start (0065 point 5).
     unreadable_at_open: u32,
     fell_back: bool,
+    /// C-3 as judged at open or set since (A1.6 "C-3 at a start"; 0072).
+    limits: Limits,
+    judged: Judged,
+    /// The highest generation number readable in either sector at open, or written since.
+    number: u32,
 }
 
 impl<F: FlashIo> Store<F> {
     /// Scan both sectors and pick the live one. `writer` is who writes: the application or the
     /// boot stage.
     pub fn open(io: F, writer: Writer) -> Result<Self, Error<F::Error>> {
-        let mut s = Store { io, writer, live: 1, generation: 0, end: STORE_SECTORS[1].start, seq: 0, unreadable: 0, unreadable_at_open: 0, fell_back: false };
+        let mut s = Store { io, writer, live: 1, generation: 0, end: STORE_SECTORS[1].start, seq: 0, unreadable: 0, unreadable_at_open: 0, fell_back: false, limits: Limits::BUILTIN, judged: Judged::Factory, number: 0 };
         let a = s.scan(STORE_SECTORS[0])?;
         let unreadable_a = s.unreadable;
         let b = s.scan(STORE_SECTORS[1])?;
@@ -194,7 +328,151 @@ impl<F: FlashIo> Store<F> {
         s.end = scan.end;
         s.seq = a.seq.max(b.seq);
         s.unreadable_at_open = s.unreadable;
+        s.judge()?;
         Ok(s)
+    }
+
+    /// C-3 at a start (A1.6 "C-3 at a start"; 0072 point 3). The live value: the newest readable
+    /// state record of the live sector; else the C-3 record of the committed live generation, lost
+    /// if it cannot be read; else (no committed generation live) the built-in values. A failed
+    /// generation in either sector counts if its number is readable and higher than the live
+    /// generation's (0 if it is not committed) and than every state record's: each item then the
+    /// stricter of it and the live value, lost if its C-3 record cannot be read.
+    fn judge(&mut self) -> Result<(), Error<F::Error>> {
+        let unreadable = self.unreadable;
+        let l = self.gen_info(STORE_SECTORS[self.live])?;
+        let o = self.gen_info(STORE_SECTORS[1 - self.live])?;
+        self.unreadable = unreadable;
+        self.number = l.max_number.max(o.max_number).max(self.generation);
+        let threshold = self.generation.max(l.state_max.unwrap_or(0));
+        let committed = self.generation > 0;
+        let (mut v, mut j) = match (l.state_newest, committed) {
+            (Some(st), _) => (st, Judged::StateRecord),
+            (None, true) => (l.limits.unwrap_or(Limits::LOST), Judged::Committed),
+            (None, false) => (Limits::BUILTIN, Judged::Factory),
+        };
+        for g in [Some(o), (!committed).then_some(l)].into_iter().flatten() {
+            if let (true, Some((n, _))) = (g.failed, g.begin) {
+                if n > threshold {
+                    v = v.stricter(&g.limits.unwrap_or(Limits::LOST));
+                    j = Judged::FailedGeneration;
+                }
+            }
+        }
+        self.limits = v;
+        self.judged = j;
+        Ok(())
+    }
+
+    /// C-3 as judged at open or set since; [`Limits::lost`] closes TX (0072 point 5).
+    pub fn limits(&self) -> Limits {
+        self.limits
+    }
+
+    /// Which case of "C-3 at a start" gave [`Self::limits`] at open.
+    pub fn judged(&self) -> Judged {
+        self.judged
+    }
+
+    /// The payload of a checked record, `None` if a word of it cannot be read.
+    fn payload<const N: usize>(&mut self, f: &Found) -> Result<Option<[u8; N]>, Error<F::Error>> {
+        let mut b = [0u8; N];
+        if f.len as usize != N {
+            return Ok(None);
+        }
+        match self.io.read(f.addr + HEADER as u32, &mut b) {
+            Ok(()) => Ok(Some(b)),
+            Err(e) if F::unreadable(&e) => Ok(None),
+            Err(e) => Err(Error::Io(e)),
+        }
+    }
+
+    fn gen_info(&mut self, r: Range) -> Result<GenInfo, Error<F::Error>> {
+        let mut g = GenInfo::default();
+        let mut state_seq = None;
+        let mut limits_seq = None;
+        let mut begin_seq = None;
+        self.walk(r, |s, f| {
+            match f.kind {
+                Kind::Begin => {
+                    if let Some(p) = s.payload::<8>(&f)? {
+                        let n = u32::from_le_bytes([p[0], p[1], p[2], p[3]]);
+                        g.max_number = g.max_number.max(n);
+                        if begin_seq.is_none_or(|q| f.seq > q) {
+                            begin_seq = Some(f.seq);
+                            g.begin = Some((n, u32::from_le_bytes([p[4], p[5], p[6], p[7]])));
+                        }
+                    }
+                }
+                Kind::Commit => {
+                    if let Some(p) = s.payload::<4>(&f)? {
+                        g.committed = true;
+                        g.max_number = g.max_number.max(u32::from_le_bytes(p));
+                    }
+                }
+                Kind::Limits => {
+                    if let Some(l) = s.payload::<LIMITS_LEN>(&f)?.and_then(|p| Limits::decode(&p)) {
+                        if limits_seq.is_none_or(|q| f.seq > q) {
+                            limits_seq = Some(f.seq);
+                            g.limits = Some(l);
+                        }
+                    }
+                }
+                Kind::LimitsState => {
+                    if let Some(p) = s.payload::<{ 4 + LIMITS_LEN }>(&f)? {
+                        if let Some(l) = Limits::decode(&p[4..]) {
+                            let n = u32::from_le_bytes([p[0], p[1], p[2], p[3]]);
+                            g.max_number = g.max_number.max(n);
+                            g.state_max = Some(g.state_max.map_or(n, |m| m.max(n)));
+                            if state_seq.is_none_or(|q| f.seq > q) {
+                                state_seq = Some(f.seq);
+                                g.state_newest = Some(l);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        })?;
+        // The commit word the begin record names: erased (a cut compaction), the commit of that
+        // number, or anything else (failed).
+        if let Some((n, at)) = g.begin {
+            g.failed = if at % FLASH_WORD != 0 || at < r.start || at + FLASH_WORD > r.end {
+                true
+            } else {
+                match self.read_header(at)? {
+                    None => true,
+                    Some(h) if h.iter().all(|&b| b == 0xFF) => false,
+                    Some(h) => match self.check(r, at, &h)? {
+                        Some(f) if f.kind == Kind::Commit => self.payload::<4>(&f)? != Some(n.to_le_bytes()),
+                        _ => true,
+                    },
+                }
+            };
+        }
+        Ok(g)
+    }
+
+    /// A C-3 state record with `number` and the limits in force, in the live sector, read back
+    /// (A1.6 "Keeping the judgment"). Uses the room kept for it ([`STATE_ROOM`]); with none left
+    /// (more than two in a row, each after a fault) it is not written.
+    fn write_state(&mut self, number: u32) -> Result<(), Error<F::Error>> {
+        let r = STORE_SECTORS[self.live];
+        let mut p = [0u8; 4 + LIMITS_LEN];
+        p[..4].copy_from_slice(&number.to_le_bytes());
+        p[4..].copy_from_slice(&self.limits.encode());
+        if self.room() < padded(p.len()) {
+            return Ok(());
+        }
+        self.end = self.write_at(r, self.end, Kind::LimitsState, 1, &p)?;
+        let unreadable = self.unreadable;
+        let back = self.gen_info(r)?;
+        self.unreadable = unreadable;
+        if back.state_newest != Some(self.limits) || back.state_max.is_none_or(|m| m < number) {
+            return Err(Error::ReadBack);
+        }
+        Ok(())
     }
 
     /// Flash words with a double ECC error that the scan at open met in both sectors (each
@@ -208,11 +486,13 @@ impl<F: FlashIo> Store<F> {
         self.io
     }
 
-    /// Bytes still free in the live sector for records other than the factory-reset mark: one
-    /// flash word is always kept for that mark ([`Self::wipe`]).
+    /// Bytes still free in the live sector for records other than the factory-reset mark and the
+    /// C-3 state records: one flash word is always kept for that mark ([`Self::wipe`]), and room
+    /// for two state records ([`STATE_ROOM`]).
     pub fn free(&self) -> u32 {
         let room = self.room();
-        if room > FLASH_WORD { room - FLASH_WORD } else { 0 }
+        let kept = FLASH_WORD + STATE_ROOM;
+        if room > kept { room - kept } else { 0 }
     }
 
     /// Bytes not yet written in the live sector, the word kept for the mark included.
@@ -379,7 +659,7 @@ impl<F: FlashIo> Store<F> {
     /// Store a new record of `kind`. Compacts first if it does not fit in the live sector, with
     /// one word left there for the factory-reset mark (a mark itself may take that word).
     pub fn put(&mut self, kind: Kind, version: u8, payload: &[u8]) -> Result<(), Error<F::Error>> {
-        if payload.len() > MAX_PAYLOAD || kind == Kind::Commit {
+        if payload.len() > MAX_PAYLOAD || matches!(kind, Kind::Commit | Kind::Begin | Kind::Limits | Kind::LimitsState) {
             return Err(Error::TooLarge);
         }
         if padded(payload.len()) > if kind == Kind::Wipe { self.room() } else { self.free() } {
@@ -413,7 +693,7 @@ impl<F: FlashIo> Store<F> {
     /// of its kind then; the sector with the old one is no longer live (the secret: A1.10 "The
     /// old secret in flash"; 0069).
     pub fn replace(&mut self, kind: Kind, version: u8, payload: &[u8]) -> Result<(), Error<F::Error>> {
-        if payload.len() > MAX_PAYLOAD || kind == Kind::Commit {
+        if payload.len() > MAX_PAYLOAD || !Kind::DATA.contains(&kind) {
             return Err(Error::TooLarge);
         }
         self.compact_with(|_| true, Some((kind, version, payload)))
@@ -513,10 +793,31 @@ impl<F: FlashIo> Store<F> {
         Ok(out)
     }
 
+    /// Write new C-3 limits, and `new` if given, by a compaction into a new generation, never
+    /// appended (A1.6 C-3; 0072 point 1): the one erase of the request.
+    pub fn write_limits(&mut self, new: Option<(Kind, u8, &[u8])>, limits: Limits) -> Result<(), Error<F::Error>> {
+        if new.is_some_and(|n| n.2.len() > MAX_PAYLOAD || !Kind::DATA.contains(&n.0)) {
+            return Err(Error::TooLarge);
+        }
+        self.compact_full(|_| true, new, limits)
+    }
+
     /// Erase the sector that is not live. For the start check only after
-    /// [`Self::stale`]; otherwise the first step of a compaction.
+    /// [`Self::stale`]; otherwise the first step of a compaction. If that sector holds a
+    /// generation without a valid commit whose number is readable and higher than the live
+    /// generation's and every state record's, a C-3 state record goes first (A1.6 "Keeping the
+    /// judgment").
     pub fn erase_stale(&mut self) -> Result<(), Error<F::Error>> {
         let r = STORE_SECTORS[1 - self.live];
+        let unreadable = self.unreadable;
+        let o = self.gen_info(r)?;
+        if let (Some((n, _)), false) = (o.begin, o.committed) {
+            let l = self.gen_info(STORE_SECTORS[self.live])?;
+            if n > self.generation.max(l.state_max.unwrap_or(0)) {
+                self.write_state(n)?;
+            }
+        }
+        self.unreadable = unreadable;
         self.guard(Op::Erase, r.start, r.len())?;
         self.io.erase_sector(r.start).map_err(Error::Io)
     }
@@ -532,12 +833,34 @@ impl<F: FlashIo> Store<F> {
     }
 
     fn compact_with(&mut self, keep: impl Fn(Kind) -> bool, new: Option<(Kind, u8, &[u8])>) -> Result<(), Error<F::Error>> {
+        self.compact_full(keep, new, self.limits)
+    }
+
+    /// A compaction: begin record, the kinds kept (or the new record), the C-3 record with
+    /// `limits` (the judged ones, unless a C-3 write sets new ones), the commit (0072 points 1, 2).
+    fn compact_full(&mut self, keep: impl Fn(Kind) -> bool, new: Option<(Kind, u8, &[u8])>, limits: Limits) -> Result<(), Error<F::Error>> {
         // (1) Erase the other sector. The live sector is not touched.
         let target = 1 - self.live;
         self.erase_stale()?;
         let r = STORE_SECTORS[target];
+        // Where the commit word will be: after the begin record, the records and the C-3 record.
+        let mut size = padded(8) + padded(LIMITS_LEN);
+        for k in Kind::DATA {
+            if let Some((_, _, p)) = new.filter(|n| n.0 == k) {
+                size += padded(p.len());
+            } else if keep(k) {
+                if let Some(f) = self.newest(k)? {
+                    size += padded(f.len as usize);
+                }
+            }
+        }
+        let g = self.number.max(self.generation).wrapping_add(1);
+        let commit_at = r.start + size;
+        let mut b = [0u8; 8];
+        b[..4].copy_from_slice(&g.to_le_bytes());
+        b[4..].copy_from_slice(&commit_at.to_le_bytes());
+        let mut at = self.write_at(r, r.start, Kind::Begin, 1, &b)?;
         // (2) Copy the newest record of every kind kept from the live sector, or write the new one.
-        let mut at = r.start;
         for k in Kind::DATA {
             if let Some((_, v, p)) = new.filter(|n| n.0 == k) {
                 at = self.write_at(r, at, k, v, p)?;
@@ -548,12 +871,17 @@ impl<F: FlashIo> Store<F> {
                 }
             }
         }
+        at = self.write_at(r, at, Kind::Limits, 1, &limits.encode())?;
+        if at != commit_at {
+            return Err(Error::TooLarge); // a record changed under the copy: a bug
+        }
         // (3) Commit with the next generation; (4) switch.
-        let g = self.generation.wrapping_add(1);
         at = self.write_at(r, at, Kind::Commit, 1, &g.to_le_bytes())?;
         self.live = target;
         self.generation = g;
+        self.number = g;
         self.end = at;
+        self.limits = limits;
         Ok(())
     }
 
@@ -694,7 +1022,7 @@ mod tests {
         let mut s = Store::open(Sim::new(), APP).unwrap();
         assert_eq!((s.live_sector(), s.generation()), (1, 0));
         assert_eq!(get(&mut s, Kind::Config), None);
-        assert_eq!(s.free(), SECTOR_SIZE - FLASH_WORD);
+        assert_eq!(s.free(), SECTOR_SIZE - FLASH_WORD - STATE_ROOM);
     }
 
     #[test]
@@ -1316,6 +1644,311 @@ mod tests {
         }
     }
 
+    // --- 0072: C-3 at a start ---
+
+    fn lim(power: u16) -> Limits {
+        let mut l = Limits::BUILTIN;
+        l.band[0] = Some(power);
+        l.max_tx_time_ms = Some(1000 * power as u32);
+        l
+    }
+
+    /// The address of the newest record of `kind` in `sector`.
+    fn addr_of(s: &mut Store<Sim>, sector: usize, kind: Kind) -> u32 {
+        let mut at = None;
+        s.walk(STORE_SECTORS[sector], |_, f| {
+            if f.kind == kind {
+                at = Some(f.addr);
+            }
+            Ok(())
+        })
+        .unwrap();
+        at.unwrap()
+    }
+
+    fn addr_of_live(s: &mut Store<Sim>, kind: Kind) -> u32 {
+        let live = s.live_sector();
+        addr_of(s, live, kind)
+    }
+
+    fn spoil(io: &mut Sim, addr: u32) {
+        io.bad[((addr - STORE.start) / FLASH_WORD) as usize] = true;
+    }
+
+    fn reopen(s: Store<Sim>) -> Store<Sim> {
+        Store::open(s.release().power_on(), APP).unwrap()
+    }
+
+    #[test]
+    fn limits_encode_and_stricter() {
+        for l in [Limits::BUILTIN, Limits::LOST, lim(5), Limits { swr_s2_x100: Some(150), pa_temp_t3: Some(700), band: [Some(0); LIMIT_BANDS], ..lim(1) }] {
+            assert_eq!(Limits::decode(&l.encode()), Some(l));
+        }
+        assert_eq!(Limits::decode(&[2; LIMITS_LEN]), None);
+        assert_eq!(Limits::decode(&[0; LIMITS_LEN - 1]), None);
+        let (a, b) = (lim(5), Limits { swr_s2_x100: Some(150), ..lim(9) });
+        assert_eq!(a.stricter(&b), Limits { swr_s2_x100: Some(150), ..lim(5) }, "per item; not tightened is looser than a value");
+        assert_eq!(a.stricter(&Limits::LOST), Limits::LOST);
+        assert_eq!(Limits::BUILTIN.stricter(&a), a);
+    }
+
+    #[test]
+    fn a_c3_write_is_a_compaction_and_holds_t_a1_86() {
+        let mut s = Store::open(Sim::new(), APP).unwrap();
+        assert_eq!((s.limits(), s.judged()), (Limits::BUILTIN, Judged::Factory));
+        s.put(Kind::Config, 1, b"c1").unwrap();
+        let e = s.io.erases;
+        s.write_limits(None, lim(50)).unwrap();
+        assert_eq!(s.io.erases - e, 1, "one erase");
+        let mut s = reopen(s);
+        assert_eq!((s.limits(), s.judged(), get(&mut s, Kind::Config).unwrap()), (lim(50), Judged::Committed, b"c1".to_vec()));
+        // Every compaction carries the limits in force, a plain one too.
+        s.compact().unwrap();
+        s.put(Kind::Config, 1, b"c1 again").unwrap();
+        let mut s = reopen(s);
+        assert_eq!((s.limits(), s.judged()), (lim(50), Judged::Committed));
+        // Loosened back: the store keeps what is written.
+        s.write_limits(Some((Kind::Config, 1, b"c1 new")), lim(80)).unwrap();
+        let mut s = reopen(s);
+        assert_eq!((s.limits(), get(&mut s, Kind::Config).unwrap()), (lim(80), b"c1 new".to_vec()));
+        assert!(s.put(Kind::Limits, 1, &lim(1).encode()).is_err(), "never appended");
+    }
+
+    /// A store with lim(50) committed in generation 1 and config "old".
+    fn c3_base() -> Sim {
+        let mut s = Store::open(Sim::new(), APP).unwrap();
+        s.write_limits(Some((Kind::Config, 1, b"old")), lim(50)).unwrap();
+        s.release()
+    }
+
+    #[test]
+    fn a_cut_c3_write_never_loosens_and_stays_after_the_start_check_t_a1_86() {
+        let mut p = Store::open(c3_base(), APP).unwrap();
+        let w = p.io.programs;
+        p.write_limits(Some((Kind::Config, 1, b"new")), lim(30)).unwrap();
+        let words = p.io.programs - w;
+        for ecc in [false, true] {
+            for cut in 0..words {
+                let mut io = c3_base();
+                io.ecc_on_cut = ecc;
+                let mut s = Store::open(io, APP).unwrap();
+                s.io.budget = Some(cut);
+                assert!(s.write_limits(Some((Kind::Config, 1, b"new")), lim(30)).is_err());
+                let mut s = reopen(s);
+                let (l, c) = (s.limits(), get(&mut s, Kind::Config).unwrap());
+                assert_eq!(c, b"old", "ecc {ecc} cut {cut}: not committed, the other items old");
+                // Old, or (the commit word torn) the stricter of old and new; never looser, never lost.
+                let commit_word = ecc && cut == words - 1;
+                assert_eq!(l, if commit_word { lim(30) } else { lim(50) }, "ecc {ecc} cut {cut}");
+                // The start check, then a cut in its erase, then the next start: the same.
+                let had = start_check(&mut s);
+                let mut s = reopen(s);
+                assert_eq!(s.limits(), l, "ecc {ecc} cut {cut}: after the start check (erased: {had})");
+                let mut io = Store::open(c3_base(), APP).unwrap();
+                io.io.budget = Some(cut);
+                io.io.ecc_on_cut = ecc;
+                let _ = io.write_limits(Some((Kind::Config, 1, b"new")), lim(30));
+                let mut s = reopen(io);
+                if s.stale(Kind::Secret, None).unwrap() != Stale::Nothing {
+                    s.io.erase_cut = true;
+                    assert!(s.erase_stale().is_err());
+                    let s = reopen(s);
+                    assert_eq!(s.limits(), l, "ecc {ecc} cut {cut}: erase cut");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_unreadable_c3_record_is_lost_until_rewritten_t_a1_87() {
+        let mut s = Store::open(c3_base(), APP).unwrap();
+        let at = addr_of_live(&mut s, Kind::Limits);
+        let mut io = s.release();
+        spoil(&mut io, at);
+        let mut s = Store::open(io, APP).unwrap();
+        assert_eq!((s.limits(), s.judged()), (Limits::LOST, Judged::Committed));
+        // Every compaction carries the lost state, until a C-3 write.
+        s.compact().unwrap();
+        let mut s = reopen(s);
+        assert_eq!(s.limits(), Limits::LOST);
+        s.write_limits(None, lim(70)).unwrap();
+        let s = reopen(s);
+        assert_eq!(s.limits(), lim(70));
+    }
+
+    #[test]
+    fn the_generation_number_in_two_places_t_a1_87() {
+        // The commit word unreadable, the other sector erased: the failed generation counts.
+        let mut s = Store::open(c3_base(), APP).unwrap();
+        s.erase_stale().unwrap();
+        let live = s.live_sector();
+        let at = addr_of(&mut s, live, Kind::Commit);
+        let mut io = s.release();
+        spoil(&mut io, at);
+        let s = Store::open(io, APP).unwrap();
+        assert_ne!(s.live_sector(), live);
+        assert_eq!((s.limits(), s.judged()), (lim(50), Judged::FailedGeneration), "never the built-in values");
+        // The begin record unreadable: the commit still makes the generation live.
+        let mut s = Store::open(c3_base(), APP).unwrap();
+        let at = addr_of_live(&mut s, Kind::Begin);
+        let mut io = s.release();
+        spoil(&mut io, at);
+        let s = Store::open(io, APP).unwrap();
+        assert_eq!((s.generation(), s.limits(), s.judged()), (1, lim(50), Judged::Committed));
+    }
+
+    /// Generation 1 (lim(50)) live in sector 6 and generation 2 (lim(30), "new") in sector 7 with
+    /// its commit word unreadable, and with its C-3 record unreadable too if `c3`.
+    fn failed_newer(c3: bool) -> Sim {
+        let mut s = Store::open(c3_base(), APP).unwrap();
+        s.write_limits(Some((Kind::Config, 1, b"new")), lim(30)).unwrap();
+        let (c, l) = (addr_of_live(&mut s, Kind::Commit), addr_of_live(&mut s, Kind::Limits));
+        let mut io = s.release();
+        spoil(&mut io, c);
+        if c3 {
+            spoil(&mut io, l);
+        }
+        io
+    }
+
+    #[test]
+    fn a_failed_generation_gives_the_stricter_values_and_a_state_record_keeps_them_t_a1_92() {
+        for c3 in [false, true] {
+            let want = if c3 { Limits::LOST } else { lim(30) };
+            let mut s = Store::open(failed_newer(c3), APP).unwrap();
+            assert!(s.fell_back());
+            assert_eq!((s.limits(), s.judged(), get(&mut s, Kind::Config).unwrap()), (want, Judged::FailedGeneration, b"old".to_vec()));
+            // The start check erases the failed generation; first a state record. A cut at its
+            // word, in the erase, after it, in the next compaction and after it: never looser.
+            let w = s.io.programs;
+            assert!(start_check(&mut s));
+            assert_eq!(s.io.programs - w, 2, "a state record of two words");
+            let s = reopen(s);
+            assert_eq!((s.limits(), s.judged()), (want, Judged::StateRecord), "c3 {c3}");
+            for cut in 0..2 {
+                let mut s = Store::open(failed_newer(c3), APP).unwrap();
+                s.io.budget = Some(cut);
+                assert!(s.erase_stale().is_err());
+                let s = reopen(s);
+                assert_eq!(s.limits(), want, "c3 {c3}: state record cut at word {cut}");
+            }
+            let mut s = Store::open(failed_newer(c3), APP).unwrap();
+            s.io.erase_cut = true;
+            assert!(s.erase_stale().is_err());
+            let mut s = reopen(s);
+            assert_eq!(s.limits(), want, "c3 {c3}: erase cut");
+            // The next compaction (a write with no C-3 item), cut at every word, then whole.
+            let base = s.release();
+            let mut p = Store::open(base.clone(), APP).unwrap();
+            let w = p.io.programs;
+            p.write_limits(None, p.limits()).unwrap();
+            for cut in 0..p.io.programs - w {
+                let mut s = Store::open(base.clone(), APP).unwrap();
+                s.io.budget = Some(cut);
+                let _ = s.put(Kind::Config, 1, b"x").and_then(|_| s.compact());
+                let s = reopen(s);
+                assert_eq!(s.limits(), want, "c3 {c3}: compaction cut at {cut}");
+            }
+            let mut s = Store::open(base, APP).unwrap();
+            s.compact().unwrap();
+            let s = reopen(s);
+            assert_eq!((s.limits(), s.judged()), (want, Judged::Committed), "c3 {c3}: carried by the committed generation");
+        }
+    }
+
+    #[test]
+    fn a_factory_reset_carries_c3_and_the_lost_state_t_a1_39() {
+        for lost in [false, true] {
+            let mut s = Store::open(owner_store(), APP).unwrap();
+            s.write_limits(None, lim(40)).unwrap();
+            if lost {
+                let at = addr_of_live(&mut s, Kind::Limits);
+                let mut io = s.release();
+                spoil(&mut io, at);
+                s = Store::open(io, APP).unwrap();
+            }
+            let want = if lost { Limits::LOST } else { lim(40) };
+            assert_eq!(s.limits(), want);
+            reset(&mut s).unwrap();
+            let mut s = reopen(s);
+            assert_eq!((s.limits(), get(&mut s, Kind::Secret)), (want, None), "lost {lost}");
+        }
+    }
+
+    #[test]
+    fn which_failed_generation_counts_t_a1_92() {
+        // Looser than the live value: the stricter, so the live one.
+        let mut s = Store::open(c3_base(), APP).unwrap();
+        s.write_limits(None, lim(80)).unwrap();
+        let at = addr_of_live(&mut s, Kind::Commit);
+        let mut io = s.release();
+        spoil(&mut io, at);
+        let s = Store::open(io, APP).unwrap();
+        assert_eq!((s.limits(), s.judged()), (lim(50), Judged::FailedGeneration));
+        // Not above the live sector's state record: it does not count (here its C-3 record is
+        // unreadable, so it would close TX).
+        let mut s = Store::open(failed_newer(true), APP).unwrap();
+        s.limits = lim(30);
+        s.write_state(2).unwrap();
+        let s = reopen(s);
+        assert_eq!((s.limits(), s.judged()), (lim(30), Judged::StateRecord));
+        // After a fall-back, L holds a state record; a tightening commits N above it; N's commit
+        // word unreadable: N counts, its stricter values, not the state record's.
+        let mut s = Store::open(failed_newer(false), APP).unwrap();
+        assert!(start_check(&mut s));
+        s.write_limits(None, lim(20)).unwrap();
+        assert!(s.generation() > 2, "above every number readable, the state record's included");
+        let at = addr_of_live(&mut s, Kind::Commit);
+        let mut io = s.release();
+        spoil(&mut io, at);
+        let mut s = Store::open(io, APP).unwrap();
+        assert_eq!((s.limits(), s.judged()), (lim(20), Judged::FailedGeneration));
+        // A state record before N's sector is erased, and a cut at each point keeps them.
+        let base = s.release();
+        let mut s = Store::open(base.clone(), APP).unwrap();
+        assert!(start_check(&mut s));
+        assert_eq!(reopen(s).limits(), lim(20));
+        for cut in 0..2 {
+            let mut s = Store::open(base.clone(), APP).unwrap();
+            s.io.budget = Some(cut);
+            assert!(s.erase_stale().is_err());
+            assert_eq!(reopen(s).limits(), lim(20), "cut {cut}");
+        }
+        // A failed generation in each sector and none live: both taken.
+        let mut s = Store::open(c3_base(), APP).unwrap();
+        s.erase_stale().unwrap();
+        let first = addr_of_live(&mut s, Kind::Commit);
+        s.write_limits(None, lim(30)).unwrap();
+        let second = addr_of_live(&mut s, Kind::Commit);
+        let mut io = s.release();
+        spoil(&mut io, first);
+        spoil(&mut io, second);
+        let s = Store::open(io, APP).unwrap();
+        assert_eq!((s.generation(), s.limits(), s.judged()), (0, lim(30), Judged::FailedGeneration));
+    }
+
+    #[test]
+    fn an_older_generation_never_counts_and_foreign_data_is_factory_t_a1_92() {
+        // G live, G-1 in the other sector with its commit word unreadable: G's values.
+        let mut s = Store::open(c3_base(), APP).unwrap();
+        s.write_limits(None, lim(40)).unwrap();
+        let older = 1 - s.live_sector();
+        let at = addr_of(&mut s, older, Kind::Commit);
+        let mut io = s.release();
+        spoil(&mut io, at);
+        let mut s = Store::open(io, APP).unwrap();
+        assert_eq!((s.limits(), s.judged()), (lim(40), Judged::Committed));
+        let w = s.io.programs;
+        assert!(start_check(&mut s), "erased as unrecognised data");
+        assert_eq!(s.io.programs, w, "no state record for an older generation");
+        // Foreign data in both sectors: the built-in values.
+        let mut io = Sim::new();
+        io.mem.fill(0x5A);
+        io.written.fill(true);
+        let s = Store::open(io, APP).unwrap();
+        assert_eq!((s.limits(), s.judged()), (Limits::BUILTIN, Judged::Factory));
+    }
+
     /// The owner's store with the live sector filled by `put` as far as it goes, and with
     /// `last_word` also its last word (a store written by a firmware that kept no word free).
     fn full_owner_store(last_word: bool) -> Sim {
@@ -1323,10 +1956,11 @@ mod tests {
         while s.free() > 0 {
             s.put(Kind::Staging, 1, &[]).unwrap();
         }
-        assert_eq!((s.generation(), s.room()), (0, FLASH_WORD));
+        assert_eq!((s.generation(), s.room()), (0, FLASH_WORD + STATE_ROOM));
         if last_word {
-            s.end = s.write_at(STORE_SECTORS[s.live], s.end, Kind::Staging, 1, &[]).unwrap();
-            assert_eq!(s.room(), 0);
+            while s.room() > 0 {
+                s.end = s.write_at(STORE_SECTORS[s.live], s.end, Kind::Staging, 1, &[]).unwrap();
+            }
         }
         s.release()
     }

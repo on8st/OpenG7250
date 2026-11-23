@@ -997,6 +997,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         secret: mgmt.secret.as_ref(),
                         p2_session: p2.session.running(),
                         armed: p2.tx.state() != g7250_safety::tx::ArmState::Disarmed,
+                        c3_lost: mgmt.c3_lost,
                         update: &mut crate::update::Port { u: &mut mgmt.update, store: mgmt.store.as_mut() },
                     };
                     // A datagram longer than the buffer arrives cut off; the header still decides

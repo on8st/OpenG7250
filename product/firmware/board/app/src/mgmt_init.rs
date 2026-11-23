@@ -7,7 +7,7 @@ use g7250_layout::header::Kind as ImageKind;
 use g7250_layout::{BOOT_STAGE, Range, Slot};
 use g7250_proto::mgmt as m;
 use g7250_proto::mgmt::payload::{Config, Identify, Version};
-use g7250_store::{Kind, Stale, Store};
+use g7250_store::{Judged, Kind, Limits, Stale, Store};
 
 pub type NvStore = Store<crate::nv::BoardFlash>;
 
@@ -28,7 +28,34 @@ pub struct MgmtInit {
     pub store_unreadable: u32,
     pub fell_back: (bool, bool, bool),
     /// What the store did at this start, for the log.
-    pub store_notes: heapless::Vec<&'static str, 4>,
+    pub store_notes: heapless::Vec<&'static str, 6>,
+    /// C-3 is lost: TX closed on every band until a `SET_CONFIG` of every C-3 item (0072).
+    pub c3_lost: bool,
+}
+
+const _: () = assert!(m::payload::MAX_BANDS == g7250_store::LIMIT_BANDS);
+
+/// The configuration as the management server sees it (Table M-3): the stored record's items
+/// other than C-3, and C-3 from the store's own record (A1.6 "C-3 at a start"; 0072). Lost: 0 W on
+/// every band, the other C-3 items at their built-in values (A1.6 "Lost").
+pub fn merged_config(record: Option<&[u8]>, l: &Limits) -> Config {
+    let f = Config::factory();
+    let c = Config::stored(record).unwrap_or(f);
+    let bands = g7250_radio::record::TX_BANDS.len();
+    if l.lost {
+        return Config { max_tx_time_ms: f.max_tx_time_ms, band_limit: core::array::from_fn(|i| (i < bands).then_some(0)), swr_s2_x100: None, pa_temp_t3: None, ..c };
+    }
+    Config { max_tx_time_ms: l.max_tx_time_ms.or(f.max_tx_time_ms), band_limit: l.band, swr_s2_x100: l.swr_s2_x100, pa_temp_t3: l.pa_temp_t3, ..c }
+}
+
+/// The C-3 items of a configuration, as the store keeps them.
+fn limits_of(c: &Config) -> Limits {
+    Limits { lost: false, max_tx_time_ms: c.max_tx_time_ms, band: c.band_limit, swr_s2_x100: c.swr_s2_x100, pa_temp_t3: c.pa_temp_t3 }
+}
+
+/// The configuration record without C-3, which the store keeps in its own record (0072).
+fn record_of(c: &Config) -> Config {
+    Config { max_tx_time_ms: None, band_limit: [None; m::payload::MAX_BANDS], swr_s2_x100: None, pa_temp_t3: None, ..*c }
 }
 
 fn version_of(v: u32) -> Version {
@@ -45,7 +72,7 @@ fn boot_stage_version() -> Version {
 impl MgmtInit {
     pub fn new(mut store: Option<NvStore>, tx_arm_state: u32, slot: Slot, cause: g7250_safety::reset::Cause) -> Self {
         let mut buf = [0u8; g7250_store::MAX_PAYLOAD];
-        let mut store_notes: heapless::Vec<&'static str, 4> = heapless::Vec::new();
+        let mut store_notes: heapless::Vec<&'static str, 6> = heapless::Vec::new();
         // A factory reset that did not end (a failed erase, a power loss): finished now, before
         // anything is read from the store and before the management socket opens (0069).
         if let Some(s) = store.as_mut() {
@@ -78,19 +105,28 @@ impl MgmtInit {
         }
         let mut get = |k: Kind, buf: &mut [u8]| store.as_mut().and_then(|s| s.get(k, buf).ok().flatten()).map(|(_, n)| n);
 
-        let mut config = heapless::Vec::new();
-        match get(Kind::Config, &mut buf) {
-            Some(n) if Config::stored(Some(&buf[..n])).is_some() => {
-                let _ = config.extend_from_slice(&buf[..n]);
-            }
+        // C-3 from the store's own record, as judged at open (0072): logged once per start when
+        // lost or taken from a failed generation.
+        let limits = store.as_ref().map_or(Limits::BUILTIN, |s| s.limits());
+        if limits.lost {
+            let _ = store_notes.push("config: C-3 lost, TX closed until rewritten");
+        } else if store.as_ref().is_some_and(|s| s.judged() == Judged::FailedGeneration) {
+            let _ = store_notes.push("config: C-3 of a failed generation kept: each item the stricter");
+        }
+        let mut get = |k: Kind, buf: &mut [u8]| store.as_mut().and_then(|s| s.get(k, buf).ok().flatten()).map(|(_, n)| n);
+        let record = match get(Kind::Config, &mut buf) {
+            Some(n) if Config::stored(Some(&buf[..n])).is_some() => Some(&buf[..n]),
             _ => {
                 fell_back.0 = true;
-                let mut b = [0u8; m::payload::MAX_CONFIG];
-                if let Some(n) = Config::factory().encode(&mut b) {
-                    let _ = config.extend_from_slice(&b[..n]);
-                }
+                None
             }
+        };
+        let mut config = heapless::Vec::new();
+        let mut b = [0u8; m::payload::MAX_CONFIG];
+        if let Some(n) = merged_config(record, &limits).encode(&mut b) {
+            let _ = config.extend_from_slice(&b[..n]);
         }
+        let mut get = |k: Kind, buf: &mut [u8]| store.as_mut().and_then(|s| s.get(k, buf).ok().flatten()).map(|(_, n)| n);
 
         let mut calibration = heapless::Vec::new();
         let (cal_id, cal_date) = match get(Kind::Calibration, &mut buf) {
@@ -141,7 +177,7 @@ impl MgmtInit {
         let mut identify = identify;
         identify.update_state = update.state as u8;
         identify.running_slot = g7250_update::stage::slot_code(slot);
-        MgmtInit { store, secret, config, calibration, identify, update, store_unreadable, fell_back, store_notes }
+        MgmtInit { store, secret, config, calibration, identify, update, store_unreadable, fell_back, store_notes, c3_lost: limits.lost }
     }
 }
 
@@ -166,11 +202,26 @@ pub fn apply_stored(m: &mut MgmtInit, e: g7250_radio::mgmt::Effect) -> Result<Op
             m.identify.secret_set = true;
             Ok(None)
         }
-        Effect::SetConfig(v) => {
+        Effect::SetConfig(v, c3) => {
+            // C-3 in its own record, written by a compaction whenever the request held a C-3 item
+            // (A1.6 C-3; 0072 point 1); the other items in the configuration record, in the same
+            // generation then.
             let st = m.store.as_mut().ok_or("no store")?;
-            st.put(Kind::Config, 1, &v).map_err(|_| "configuration")?;
+            let c = Config::decode(&v).map_err(|_| "configuration")?;
+            let mut b = [0u8; m::payload::MAX_CONFIG];
+            let n = record_of(&c).encode(&mut b).ok_or("configuration")?;
+            if c3 {
+                st.write_limits(Some((Kind::Config, 1, &b[..n])), limits_of(&c)).map_err(|_| "configuration")?;
+            } else {
+                st.put(Kind::Config, 1, &b[..n]).map_err(|_| "configuration")?;
+            }
+            let l = st.limits();
+            m.c3_lost = l.lost;
             m.config.clear();
-            let _ = m.config.extend_from_slice(&v);
+            let mut out = [0u8; m::payload::MAX_CONFIG];
+            if let Some(k) = merged_config(Some(&b[..n]), &l).encode(&mut out) {
+                let _ = m.config.extend_from_slice(&out[..k]);
+            }
             Ok(None)
         }
         Effect::SetCalibration(v) => {
