@@ -3553,7 +3553,8 @@
    "pending": [],
    "tx_part": true,
    "notes": [
-    "unarmed drop events: runs while TX is locked"
+    "unarmed drop events: runs while TX is locked",
+    "the C-3 change: C&C every 100 ms from another thread during the request; a session end then counts only where the reply came 1 s or more after the request (the watchdog over the flash work, 0072 point D), and its new token must be pushed at the next session start"
    ]
   },
   {

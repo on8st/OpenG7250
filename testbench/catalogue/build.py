@@ -204,7 +204,10 @@ OVERRIDES: dict[str, dict] = {
     "T-A3-38": {"target": "emulator", "also": ["host"], "needs": ["power.cycle", "reset.wdt"],
                 "notes": ["'RESTART while armed' part needs TX unlocked: host"]},
     "T-A3-47": {"target": "emulator", "also": ["host"],
-                "notes": ["unarmed drop events: runs while TX is locked"]},
+                "notes": ["unarmed drop events: runs while TX is locked",
+                          "the C-3 change: C&C every 100 ms from another thread during the request; a session end then counts "
+                          "only where the reply came 1 s or more after the request (the watchdog over the flash work, 0072 "
+                          "point D), and its new token must be pushed at the next session start"]},
     # B3
     "T-B3-09": {"target": "needs-radio", "also": ["emulator"], "needs": ["power.cycle"],
                 "pending": ["P-NET-2"]},
