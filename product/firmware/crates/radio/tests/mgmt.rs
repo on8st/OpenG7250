@@ -198,25 +198,52 @@ fn repeat_is_answered_from_the_cache() {
     assert_ne!(c.2, d.2);
 }
 
+fn auth_required_count(w: &mut World, s: &mut Server, id: u32, now: u64) -> u64 {
+    let r = w.call(s, HOST, &req(id, Command::GetStats, &[]), now).unwrap();
+    mgmt::payload::stats(&r.2).map(|e| e.unwrap()).find(|(n, _)| *n == b"mg_auth_required").unwrap().1
+}
+
 #[test]
-fn authenticated_requests_before_a_secret_exists() {
+fn authenticated_requests_before_a_secret_exists_t_a1_99() {
+    use g7250_radio::mgmt::Effect;
     let mut s = Server::new();
     let mut w = World::new();
-    // No trailer: 32.
-    assert_eq!(w.call(&mut s, HOST, &req(1, Command::SetConfig, &[]), 0).unwrap().1, Status::AuthRequired);
-    // With a trailer but no secret stored: 33; five of them in 10 s: 34, also for GET_CHALLENGE.
-    for i in 0..5u32 {
-        let mut b = [0u8; 1000];
-        let n = mgmt::build_request(&mut b, 100 + i, Command::SetConfig, &[], Some((&[1; 32], &[2; 16]))).unwrap();
-        assert_eq!(w.call(&mut s, HOST, &b[..n], 100 * i as u64).unwrap().1, Status::AuthFailed);
-    }
+    // No secret set: 32 with and without a trailer, not executed; ten in 10 s never give 34
+    // (0080). Commands whose empty payload is well formed (a malformed one gets 17 first, 0056).
+    // The trailer is made with a challenge the radio gave, which stays unused.
+    let ch: [u8; 16] = w.call(&mut s, HOST, &req(1, Command::GetChallenge, &[]), 0).unwrap().2.try_into().unwrap();
     let mut b = [0u8; 1000];
-    let n = mgmt::build_request(&mut b, 200, Command::SetConfig, &[], Some((&[1; 32], &[2; 16]))).unwrap();
-    assert_eq!(w.call(&mut s, HOST, &b[..n], 600).unwrap().1, Status::RateLimited);
-    assert_eq!(w.call(&mut s, HOST, &req(201, Command::GetChallenge, &[]), 700).unwrap().1, Status::RateLimited);
-    // Reads stay answered; after 10 s without a failure the limit lifts.
-    assert_eq!(w.call(&mut s, HOST, &req(202, Command::Identify, &[]), 800).unwrap().1, Status::Ok);
-    assert_eq!(w.call(&mut s, HOST, &req(203, Command::GetChallenge, &[]), 11_000).unwrap().1, Status::Ok);
+    for i in 0..10u32 {
+        let cmd = [Command::SetConfig, Command::FactoryReset, Command::Restart, Command::UpdateAbort][i as usize % 4];
+        let trailer = (i % 2 == 0).then_some((&[1u8; 32], &ch));
+        let n = mgmt::build_request(&mut b, 100 + i, cmd, &[], trailer).unwrap();
+        assert_eq!(w.call(&mut s, HOST, &b[..n], 100 + 900 * i as u64).unwrap().1, Status::AuthRequired, "{cmd:?} trailer {}", trailer.is_some());
+        assert!(s.take_effects().is_empty(), "not executed");
+    }
+    assert_eq!(auth_required_count(&mut w, &mut s, 200, 9_500), 10);
+    assert_eq!(s.stats.mgmt_auth_failures, 0, "a 32 is no authentication failure");
+    assert_eq!(w.call(&mut s, HOST, &req(201, Command::GetChallenge, &[]), 9_600).unwrap().1, Status::Ok);
+    // Reads stay answered.
+    assert_eq!(w.call(&mut s, HOST, &req(202, Command::Identify, &[]), 9_700).unwrap().1, Status::Ok);
+}
+
+#[test]
+fn a_32_with_a_secret_set_leaves_the_challenge_usable_t_a1_99() {
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let ch: [u8; 16] = w.call(&mut s, HOST, &req(1, Command::GetChallenge, &[]), 0).unwrap().2.try_into().unwrap();
+    // No trailer: 32, the challenge still there.
+    assert_eq!(w.call(&mut s, HOST, &req(2, Command::SetConfig, &[]), 100).unwrap().1, Status::AuthRequired);
+    let mut b = [0u8; 1000];
+    let n = mgmt::build_request(&mut b, 4, Command::SetConfig, &[], Some((&[7; 32], &ch))).unwrap();
+    assert_eq!(w.call(&mut s, HOST, &b[..n], 200).unwrap().1, Status::Ok);
+    // A wrong HMAC: 33, counted as a failure, not as a 32.
+    let ch: [u8; 16] = w.call(&mut s, HOST, &req(6, Command::GetChallenge, &[]), 300).unwrap().2.try_into().unwrap();
+    let n = mgmt::build_request(&mut b, 8, Command::SetConfig, &[], Some((&[8; 32], &ch))).unwrap();
+    assert_eq!(w.call(&mut s, HOST, &b[..n], 400).unwrap().1, Status::AuthFailed);
+    assert_eq!(s.stats.mgmt_auth_failures, 1);
+    assert_eq!(auth_required_count(&mut w, &mut s, 10, 500), 1);
 }
 
 #[test]

@@ -44,6 +44,8 @@ pub struct Stats {
     pub mgmt_dropped_rate: u64,
     pub mgmt_repeats: u64,
     pub mgmt_auth_failures: u64,
+    /// Requests answered with status 32 (Table M-6; 0080).
+    pub mg_auth_required: u64,
     pub discovery_answered: u64,
     pub discovery_dropped_rate: u64,
     pub discovery_from_port_1024: u64,
@@ -102,7 +104,7 @@ pub const STEP_NAMES: [&[u8]; STEPS] = [
 
 impl Stats {
     fn encode(&self, out: &mut [u8]) -> usize {
-        let items: [(&[u8], u64); 38] = [
+        let items: [(&[u8], u64); 39] = [
             (b"mgmt_requests", self.mgmt_requests),
             (b"mgmt_replies", self.mgmt_replies),
             (b"mgmt_dropped_not_request", self.mgmt_dropped_not_request),
@@ -110,6 +112,7 @@ impl Stats {
             (b"mgmt_dropped_rate", self.mgmt_dropped_rate),
             (b"mgmt_repeats", self.mgmt_repeats),
             (b"mgmt_auth_failures", self.mgmt_auth_failures),
+            (b"mg_auth_required", self.mg_auth_required),
             (b"discovery_answered", self.discovery_answered),
             (b"discovery_dropped_rate", self.discovery_dropped_rate),
             (b"discovery_from_port_1024", self.discovery_from_port_1024),
@@ -262,6 +265,7 @@ impl<W: logring::Words> Server<W> {
                 mgmt_dropped_rate: 0,
                 mgmt_repeats: 0,
                 mgmt_auth_failures: 0,
+                mg_auth_required: 0,
                 discovery_answered: 0,
                 discovery_dropped_rate: 0,
                 discovery_from_port_1024: 0,
@@ -466,13 +470,19 @@ impl<W: logring::Words> Server<W> {
             if self.auth_limited(src.0, now) {
                 return (Status::RateLimited, 0);
             }
-            let Some(trailer) = req.trailer else { return (Status::AuthRequired, 0) };
-            let ok = match (ctx.secret, self.take_challenge(src, now)) {
-                (Some(secret), Some(ch)) => {
+            // No trailer, or no secret to verify it with: 32, executed not, counted, and not an
+            // authentication failure: toward no 34, no challenge used, no session refreshed
+            // (A1.10 "No secret, no HMAC"; 0080).
+            let (Some(trailer), Some(secret)) = (req.trailer, ctx.secret) else {
+                self.stats.mg_auth_required += 1;
+                return (Status::AuthRequired, 0);
+            };
+            let ok = match self.take_challenge(src, now) {
+                Some(ch) => {
                     self.used_challenge = ch;
                     auth::verify(secret, &ch, req.signed, trailer)
                 }
-                _ => false,
+                None => false,
             };
             if !ok {
                 self.auth_failed(src.0, now);
