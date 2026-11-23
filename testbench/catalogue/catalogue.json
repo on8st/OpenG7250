@@ -1524,17 +1524,19 @@
     "A1.11"
    ],
    "scope": "v1.0",
-   "target": "host",
-   "also": [
-    "emulator"
-   ],
+   "target": "emulator",
+   "also": [],
    "needs": [
-    "dhcp.server"
+    "eth.log",
+    "arp.peer",
+    "ip.conflict",
+    "power.cycle"
    ],
    "pending": [],
    "tx_part": false,
    "notes": [
-    "spec marks it reference model; emulator only with the fixtures"
+    "spec marks it reference model; emulator only with the fixtures",
+    "timing in radio time from eth.log (RFC 3927 section 9 bounds, 50 ms slack); 'closed for at most 10 s' and 'only then answers' from sock.log; the start-up bound from the radio's first frame, which comes after link up"
    ]
   },
   {
@@ -1549,10 +1551,17 @@
    "scope": "v1.0",
    "target": "emulator",
    "also": [],
-   "needs": [],
+   "needs": [
+    "eth.log",
+    "arp.peer",
+    "ip.conflict",
+    "power.cycle"
+   ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "timing in radio time from eth.log (RFC 3927 section 9 bounds, 50 ms slack); 'closed for at most 10 s' and 'only then answers' from sock.log; the start-up bound from the radio's first frame, which comes after link up"
+   ]
   },
   {
    "id": "T-A1-72",
@@ -1568,11 +1577,16 @@
    "target": "emulator",
    "also": [],
    "needs": [
-    "time.scale"
+    "eth.log",
+    "arp.peer",
+    "ip.conflict",
+    "power.cycle"
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "timing in radio time from eth.log (RFC 3927 section 9 bounds, 50 ms slack); 'closed for at most 10 s' and 'only then answers' from sock.log; the start-up bound from the radio's first frame, which comes after link up"
+   ]
   },
   {
    "id": "T-A1-73",
@@ -1588,11 +1602,16 @@
    "target": "emulator",
    "also": [],
    "needs": [
+    "eth.log",
+    "ip.conflict",
+    "power.cycle",
     "dhcp.server"
    ],
    "pending": [],
    "tx_part": false,
-   "notes": []
+   "notes": [
+    "a static address with no previous configuration is a part: the bench cannot remove it"
+   ]
   },
   {
    "id": "T-A1-74",

@@ -336,6 +336,12 @@ OVERRIDES: dict[str, dict] = {
                           "on the reference model the lost state of 0072 only, through its fixture c3.lose; on the emulator "
                           "the C-3 parts are not run yet: where the C-3 record and the generation number lie is the "
                           "firmware's choice"]},
+    **{x: {"target": "emulator", "also": [], "needs": ["eth.log", "arp.peer", "ip.conflict", "power.cycle"],
+           "notes": ["timing in radio time from eth.log (RFC 3927 section 9 bounds, 50 ms slack); 'closed for at most 10 s' "
+                     "and 'only then answers' from sock.log; the start-up bound from the radio's first frame, which comes "
+                     "after link up"]} for x in ("T-A1-70", "T-A1-71", "T-A1-72")},
+    "T-A1-73": {"target": "emulator", "also": [], "needs": ["eth.log", "ip.conflict", "power.cycle", "dhcp.server"],
+                "notes": ["a static address with no previous configuration is a part: the bench cannot remove it"]},
     "T-A1-77": {"target": "emulator", "also": [], "needs": ["flash.log"],
                 "notes": ["flash.log v1.8 and IDENTIFY tag 25; the live store sector is taken as the one with the newest store "
                           "program; 'whole store records' is a part (the format is the firmware's choice)"]},
