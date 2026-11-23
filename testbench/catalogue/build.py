@@ -337,7 +337,8 @@ OVERRIDES: dict[str, dict] = {
                           "the C-3 parts are not run yet: where the C-3 record and the generation number lie is the "
                           "firmware's choice"]},
     "T-A1-77": {"target": "emulator", "also": [], "needs": ["flash.log"],
-                "notes": ["needs the update client (Table M-4 package) in the bench and the slot layout; flash.log v1.8"]},
+                "notes": ["flash.log v1.8 and IDENTIFY tag 25; the live store sector is taken as the one with the newest store "
+                          "program; 'whole store records' is a part (the format is the firmware's choice)"]},
     "T-A1-78": {"target": "emulator", "also": ["host"],
                 "notes": ["needs the update client (Table M-4 package) in the bench and the slot size of the firmware layout"]},
     "T-B6-28": {"target": "needs-radio", "also": [],

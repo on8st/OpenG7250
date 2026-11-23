@@ -1105,3 +1105,71 @@ def t_a1_83(ctx: Ctx):
             from .t_update import rollback_logged
             rollback_logged(ctx, u, run)
     planned_cuts_seen(missing)
+
+
+# ---------------- T-A1-77 ----------------
+def sectors_of(first_count) -> tuple[int, int]:
+    first, n = first_count
+    return FLASH_BASE + first * SECTOR, FLASH_BASE + (first + n) * SECTOR
+
+
+def judge_77(ctx, label: str, entries: list[dict], staging: tuple[int, int], store: tuple[int, int]):
+    """A1.8 "Slot size and the store" (0061): every erase and program in the staging slot or the store;
+    in the store no erase of the sector that holds the newest store program (the live one). Whole
+    records of the store format are not judged: the format is the firmware's choice."""
+    outside, live_erased, live = [], [], None
+    for e in entries:
+        if e.get("op") not in ("erase", "program") or "address" not in e:
+            continue
+        a = int(e["address"], 0) if isinstance(e["address"], str) else e["address"]
+        z = a + int(e.get("len", 32) or 32)
+        if staging[0] <= a and z <= staging[1]:
+            continue
+        if store[0] <= a and z <= store[1]:
+            sec = FLASH_BASE + (a - FLASH_BASE) // SECTOR * SECTOR
+            if e["op"] == "program":
+                live = sec
+            elif sec == live:
+                live_erased.append(f"{a:#x}")
+            continue
+        outside.append(f"{e['op']} {a:#x}+{z - a}")
+    ctx.check(f"{label}: no erase or program outside the staging slot and the store (IDENTIFY tag 25)", not outside, f"{outside[:4]}")
+    ctx.check(f"{label}: no erase of the live store sector (the one with the newest store program)", not live_erased, f"{live_erased[:4]}")
+
+
+@test("T-A1-77")
+def t_a1_77(ctx: Ctx):
+    """A1.8 "Slot size and the store" (0061): flash.log during a complete update (to the confirmed trial
+    boot) and during an aborted one."""
+    need(ctx, "flash.log")
+    from .t_update import activate_new, facts, image, newer, pkg, restart
+    s = secret(ctx)
+    with mg(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+    staging, store = sectors_of(lay[other - 1]), sectors_of(lay[2])
+    flog_start(ctx)
+    a = activate_new(ctx, s, 770)
+    if not ctx.check("a complete update activated", a is not None, ctx.__dict__.get("_upd_fail", "")):
+        return
+    confirmed = False
+    for _ in range(30):  # the trial confirms itself (0044)
+        with mg(ctx, s) as u:
+            if u.identify().get(10) == b"\x00":
+                confirmed = True
+                break
+        time.sleep(1.0)
+    ctx.check("the trial boot confirmed itself", confirmed, "tag 10 not 0 within 30 s")
+    judge_77(ctx, "UPDATE_BEGIN to the confirmed trial boot", flog(ctx), staging, store)
+    with mg(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        staging = sectors_of(lay[other - 1])
+        flog_start(ctx)
+        img = image(2 * SECTOR + 100, seed=771)
+        r = u.begin(pkg(img, newer(ver), other))
+        if ctx.eq("a second update begun", r["status"] if r else None, 0):
+            u.blocks(img, 512)
+            r = u.req("UPDATE_ABORT")
+            ctx.eq("UPDATE_ABORT: 0", r["status"] if r else None, 0)
+        restart(ctx, u)
+    judge_77(ctx, "an aborted update and its RESTART", flog(ctx), staging, store)
+    ctx.part("'whole store records of the store format': not judged, the format is the firmware's choice")

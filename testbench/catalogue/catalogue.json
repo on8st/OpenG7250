@@ -1684,7 +1684,7 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "needs the update client (Table M-4 package) in the bench and the slot layout; flash.log v1.8"
+    "flash.log v1.8 and IDENTIFY tag 25; the live store sector is taken as the one with the newest store program; 'whole store records' is a part (the format is the firmware's choice)"
    ],
    "covers": [
     "UP-02 (flash.log: sectors 6 and 7 only as store writes)"
