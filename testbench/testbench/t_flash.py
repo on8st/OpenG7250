@@ -834,7 +834,8 @@ def c3_writes(ctx, s: bytes, missing: list[str]):
     ctx.part("the C-3 cases of T-A1-86 that need a store where C-3 was never written (a boot-counter or C-1 write cut, "
              "the first generation live): not run yet, they need the wiped store of T-A1-92's cases")
     ctx.part("a sector left by a compaction cut before its commit word, with a stricter C-3 record, then a cut in its erase: "
-             "not run, the start right after the first cut erases it, and no second cut can be armed between")
+             "not run, the start right after the first cut erases it; it waits for power.cut {during_erase, at_power_on: true}, "
+             "a cut armed across the power-on (asked of emu)")
 
 
 def start_check_cuts(ctx, s: bytes, tx: int, missing: list[str]) -> bytes:
