@@ -163,9 +163,11 @@ OVERRIDES: dict[str, dict] = {
                           "built: the commanded resets (two in a row, ring full, just wrapped), the lost reason line and start "
                           "entry, a word that names another entry, the trial's reset; on the model a stop (stop.sim); never a "
                           "pass until then"]},
-    "T-A1-28": {"also": ["host"],
+    "T-A1-28": {"also": ["host"], "pending": [],
                 "notes": ["S2 and T3 (tags 9, 10) only with a calibration set that holds P-PWR-2; the FACTORY_RESET part only "
-                          "from address mode DHCP (tag 1 = 0)"]},
+                          "from address mode DHCP (tag 1 = 0)",
+                          "not blocked by P-PWR-2: the 50 MHz part is the state while P-PWR-2 is pending (0079), 0 W in the "
+                          "record and tag 8; once a build gives the 50 MHz rating that part changes with the spec"]},
     # A1: update and reset tests whose subject is the armed / keyed case
     **{t: TXR for t in ["T-A1-02", "T-A1-05", "T-A1-27", "T-A1-29", "T-A1-30", "T-A1-33",
                         "T-A1-38", "T-A1-40", "T-A1-52"]},

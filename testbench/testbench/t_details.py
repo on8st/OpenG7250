@@ -474,6 +474,15 @@ def foreign_iq(ctx, c):
 
 
 # ---------------- T-A1-96 ----------------
+def tlv_tags(p: bytes) -> list[int]:
+    """The tags of a Table M-3 TLV list, in order."""
+    tags, i = [], 0
+    while i + 2 <= len(p):
+        tags.append(p[i])
+        i += 2 + p[i + 1]
+    return tags
+
+
 @test("T-A1-96", whole=True)
 def t_a1_96(ctx: Ctx):
     """GET_CONFIG and GET_CALIBRATION without and with a set that holds S2 and T3 (Table M-1, M-3; 0074)."""
@@ -488,6 +497,12 @@ def t_a1_96(ctx: Ctx):
             conf = get_config(c)
             ctx.check("GET_CONFIG answered", 7 in conf, f"tags {sorted(conf)}")
             ctx.check("with no calibration set GET_CONFIG holds no tag 9 or 10", 9 not in conf and 10 not in conf, f"tags {sorted(conf)}")
+            if 7 in conf:  # 0079: the reply of a SET_CONFIG as GET_CONFIG gives it
+                r = c.authed("SET_CONFIG", s, config_tlv((7, conf[7])))
+                if ctx.eq("SET_CONFIG of the TX time as it is: 0", r["status"] if r else None, 0):
+                    tags = tlv_tags(r["payload"])
+                    ctx.check("with no calibration set the SET_CONFIG reply holds no tag 9 or 10 either (Table M-1; 0079)",
+                              9 not in tags and 10 not in tags and 7 in tags, f"tags {tags}")
             g = ctx.got(c.req("GET_CALIBRATION"), "GET_CALIBRATION")
             ctx.eq("GET_CALIBRATION: 37 bytes, id zeros, date 0, source length 0, no entries", (g["status"], g["payload"]), (0, bytes(37)))
             r = c.authed("SET_CALIBRATION", s, simulated_set())

@@ -19,7 +19,7 @@ import time
 
 from .core import Ctx, RadioClock, Skip, test
 from .mgmt import CMD, FLASH_WINDOW_S, Mgmt, build, config_tlv, read_log, req_retransmit, send_retransmit, tlv
-from .p2 import Host, value, wait_reachable
+from .p2 import Host, need_record, value, wait_reachable
 from .t_flash import SECTOR, flog, flog_start, in_range, is_erase, store_range, stretch
 from .t_update import secret, updating
 from .update import Updater
@@ -467,7 +467,8 @@ def logged_change(entries: list, old: int, new: int, ip: str, scales: tuple) -> 
 def t_a1_28(ctx: Ctx):
     """A1.6 C-3, A1.7, Table A1-4: a loosened persistent limit is accepted and logged with old value,
     new value and source; looser than built-in 49; built-in values not writable; FACTORY_RESET
-    keeps the limits."""
+    keeps the limits. While P-PWR-2 is pending, 50 MHz is 0 W in the record and in tag 8, 50 W there
+    gets 49 and 0 gets 0, and every other band takes 100 W (B4.8; 0079)."""
     s = secret(ctx)
     ip = ctx.host_ip
     u32, u16 = (lambda v: struct.pack(">I", v)), (lambda v: struct.pack(">H", v))
@@ -481,8 +482,8 @@ def t_a1_28(ctx: Ctx):
         tx = lambda v: (7, u32(v))
         pw = lambda v: (8, bytes([band]) + u16(v))
 
-        def write(item):
-            r = u.req("SET_CONFIG", config_tlv(item))
+        def write(*items):
+            r = u.req("SET_CONFIG", config_tlv(*items))
             return r["status"] if r else None
 
         def now(tag):
@@ -517,6 +518,7 @@ def t_a1_28(ctx: Ctx):
                 was = now(tag)
                 ctx.eq(f"{name}: {built + 1}, looser than any built-in value: 49", write(item(built + 1)), 49)
                 ctx.eq(f"{name}: unchanged after it", now(tag), was)
+            fifty_mhz(ctx, u, write, conf0[8])
             kept = get_config(u.c)
             if conf0.get(1) == b"\x00":
                 st, _, _ = factory_reset(ctx, u)
@@ -534,6 +536,26 @@ def t_a1_28(ctx: Ctx):
         finally:
             for name, _, item, _, _, v0, _ in cases:
                 ctx.eq(f"{name}: put back to {v0}", write(item(v0)), 0)
+            ctx.eq("every band limit put back", write(*[(8, bytes([i]) + u16(v)) for i, v in sorted(conf0[8].items())]), 0)
+
+
+def fifty_mhz(ctx: Ctx, u, write, bands0: dict):
+    """0079: the built-in limit of a band is the maximum power of its tx_band entry (B4.8); at 50 MHz
+    0 W while P-PWR-2 is pending (Annex P), so the record and tag 8 carry 0 there."""
+    with Host(ctx.net) as h:
+        rec = need_record(ctx, h)
+    entries = [(rec[0x22 + 3 * i], rec[0x24 + 3 * i]) for i in range(rec.get(0x21, 0))]
+    six = [i for i, (lo, _) in enumerate(entries) if lo >= 50_000_000]
+    if not ctx.check("the record has one tx_band entry from 50 MHz (Table A3-0)", len(six) == 1, f"{entries}"):
+        return
+    i6, band = six[0], (lambda i, v: (8, bytes([i]) + struct.pack(">H", v)))
+    ctx.eq(f"tx_band[{i6}] (50 MHz): both power fields 0 while P-PWR-2 is pending (B4.8; 0079)", entries[i6][1], 0)
+    ctx.eq(f"GET_CONFIG tag 8, band {i6} (50 MHz): 0", get_config(u.c)[8].get(i6), 0)
+    ctx.eq("a 50 MHz limit of 50 W: 49", write(band(i6, 500)), 49)
+    ctx.eq("a 50 MHz limit of 0 W: 0", write(band(i6, 0)), 0)
+    for i in sorted(bands0):
+        if i != i6:
+            ctx.eq(f"band {i} ({entries[i][0] / 1e6:g} MHz): a limit of 100 W: 0", write(band(i, 1000)), 0)
 
 
 # ---------------- the host rule of 0069 on the reference model (T-B5-22) ----------------
