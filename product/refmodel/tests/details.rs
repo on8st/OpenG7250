@@ -441,3 +441,40 @@ fn installer_session() {
     assert_eq!(b.plain(B, FIRST, &[1; 32]).status, st::WINDOW_CLOSED);
     assert_eq!(b.req(A, BLOCK, &block(3)).status, st::OK); // the old secret still authenticates
 }
+
+fn tlvs(p: &[u8]) -> Vec<(u8, Vec<u8>)> {
+    let (mut v, mut i) = (Vec::new(), 0);
+    while i + 2 <= p.len() {
+        let n = p[i + 1] as usize;
+        v.push((p[i], p[i + 2..i + 2 + n].to_vec()));
+        i += 2 + n;
+    }
+    v
+}
+
+/// T-A1-28, T-A1-96 (0079): 50 MHz built in at 0 W while P-PWR-2 is pending; the `SET_CONFIG`
+/// reply as `GET_CONFIG` gives it.
+#[test]
+fn fifty_mhz_and_the_set_config_reply() {
+    let mut b = Bench::new(Config::default());
+    assert_eq!(b.r.record[0x22 + 27 + 2], 0); // both power fields of the 50 MHz entry
+    assert_eq!(b.r.record[0x22 + 2], (1000 << 16) | 250);
+    let band = |p: &[u8], i: u8| tlvs(p).into_iter().find(|(t, v)| *t == 8 && v[0] == i).map(|(_, v)| u16::from_be_bytes([v[1], v[2]]));
+    let g = b.plain(A, GET_CONFIG, &[]).p;
+    assert_eq!((band(&g, 9), band(&g, 0)), (Some(0), Some(1000)));
+    assert_eq!(b.req(A, SET_CONFIG, &[8, 3, 9, 0, 50]).status, st::NOT_ALLOWED); // 5 W at 50 MHz
+    assert_eq!(b.req(A, SET_CONFIG, &[8, 3, 9, 0x01, 0xF4]).status, st::NOT_ALLOWED); // 50 W
+    let r = b.req(A, SET_CONFIG, &[8, 3, 9, 0, 0]);
+    assert_eq!(r.status, st::OK);
+    for i in 0..9 {
+        assert_eq!(b.req(A, SET_CONFIG, &[8, 3, i, 0x03, 0xE8]).status, st::OK, "band {i} at 100 W");
+    }
+    assert_eq!(b.req(A, SET_CONFIG, &[8, 3, 0, 0, 0]).status, st::OK); // 0 W closes a band
+    let r = b.req(A, SET_CONFIG, &[8, 3, 1, 0x03, 0xE9]);
+    assert_eq!(r.status, st::NOT_ALLOWED); // 100.1 W
+    // no calibration set: the reply, like GET_CONFIG, holds no tag 9 or 10
+    let r = b.req(A, SET_CONFIG, &[7, 4, 0, 0, 0x75, 0x30]);
+    assert_eq!(r.status, st::OK);
+    assert!(tlvs(&r.p).iter().all(|(t, _)| *t != 9 && *t != 10), "{:?}", tlvs(&r.p));
+    assert_eq!(r.p, b.plain(A, GET_CONFIG, &[]).p);
+}

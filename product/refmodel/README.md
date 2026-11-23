@@ -29,10 +29,13 @@ endpoint description the test bench reads.
 
 Choices where the spec leaves room: a discarded packet counts under its own name and under
 `drop_<port>` (B11.1); a request that gets a refusal (a run request during an update or on a slow
-link) counts as discarded; the sequence numbers of B11.6 start
-again at a takeover; a start with no reset flag clears `reset_<cause>`, `fault_<code>` and
+link) counts as discarded; a start with no reset flag clears `reset_<cause>`, `fault_<code>` and
 `trip_count` too and counts no `reset_unknown` (it counts as power-on). The commanded-reset word
 (0078) is a field kept over a reset; the boot stage makes no software reset of its own.
+The sequence numbers of B11.6 start again at a takeover, since a takeover starts a session
+(A2.3): spec, not a choice. The persistent power limit per band (C-3) is kept, checked and
+reported, but the keying model does not limit power by it, so a band at 0 W does not refuse arming
+in the model.
 
 ## Language (decisions 0033, 0037, proposed)
 
@@ -69,9 +72,12 @@ A calibration set can also be written and cleared at run time with `SET_CALIBRAT
 | A1 | header, size and status precedence, stored replies (5 s, 4 hosts), challenge per host (10 s, once), HMAC-SHA256, write session (60 s, `RESTART` exempt), auth-failure limit (status 34), reply caps, first-secret window (300 s), every payload of Annex M for `IDENTIFY` (tags 1–25), `GET_STATS` (the 45 names of Table M-6, then the model's own; 0074), `GET_CHALLENGE`, `SET_FIRST_SECRET`, `CHANGE_SECRET`, `GET_CONFIG`/`SET_CONFIG` (Table M-3; region 0 only, 62 for S2/T3 before calibration, 49 beyond built-in), `READ_LOG`, `CLEAR_LOG`, `SWITCH_LEVEL`, `RESTART`, `FACTORY_RESET` (keeps the calibration set), `UPDATE_STATUS`, `RETURN_TO_STOCK`, `ENTER_VENDOR_RECOVERY`, `GET_CALIBRATION`, `SET_CALIBRATION`, `CLEAR_CALIBRATION` (A1.12); firmware update and `ROLLBACK` (A1.8), the log kept over a reset (A1.7), limits that fall due during flash work act before waiting requests (0073), an address or netmask change by `SET_CONFIG` or Set IP ends the write session (0074) | the sockets stay where they are bound after an address change; DHCP (the mode returns the start values, no renewal); faults: `fault_<code>` and `trip_count` stay 0, and after an unexpected stop (a software reset that the commanded-reset word does not show as commanded; `stop.sim` makes one) only the log line `start: unexpected stop` is there, no `WDT_RESET_AT_START` and no drop reason beyond `RESET` (0075, 0078), and a write of the word is never cut; `icmp_unreach`, `gen1024_ignored` and `ll_unprobed` stay 0; a write that fails in flash |
 
 Payload layouts are those of the spec's Annex M (0039), which adopted the model's first layouts.
-Values pending hardware (Annex P) are SIMULATED in the model and marked in the code: range 10
-power, SWR S2 and PA T3 (used only once a calibration set holds P-PWR-2), `status_fill`. Tests
-must not assert them.
+Values pending hardware (Annex P) are SIMULATED in the model and marked in the code: SWR S2 and PA T3 (used only once a calibration set holds P-PWR-2), `status_fill`. Tests
+must not assert them. The maximum power at 50 MHz (P-PWR-2) is not simulated: the model is a
+build with P-PWR-2 pending, so the record's 50 MHz entry carries 0 in both power fields, its
+built-in limit is 0 W, `GET_CONFIG` tag 8 gives 0 there and any C-3 limit above 0 gets 49 (0079).
+A C-3 band limit of 0 W is accepted on every band (A1.6 C-6: 0 W closes a band); the model refused
+it with 48 before.
 
 ## The `hw.observe` fixture
 

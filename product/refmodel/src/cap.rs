@@ -73,8 +73,9 @@ pub fn build(cfg: &Config, calibrated: bool, rx_offered: bool) -> Vec<u32> {
         let base = 0x22 + 3 * i;
         r[base] = *lo;
         r[base + 1] = *hi;
-        // 100 W / 25 W [G7250-MAN]; range 10 pending hardware (P-PWR-2): SIMULATED 90 W / 22.5 W
-        r[base + 2] = if *lo >= 50_000_000 { (900 << 16) | 225 } else { (1000 << 16) | 250 };
+        // 100 W / 25 W [G7250-MAN]; 50 MHz 0 in both fields until P-PWR-2 gives its maximum power
+        // (0079); P-PWR-2 is a firmware value, pending in this version
+        r[base + 2] = if *lo >= 50_000_000 { 0 } else { (1000 << 16) | 250 };
     }
     r[0x52] = 0x1C53_0001;
     r[0x53] = regmap_groups(cfg);

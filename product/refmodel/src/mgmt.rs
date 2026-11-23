@@ -152,10 +152,11 @@ impl Conf {
                band_limits: band_builtin(), allow: Vec::new() }
     }
 }
-/// Built-in power per `tx_band`, 0.1 W (Table A3-0; range 10 SIMULATED, P-PWR-2).
-fn band_builtin() -> [u16; 10] {
+/// Built-in power per `tx_band`, 0.1 W: the maximum power of its record entry (B4.8); 50 MHz 0 W
+/// until P-PWR-2 (0079).
+pub fn band_builtin() -> [u16; 10] {
     let mut b = [1000u16; 10];
-    b[9] = 900;
+    b[9] = 0;
     b
 }
 fn is_update(cmd: u16) -> bool {
@@ -1073,9 +1074,8 @@ impl Mgmt {
                 }
                 (8, 3) if (val[0] as usize) < 10 => {
                     let w = be16(val, 1);
-                    if w == 0 {
-                        bad = true;
-                    } else if w > band_builtin()[val[0] as usize] {
+                    // 0 W closes a band (A1.6 C-6) and is the one value accepted at 50 MHz (0079)
+                    if w > band_builtin()[val[0] as usize] {
                         looser = true;
                     } else {
                         c.band_limits[val[0] as usize] = w;
