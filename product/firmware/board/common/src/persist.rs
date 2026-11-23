@@ -20,143 +20,66 @@
 //! a write goes to the slot that is not the newest valid one, header last, so a reset in the
 //! middle of a write leaves the other slot whole.
 
-use core::ptr::{addr_of_mut, write_volatile};
-use g7250_safety::counters::{Counters, SLOT_WORDS};
+//!
+//! What is taken from the words and written to them is g7250_safety::kept (host tests, also with
+//! words that cannot be read); here only the place and the accesses.
 
-/// Two slots. The AXI SRAM has a 64-bit ECC word: it is written in whole, aligned 64-bit words
-/// only ([HIS] HIS 10, MEDIUM), never in halves.
-/// The whole block as one static with a fixed layout, so that the boot stage (which uses only
-/// the handover) and the application place every part at the same address: the counter slots
-/// at 0x2401FF80, the handover after them. (Two statics let the boot stage's linker drop the
-/// unused slots and put the handover 96 bytes lower than the application looked for it.)
-#[repr(C)]
-struct Region {
-    slots: [[u64; SLOT_WORDS]; 2],
-    handover: [u64; 3],
-}
+use core::ptr::{addr_of, addr_of_mut, write_volatile};
+use g7250_safety::counters::Counters;
+pub use g7250_safety::kept::Handover;
+use g7250_safety::kept::{self, WORDS};
+use g7250_safety::logring::Words;
+
+/// Two counter slots, then the handover. The AXI SRAM has a 64-bit ECC word: it is written in
+/// whole, aligned 64-bit words only ([HIS] HIS 10, MEDIUM), never in halves.
+/// The whole block as one static, so that the boot stage (which uses only the handover) and the
+/// application place every part at the same address: the counter slots at 0x2401FF80, the
+/// handover after them. (Two statics let the boot stage's linker drop the unused slots and put
+/// the handover 96 bytes lower than the application looked for it.)
 #[unsafe(link_section = ".persist")]
-static mut REGION: core::mem::MaybeUninit<Region> = core::mem::MaybeUninit::uninit();
-const _: () = assert!(core::mem::size_of::<Region>() <= 128);
+static mut REGION: core::mem::MaybeUninit<[u64; WORDS]> = core::mem::MaybeUninit::uninit();
+const _: () = assert!(core::mem::size_of::<[u64; WORDS]>() <= 128);
 
-// The boot stage's TX path check, handed to the application (A3.6b; 0066 addendum): written by
-// the boot stage just before the jump (whole 64-bit words, so read only what was written this
-// start), taken and cleared by the application. `Region::handover`.
-const HANDOVER_MAGIC: u32 = 0x4737_4842; // "G7HB"
+struct Mem;
 
-/// What the boot stage's TX path check found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Handover {
-    /// Microseconds from the boot stage's start to its first check.
-    pub first_check_us: u32,
-    /// A fault it found: index into the Table A3-6 pins, bit 7 the configuration (else the level).
-    pub fault: Option<u8>,
-    /// A mismatch run still open at the jump: pin index and its start, ms since the boot stage
-    /// start (the DWT cycle counter runs on into the application).
-    pub open: Option<(u8, u32)>,
-    /// The reset flags of this start, read once by the boot stage (0068).
-    pub reset: crate::reset::Flags,
-}
-
-fn handover_ptr() -> *mut u64 {
-    // SAFETY: a field of the module's static, raw pointer only.
-    unsafe { core::ptr::addr_of_mut!((*addr_of_mut!(REGION).cast::<Region>()).handover) as *mut u64 }
+impl Words for Mem {
+    fn get(&self, i: usize) -> Option<u64> {
+        assert!(i < WORDS);
+        // SAFETY: inside the static above, only raw pointers; 8-aligned.
+        unsafe { crate::kept::read_tolerant((addr_of!(REGION) as *const u64).add(i)) }
+    }
+    fn set(&mut self, i: usize, v: u64) {
+        assert!(i < WORDS);
+        // SAFETY: inside the static above; volatile, as it outlives the program.
+        unsafe { write_volatile((addr_of_mut!(REGION) as *mut u64).add(i), v) }
+    }
 }
 
 /// The boot stage, just before the jump.
 pub fn write_handover(h: &Handover) {
-    let f = h.fault.unwrap_or(0xFF) as u64;
-    let (oi, os) = h.open.map_or((0xFFu64, 0u64), |(i, s)| (i as u64, s as u64));
-    // SAFETY: the `.persist` block, 8-aligned; volatile; the magic word last.
-    unsafe {
-        let r = h.reset.bits() as u32;
-        write_volatile(handover_ptr().add(2), r as u64 | (!r as u64) << 32);
-        write_volatile(handover_ptr().add(1), f | oi << 8 | os << 32);
-        write_volatile(handover_ptr(), HANDOVER_MAGIC as u64 | (h.first_check_us as u64) << 32);
-    }
+    kept::write_handover(&mut Mem, h)
 }
 
 /// The application, at start: the boot stage's handover of this start, then cleared.
 pub fn take_handover() -> Option<Handover> {
-    // SAFETY: as `write_handover`; the boot stage wrote the words before the jump.
-    let w = |k| unsafe { crate::kept::read_tolerant(handover_ptr().add(k)) };
-    let words = (w(0), w(1), w(2));
-    unsafe {
-        write_volatile(handover_ptr(), 0);
-    }
-    let (Some(w0), Some(w1), Some(w2)) = words else { return None };
-    if w0 as u32 != HANDOVER_MAGIC || w2 as u32 != !((w2 >> 32) as u32) {
-        return None;
-    }
-    let b = |v: u64| (v != 0xFF).then_some(v as u8);
-    Some(Handover {
-        first_check_us: (w0 >> 32) as u32,
-        fault: b(w1 & 0xFF),
-        open: b((w1 >> 8) & 0xFF).map(|i| (i, (w1 >> 32) as u32)),
-        reset: crate::reset::Flags::from_bits(w2 as u8),
-    })
-}
-
-fn slot(i: usize) -> *mut u64 {
-    // SAFETY: a static of this module; only raw pointers, read and written volatile.
-    unsafe { (core::ptr::addr_of_mut!((*addr_of_mut!(REGION).cast::<Region>()).slots) as *mut [u64; SLOT_WORDS]).add(i) as *mut u64 }
-}
-
-fn read(i: usize) -> [u64; SLOT_WORDS] {
-    let mut w = [0u64; SLOT_WORDS];
-    for (k, x) in w.iter_mut().enumerate() {
-        // SAFETY: `slot` points into the `.persist` block (8-aligned). A word that cannot be read
-        // makes the slot fail: zeros do not check.
-        match unsafe { crate::kept::read_tolerant(slot(i).add(k)) } {
-            Some(v) => *x = v,
-            None => return [0; SLOT_WORDS],
-        }
-    }
-    w
-}
-
-fn write(i: usize, w: &[u64; SLOT_WORDS]) {
-    // SAFETY: as `read`. Values and check first, the header (magic, sequence) last: a reset in
-    // between leaves this slot invalid and the other one is used.
-    unsafe {
-        for k in (1..SLOT_WORDS).rev() {
-            write_volatile(slot(i).add(k), w[k]);
-        }
-        write_volatile(slot(i), w[0]);
-    }
-}
-
-fn newest() -> Option<(usize, u32, Counters)> {
-    Counters::newest(&read(0), &read(1))
+    kept::take_handover(&mut Mem)
 }
 
 /// At start, before any other use: `power_lost` from the reset flags (power-on or brown-out).
 /// Returns the counters kept over the reset, and whether they were found (false after a power
 /// loss, or when a previous stage overwrote the block: then they start again at 0).
 pub fn start(power_lost: bool) -> (Counters, bool) {
-    if !power_lost {
-        if let Some((_, _, c)) = newest() {
-            return (c, true);
-        }
-    }
-    let z = Counters::default();
-    write(0, &z.encode(0));
-    write(1, &z.encode(0));
-    (z, false)
+    kept::start(&mut Mem, power_lost)
 }
 
 /// The counters kept (zero if none; after [`start`] there always are some).
 pub fn get() -> Counters {
-    newest().map_or(Counters::default(), |n| n.2)
+    kept::get(&Mem)
 }
 
 /// Keep new counters (call on every change).
 pub fn set(c: &Counters) {
-    let (i, seq) = match newest() {
-        Some((_, _, old)) if old == *c => return,
-        Some((i, s, _)) => (1 - i, s.wrapping_add(1)),
-        None => (0, 1),
-    };
-    write(i, &c.encode(seq));
+    kept::set(&mut Mem, c)
 }
 
 /// The trip count kept.
