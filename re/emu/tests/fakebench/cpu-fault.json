@@ -1,0 +1,22 @@
+{
+ "format": "g7250-testlist",
+ "version": 1,
+ "minor": 2,
+ "defaults": {
+  "timeout_s": 20
+ },
+ "boot": "per-list",
+ "tests": [
+  {
+   "id": "T-EMU-29",
+   "title": "cpu.fault (0075, way (a)): an undefined instruction at a chosen emulated time, thread mode, a chosen handler, UsageFault",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 400
+  }
+ ],
+ "note": "The image is firmware-tests/bench/net_test.c: its HardFault and UsageFault handlers keep the frame and reset by SYSRESETREQ (FF reads it). The stacked PC names the emulator's stub, not the image's code."
+}

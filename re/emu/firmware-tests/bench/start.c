@@ -5,7 +5,8 @@ extern uint32_t _estack, _sidata, _sdata, _edata, _sbss, _ebss;
 int main(void);
 
 void default_handler(void) { puts_("FAULT unexpected exception\r\n"); bench_done(); for(;;) {} }
-void hardfault_handler(void) { puts_("FAULT HardFault\r\n"); bench_done(); for(;;) {} }
+__attribute__((weak)) void hardfault_handler(void) { puts_("FAULT HardFault\r\n"); bench_done(); for(;;) {} }
+__attribute__((weak)) void usagefault_handler(void) { default_handler(); }
 
 #define WEAK __attribute__((weak, alias("default_handler")))
 void DMA1_Stream0_IRQHandler(void) WEAK;
@@ -43,6 +44,7 @@ void (*const vectors[16 + 163])(void) = {
     [1] = reset_handler,
     [2 ... 15] = default_handler,
     [3] = hardfault_handler,
+    [6] = usagefault_handler,
     [16 ... 16 + 162] = default_handler,
     [16 + 11] = DMA1_Stream0_IRQHandler,
     [16 + 12] = DMA1_Stream1_IRQHandler,

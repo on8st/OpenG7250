@@ -221,6 +221,39 @@ test is listed as such. Checked without an emulator by tests/baseline/slow_calls
   (`emulator.flash_ecc`), and its reason names each one that was not in force when answered.
 - The runner refuses a run folder that is already used (it would append to the old logs).
 
+## cpu.fault: a processor fault at a chosen emulated time (0075, way (a))
+
+The name and the shape are this emulator's proposal; the bench format lists the fixture as pending
+and does not call it yet.
+- `cpu.fault {at_us | in_us, mode?: "any"|"thread"|"handler", exception?, within_us?: 1000000}` →
+  `{at_us, mode, exception, within_us, stub}`: from `at_us` (emulated us since the boot, as `hw.trace`)
+  or `in_us` from now, the core's mode is looked at in a time event, between translated blocks, and
+  then every 10 us of emulated time until `at_us + within_us`. When it is the mode asked for (thread:
+  IPSR 0; handler: IPSR not 0, or the one `exception` number given, 2 to 178; any), the PC is set to
+  an undefined instruction (UDF) in the emulator's own stub memory at 0x0FFF0000 (a range the chip
+  leaves reserved; a fetch there on the chip would itself fault). The core takes the fault as for an
+  undefined instruction: HardFault with HFSR FORCED and CFSR UNDEFINSTR, or UsageFault when the image
+  has set USGFAULTENA. The registers and the stack are the image's; the stacked PC names the stub,
+  not the image's code (way (b), a patched instruction, is not built: the stacked PC is not judged).
+- `cpu.fault {read: true}` → `{state, mode, exception, at_us, until_us, samples, injected: {t_us, pc,
+  ipsr, stub}, entry: {t_us, exception, handler, cfsr, hfsr, stacked_pc, stacked_ipsr}}`; `state` is
+  `armed`, `injected`, `entered` (the first entry of the HardFault, MemManage, BusFault or UsageFault
+  vector after it), `missed` (the mode did not come within the window; nothing done) or `dropped`
+  (an MCU reset before the injection, or between the injection and the entry). A power cycle starts a
+  new emulator, without the fixture. A new call replaces an armed one. In `hw.trace` the events
+  `{"kind": "fault", "result": "injected"|"missed", ...}` and `{"kind": "fault_entry", exception}`.
+- The sampling step is 10 us: a handler shorter than that can be missed for a long time, and the
+  first instruction of a handler is not hit on purpose (a hook at the handler's address would do
+  that; not built). The entry latency is not cycle-true. Not modelled: bus faults (also imprecise
+  ones), MemManage without a real MPU violation, stacking and unstacking faults, lazy FP stacking,
+  LOCKUP (a fault inside HardFault or with FAULTMASK set; what Renode does there is not known, so no
+  test may rest on it). A fault while the core is stalled by a fetch during a masked erase lands at the
+  polling loop's fetch from RAM.
+- Checked by T-EMU-29 (tests/fakebench/cpu-fault.json, m1_smoke step [12]) against the bench image
+  net_test.c: thread mode, the handler of exception 44, UsageFault, a missed window, a reset before the
+  time, and the image's own handler seeing the same frame (IPSR, CFSR, HFSR, stacked PC and IPSR,
+  EXC_RETURN). Every call is in fixture-log.jsonl.
+
 ## The emulator process
 
 The runner records an emulator process that ends unasked (any exit code) and the macOS crash

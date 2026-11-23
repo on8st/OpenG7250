@@ -241,5 +241,17 @@ else
   echo "  skip (no arm-none-eabi-gcc or Renode)"
 fi
 
+echo "[12] cpu.fault: an undefined instruction at a chosen emulated time, thread mode, a handler, UsageFault (T-EMU-29)"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
+  if G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
+       tests/fakebench/cpu-fault.json --run-id smoke-cpu-fault >/dev/null 2>&1; then
+    ok "cpu.fault: T-EMU-29 passes (the fixture's record and the image's own handler agree)"
+  else
+    bad "cpu.fault (see .private/product-runs/smoke-cpu-fault/result.json)"
+  fi
+else
+  echo "  skip (no arm-none-eabi-gcc or Renode)"
+fi
+
 echo
 [ $fail -eq 0 ] && { echo "M1 smoke: ALL PASS"; exit 0; } || { echo "M1 smoke: FAILURES"; exit 1; }

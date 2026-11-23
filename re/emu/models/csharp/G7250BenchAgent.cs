@@ -878,6 +878,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         private void OnMachineReset()
         {
             System.Threading.Interlocked.Increment(ref resetCount);
+            FaultAtReset();
             string cause = "software";
             IPeripheral wd;
             if(machine.TryGetByName("sysbus.watchdog", out wd))
@@ -913,6 +914,215 @@ namespace Antmicro.Renode.Peripherals.SPI
                 }
             }
             catch(Exception e) { this.Log(LogLevel.Warning, "agent: boot hook after reset: {0}", e.Message); }
+        }
+
+        // ---- cpu.fault (0075, way (a)): an undefined instruction at a chosen emulated time ----
+        // At a time event (between translated blocks) the core's PC is set to a UDF kept in the
+        // emulator's own stub memory (FaultStub, not a part of the chip), when the mode the bench asks
+        // for runs: thread (IPSR 0), handler (IPSR not 0, or the one exception number given) or any.
+        // Until then the mode is sampled every 10 us of emulated time, up to within_us. The core then
+        // takes the fault as the chip does for an undefined instruction (HardFault with HFSR FORCED, or
+        // UsageFault when the image enabled it); its first vector entry is recorded. The stacked PC
+        // names the stub, not the image's code; registers and stack are the image's.
+        public const uint FaultStub = 0x0FFF0000;
+        private LimitTimer faultTimer;
+        private readonly object faultSync = new object();
+        private string faultState = "none";      // none, armed, injected, entered, missed, dropped
+        private string faultMode = "any";
+        private int faultExc = -1;
+        private ulong faultAtUs, faultUntilUs, faultInjUs, faultInjPc, faultInjXpsr, faultSamples;
+        private string faultEntry;               // JSON of the first vector entry after the injection
+        private readonly List<ulong> faultHooks = new List<ulong>();
+        private int xpsrIndex = -1;
+
+        private ulong CpuRegister(Antmicro.Renode.Peripherals.CPU.ICPU cpu, int index)
+        {
+            var v = cpu.GetType().GetMethod("GetRegister", new[] { typeof(int) }).Invoke(cpu, new object[] { index });
+            return Convert.ToUInt64(v.GetType().GetProperty("RawValue").GetValue(v), CultureInfo.InvariantCulture);
+        }
+
+        private Antmicro.Renode.Peripherals.CPU.ICPU Core()
+        {
+            foreach(var c in machine.SystemBus.GetCPUs()) return c;
+            return null;
+        }
+
+        private ulong Xpsr(Antmicro.Renode.Peripherals.CPU.ICPU cpu)
+        {
+            if(xpsrIndex < 0)
+            {
+                xpsrIndex = 25;                  // Renode's Cortex-M index, unless the core names it otherwise
+                var regs = cpu.GetType().GetMethod("GetRegisters");
+                if(regs != null)
+                    foreach(var r in (System.Collections.IEnumerable)regs.Invoke(cpu, null))
+                    {
+                        var al = r.GetType().GetProperty("Aliases");
+                        var names = al == null ? null : al.GetValue(r) as string[];
+                        if(names != null && Array.Exists(names, n => string.Equals(n, "XPSR", StringComparison.OrdinalIgnoreCase)))
+                            xpsrIndex = Convert.ToInt32(r.GetType().GetProperty("Index").GetValue(r), CultureInfo.InvariantCulture);
+                    }
+            }
+            return CpuRegister(cpu, xpsrIndex);
+        }
+
+        private string FaultCommand(string[] w)
+        {
+            if(w.Length >= 2 && w[1] == "read") return "ok " + FaultRecord();
+            if(w.Length >= 2 && w[1] == "clear")
+            {
+                lock(faultSync) { if(faultTimer != null) faultTimer.Enabled = false; RemoveFaultHooks(); faultState = "none"; }
+                return "ok";
+            }
+            if(w.Length != 6 || w[1] != "arm") return "err usage: fault arm <at_us> <any|thread|handler> <exception|-1> <within_us> | read | clear";
+            ulong at = ulong.Parse(w[2], CultureInfo.InvariantCulture), within = ulong.Parse(w[5], CultureInfo.InvariantCulture);
+            string mode = w[3];
+            int exc = int.Parse(w[4], CultureInfo.InvariantCulture);
+            if(mode != "any" && mode != "thread" && mode != "handler") return "err mode must be any, thread or handler";
+            if(exc != -1 && (mode != "handler" || exc < 2 || exc > 16 + 162)) return "err exception: only with mode handler, 2 to 178";
+            if(PowerOff) return "err the supply is cut";
+            string res = null;
+            var done = new ManualResetEventSlim(false);
+            machine.LocalTimeSource.ExecuteInNearestSyncedState(ts =>
+            {
+                try { lock(faultSync)
+                {
+                    machine.SystemBus.WriteWord(FaultStub, 0xDE00);          // UDF #0
+                    machine.SystemBus.WriteWord(FaultStub + 2, 0xDE00);
+                    ulong now = NowUs();
+                    if(at < now) at = now;
+                    RemoveFaultHooks();
+                    faultMode = mode; faultExc = exc; faultAtUs = at; faultUntilUs = at + within;
+                    faultInjUs = faultInjPc = faultInjXpsr = faultSamples = 0; faultEntry = null;
+                    faultState = "armed";
+                    // a new timer per arm, its limit the delay (a raised Limit of a descending LimitTimer
+                    // is refused against its old value)
+                    if(faultTimer != null) { faultTimer.Enabled = false; faultTimer.LimitReached -= OnFaultTime; }
+                    ulong delta = at > now ? at - now : 1;
+                    faultTimer = new LimitTimer(machine.ClockSource, 1000000, this, "cpufault", delta,
+                                                direction: Direction.Descending, enabled: false,
+                                                workMode: WorkMode.Periodic, eventEnabled: true);
+                    faultTimer.LimitReached += OnFaultTime;
+                    faultTimer.Enabled = true;
+                    res = "ok " + at;
+                } }
+                catch(Exception e) { res = "err " + e.Message; }      // never out of the time source's thread
+                done.Set();
+            });
+            done.Wait(30000);
+            return res ?? "err not armed (no synced state within 30 s)";
+        }
+
+        private void OnFaultTime()
+        {
+            try { OnFaultTimeInner(); }
+            catch(Exception e) { lock(faultSync) { faultState = "error: " + e.Message.Replace("\"", "'"); if(faultTimer != null) faultTimer.Enabled = false; } }
+        }
+
+        private void OnFaultTimeInner()
+        {
+            string ev = null;
+            lock(faultSync)
+            {
+                if(faultState != "armed") { faultTimer.Enabled = false; return; }
+                var cpu = Core();
+                ulong now = NowUs();
+                ulong x = Xpsr(cpu), ipsr = x & 0x1FF;
+                faultSamples++;
+                bool hit = faultMode == "any" || (faultMode == "thread" && ipsr == 0)
+                           || (faultMode == "handler" && ipsr != 0 && (faultExc < 0 || (int)ipsr == faultExc));
+                if(!hit)
+                {
+                    if(now >= faultUntilUs) { faultTimer.Enabled = false; faultState = "missed"; ev = "\"kind\": \"fault\", \"result\": \"missed\""; }
+                    else faultTimer.Limit = 10;
+                }
+                else
+                {
+                    faultTimer.Enabled = false;
+                    faultInjUs = now; faultInjPc = (ulong)cpu.PC; faultInjXpsr = x;
+                    ArmFaultHooks(cpu);
+                    cpu.PC = FaultStub;
+                    faultState = "injected";
+                    ev = string.Format(CultureInfo.InvariantCulture, "\"kind\": \"fault\", \"result\": \"injected\", \"pc\": \"0x{0:X8}\", \"ipsr\": {1}", faultInjPc, ipsr);
+                }
+            }
+            if(ev != null) lock(sync) { if(tracing) Send("ev " + Event(ev)); }
+        }
+
+        // the first entry of HardFault, MemManage, BusFault or UsageFault after the injection
+        private void ArmFaultHooks(Antmicro.Renode.Peripherals.CPU.ICPU cpu)
+        {
+            var add = cpu.GetType().GetMethod("AddHook");
+            if(add == null) return;
+            uint vt = machine.SystemBus.ReadDoubleWord(0xE000ED08);
+            var dt = add.GetParameters()[1].ParameterType;
+            var mi = GetType().GetMethod("OnFaultEntry", BindingFlags.Instance | BindingFlags.NonPublic);
+            for(uint v = 3; v <= 6; v++)
+            {
+                ulong h = machine.SystemBus.ReadDoubleWord(vt + 4 * v) & ~1u;
+                if(h == 0 || faultHooks.Contains(h) || h == bootHookPc) continue;
+                add.Invoke(cpu, new object[] { h, Delegate.CreateDelegate(dt, this, mi) });
+                faultHooks.Add(h);
+            }
+        }
+
+        private void RemoveFaultHooks()
+        {
+            var cpu = Core();
+            var remove = cpu == null ? null : cpu.GetType().GetMethod("RemoveHooksAt");
+            if(remove != null) foreach(var h in faultHooks) remove.Invoke(cpu, new object[] { h });
+            faultHooks.Clear();
+        }
+
+        private void OnFaultEntry(Antmicro.Renode.Peripherals.CPU.ICpuSupportingGdb c, ulong pc)
+        {
+            try { OnFaultEntryInner(pc); }
+            catch(Exception e) { lock(faultSync) { faultState = "error: " + e.Message.Replace("\"", "'"); } }
+        }
+
+        private void OnFaultEntryInner(ulong pc)
+        {
+            string ev = null;
+            lock(faultSync)
+            {
+                if(faultState != "injected") return;
+                var cpu = Core();
+                ulong x = Xpsr(cpu), sp = CpuRegister(cpu, 13);
+                uint spc = machine.SystemBus.ReadDoubleWord(sp + 24), sxpsr = machine.SystemBus.ReadDoubleWord(sp + 28);
+                uint cfsr = machine.SystemBus.ReadDoubleWord(0xE000ED28), hfsr = machine.SystemBus.ReadDoubleWord(0xE000ED2C);
+                faultEntry = string.Format(CultureInfo.InvariantCulture,
+                    "{{\"t_us\": {0}, \"exception\": {1}, \"handler\": \"0x{2:X8}\", \"cfsr\": \"0x{3:X8}\", \"hfsr\": \"0x{4:X8}\", " +
+                    "\"stacked_pc\": \"0x{5:X8}\", \"stacked_ipsr\": {6}}}", NowUs(), x & 0x1FF, pc, cfsr, hfsr, spc, sxpsr & 0x1FF);
+                faultState = "entered";
+                RemoveFaultHooks();
+                ev = "\"kind\": \"fault_entry\", \"exception\": " + (x & 0x1FF);
+            }
+            lock(sync) { if(tracing) Send("ev " + Event(ev)); }
+        }
+
+        private string FaultRecord()
+        {
+            lock(faultSync)
+            {
+                var sb = new StringBuilder();
+                sb.AppendFormat(CultureInfo.InvariantCulture, "{{\"state\": \"{0}\", \"mode\": \"{1}\", \"exception\": {2}, \"at_us\": {3}, \"until_us\": {4}, \"samples\": {5}",
+                                faultState, faultMode, faultExc < 0 ? "null" : faultExc.ToString(CultureInfo.InvariantCulture), faultAtUs, faultUntilUs, faultSamples);
+                if(faultInjUs != 0 || faultState == "injected" || faultState == "entered")
+                    sb.AppendFormat(CultureInfo.InvariantCulture, ", \"injected\": {{\"t_us\": {0}, \"pc\": \"0x{1:X8}\", \"ipsr\": {2}, \"stub\": \"0x{3:X8}\"}}",
+                                    faultInjUs, faultInjPc, faultInjXpsr & 0x1FF, FaultStub);
+                sb.Append(", \"entry\": " + (faultEntry ?? "null") + "}");
+                return sb.ToString();
+            }
+        }
+
+        // an MCU reset ends an armed fault (dropped) or one injected but not yet entered
+        private void FaultAtReset()
+        {
+            lock(faultSync)
+            {
+                if(faultTimer != null) faultTimer.Enabled = false;
+                RemoveFaultHooks();
+                if(faultState == "armed" || faultState == "injected") faultState = "dropped";
+            }
         }
 
         // power.cut: at emulated time t_us the core stops at once (supply gone);
@@ -1130,6 +1340,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 switch(w[0])
                 {
                     case "time": return "time " + NowUs();
+                    case "fault": return FaultCommand(w);
                     case "ft": return FlashTiming(w);
                     case "ch394silent":
                     {

@@ -606,7 +606,9 @@ class FixtureServer:
                # format v1.8 with the flash controller model (docs/FLASH-model.md)
                "flash.log", "flash.timing", "flash.fault", "flash.ecc", "slot.corrupt", "ch394.silent",
                # format v1.9
-               "flash.dump", "flash.fill", "reset.flags"] + (
+               "flash.dump", "flash.fill", "reset.flags",
+               # 0075, way (a): an undefined instruction at a chosen emulated time (name and shape proposed, not yet agreed)
+               "cpu.fault"] + (
                # log.corrupt: only where the runner knows the ring (G7250_LOG_RING, not in the endpoint)
                ["log.corrupt"] if os.environ.get("G7250_LOG_RING") else [])
 
@@ -704,8 +706,8 @@ class FixtureServer:
         return out
 
     def record(self, op, args, rep):
-        """flash.ecc, flash.fill and log.corrupt calls and their answers (fixture-log.jsonl)."""
-        if op in ("flash.ecc", "flash.fill", "log.corrupt"):
+        """flash.ecc, flash.fill, log.corrupt and cpu.fault calls and their answers (fixture-log.jsonl)."""
+        if op in ("flash.ecc", "flash.fill", "log.corrupt", "cpu.fault"):
             v = {"op": op, "boot": self.boot_no, "t_wall": time.time(), "args": args, "answer": rep}
             if op == "flash.fill":
                 v["after"] = self.fill_after         # number of flash.log entries before it
@@ -1209,6 +1211,35 @@ class FixtureServer:
             if not r or not r.startswith("ok"):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"seq": seq}}
+        if op == "cpu.fault":
+            # {at_us | in_us, mode?: any|thread|handler, exception?, within_us?} arms one; {read: true} gives the record
+            if args.get("read"):
+                r = agent.ask("fault read") if agent else None
+                if not r or not r.startswith("ok "):
+                    return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+                return {"ok": True, "value": json.loads(r[3:])}
+            mode, exc, within = args.get("mode", "any"), args.get("exception"), args.get("within_us", 1000000)
+            if mode not in ("any", "thread", "handler"):
+                return {"ok": False, "error": "mode must be any, thread or handler"}
+            if exc is not None and (mode != "handler" or not isinstance(exc, int) or not 2 <= exc <= 178):
+                return {"ok": False, "error": "exception: an exception number 2 to 178, only with mode handler"}
+            if not isinstance(within, int) or not 0 <= within <= 60000000:
+                return {"ok": False, "error": "within_us must be an integer 0 to 60000000"}
+            if ("at_us" in args) == ("in_us" in args):
+                return {"ok": False, "error": "give one of at_us (emulated us since boot) or in_us (from now)"}
+            t = args.get("at_us", args.get("in_us"))
+            if not isinstance(t, int) or t < 0:
+                return {"ok": False, "error": "at_us and in_us are non-negative integers"}
+            if "in_us" in args:
+                r = agent.ask("time") if agent else None
+                if not r or not r.startswith("time "):
+                    return {"ok": False, "error": "emulator not ready"}
+                t += int(r.split()[1])
+            r = agent.ask("fault arm %d %s %d %d" % (t, mode, -1 if exc is None else exc, within)) if agent else None
+            if not r or not r.startswith("ok "):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"at_us": int(r.split()[1]), "mode": mode, "exception": exc, "within_us": within,
+                                          "stub": "0x0FFF0000"}}
         if op == "ch394.silent":
             n = args.get("boots", 1)
             if not isinstance(n, int) or n < 0:

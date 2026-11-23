@@ -1010,6 +1010,115 @@ def run_test(tid, ep):
                          "%s second word %s" % (e, b[32:40].hex())))
         ctl.op("flash.timing", erase_us=None)
         return out
+    if tid == "T-EMU-29":
+        # cpu.fault (0075, way (a)): an undefined instruction at a chosen emulated time, in thread mode,
+        # in a chosen interrupt handler and with UsageFault enabled; the image keeps the frame it saw
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 14))
+
+        def cmd(payload, wait=20.0, again=False):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(1.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def kept():
+            d = cmd(b"FF", again=True, wait=60.0)
+            return None if d is None or len(d) < 34 else [int.from_bytes(d[2 + 4 * i:6 + 4 * i], "big") for i in range(8)]
+
+        def after_fault(n0, wait=60.0):
+            t0 = time.time()
+            while time.time() - t0 < wait:
+                k = kept()
+                if k and k[0] != n0:
+                    return k
+                time.sleep(0.5)
+            return None
+
+        def read():
+            return ctl.op("cpu.fault", read=True).get("value") or {}
+
+        out, STUB = [], 0x0FFF0000
+        k0 = kept()
+        n0 = k0[0] if k0 else None
+        # 1. thread mode
+        a = ctl.op("cpu.fault", in_us=20000, mode="thread")
+        k = after_fault(n0)
+        r = read()
+        e, inj = r.get("entry") or {}, r.get("injected") or {}
+        out.append(check("thread mode: armed, injected in thread mode, HardFault entered (HFSR FORCED, CFSR UNDEFINSTR), stacked PC the stub, stacked IPSR 0",
+                         a.get("ok") and r.get("state") == "entered" and inj.get("ipsr") == 0 and e.get("exception") == 3
+                         and int(e.get("hfsr", "0"), 16) >> 30 & 1 and int(e.get("cfsr", "0"), 16) == 0x10000
+                         and int(e.get("stacked_pc", "0"), 16) == STUB and e.get("stacked_ipsr") == 0, "%s %s" % (a, r)))
+        out.append(check("thread mode: the vector entered within 20 us of emulated time of the injection",
+                         e.get("t_us") is not None and inj.get("t_us") is not None and 0 <= e["t_us"] - inj["t_us"] <= 20,
+                         "injected %s, entry %s" % (inj.get("t_us"), e.get("t_us"))))
+        out.append(check("thread mode: the image's own handler saw the same (IPSR 3, CFSR 0x10000, HFSR FORCED, stacked PC the stub, IPSR 0, EXC_RETURN thread MSP)",
+                         k is not None and k[7] == 0xFA0170FF and k[1] == 0x10000 and k[2] >> 30 & 1 and k[3] == 3 and k[4] == STUB
+                         and k[5] == 0 and k[6] == 0xFFFFFFF9, str([hex(x) for x in k] if k else None)))
+        rsr = cmd(b"FR", again=True, wait=30.0)
+        out.append(check("thread mode: the image's reset after it is a software reset (RCC_RSR SFTRSTF)",
+                         rsr is not None and int.from_bytes(rsr[2:6], "big") >> 24 & 1, rsr[2:6].hex() if rsr else None))
+        # 2. in the handler of exception 44 (TIM2), pended by the image; the mode is sampled every 10 us
+        n0 = k[0] if k else n0
+        a = ctl.op("cpu.fault", in_us=0, mode="handler", exception=44, within_us=3000000)
+        cmd(b"FH\x32", wait=1.0)
+        k = after_fault(n0)
+        r = read()
+        e, inj = r.get("entry") or {}, r.get("injected") or {}
+        out.append(check("handler mode, exception 44: injected there, HardFault entered, stacked IPSR 44, the image saw it as well (EXC_RETURN handler)",
+                         a.get("ok") and r.get("state") == "entered" and inj.get("ipsr") == 44 and e.get("exception") == 3
+                         and e.get("stacked_ipsr") == 44 and k is not None and k[5] == 44 and k[3] == 3 and k[6] == 0xFFFFFFF1,
+                         "%s %s" % (r, [hex(x) for x in k] if k else None)))
+        # 3. UsageFault enabled by the image: the UDF enters UsageFault, not HardFault
+        n0 = k[0] if k else n0
+        u = cmd(b"FU", again=True, wait=30.0)
+        a = ctl.op("cpu.fault", in_us=20000, mode="thread")
+        k = after_fault(n0)
+        r = read()
+        e = r.get("entry") or {}
+        out.append(check("with USGFAULTENA set: UsageFault (exception 6) entered, CFSR UNDEFINSTR, HFSR not FORCED; the image saw IPSR 6",
+                         u is not None and r.get("state") == "entered" and e.get("exception") == 6 and int(e.get("cfsr", "0"), 16) == 0x10000
+                         and not int(e.get("hfsr", "0"), 16) >> 30 & 1 and k is not None and k[3] == 6, "%s %s" % (r, [hex(x) for x in k] if k else None)))
+        # 4. a handler that does not run within the window: missed, no fault
+        n0 = k[0] if k else n0
+        a = ctl.op("cpu.fault", in_us=0, mode="handler", exception=44, within_us=20000)
+        w = ctl.op("time.wait", us=200000)
+        r = read()
+        k = kept()
+        out.append(check("a handler that does not run within within_us: missed, no fault taken",
+                         a.get("ok") and r.get("state") == "missed" and r.get("samples", 0) >= 1000 and k is not None and k[0] == n0,
+                         "%s %s wait %s" % (r, k[0] if k else None, w)))
+        # 5. a reset before the time: dropped
+        a = ctl.op("cpu.fault", in_us=5000000, mode="any")
+        cmd(b"FX", wait=1.0)
+        time.sleep(3.0)
+        cmd(b"FR", again=True, wait=30.0)
+        r = read()
+        out.append(check("an MCU reset before the fault's time: dropped, no fault taken",
+                         a.get("ok") and r.get("state") == "dropped" and (kept() or [None])[0] == n0, str(r)))
+        # 6. refusals
+        b1 = ctl.op("cpu.fault", in_us=10, mode="thread", exception=44)
+        b2 = ctl.op("cpu.fault", mode="any")
+        out.append(check("refused: an exception number with mode thread, and neither at_us nor in_us",
+                         b1.get("ok") is False and b2.get("ok") is False, "%s %s" % (b1, b2)))
+        return out
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

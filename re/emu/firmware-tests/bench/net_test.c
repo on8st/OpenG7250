@@ -75,6 +75,10 @@ static void wr16(uint16_t a, uint8_t bsb, uint16_t v) { uint8_t b[2] = { (uint8_
  *   FG n      program word n + 1, then read word n at once, and again some us later
  *             -> SR1 after the first read, SR1 after the second
  *   FS        word 9 and SR1 as the very first code of this start read them -> word, SR1
+ *   FH n      TIM2's interrupt (exception 44) pended; its handler spins about n ms -> 0
+ *   FU        UsageFault enabled (SHCSR USGFAULTENA) -> SHCSR
+ *   FF        the kept record of the last fault (the handler keeps it, then resets by SYSRESETREQ)
+ *             -> count, CFSR, HFSR, IPSR at entry, stacked PC, stacked IPSR, EXC_RETURN, the fault's mark
  * Except FC the code runs from flash: an erase stalls it until the erase ends. */
 #define FLASHC 0x52002000u
 #define F_KEYR REG(FLASHC + 0x004)
@@ -138,6 +142,32 @@ static void erase_masked(void)
     KEEP(0) = F_SR;
     F_CR = 0;
     __asm volatile ("cpsie i");
+}
+
+/* runner self-test T-EMU-29 (cpu.fault): HardFault and UsageFault keep the frame in KEEP(16..23) */
+void fault_keep(uint32_t *frame, uint32_t ipsr, uint32_t exc_return)
+{
+    KEEP(16) = KEEP(16) + 1;
+    KEEP(17) = REG(0xE000ED28u); KEEP(18) = REG(0xE000ED2Cu); KEEP(19) = ipsr;
+    KEEP(20) = frame[6]; KEEP(21) = frame[7] & 0x1FFu; KEEP(22) = exc_return; KEEP(23) = 0xFA0170FFu;
+    puts_("FAULT kept, reset\r\n");
+    REG(0xE000ED0Cu) = 0x05FA0004u;       /* SYSRESETREQ */
+    for(;;) {}
+}
+__attribute__((naked)) void hardfault_handler(void)
+{
+    __asm volatile ("tst lr, #4\n ite eq\n mrseq r0, msp\n mrsne r0, psp\n mrs r1, ipsr\n mov r2, lr\n b fault_keep\n");
+}
+__attribute__((naked)) void usagefault_handler(void)
+{
+    __asm volatile ("tst lr, #4\n ite eq\n mrseq r0, msp\n mrsne r0, psp\n mrs r1, ipsr\n mov r2, lr\n b fault_keep\n");
+}
+
+static volatile uint32_t spin_ms;
+void TIM2_IRQHandler(void)
+{
+    REG(0xE000E180u) = 1u << 28;          /* ICER0: once */
+    for(volatile uint32_t k = 0; k < spin_ms * 6400u; k++) {}
 }
 
 static uint16_t command(uint8_t *d, uint16_t len)
@@ -238,6 +268,19 @@ static uint16_t command(uint8_t *d, uint16_t len)
         W32(0x2401E700u) = 0x4B455054u; W32(0x2401FFFCu) = 0x4B455055u;
     }
     else if(d[1] == 'X') { REG(0xE000ED0Cu) = 0x05FA0004u; for(;;) {} }
+    else if(d[1] == 'H' && len >= 3)
+    {
+        spin_ms = d[2];
+        REG(0xE000E100u) = 1u << 28;      /* ISER0: TIM2 */
+        REG(0xE000E200u) = 1u << 28;      /* ISPR0: pended, taken at once */
+        __asm volatile ("dsb\n isb\n");
+    }
+    else if(d[1] == 'U') { REG(0xE000ED24u) |= 1u << 18; a = REG(0xE000ED24u); }
+    else if(d[1] == 'F')
+    {
+        for(uint32_t i = 0; i < 8; i++) put_be(&d[2 + 4 * i], KEEP(16 + i));
+        return 34;
+    }
     put_be(&d[2], a); put_be(&d[6], b);
     return 10;
 }

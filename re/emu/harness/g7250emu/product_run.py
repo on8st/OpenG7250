@@ -104,6 +104,9 @@ GENERIC = [
     ("cmd", "sysbus Unregister sysbus.watchdog"),
     ("repl", P("platforms", "g7250_main_iwdg.repl")),
     # GPIOE with the RF FPGA on its pins (his/80), DRDY at the his/80 rate
+    # cpu.fault (0075, way (a)): the emulator's own stub memory with the undefined instruction, in a
+    # range the chip leaves reserved (a fetch there would fault on the chip; nothing of the image is there)
+    ("str", 'faultstub: Memory.MappedMemory @ sysbus 0x0FFF0000 { size: 0x1000 }'),
     ("cs", P("models", "csharp", "G7250Gpioe.cs")),
     ("cmd", "sysbus Unregister sysbus.gpioPortE"),
     ("repl", P("platforms", "g7250_main_fpga_his.repl")),
