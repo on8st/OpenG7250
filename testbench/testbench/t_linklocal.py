@@ -61,6 +61,20 @@ def no_defence(frames, addr: str, after: float) -> list[float]:
     return [t for t, op, spa, tpa in frames if t > after and spa == addr]
 
 
+NO_FRAMES = ("not judged: eth.log holds no ARP frame from the radio (the emulator does not model the frames of its "
+             "link-local probe), so this says nothing about the image")
+
+
+def frames_or_part(ctx, label: str, entries: list[dict]):
+    """The radio's ARP frames, or None with a part and no pass for the test when eth.log holds none."""
+    f = arps(entries)
+    if f:
+        return f
+    ctx.part(f"{label}: {NO_FRAMES}")
+    ctx.no_pass = True
+    return None
+
+
 # ---------------- fixtures ----------------
 def need(ctx, *fx):
     for f in fx:
@@ -130,7 +144,9 @@ def t_a1_70(ctx: Ctx):
     them within the start-up bound; a conflict during the probe makes the radio choose another address."""
     need(ctx, "eth.log", "arp.peer", "power.cycle")
     entries, sock = link_local_start(ctx, "a power cycle with no DHCP server")
-    frames = arps(entries)
+    frames = frames_or_part(ctx, "the probe at start-up", entries)
+    if frames is None:
+        return
     p = probes(frames)
     if not ctx.check("the radio probes a link-local address", bool(p) and is_link_local(p[0][1]), f"{p[:3]}"):
         return
@@ -157,7 +173,9 @@ def t_a1_70(ctx: Ctx):
         entries, _ = link_local_start(ctx, "a power cycle with the probed address taken")
     finally:
         ctx.fixture("arp.peer", action="clear")
-    frames = arps(entries)
+    frames = frames_or_part(ctx, "the probe with the address taken", entries)
+    if frames is None:
+        return
     other = [tpa for _, tpa in probes(frames) if tpa != addr]
     if not ctx.check(f"an ARP reply claiming {addr} during its probe: the radio chooses another address and probes it",
                      bool(other) and is_link_local(other[0]), f"probed {[tpa for _, tpa in probes(frames)][:6]}"):
@@ -219,14 +237,15 @@ def t_a1_72(ctx: Ctx):
         ctx.eq("the session ended (no status packets for C&C)", len([1 for p, _, _ in h.recv_alive(0.5) if p == PORT_DDC]), 0)
     finally:
         h.close()
-    frames = arps(entries)
-    after = t0 if t0 is not None else (frames[0][0] if frames else 0.0)
-    ctx.eq(f"no defending ARP for {addr} after the conflict ([RFC3927] 2.5 option (a))", no_defence(frames, addr, after), [])
-    p = probes(frames)
-    new = [tpa for _, tpa in p if tpa != addr]
-    if ctx.check("a new address probed", bool(new), f"{p[:4]}"):
-        judge_probe(ctx, f"the probe of {new[0]}", [t for t, _ in probes(frames, new[0])])
-        ctx.eq("the new address in use", current_ip(ctx), new[0])
+    frames = frames_or_part(ctx, "no defending ARP, and the new probe", entries)
+    if frames is not None:
+        after = t0 if t0 is not None else frames[0][0]
+        ctx.eq(f"no defending ARP for {addr} after the conflict ([RFC3927] 2.5 option (a))", no_defence(frames, addr, after), [])
+        p = probes(frames)
+        new = [tpa for _, tpa in p if tpa != addr]
+        if ctx.check("a new address probed", bool(new), f"{p[:4]}"):
+            judge_probe(ctx, f"the probe of {new[0]}", [t for t, _ in probes(frames, new[0])])
+            ctx.eq("the new address in use", current_ip(ctx), new[0])
     if sock is None:
         ctx.part("'discovery and management closed for at most 10 s': not judged, no sock.log")
     else:
@@ -242,7 +261,10 @@ def t_a1_72(ctx: Ctx):
     t_raise = (ctx.fixture("hw.observe") or {}).get("t_us") if "hw.observe" in ctx.endpoint.get("fixtures", []) else None
     ctx.fixture("ip.conflict", action="raise")
     wait_reachable(ctx, f"conflict {MAX_CONFLICTS}", 120)
-    p = probes(arps(eth_read(ctx)))
+    frames = frames_or_part(ctx, f"after {MAX_CONFLICTS} conflicts, 60 s before the next probe", eth_read(ctx))
+    if frames is None:
+        return
+    p = probes(frames)
     if t_raise is None or not p:
         raise PartSkip(f"after {MAX_CONFLICTS} conflicts, 60 s before the next probe: not judged (hw.observe {t_raise}, probes {len(p)})")
     ctx.check(f"after {MAX_CONFLICTS} conflicts the next probe waits {RATE_LIMIT_INTERVAL:g} s ([RFC3927] section 9)",
@@ -270,8 +292,10 @@ def t_a1_73(ctx: Ctx):
         msgs = dhcp_messages(ctx)[before:]
         kinds = [mtype(x) for x in msgs]
         ctx.check("a conflict on the leased address: DHCPDECLINE sent", "DECLINE" in kinds, f"{kinds}")
-        p = probes(arps(entries))
-        ctx.check("then a link-local address probed", bool(p) and is_link_local(p[0][1]), f"{p[:3]}")
+        frames = frames_or_part(ctx, "the link-local probe after the DECLINE", entries)
+        if frames is not None:
+            p = probes(frames)
+            ctx.check("then a link-local address probed", bool(p) and is_link_local(p[0][1]), f"{p[:3]}")
         d = kinds.index("DECLINE") if "DECLINE" in kinds else None
         ctx.check("and DHCP restarted (a DISCOVER after the DECLINE)", d is not None and "DISCOVER" in kinds[d + 1:], f"{kinds}")
         conflict_logged(ctx, "the conflict on the leased address", s, n0)

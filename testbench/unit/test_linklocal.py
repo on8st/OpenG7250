@@ -48,6 +48,13 @@ class LinkLocal(unittest.TestCase):
         self.assertEqual(L.no_defence(f, A, 4.0), [5.0])
         self.assertEqual(L.no_defence(f, A, 5.5), [])
 
+    def test_no_frames_is_a_part_not_a_fail(self):
+        ctx = Ctx({})
+        self.assertIsNone(L.frames_or_part(ctx, "x", [dict(t_us=1, dir="to_radio", arp=dict(op=1, spa=A, tpa=A))]))
+        self.assertTrue(ctx.no_pass)
+        self.assertEqual([c for c in ctx.checks if not c["ok"]], [])
+        self.assertIn("does not model", ctx.parts[0])
+
     def test_link_local(self):
         self.assertTrue(L.is_link_local(A))
         self.assertFalse(L.is_link_local("169.254.0.1"))
