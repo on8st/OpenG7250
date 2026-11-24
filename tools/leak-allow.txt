@@ -1,0 +1,25 @@
+# Files allowed to contain 64-hex strings or home paths, one path per line.
+# Every entry needs a reason in the comment above it.
+
+# Upstream RE material from the repository owner (hashes and the public
+# decryption key used by the tooling).
+re/analysis/analysis/README.md
+re/analysis/docs/fventuri-findings.md
+re/analysis/docs/headless-startup-analysis.md
+re/analysis/scripts/prepare_firmware.py
+
+# Hashes of the public, encrypted vendor release package (not of decrypted images).
+re/emu/images/manifest.yaml
+re/emu/docs/G7250-emulator-test-spec-v0.5.md
+
+# Standard SHA-256 / HMAC test vectors and a generated input checksum (not firmware hashes).
+product/refmodel/src/crypto.rs
+testbench/catalogue/catalogue.json
+
+# Cargo lock files carry the crates.io checksums of the Rust dependencies.
+product/firmware/Cargo.lock
+product/firmware/board/Cargo.lock
+
+# This file and the checker name the patterns themselves.
+tools/leak-allow.txt
+tools/leak-check.sh
