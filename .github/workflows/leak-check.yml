@@ -1,0 +1,17 @@
+name: leak-check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  leak-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tools/leak-check.sh
+        run: bash tools/leak-check.sh

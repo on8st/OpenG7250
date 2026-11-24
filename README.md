@@ -5,7 +5,8 @@ firmware, an emulator, a hardware-interface spec, a test bench, and a new
 product: independent firmware speaking a documented network protocol.
 
 Read [CLEANROOM.md](CLEANROOM.md) and [AGENTS.md](AGENTS.md) before working in
-any part of this project.
+any part of this project. Then see [CONTRIBUTING.md](CONTRIBUTING.md),
+[SECURITY.md](SECURITY.md) and [LICENSES.md](LICENSES.md).
 
 ## Layout
 
@@ -17,7 +18,9 @@ any part of this project.
 | `product/spec/` | Product | `g7250-spec` | Network interface spec based on the public OpenHPSDR protocols; details in `product/spec/` | Present (skeleton); content follows in a separate PR |
 | `product/firmware/` | Product | `g7250-firmware` | New firmware, starting with a headless Main for AetherSDR | Later; never checked out in an RE work tree |
 | `testbench/` | Shared | — | Automated test framework and design of the HIL test bench | Planned in the tree; written from `product/spec/` and `his/` only |
-| `website/` | — | — | Project website | Possibly later |
+| `website/` | — | — | Project website | Possibly later (placeholder README) |
+| `tools/` | Shared | — | Leak check, pre-commit hook, product-clone setup | Present |
+| `decisions/` | — | — | Project-wide decisions | Present (0001–0006, proposed) |
 
 ## The three sides
 
