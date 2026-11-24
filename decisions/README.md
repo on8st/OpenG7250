@@ -26,3 +26,4 @@ detail.
 | [0004](0004-no-legal-gate.md) | No legal-advice gate | proposed | 2026-11-20 |
 | [0005](0005-stacked-prs.md) | Structure first, components as stacked pull requests | proposed | 2026-11-20 |
 | [0006](0006-no-decrypted-hashes.md) | No hashes of decrypted images | proposed | 2026-11-20 |
+| [0007](0007-emulator-as-test-bench.md) | The emulator as test bench for the product firmware | proposed | 2026-11-20 |
