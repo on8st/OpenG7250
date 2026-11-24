@@ -216,4 +216,8 @@ erase ended. Now, for power.cut in every form and for power.cycle (its halt, wit
 - Limits: an access of the core already in the same translated block may still run after the halt (T-EMU-28
   shows no second flash word is programmed, with the one sequence it tries); a DMA transfer or a SEND already
   started at the cut is not looked at; the emulator itself is not paused at a cut, only at power.cycle.
-flash_dump_check compares each cut erase with its recorded fraction where old content is known.
+flash_dump_check compares each cut erase with its recorded fraction where old content is known. A cut erase erased only
+the words below its fraction: a word programmed earlier in the same boot and kept above it must still be
+logged and changed in the dump (until 2026-11-24 the check left such words out of the logged set and called
+them "not logged": the fw-adb8f45 T-A1-92 boot 3 and 4 mismatch). The words at the fraction, within its
+tolerance, are left out of both counts. Check case: tests/baseline/dump_check_case.py (m1_smoke step [2i]).

@@ -49,6 +49,9 @@ python3 tests/baseline/slow_calls_check.py >/dev/null 2>&1 && ok slow_calls || b
 echo "[2h] the stand-in's wait for a masked erase (no emulator)"
 python3 tests/baseline/erase_wait_check.py >/dev/null 2>&1 && ok erase_wait || bad erase_wait
 
+echo "[2i] the dump check: a program, then a cut erase of the same sector in one boot (no emulator)"
+python3 tests/baseline/dump_check_case.py >/dev/null 2>&1 && ok dump_check_case || bad dump_check_case
+
 if [ ! -x "$RN" ] && [ ! -f "$RN" ]; then
   echo "[3-4] SKIP (pinned Renode not found at tools/renode-1.17.0)"
 else

@@ -13,7 +13,9 @@ ELF) and the boot stage are left out.
 Limits: the last boot has no dump and is NOT checked; a word programmed with its old
 content (or all ones) cannot be seen in a dump; a word programmed and then erased in
 the same boot is left out; after an erase in a boot, words that kept their old content
-in an interrupted erase are left out; so are the words slot.corrupt changed. flash.fill calls (fixture-log.jsonl) are replayed in
+in an interrupted erase are left out (a cut erase with a fraction erased only the words below
+it, so a word programmed earlier in the boot and kept above it must still be logged and changed; the
+words at the fraction, within its tolerance, are left out); so are the words slot.corrupt changed. flash.fill calls (fixture-log.jsonl) are replayed in
 their order: a filled word that no later entry of the boot touches must hold the fill's data
 in the dump (its own count); an image write between the pull before a fill and the fill itself
 counts as after it. A cut erase is also checked against its recorded fraction (cut_erase): the sector must read
@@ -77,6 +79,7 @@ def check(d):
         cuts, odd = [], []
         changed = {BASE + LO + i for i in range(0, HI - LO, 32) if cur[i:i + 32] != base[i:i + 32] and cur[i:i + 32] != FF}
         logged, erased_later = set(), set()
+        unsure = set()            # words at the fraction of a cut erase: erased or kept
         for e in mine:
             if e["op"] == "fill":
                 logged -= set(e["words"])
@@ -110,7 +113,13 @@ def check(d):
             if e["op"] in ("erase", "bank_erase"):
                 a = int(e.get("address", "0x08000000"), 16)
                 size = e.get("len", 0x100000)
-                gone = {w for w in logged if a <= w < a + size}
+                top = a + size
+                if e.get("result") == "cut" and e.get("fraction_done") is not None:
+                    edge = int(size * e["fraction_done"]) // 32
+                    tol = 3 if len(str(e["fraction_done"]).partition(".")[2]) <= 3 else 1
+                    top = a + max(0, edge - tol) * 32          # a cut erase erased only below its fraction
+                    unsure |= set(range(top, a + min(size // 32, edge + tol) * 32, 32))
+                gone = {w for w in logged if a <= w < top}
                 logged -= gone
                 erased_later |= gone
             elif e["op"] == "program":
@@ -125,6 +134,7 @@ def check(d):
                 and cur[w - BASE - LO:w - BASE - LO + 32] != FF}
         wrong = [w for w, v in filled.items() if cur[w - BASE - LO:w - BASE - LO + 32] not in (v, FF if w in maybe else v)]
         changed -= set(filled)
+        changed -= unsure; logged -= unsure
         rows.append((n, len(changed), sorted(changed - logged) + sorted(wrong), sorted(logged - changed - same),
                      "; ".join("%s cut at %s" % (e["op"], e.get("torn") or e.get("address")) for e in mine if e.get("result") == "cut"), False))
         if cuts or odd:
