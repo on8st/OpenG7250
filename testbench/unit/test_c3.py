@@ -1,5 +1,6 @@
 """The C-3 writes of T-A1-86 (0072) against a fake store: one erase for a C-3 write, the cuts at
-each word of a mixed write, the cuts during a C-1 compaction's erase. No network.
+each word of a mixed write, the cuts during a C-1 compaction's erase, and the cut (at_power_on) in
+the start's erase of what a write cut before its commit word left. No network.
 
 GPL-3.0-or-later, (c) 2026 ON8ST.
 """
@@ -17,6 +18,7 @@ class C3Radio:
     def __init__(self, broken=None):
         self.tx, self.gw, self.broken = 250_000, bytes(4), broken
         self.log, self.cut, self.addr, self.appended, self.stale = [], None, STORE, 0, False
+        self.pon, self.left = None, None  # a cut armed for the next power-on; what a cut write left
 
     def fixture(self, op, **a):
         if op == "flash.log":
@@ -25,7 +27,10 @@ class C3Radio:
                 return None
             return dict(count=len(self.log), dropped=0, entries=self.log[a.get("from", 0):])
         if op == "power.cut":
-            self.cut, self.left = a, a.get("after_flash_words")
+            if a.get("at_power_on"):
+                self.pon = a
+            else:
+                self.cut, self.n_left = a, a.get("after_flash_words")
             return None
         raise AssertionError(op)
 
@@ -33,8 +38,8 @@ class C3Radio:
         """n words; the word the cut lands in (1-based), or None."""
         for i in range(1, n + 1):
             if self.cut and "after_flash_words" in self.cut:
-                self.left -= 1
-                if self.left == 0:
+                self.n_left -= 1
+                if self.n_left == 0:
                     self.log.append(dict(op="program", address=self.addr, len=32, result="cut", words_written=i - 1))
                     self.cut = None
                     return i
@@ -43,7 +48,7 @@ class C3Radio:
         return None
 
     def erase(self) -> bool:
-        e = dict(op="erase", address=STORE + 0x20000, len=131072, result="ok")
+        e = dict(op="erase", address=self.addr - (self.addr - 0x0800_0000) % 0x20000, len=131072, result="ok")
         self.log.append(e)
         if self.cut and "during_erase" in self.cut:
             e["result"], e["fraction_done"] = "cut", self.cut["during_erase"]
@@ -52,6 +57,18 @@ class C3Radio:
                 self.tx = BUILT_IN
             return True
         return False
+
+    def power_on(self):
+        """After a cut: the start check erases what a write cut before its commit word left; a cut armed
+        at_power_on cuts that erase, and the power-on after it erases the sector again."""
+        while self.left is not None:
+            if self.pon:
+                self.cut, self.pon = self.pon, None
+            if self.erase():
+                if self.broken == "left-cut-stricter":
+                    self.tx = min(self.tx, self.left)
+                continue
+            self.left = None
 
     def restart(self):
         """The start check erases the stale sector a CHANGE_SECRET left (A1.10)."""
@@ -73,6 +90,9 @@ class C3Radio:
             if torn is None:
                 self.tx, self.gw = tx, gw if gw is not None else self.gw
                 return 0
+            if torn < N:  # the new generation left without its commit word
+                self.left = tx
+                self.power_on()
             if torn == N:  # the commit word cut: C-1 old, C-3 the stricter
                 self.tx = max(self.tx, tx) if self.broken == "commit-looser" else min(self.tx, tx)
                 if self.broken == "commit-c1-new" and gw is not None:
@@ -138,13 +158,16 @@ class C3Writes(unittest.TestCase):
     def test_correct_store(self):
         bad, missing, ctx = run()
         self.assertEqual((bad, missing), ([], []))
-        self.assertEqual(sum("cut at word" in c["name"] for c in ctx.checks), N + 1)
+        self.assertEqual(sum("cut at word" in c["name"] and "left" not in c["name"] for c in ctx.checks), N + 1)
         self.assertTrue(ctx.parts)
         self.assertEqual(sum("start check's erase cut" in c["name"] and "as before" in c["name"] for c in ctx.checks), 3)
+        self.assertEqual(sum("left, cut at" in c["name"] and "as before" in c["name"] for c in ctx.checks), 6)
+        self.assertFalse(any("waits for" in x for x in ctx.parts))
 
     def test_broken_stores(self):
         for broken, seen in (("c3-appends", "one store erase"), ("commit-c1-new", "C-1 old"),
-                             ("commit-looser", "the stricter"), ("erase-cut-built-in", "the C-3 item as before")):
+                             ("commit-looser", "the stricter"), ("erase-cut-built-in", "the C-3 item as before"),
+                             ("left-cut-stricter", "left, cut at 0.1: the C-3 item and the gateway as before")):
             bad, _, _ = run(broken)
             self.assertTrue(any(seen in b for b in bad), (broken, bad[:4]))
 

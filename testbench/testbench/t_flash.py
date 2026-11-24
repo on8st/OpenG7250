@@ -868,14 +868,12 @@ def c3_writes(ctx, s: bytes, missing: list[str]):
             ctx.eq(f"{label}: the C-3 item as before", c3_c1(u)[0], tx)
             ctx.eq(f"{label}: no '{LOST_LINE}' line", lost_lines(ctx, u, n0 + 1), 0)
     s = start_check_cuts(ctx, s, tx, missing)
+    left_sector_cuts(ctx, s, n_words, ref, gws, missing)
     with mg(ctx, s) as u:
         r = set_c3_c1(u, tx0, gw0)
         ctx.eq("the TX time and the gateway put back", r["status"] if r else None, 0)
     ctx.part("the C-3 cases of T-A1-86 that need a store where C-3 was never written (a boot-counter or C-1 write cut, "
              "the first generation live): not run yet, they need the wiped store of T-A1-92's cases")
-    ctx.part("a sector left by a compaction cut before its commit word, with a stricter C-3 record, then a cut in its erase: "
-             "not run, the start right after the first cut erases it; it waits for power.cut {during_erase, at_power_on: true}, "
-             "a cut armed across the power-on (asked of emu)")
 
 
 def start_check_cuts(ctx, s: bytes, tx: int, missing: list[str]) -> bytes:
@@ -904,6 +902,58 @@ def start_check_cuts(ctx, s: bytes, tx: int, missing: list[str]) -> bytes:
             ctx.eq(f"{label}: the C-3 item as before", c3_c1(u)[0], tx)
             ctx.eq(f"{label}: no '{LOST_LINE}' line", lost_lines(ctx, u, n0 + 1), 0)
     return s
+
+
+def left_sector_cuts(ctx, s: bytes, n_words: int, ref: list[int], gws: tuple, missing: list[str]):
+    """T-A1-86's last sentence (0072): the start check's erase of the sector that a mixed SET_CONFIG,
+    tightening C-3, left when it was cut before its commit word (at word n - 1 of its n, so that as much
+    of it as the write programs before the commit word is there; where its C-3 record lies is the
+    firmware's choice), cut in its turn at 0.1, 0.5, 0.9 by power.cut {during_erase, at_power_on: true}
+    armed for the power-on after the first cut. C-3, the band limits and the gateway as before, and no
+    'C-3 lost' line."""
+    k = n_words - 1
+    if k < 1:
+        ctx.part("a sector left by a write cut before its commit word, then a cut in its erase: not run, the write "
+                 "programs one word only")
+        return
+    for frac in (0.1, 0.5, 0.9):
+        label = (f"the start check's erase of what a tightening mixed SET_CONFIG cut at word {k} of {n_words} left, "
+                 f"cut at {frac}")
+        with mg(ctx, s) as u:
+            c0 = items(u)
+            old = c3_c1(u)
+            if None in old:
+                ctx.part(f"{label}: not run, GET_CONFIG gives no TX time or gateway ({old})")
+                return
+            new = (old[0] - 10, gws[0] if old[1] == gws[1] else gws[1])  # a shorter TX time: stricter
+            n0 = log_end(u)
+            flog_start(ctx)
+            ctx.fixture("power.cut", after_flash_words=k)
+            ctx.fixture("power.cut", during_erase=frac, at_power_on=True)  # for the power-on after that cut
+            set_c3_c1(u, *new, window=3.0)  # the power is cut: no reply is expected
+        wait_reachable(ctx, label)
+        with mg(ctx, s) as u:
+            entries = flog(ctx)
+            cuts = [e for e in entries if e.get("result") == "cut"]
+            if len(cuts) != 2 or cuts[0].get("op") != "program" or cuts[1].get("op") != "erase":
+                missing.append(f"{label} (cut entries {cuts[:3]})")
+                if len(cuts) < 2:
+                    return  # an at_power_on cut may still be armed: the other cases would not say what they plan
+                continue
+            placed, why = cut_placed(entries[:entries.index(cuts[1])], k, ref)
+            torn = torn_address(cuts[0])
+            if not placed or torn is None:
+                missing.append(f"{label} (the first cut: {why or 'no torn word'})")
+                continue
+            base = torn - (torn - FLASH_BASE) % SECTOR
+            if not in_range(cuts[1], base, base + SECTOR):
+                missing.append(f"{label} (the cut erase at {cuts[1].get('address')}, not the sector of the cut write "
+                               f"at {base:#x})")
+                continue
+            c1 = items(u)
+            ctx.eq(f"{label}: the C-3 item and the gateway as before", c3_c1(u), old)
+            ctx.eq(f"{label}: the band limits as before (TX as before)", c1.get(8), c0.get(8))
+            ctx.eq(f"{label}: no '{LOST_LINE}' line", lost_lines(ctx, u, n0 + 1), 0)
 
 
 LOST = "config: C-3 lost, TX closed until rewritten"
