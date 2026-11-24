@@ -71,9 +71,46 @@ def _drain(stream, replies):
         pass
 
 
+class _Milestones:
+    """Milestones seen in the newly-appended log text, timed in seconds since the start of the
+    budget. Each is (name, kind, text): kind "console" is text the image sent on usart1 (the
+    TransmitData writes, as console_from_log rebuilds them; matched without case), kind "log" is
+    a substring of one log line."""
+    _TX = re.compile(r"usart1:.*WriteUInt32 to 0x28 \([^)]*\), value (0x[0-9A-Fa-f]+)")
+
+    def __init__(self, milestones, seen):
+        self.ms = list(milestones)
+        self.seen = seen
+        self.part = ""
+        self.con = ""
+
+    def feed(self, text, t):
+        lines = (self.part + text).split("\n")
+        self.part = lines.pop()
+        for line in lines:
+            m = self._TX.search(line)
+            if m:
+                v = int(m.group(1), 16) & 0xFF
+                self.con = (self.con + (chr(v) if 9 <= v < 127 else ("\n" if v == 10 else ".")))[-64:]
+            for name, kind, pat in self.ms:
+                if name in self.seen:
+                    continue
+                if kind == "log" and pat in line:
+                    self.seen[name] = t
+                elif kind == "console" and m and self.con.lower().endswith(pat.lower()):
+                    self.seen[name] = t
+
+    def all_seen(self):
+        return all(name in self.seen for name, _, _ in self.ms)
+
+
 def execute(resc_text, log_path, report_path,
-            timeout=60.0, cadence=0.5, pc_span=0x80, idle_hold=3.0):
-    """Run one boot and return (verdict, accesses). Writes the observe report."""
+            timeout=60.0, cadence=0.5, pc_span=0x80, idle_hold=3.0,
+            milestones=None, hold=0.0, seen=None):
+    """Run one boot and return (verdict, accesses). Writes the observe report.
+    With milestones (see _Milestones), the run ends `hold` seconds after the last of them is
+    seen; `timeout` stays the hard upper limit. `seen` (a dict) gets each milestone's time in
+    seconds since the start of the budget. Without milestones the run is as before."""
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     open(log_path, "w").close()  # truncate; Renode appends
     resc = os.path.join(os.path.dirname(log_path), "boot.resc")
@@ -108,6 +145,8 @@ def execute(resc_text, log_path, report_path,
     tail = deque(maxlen=observe.TAIL_WINDOW)
     verdict = None
     t_start = time.time()
+    ms = _Milestones(milestones, seen if seen is not None else {}) if milestones else None
+    t_all = None
     offset = 0
     last_exec = None
     exec_frozen_since = None
@@ -123,7 +162,18 @@ def execute(resc_text, log_path, report_path,
                     lf.seek(offset)
                     data = lf.read()
                 offset += len(data)
-                _feed_tail(tail, data.decode("utf-8", "replace"))
+                text = data.decode("utf-8", "replace")
+                _feed_tail(tail, text)
+                if ms is not None:
+                    ms.feed(text, time.time() - t_start)
+            if ms is not None and t_all is None and ms.all_seen():
+                t_all = time.time()
+            if t_all is not None and time.time() - t_all >= hold:
+                verdict = observe.HangVerdict(
+                    "running",
+                    detail="all %d milestones seen, the last at %.1fs; held %.0fs (hard limit %.0fs)"
+                           % (len(ms.ms), max(ms.seen.values()), hold, timeout))
+                break
 
             v = observe.classify_tail(tail, pc_span=pc_span)
             if v is not None:

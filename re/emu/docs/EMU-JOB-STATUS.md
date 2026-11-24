@@ -50,6 +50,10 @@ inserted is a valid real state); it does not block the GUI loop. CLOSED.
 - E1 ✅ dual-signal hang verdict (MMIO poll-hang + executed-frozen WFI idle).
 - E2 ✅ PW-1 emulator confirmation (r0_confirm.py): Main matches the prediction.
 - E3 ✅ boot-milestone regression (tests/baseline/boot_milestone.sh).
+  It runs until all 7 milestones are seen, then 10 s more (`m1_run.py --until-milestones`);
+  120 s is the hard limit, so a hang still fails. It prints each milestone's wall time and the
+  margin, and keeps the step's files (log gzipped) in `.private/m1/boot-runs/<UTC>`. Until
+  2026-11-24 it had a fixed 35 s budget, which a slower host could run out of at a clean load.
 - E4 ✅ HIS started, then as the separate `g7250-his` repo (historical; now
   `his/` in the umbrella, PR #4): README (role +
   clean-room process) and HIS sections 00–80 populated from the emulator-proven

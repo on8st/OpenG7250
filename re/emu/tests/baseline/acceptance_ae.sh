@@ -17,9 +17,10 @@ echo "[1/5] smoke (models + platforms: B1/C models, observe/E1, r0_sim/E2-pred)"
 bash tests/baseline/m1_smoke.sh >/dev/null 2>&1 && pass "E1 observe + models (smoke 17 checks)" || fail "E1/models (smoke)"
 
 echo "[2/5] boot milestones + superloop (A, A1.12, B2 chip-side IP)"
-bash tests/baseline/boot_milestone.sh >/dev/null 2>&1 && rc=0 || rc=1
+bash tests/baseline/boot_milestone.sh > "$OUT/boot_milestone.out" 2>&1 && rc=0 || rc=1
 C="$OUT/main_console.txt"
-[ $rc -eq 0 ] && pass "A1-A4 Main boot milestones (System started .. RX mode)" || fail "A1-A4 boot milestones"
+BM=$(grep "^  milestones:" "$OUT/boot_milestone.out" | sed 's|^  ||'); echo "  $BM"; grep "^  kept:" "$OUT/boot_milestone.out"
+[ $rc -eq 0 ] && pass "A1-A4 Main boot milestones (System started .. RX mode; $BM)" || fail "A1-A4 boot milestones ($BM)"
 # A: the superloop itself. "Init Radio Server" plus >= 128 IWDG refreshes after it
 # (harness/g7250emu/superloop_run.py; needs the MDMA and PA plant models).
 python3 harness/g7250emu/superloop_run.py --timeout 240 --hold 30 >/dev/null 2>&1 \

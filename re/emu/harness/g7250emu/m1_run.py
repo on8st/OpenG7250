@@ -147,13 +147,42 @@ def build_resc(image_path, log_path, fpga=False):
     return "\n".join(lines) + "\n"
 
 
-def run_boot(image_path, timeout=60.0, cadence=0.5, fpga=False):
+# The boot milestones of tests/baseline/boot_milestone.sh (the same texts it greps for).
+MILESTONES = [
+    ("System started", "console", "System started."),
+    ("AXP223 PSU init", "console", "Init PSU"),
+    ("VersaClock 6", "console", "5p49v6965"),
+    ("LAN default IP", "console", "IP 192.168.3.199"),
+    ("audio codec", "console", "aic3204"),
+    ("TRX RX mode", "console", "Start RX mode"),
+    ("CH394 chip-side IP", "log", "source IP set to 192.168.3.199"),
+]
+
+
+def run_boot(image_path, timeout=60.0, cadence=0.5, fpga=False, milestones=None, hold=0.0, seen=None):
     os.makedirs(OUT, exist_ok=True)
     log_path = os.path.join(OUT, "m1_renode.log")
     report_path = os.path.join(OUT, "m1_observe_report.md")
     verdict, n = bootcore.execute(build_resc(image_path, log_path, fpga=fpga), log_path,
-                                  report_path, timeout=timeout, cadence=cadence)
+                                  report_path, timeout=timeout, cadence=cadence,
+                                  milestones=milestones, hold=hold, seen=seen)
     return report_path, verdict, n
+
+
+def milestone_lines(seen, timeout, budget_was=35.0):
+    """The margin lines: each milestone's wall time since the start of the budget, and the last
+    one against the hard limit (and against the old fixed 35 s budget, for comparison)."""
+    out = []
+    for name, _, _ in MILESTONES:
+        t = seen.get(name)
+        out.append("milestone %-20s %s" % (name, "at %.1f s" % t if t is not None else "NOT SEEN"))
+    if len(seen) == len(MILESTONES):
+        last = max(seen.values())
+        out.append("milestones: all %d, the last at %.1f s; margin %.1f s to the hard limit %.0f s (%.1f s to the old %.0f s budget)"
+                   % (len(MILESTONES), last, timeout - last, timeout, budget_was - last, budget_was))
+    else:
+        out.append("milestones: %d of %d seen within the hard limit %.0f s" % (len(seen), len(MILESTONES), timeout))
+    return out
 
 
 def main():
@@ -161,6 +190,9 @@ def main():
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--cadence", type=float, default=0.5)
     ap.add_argument("--fpga", action="store_true", help="use the fused GPIOE+FPGA port (M3/D2; slower)")
+    ap.add_argument("--until-milestones", action="store_true",
+                    help="end --hold s after the boot milestones are all seen; --timeout is the hard limit")
+    ap.add_argument("--hold", type=float, default=10.0, help="seconds to run on after the last milestone")
     args = ap.parse_args()
 
     if not os.path.isfile(bootcore.RENODE):
@@ -177,7 +209,10 @@ def main():
         sys.exit(2)
 
     print("M1 boot: image %s" % image)
-    report, verdict, n = run_boot(image, timeout=args.timeout, cadence=args.cadence, fpga=args.fpga)
+    seen = {}
+    report, verdict, n = run_boot(image, timeout=args.timeout, cadence=args.cadence, fpga=args.fpga,
+                                  milestones=MILESTONES if args.until_milestones else None,
+                                  hold=args.hold, seen=seen)
     print("MMIO accesses: %d   verdict: %s" % (n, verdict.kind if verdict else "?"))
     if verdict and verdict.detail:
         print("  %s" % verdict.detail)
@@ -185,6 +220,10 @@ def main():
     print("console: %s" % os.path.join(OUT, "main_console.txt"))
     open(os.path.join(OUT, "main_console.txt"), "w").write(
         bootcore.console_from_log(os.path.join(OUT, "m1_renode.log")))
+    if args.until_milestones:
+        lines = milestone_lines(seen, args.timeout)
+        open(os.path.join(OUT, "boot_milestones.txt"), "w").write("\n".join(lines) + "\n")
+        print("\n".join(lines))
 
 
 if __name__ == "__main__":
