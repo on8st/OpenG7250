@@ -78,6 +78,20 @@
    ]
   },
   {
+   "id": "T-EMU-32",
+   "title": "one change gives one event: PH6 driven by hw.input while the image changes its pull; each change once in the trace",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "hw.trace",
+    "hw.input"
+   ],
+   "timeout_s": 120
+  },
+  {
    "id": "T-EMU-09",
    "title": "power.cycle",
    "reqs": [

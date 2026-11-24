@@ -120,7 +120,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                     string key = st.Level + "/" + st.Mode + "/" + st.Pull, prev;
                     if(!(lastState.TryGetValue(LatchPins[number], out prev) && prev == key))
                     {
-                        lastState[LatchPins[number]] = key;
+                        lastState[LatchPins[number]] = key; stateGen++;
                         ev = GpioState(LatchPins[number]);
                     }
                 }
@@ -556,11 +556,27 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(!machine.TryGetByName(name, out p) || !(p is IGPIOReceiver)) return "err no port " + name;
             ((IGPIOReceiver)p).OnGPIO(bit, level != 0);
             lock(sync) drivenLevel[pin] = level != 0 ? 1 : 0;
-            // bus reads outside the lock: the CPU thread takes it at every GPIO write
-            var st = State(pin);
-            lock(sync)
+            // One change gives one event: the 50 us sampler (emulation thread) reports the same pin.
+            // The state is read outside the lock (bus reads: the CPU thread takes it at every GPIO
+            // write); compared with lastState and sent inside it. If another path sent in between
+            // (stateGen moved), the read may be stale: read again.
+            for(int i = 0; i < 20; i++)
             {
-                if(tracing) { lastState[pin] = st.Level + "/" + st.Mode + "/" + st.Pull; Send("ev " + GpioStateFrom(pin, st)); }
+                long g;
+                lock(sync) { if(!tracing) break; g = stateGen; }
+                var st = State(pin);
+                lock(sync)
+                {
+                    if(!tracing) break;
+                    if(stateGen != g) continue;
+                    string key = st.Level + "/" + st.Mode + "/" + st.Pull, prev;
+                    if(!(lastState.TryGetValue(pin, out prev) && prev == key))
+                    {
+                        lastState[pin] = key; stateGen++;
+                        Send("ev " + GpioStateFrom(pin, st));
+                    }
+                    break;
+                }
             }
             return "ok";
         }
@@ -582,19 +598,21 @@ namespace Antmicro.Renode.Peripherals.SPI
         {
             List<string> evs = null;
             string[] pins;
-            lock(sync) { if(!tracing) return; pins = tracePins; }
+            long g;
+            lock(sync) { if(!tracing) return; pins = tracePins; g = stateGen; }
             // bus reads outside the lock (the CPU thread takes it at every GPIO write)
             var states = new PinState[pins.Length];
             for(int i = 0; i < pins.Length; i++) states[i] = State(pins[i]);
             lock(sync)
             {
                 if(!tracing) return;
+                if(stateGen != g) return;          // hw.input sent in between: these reads may be stale; the next sample reports
                 for(int i = 0; i < pins.Length; i++)
                 {
                     var s = states[i];
                     string key = s.Level + "/" + s.Mode + "/" + s.Pull, prev;
                     if(lastState.TryGetValue(pins[i], out prev) && prev == key) continue;
-                    lastState[pins[i]] = key;
+                    lastState[pins[i]] = key; stateGen++;
                     (evs = evs ?? new List<string>()).Add(GpioStateFrom(pins[i], s));
                 }
                 if(evs != null) foreach(var e in evs) Send("ev " + e);
@@ -644,6 +662,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         // the executed instruction count at the core clock (one instruction a cycle:
         // an estimate; flash wait states and dual issue are not modelled).
         private readonly Dictionary<int, uint[]> shadow = new Dictionary<int, uint[]>();   // port -> MODER, OTYPER, PUPDR, ODR
+        private long stateGen;             // moves at every lastState change (under sync): a read outside the lock is stale if it moved
         private readonly List<string> bootPhase = new List<string>();   // events of the first 100 ms after a boot
         private ulong bootInstr, bootUs;
         // during the boot phase each instruction is its own translation block, so the
@@ -793,12 +812,14 @@ namespace Antmicro.Renode.Peripherals.SPI
                     string pin = "P" + (char)('A' + port) + bit;
                     string m, pl, lv = ShadowLevel(port, bit, out m, out pl);
                     if(lv + "/" + m + "/" + pl == before[bit]) continue;
-                    lastState[pin] = lv + "/" + m + "/" + pl;
+                    string prevKey;
+                    bool given = lastState.TryGetValue(pin, out prevKey) && prevKey == lv + "/" + m + "/" + pl;   // hw.input gave it already
+                    lastState[pin] = lv + "/" + m + "/" + pl; stateGen++;
                     string body = string.Format(CultureInfo.InvariantCulture,
                         "\"t_us\": {0}, " + (early ? "\"since_boot_us\": {1:F3}, " : "") + "\"kind\": \"gpio\", \"pin\": \"{2}\", \"level\": {3}, \"mode\": \"{4}\", \"pull\": \"{5}\"",
                         NowUs(), since, pin, lv, m, pl);
                     if(early && bootPhase.Count < 512) bootPhase.Add(body);
-                    if(tracing) evs.Add("{\"seq\": " + (seq++) + ", " + body + "}");
+                    if(tracing && !given) evs.Add("{\"seq\": " + (seq++) + ", " + body + "}");
                 }
                 foreach(var e in evs) Send("ev " + e);
             }

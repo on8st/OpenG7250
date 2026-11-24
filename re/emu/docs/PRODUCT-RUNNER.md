@@ -318,6 +318,10 @@ one of these is skipped with `fixture:<name>`.
   level; pins sampled every 50 µs of emulated time, latch edges exact), `spi`
   (SPI1 transfers, `cs` null, data as hex), `reset` (`power` after a
   `power.cycle`).
+  One change of a pin's state (level, mode, pull) gives one `gpio` event,
+  whichever path sees it first: `hw.input`, the 50 µs sampler, a latch edge or
+  the boot-phase port hooks. A `hw.input` that does not change the state gives no
+  event. (Until 2026-11-24 a `hw.input` could give an edge a second time.)
 - **Pin state (proposal for format v1.4, agreed):** every `gpio` trace event
   and every pin in the snapshot's `pins` block carries `mode` (`output`,
   `input`, `af`, `analog`, from MODER), `pull` (`up`, `down`, `none`) and
@@ -367,7 +371,8 @@ observer with latch inputs, pin reads, input driving, emulated time).
 (RE-side scaffolding), run against the own program
 `firmware-tests/bench/net_test.c` (sets the safe state, brings up the CH394,
 echoes UDP on 1024): UDP echo, the outside host, limited broadcast,
-hw.observe, hw.trace with hw.input edges, a refused pin, power.cycle with the
+hw.observe, hw.trace with hw.input edges, one event per change while the image
+changes the same pin (T-EMU-32), a refused pin, power.cycle with the
 reset event, plus a host-only test and a missing fixture that skip.
 `m1_smoke.sh` runs it as step [7].
 

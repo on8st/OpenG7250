@@ -1356,6 +1356,53 @@ def run_test(tid, ep):
         # the end: one armed and never used (the fixture log says: not armed)
         ctl.op("power.cut", during_erase=0.5, at_power_on=True)
         return out
+    if tid == "T-EMU-32":
+        # one change gives one event: PH6 driven by hw.input (the agent's socket thread) while the
+        # image changes its pull (net_test FT, seen by the 50 us sampler on the emulation thread).
+        # No two events in a row with the same state; every level change and every pull change
+        # is in the trace once.
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 17))
+        pairs, spin, n_in = 100, 20, 60
+        ctl.op("hw.input", pin="PH6", level=0)
+        r1 = ctl.op("hw.trace", action="start", pins=["PH6"])
+        f = (r1.get("value") or {}).get("file")
+        sk.sendto(b"FT" + bytes([pairs, spin]), addr(c))
+        ins = []
+        for i in range(n_in):
+            ins.append(ctl.op("hw.input", pin="PH6", level=1 - i % 2))
+            time.sleep(0.01)
+        sk.settimeout(1.0)
+        rep, t0 = None, time.time()
+        while rep is None and time.time() - t0 < 90:
+            try:
+                d = sk.recv(2048)
+            except socket.timeout:
+                continue
+            if d[:2] == b"FT":
+                rep = d
+        time.sleep(0.3)
+        r2 = ctl.op("hw.trace", action="stop")
+        evs = [json.loads(x) for x in open(f)] if f and os.path.isfile(f) else []
+        ph6 = [e for e in evs if e.get("kind") == "gpio" and e.get("pin") == "PH6"]
+        keys = [(e.get("level"), e.get("mode"), e.get("pull")) for e in ph6]
+        dup = [(ph6[i - 1].get("seq"), ph6[i].get("seq")) for i in range(1, len(keys)) if keys[i] == keys[i - 1]]
+        lv = sum(1 for i in range(1, len(keys)) if keys[i][0] != keys[i - 1][0])
+        pu = sum(1 for i in range(1, len(keys)) if keys[i][2] != keys[i - 1][2])
+        changes = int.from_bytes(rep[2:6], "big") if rep else None
+        t_pull = [ph6[i]["t_us"] for i in range(1, len(keys)) if keys[i][2] != keys[i - 1][2]]
+        t_lv = [ph6[i]["t_us"] for i in range(1, len(keys)) if keys[i][0] != keys[i - 1][0]]
+        both = sum(1 for t in t_lv if t_pull and t_pull[0] <= t <= t_pull[-1])
+        return [check("start, inputs, FT reply, stop", r1.get("ok") and f and all(x.get("ok") for x in ins) and rep is not None
+                      and (r2.get("value") or {}).get("events", 0) == len(evs), "%s; FT %r; %s" % (r1, rep, r2.get("value"))),
+                check("both paths at once: level changes between the first and the last pull change", both >= 5,
+                      "%d of %d level changes inside the pull changes (%s to %s us)" % (both, len(t_lv), t_pull[:1], t_pull[-1:])),
+                check("one event per change: no two PH6 events in a row with the same state", not dup and len(keys) > 1,
+                      "%d events; repeated: %s" % (len(keys), dup[:10])),
+                check("no level change dropped: %d hw.input changes, each once in the trace" % n_in, lv == n_in, "%d level changes" % lv),
+                check("no pull change dropped: the image's changes, each once in the trace", changes is not None and pu == changes,
+                      "%s pull changes by the image, %d in the trace" % (changes, pu))]
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

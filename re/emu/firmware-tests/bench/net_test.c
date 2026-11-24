@@ -282,6 +282,18 @@ static uint16_t command(uint8_t *d, uint16_t len)
         __asm volatile ("dsb\n isb\n");
     }
     else if(d[1] == 'U') { REG(0xE000ED24u) |= 1u << 18; a = REG(0xE000ED24u); }
+    else if(d[1] == 'T' && len >= 4)
+    {
+        // PH6 pull changes from the image while the bench drives the pin (T-EMU-32): d[2] pairs of
+        // pull-up then no pull, each change followed by d[3] x 1000 spin loops; ends with no pull
+        for(uint32_t k = 0; k < d[2]; k++)
+            for(uint32_t u = 0; u < 2; u++)
+            {
+                REG(GPIO(H) + 0x0C) = (REG(GPIO(H) + 0x0C) & ~(3u << 12)) | ((u == 0 ? 1u : 0u) << 12);
+                a++;
+                for(volatile uint32_t w = 0; w < 1000u * d[3]; w++) {}
+            }
+    }
     else if(d[1] == 'F')
     {
         for(uint32_t i = 0; i < 8; i++) put_be(&d[2 + 4 * i], KEEP(16 + i));
