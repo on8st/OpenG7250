@@ -642,6 +642,8 @@ class FixtureServer:
         self.local = threading.local()        # .parts: seconds of the power cycle this thread's call made
         self.fx_records = []
         self.fill_after = None
+        self.cut_rec = None                   # the power.cut record in force for this boot (fixture log)
+        self.cut_next_rec = None              # power.cut at_power_on: armed at the next power-on
         self.fl_next = 0
         self.fl_origin = 0
         self.fl_on = True
@@ -706,7 +708,15 @@ class FixtureServer:
         return out
 
     def record(self, op, args, rep):
-        """flash.ecc, flash.fill, log.corrupt and cpu.fault calls and their answers (fixture-log.jsonl)."""
+        """flash.ecc, flash.fill, log.corrupt, cpu.fault and power.cut calls and their answers
+        (fixture-log.jsonl). A power.cut entry gets its outcome later: fired, the boot it fired in
+        and the flash.log entry it ended (cut_outcome)."""
+        if op == "power.cut":
+            v = getattr(self.local, "cut_rec", None) or {"op": op, "boot": self.boot_no, "t_wall": time.time(), "args": args}
+            self.local.cut_rec = None
+            v["answer"] = rep
+            self.fx_records.append(v)
+            return
         if op in ("flash.ecc", "flash.fill", "log.corrupt", "cpu.fault"):
             v = {"op": op, "boot": self.boot_no, "t_wall": time.time(), "args": args, "answer": rep}
             if op == "flash.fill":
@@ -783,8 +793,38 @@ class FixtureServer:
         s["max_instructions"] = max(s["max_instructions"], mx)
         self._span_last, self._span_boot = (n, tot, mx), self.boot_no
 
-    def before_power_cycle(self):
+    def cut_outcome(self, cut, why=None):
+        """The outcome of the power.cut in force for this boot: fired (the boot ended by a cut) and
+        the flash.log entry it ended, or not fired (why). Called before a power cycle and at the
+        test's end."""
+        rec, self.cut_rec = self.cut_rec, None
+        if rec is None:
+            return
+        if cut:
+            rec["fired"] = True
+            rec["fired_boot"] = self.boot_no
+            hit = [e for e in self.fl_entries if e.get("boot") == self.boot_no and e.get("result") == "cut"]
+            if hit:
+                e = hit[-1]
+                rec["fired_entry"] = {k: e[k] for k in ("op", "address", "t_us", "fraction_done", "words", "torn") if k in e}
+            else:
+                agent = self.agent_getter()
+                rec["fired_entry"] = {"at_us": getattr(agent, "cut_us", None)}
+        else:
+            rec["fired"] = False
+            rec["outcome"] = why or "not fired: boot %d ended by a power cycle" % self.boot_no
+
+    def cut_finish(self):
+        """At the test's end: a cut still armed did not fire; an at_power_on one never got a power-on."""
+        self.cut_outcome(False, "not fired by the end of the test (boot %d)" % self.boot_no)
+        rec, self.cut_next_rec = self.cut_next_rec, None
+        if rec is not None:
+            rec["fired"] = False
+            rec["outcome"] = "not armed: no power-on after it before the end of the test"
+
+    def before_power_cycle(self, cut=False):
         self.flash_pull()
+        self.cut_outcome(cut)
         agent = self.agent_getter()
         self.ecc_span_pull()
         r = agent.ask("ft ecclist", timeout=10, internal=True) if agent else None
@@ -808,6 +848,16 @@ class FixtureServer:
             out.append("sysbus.flashtiming SetEraseUs %d" % self.erase_us)
         for a, t in sorted(self.ecc.items()):
             out.append('sysbus.flashtiming AddEccText "0x%08X" %s' % (a, "true" if t == "double" else "false"))
+        rec, self.cut_next_rec = self.cut_next_rec, None
+        if rec is not None:                       # power.cut at_power_on: armed from this power-on, used once
+            a = rec["args"]
+            out.append("sysbus.flashtiming NotifyCut true")
+            if "during_erase" in a:
+                out.append("sysbus.flashtiming CutDuringErase %s" % repr(float(a["during_erase"])))
+            else:
+                out.append("sysbus.flashtiming CutAfterWords %d" % a["after_flash_words"])
+            rec["armed_boot"] = self.boot_no + 1
+            self.cut_rec = rec
         if self.silent_left > 0:
             out.append("sysbus.spi6.ch394 SilentNow true")
             out.append("sysbus.spi6.ch394 SilentBoots %d" % (self.silent_left - 1))
@@ -1248,8 +1298,40 @@ class FixtureServer:
             if not r or not r.startswith("ok "):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"boots": n}}
+        if op == "power.cut":
+            rec = {"op": op, "boot": self.boot_no, "t_wall": time.time(), "args": args}
+            self.local.cut_rec = rec
+        if op == "power.cut" and "at_power_on" in args:
+            # armed for the next power-on (a power cycle or the start after a cut); a cut armed for
+            # this boot stays, and a later plain power.cut does not drop this one
+            if args["at_power_on"] is not True:
+                return {"ok": False, "error": "at_power_on must be true"}
+            if "at_us" in args or "at_address" in args:
+                return {"ok": False, "error": "at_power_on takes during_erase or after_flash_words, not at_us or at_address"}
+            if ("during_erase" in args) == ("after_flash_words" in args):
+                return {"ok": False, "error": "at_power_on takes one of during_erase and after_flash_words"}
+            if "after_flash_words" in args:
+                k = args["after_flash_words"]
+                if not isinstance(k, int) or isinstance(k, bool) or k < 1:
+                    return {"ok": False, "error": "after_flash_words must be a positive integer"}
+                val = {"after_flash_words": k, "at_power_on": True}
+            else:
+                f = args["during_erase"]
+                if not isinstance(f, (int, float)) or isinstance(f, bool) or not 0 <= f <= 1:
+                    return {"ok": False, "error": "during_erase must be within 0..1"}
+                val = {"during_erase": f, "at_power_on": True}
+            old = self.cut_next_rec
+            if old is not None:
+                old["fired"] = False
+                old["outcome"] = "replaced by a later power.cut at_power_on (boot %d)" % self.boot_no
+            self.cut_next_rec = rec
+            return {"ok": True, "value": val}
         if op == "power.cut" and agent:
             agent.ask("cutclear")                 # a new power.cut replaces one still armed
+            if self.cut_rec is not None:
+                self.cut_rec["fired"] = False
+                self.cut_rec["outcome"] = "replaced by a later power.cut (boot %d)" % self.boot_no
+                self.cut_rec = None
         if op == "power.cut" and any(k in args for k in ("after_flash_words", "during_erase", "at_address")):
             if "after_flash_words" in args:
                 k = args["after_flash_words"]
@@ -1265,16 +1347,20 @@ class FixtureServer:
                 a = args["at_address"]
                 a = int(a, 0) if isinstance(a, str) else a
                 cmd = "ft cut-address-notify 0x%08X" % a
+            self.cut_rec = self.local.cut_rec         # before the arm: the cut can fire at once
             r = agent.ask(cmd) if agent else None
             if not r or not r.startswith("ok"):
+                self.cut_rec = None
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True}
         if op == "power.cut":
             at = args.get("at_us")
             if not isinstance(at, int) or at < 0:
                 return {"ok": False, "error": "at_us must be a non-negative integer (emulated us since boot)"}
+            self.cut_rec = self.local.cut_rec
             r = agent.ask("cut %d" % at) if agent else None
             if not r or not r.startswith("ok"):
+                self.cut_rec = None
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"at_us": int(r.split()[1])}}
         if op == "power.cycle":

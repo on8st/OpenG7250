@@ -1166,6 +1166,7 @@ def run_test(tid, ep):
         d3 = words(cmd(b"FD\x03"))
         ctl.op("flash.ecc", address=S7 + 32 * 5, type="double")
         d5 = words(cmd(b"FD\x05"))
+        bb = words(cmd(b"FB\x05\x0b"))               # a byte read inside the marked word
         sk.sendto(b"FX", addr(c))                      # software reset, no reply
         time.sleep(1.0)
         cmd(b"FR", again=True, wait=60.0)
@@ -1187,6 +1188,8 @@ def run_test(tid, ep):
         c3 = [e for e in r1[:i3 if i3 >= 0 else 0] if e.get("op") == "ccr1"]
         i5 = first(r1, 0, lambda e: e.get("op") == "read" and e.get("address") == "0x%08X" % (S7 + 160) and e.get("width") == 4)
         s5 = first(r1, i5 + 1 if i5 >= 0 else len(r1), lambda e: e.get("op") == "sr1")
+        ib = first(r1, 0, lambda e: e.get("op") == "read" and e.get("address") == "0x%08X" % (S7 + 160 + 11) and e.get("width") == 1)
+        sb = first(r1, ib + 1 if ib >= 0 else len(r1), lambda e: e.get("op") == "sr1")
         un = [i for i, e in enumerate(r1) if e.get("op") == "unwatched"]
         wa = [i for i, e in enumerate(r1) if e.get("op") == "watched"]
         quiet = all(not any(r1[k].get("op") == "read" for k in range(u, w)) for u, w in zip(un, wa))
@@ -1204,6 +1207,10 @@ def run_test(tid, ep):
                       i5 >= 0 and r1[i5].get("ecc_mark") is True and s5 >= 0 and r1[s5].get("dbeccerr") is True
                       and len(d5) >= 1 and int(r1[s5]["value"], 16) == d5[0] and d5[0] & DBECC,
                       "%s %s %s" % (r1[i5] if i5 >= 0 else None, r1[s5] if s5 >= 0 else None, d5)),
+                check("a byte read at offset 0x0B of the marked word 5 (FB 5 11): width 1, ecc_mark, the value the image got, then SR1 with DBECCERR",
+                      ib >= 0 and r1[ib].get("ecc_mark") is True and len(bb) >= 2 and int(r1[ib]["value"], 16) == bb[1]
+                      and sb >= 0 and r1[sb].get("dbeccerr") is True and int(r1[sb]["value"], 16) == bb[0] and bb[0] & DBECC,
+                      "%s %s %s" % (r1[ib] if ib >= 0 else None, r1[sb] if sb >= 0 else None, bb)),
                 check("while PG is set the reads are not watched: an unwatched and a watched line per program, no read between",
                       len(un) >= 2 and len(wa) >= 2 and quiet, "unwatched %d, watched %d, quiet %s" % (len(un), len(wa), quiet)),
                 check("CR1 writes logged (PG for the programs)",
@@ -1214,6 +1221,141 @@ def run_test(tid, ep):
                       b3 is not None and os.path.exists(os.path.join(tdir, "console-boot3.txt"))
                       and not os.path.exists(os.path.join(tdir, "flash-reads-3.jsonl")) and bool(r2),
                       "answer %s, files %s" % (b3 is not None, sorted(f for f in os.listdir(tdir) if f.startswith("flash-reads"))))]
+    if tid == "T-EMU-31":
+        # power.cut at_power_on: a cut armed for the first erase (during_erase) or the k-th programmed
+        # word (after_flash_words) after the next power-on; used once; a cut of the running boot stays;
+        # a later plain power.cut does not drop it; refusals. The fixture log (outcome per cut, the
+        # boot it fired in) is checked by m1_smoke step [14] after the run.
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 16))
+
+        def cmd(payload, wait=20.0, again=False):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(1.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def up():
+            return cmd(b"FR", again=True, wait=90.0) is not None
+
+        def log():
+            return [x for x in (ctl.op("flash.log", action="read").get("value") or {}).get("entries", []) if x.get("op") in ("erase", "program")]
+
+        def new(n0):
+            return log()[n0:]
+
+        out = []
+        ctl.op("flash.timing", erase_us=200000)
+        up()
+        ctl.op("flash.log", action="start")
+        # 1. during_erase at the next power-on: an erase in this boot is not cut; after power.cycle it is
+        r1 = ctl.op("power.cut", during_erase=0.5, at_power_on=True)
+        n0 = len(log())
+        cmd(b"FE", wait=30.0)
+        e_now = new(n0)
+        ctl.op("power.cycle")
+        a = up()
+        n1 = len(log())
+        cmd(b"FE", wait=1.0)
+        b = up()
+        e_next = new(n1)
+        out.append(check("during_erase at_power_on: the reply; this boot's erase completes; the first erase after power.cycle is cut at 0.5, in the next boot",
+                         r1 == {"ok": True, "value": {"during_erase": 0.5, "at_power_on": True}}
+                         and [x.get("result") for x in e_now] == ["ok"] and a and b
+                         and len(e_next) == 1 and e_next[0].get("result") == "cut" and 0.49 <= e_next[0].get("fraction_done", -1) <= 0.51
+                         and e_next[0].get("boot") == (e_now[0].get("boot") or 0) + 1,
+                         "%s; now %s; next %s" % (r1, [(x.get("result"), x.get("boot")) for x in e_now],
+                                                  [(x.get("result"), x.get("fraction_done"), x.get("boot")) for x in e_next])))
+        # 2. used once: the start after that cut erases in full
+        n2 = len(log())
+        cmd(b"FE", wait=30.0)
+        e2 = new(n2)
+        out.append(check("used once: the erase after the cut's restart completes", [x.get("result") for x in e2] == ["ok"], str(e2)))
+        # 3. after_flash_words at the next power-on: the 2nd programmed word of the next boot is cut
+        r3 = ctl.op("power.cut", after_flash_words=2, at_power_on=True)
+        n3 = len(log())
+        cmd(b"FP\x01")
+        p_now = new(n3)
+        ctl.op("power.cycle")
+        up()
+        n4 = len(log())
+        q2 = cmd(b"FP\x02")
+        l2 = log()[n4:]                           # a log read closes the program entry: two entries at any load
+        cmd(b"FP\x03", wait=1.0)
+        c3 = up()
+        p_next = new(n4)
+        out.append(check("after_flash_words 2 at_power_on: this boot's program is not cut; in the next boot the first programmed word ok, the second cut",
+                         r3 == {"ok": True, "value": {"after_flash_words": 2, "at_power_on": True}}
+                         and [x.get("result") for x in p_now] == ["ok"] and c3
+                         and [(x.get("op"), x.get("result")) for x in p_next] == [("program", "ok"), ("program", "cut")],
+                         "%s; now %s; next %s; FP2 reply %r, read after it %s" % (r3, [(x.get("op"), x.get("result")) for x in p_now], [(x.get("op"), x.get("address"), x.get("result"), x.get("t_us")) for x in p_next], q2, [(x.get("op"), x.get("address"), x.get("t_us")) for x in l2])))
+        # 4. not fired: armed, then two power cycles without an erase in the armed boot; then an erase completes
+        ctl.op("power.cut", during_erase=0.5, at_power_on=True)
+        ctl.op("power.cycle")
+        up()
+        ctl.op("power.cycle")
+        up()
+        n5 = len(log())
+        cmd(b"FE", wait=30.0)
+        e5 = new(n5)
+        out.append(check("not fired in its boot: dropped at the power cycle after it, the next boot's erase completes",
+                         [x.get("result") for x in e5] == ["ok"], str(e5)))
+        # 5. a plain cut of the running boot stays and fires first; a later plain cut does not drop the at_power_on one
+        ra = ctl.op("power.cut", during_erase=0.3, at_power_on=True)
+        rp = ctl.op("power.cut", during_erase=0.7)
+        n6 = len(log())
+        cmd(b"FE", wait=1.0)
+        up()
+        cmd(b"FE", wait=1.0)
+        up()
+        e6 = new(n6)
+        out.append(check("a plain cut in this boot fires at 0.7, then the at_power_on one at 0.3 in the start after that cut",
+                         ra.get("ok") and rp.get("ok") and [x.get("result") for x in e6] == ["cut", "cut"]
+                         and 0.69 <= e6[0].get("fraction_done", -1) <= 0.71 and 0.29 <= e6[1].get("fraction_done", -1) <= 0.31
+                         and e6[1].get("boot") == e6[0].get("boot") + 1,
+                         str([(x.get("result"), x.get("fraction_done"), x.get("boot")) for x in e6])))
+        # 6. a second at_power_on replaces the first
+        ctl.op("power.cut", during_erase=0.2, at_power_on=True)
+        ctl.op("power.cut", during_erase=0.6, at_power_on=True)
+        ctl.op("power.cycle")
+        up()
+        n7 = len(log())
+        cmd(b"FE", wait=1.0)
+        up()
+        e7 = new(n7)
+        out.append(check("a second at_power_on replaces the first: the cut is at 0.6",
+                         len(e7) >= 1 and e7[0].get("result") == "cut" and 0.59 <= e7[0].get("fraction_done", -1) <= 0.61,
+                         str([(x.get("result"), x.get("fraction_done")) for x in e7])))
+        # 7. refusals
+        bad = [ctl.op("power.cut", at_us=1000, at_power_on=True),
+               ctl.op("power.cut", at_address=0x080E0000, during_erase=0.5, at_power_on=True),
+               ctl.op("power.cut", during_erase=1.5, at_power_on=True),
+               ctl.op("power.cut", during_erase=-0.1, at_power_on=True),
+               ctl.op("power.cut", after_flash_words=0, at_power_on=True),
+               ctl.op("power.cut", during_erase=0.5, after_flash_words=2, at_power_on=True),
+               ctl.op("power.cut", at_power_on=True),
+               ctl.op("power.cut", during_erase=0.5, at_power_on=False)]
+        out.append(check("refused: with at_us, with at_address, f outside 0..1, k 0, both keys, neither, at_power_on false",
+                         all(x.get("ok") is False for x in bad), str([x.get("error") for x in bad])))
+        # the end: one armed and never used (the fixture log says: not armed)
+        ctl.op("power.cut", during_erase=0.5, at_power_on=True)
+        return out
     if tid == "T-EMU-06":
         r = ctl.op("hw.input", pin="PA0", level=1)
         return [check("refused", r.get("ok") is False and "pin not offered" in r.get("error", ""), str(r))]

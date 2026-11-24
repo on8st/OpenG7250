@@ -216,8 +216,14 @@ test is listed as such. Checked without an emulator by tests/baseline/slow_calls
   cycle drops it. An entry whose number is not there at the call is refused. A change of the
   firmware's layout makes the fixture wrong. (8a2a100 changed the RAM at once, while the image
   ran: the log.corrupt checks of T-A1-91 in the runs on that build do not count.)
-- Every `flash.ecc`, `flash.fill` and `log.corrupt` call with its answer is in the test folder's
-  fixture-log.jsonl. A test's entry gives the `flash.ecc` calls of that test
+- Every `flash.ecc`, `flash.fill`, `log.corrupt`, `cpu.fault` and `power.cut` call with its answer
+  is in the test folder's fixture-log.jsonl, with `boot`, the boot of the call. A `power.cut` entry
+  also gets its outcome: `fired` true with `fired_boot` (the boot it fired in) and `fired_entry`
+  (the flash.log entry it ended: op, address, t_us, fraction_done or the torn word; `at_us` for a
+  time cut), or `fired` false with `outcome` (dropped at the power cycle that ended its boot,
+  replaced by a later `power.cut`, not fired by the end of the test, or, for `at_power_on`, not
+  armed: no power-on after it). An `at_power_on` entry has `armed_boot`, the boot it was armed
+  for. A test's entry gives the `flash.ecc` calls of that test
   (`emulator.flash_ecc`), and its reason names each one that was not in force when answered.
 - The runner refuses a run folder that is already used (it would append to the old logs).
 
@@ -265,7 +271,8 @@ hang of the image.
 ## Format v1.8 (part 3): the flash controller fixtures
 
 `flash.log`, `flash.timing`, `flash.fault`, `flash.ecc`, `power.cut
-{after_flash_words | during_erase | at_address}`, `slot.corrupt`, `ch394.silent`;
+{after_flash_words | during_erase | at_address}` (also `{during_erase | after_flash_words,
+at_power_on: true}`, for the next power-on), `slot.corrupt`, `ch394.silent`;
 the endpoint carries `flash_timing {erase_us, program_us, t_erase_max_us, source}`,
 and `net.endpoint` answers the same whole endpoint (with `minor`, `usart1_timed` and
 `time_scale`; before, these were lost at the bench's first `net.endpoint`).

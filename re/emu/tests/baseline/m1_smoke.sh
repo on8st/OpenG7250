@@ -266,5 +266,19 @@ else
   echo "  skip (no arm-none-eabi-gcc or Renode)"
 fi
 
+echo "[14] power.cut at_power_on: a cut after the next power-on, used once; the fixture log names the boot it fired in (T-EMU-31)"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
+  if G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
+       tests/fakebench/cut-at-power-on.json --run-id smoke-cut-pon >/dev/null 2>&1 \
+     && python3 tests/fakebench/cut_pon_check.py .private/product-runs/smoke-cut-pon/list >/dev/null \
+     && python3 harness/g7250emu/flash_dump_check.py .private/product-runs/smoke-cut-pon list | grep -q "^list: dumps equal the log"; then
+    ok "at_power_on: T-EMU-31 passes, the fixture log has each cut's outcome and boot, the dumps agree"
+  else
+    bad "at_power_on (see .private/product-runs/smoke-cut-pon/result.json, cut_pon_check.py)"
+  fi
+else
+  echo "  skip (no arm-none-eabi-gcc or Renode)"
+fi
+
 echo
 [ $fail -eq 0 ] && { echo "M1 smoke: ALL PASS"; exit 0; } || { echo "M1 smoke: FAILURES"; exit 1; }

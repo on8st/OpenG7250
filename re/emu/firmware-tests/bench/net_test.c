@@ -66,6 +66,7 @@ static void wr16(uint16_t a, uint8_t bsb, uint16_t v) { uint8_t b[2] = { (uint8_
  *   FX        software reset (no reply)
  *   FQ n      program words n and n + 1 back to back -> SR1, first word of n + 1
  *   FD n      clear the error flags, read the n-th word -> SR1, word
+ *   FB n o    clear the error flags, read the byte at offset o of the n-th word -> SR1, byte
  *   FC        erase sector 7 with interrupts masked, polling from RAM: the length by the DWT cycle
  *             counter, TIM5 (32 bits, 1 MHz) and TIM12 (16 bits, 1 MHz, unwrapped in the loop)
  *             -> SR1, cycles, TIM5 us, TIM12 us, worst |cycles / 64 - TIM5| us, polls
@@ -221,6 +222,11 @@ static uint16_t command(uint8_t *d, uint16_t len)
     {
         F_CCR = F_ERRS | (3u << 25);      /* SNECCERR and DBECCERR too */
         b = W32(S7 + 32u * d[2]); a = F_SR;
+    }
+    if(d[1] == 'B' && len >= 4)
+    {
+        F_CCR = F_ERRS | (3u << 25);
+        b = *(volatile uint8_t *)(S7 + 32u * d[2] + (d[3] & 31u)); a = F_SR;
     }
     if(d[1] == 'Q' && len >= 3)
     {

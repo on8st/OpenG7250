@@ -100,7 +100,19 @@ characteristics" (format v1.8 build).
 - **power.cut {after_flash_words | during_erase | at_address}**: the layer stops the core
   at the k-th programmed word, at that fraction of the next erase, or at the programming of
   that word; the runner then power-cycles as for `power.cut {at_us}`. A new `power.cut`
-  replaces one still armed (any form).
+  replaces one still armed (any form). A cut armed for a boot and not fired is dropped at the
+  power cycle that ends that boot.
+- **power.cut {during_erase | after_flash_words, at_power_on: true}**: the same cut, armed for
+  the next power-on (a `power.cycle`, or the start after a cut): the first erase, or the k-th
+  programmed word counted from that power-on. It is carried to the next emulator's start-up
+  script (`NotifyCut`, `CutDuringErase` or `CutAfterWords`, before the core runs) and used once.
+  It does not replace a cut armed for the running boot, and a plain `power.cut` after it does
+  not drop it; a second `at_power_on` replaces the first. Refused with `at_us` or `at_address`,
+  with neither or both of `during_erase` and `after_flash_words`, f outside 0..1, k below 1, or
+  `at_power_on` other than true. Reply `{"ok": true, "value": {"during_erase": f, "at_power_on":
+  true}}` (or `after_flash_words`). In the boot it is armed for it is a cut of that boot: a plain
+  `power.cut` there replaces it. Self-test T-EMU-31 (`tests/fakebench/cut-at-power-on.json`,
+  m1_smoke step [14]).
 - **Evidence rule**: `harness/g7250emu/flash_dump_check.py <run dir>` compares the flash
   dump of each boot with flash.log; a cut or ECC result is reported only with it (a build
   before d605292 missed programmed words and placed cuts on the wrong word). flash.fill calls

@@ -268,7 +268,7 @@ class Boot:
             try:
                 self.fixtures.sock_pull()
                 self.fixtures.console_pull()
-                self.fixtures.before_power_cycle()
+                self.fixtures.before_power_cycle(cut)
             except Exception:  # noqa: BLE001
                 pass
             dump = os.path.join(self.out, "flash-%d.bin" % self.boots)
@@ -475,6 +475,7 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             with open(os.path.join(tdir, "flash-log.jsonl"), "w") as f:
                 for e in bt.fixtures.fl_entries:
                     f.write(json.dumps(e) + "\n")
+            bt.fixtures.cut_finish()
             with open(os.path.join(tdir, "fixture-log.jsonl"), "w") as f:
                 for x in bt.fixtures.fx_records:
                     f.write(json.dumps(x) + "\n")

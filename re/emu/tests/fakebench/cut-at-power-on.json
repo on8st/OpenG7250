@@ -1,0 +1,22 @@
+{
+ "format": "g7250-testlist",
+ "version": 1,
+ "minor": 2,
+ "defaults": {
+  "timeout_s": 20
+ },
+ "boot": "per-list",
+ "tests": [
+  {
+   "id": "T-EMU-31",
+   "title": "power.cut at_power_on: a cut for the first erase or the k-th programmed word after the next power-on, used once, beside a cut of the running boot; refusals",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 600
+  }
+ ],
+ "note": "The image is firmware-tests/bench/net_test.c (its F commands on sector 7). m1_smoke step [14] checks the fixture log after the run (tests/fakebench/cut_pon_check.py): each power.cut entry with its outcome and the boot it fired in."
+}
