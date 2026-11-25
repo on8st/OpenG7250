@@ -23,6 +23,17 @@ def session(h: Host, pa=True, wd=True):
     return sum((parse_regs(d) for _, d, _ in got), [])
 
 
+def watchdog_out(ctx):
+    """The 1 s P2 watchdog (B5.6) run out, plus 300 ms: in radio time where time.wait is offered (the
+    emulator may run slower than the host), else on the host clock, with a note on an emulator."""
+    from .t_a3 import wait_radio
+    if "time.wait" not in ctx.endpoint.get("fixtures", []) and ctx.kind == "emulator":
+        note = "the watchdog standby waited on the host clock: no time.wait (the emulator may run slower than the host)"
+        if note not in ctx.notes:
+            ctx.notes.append(note)
+    wait_radio(ctx, 1300)
+
+
 def token_of(ctx, h: Host, pairs):
     return need_token(ctx, h, pairs)
 
@@ -336,7 +347,7 @@ def t_l11(ctx):
         b.keepalive(ptt=True)
         time.sleep(0.05)
         safe(ctx, "takeover")
-        time.sleep(1.3)
+        watchdog_out(ctx)
         safe(ctx, "watchdog standby")
         if "power.cycle" in ctx.endpoint.get("fixtures", []):
             ctx.fixture("power.cycle")
@@ -376,7 +387,7 @@ def t_a3_06(ctx):
             if end == "stop":
                 a.stop()
             elif end == "watchdog standby":
-                time.sleep(1.3)
+                watchdog_out(ctx)
             else:
                 b.keepalive()
                 time.sleep(0.05)
