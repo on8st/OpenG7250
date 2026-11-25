@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: run the leak check on staged files.
+# Install: ln -s ../../tools/pre-commit .git/hooks/pre-commit
+exec "$(git rev-parse --show-toplevel)/tools/leak-check.sh" --staged
