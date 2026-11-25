@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = ROOT / "product/spec/spec"
 OUT = Path(__file__).resolve().parent
 
-ROW = re.compile(r"^\| (T-[A-C]\d{1,2}-\d{2}) \| (.*) \|\s*$")
+ROW = re.compile(r"^\| (T-[A-C]\d{1,2}-\d{2,3}) \| (.*) \|\s*$")  # T-A1-100 on (0082)
 
 # --- requirement references -------------------------------------------------------------
 SEC = re.compile(r"(?<![\w.])([ABC]\d{1,2}(?:\.\d{1,2}[a-z]?){0,2})(?![\w])")
@@ -358,6 +358,12 @@ OVERRIDES: dict[str, dict] = {
     "T-A1-76": {"target": "emulator", "also": [], "needs": ["dhcp.server", "power.cycle"],
                 "notes": ["MACRAW failing: macraw.fail where offered (proposed), else a runner without MACRAW; console line not checked"]},
     "T-A1-74": {"target": "emulator", "also": ["host"], "needs": ["dhcp.server", "power.cycle"]},
+    "T-A1-100": {"target": "emulator", "also": [], "needs": ["dhcp.server", "power.cycle", "net.endpoint"],
+                 "notes": ["static addresses in dhcp.start's default subnet (192.168.73.50, .51; the lease .10); the borrows "
+                           "and 'closed for at most 10 s' from sock.log, the probe and the 6 s from eth.log, the message fields "
+                           "from dhcp.log; the link-local start in static mode by a conflict on a static address whose "
+                           "previous configuration is taken too (arp.peer, ip.conflict); each fixture not offered is a part, "
+                           "no pass"]},
     "T-B10-47": {"target": "emulator", "also": ["host"], "pending": CAL_SET,
                  "notes": ["needs TX unlocked: blocked until the calibration set is complete (tx bit 4)",
                            "tuned, failed and tune-time parts need the model-only fixture atu.sim; the stop "
@@ -497,7 +503,7 @@ TIMEOUTS: dict[str, int] = {
     "T-A1-88": 900, "T-A1-89": 900, "T-A1-90": 900, "T-A1-67": 300, "T-A1-80": 1000,
     "T-A1-05": 120, "T-A1-33": 120, "T-A1-23": 120, "T-A1-59": 120, "T-A1-78": 120, "T-A1-79": 120, "T-A1-81": 120,
     "T-B8-10": 120, "T-A1-91": 1500, "T-A1-28": 240, "T-A1-39": 300, "T-A1-92": 2700,
-    "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-76": 120,
+    "T-A3-61": 300, "T-A1-66": 400, "T-A1-69": 120, "T-A1-74": 120, "T-A1-100": 900, "T-A1-76": 120,
     # requests that may do flash work: each may take 15 s (0069), a factory reset 17 s more
     "T-A1-03": 90, "T-A1-04": 1800, "T-A1-16": 1800, "T-A1-20": 90, "T-A1-22": 90, "T-A1-63": 240, "T-A1-64": 90, "T-A1-65": 120,
     "T-A1-75": 120, "T-B5-21": 180,

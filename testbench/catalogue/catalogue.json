@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "9aa5b1b",
-  "sha256_of_inputs": "0eeebacd5ae72809acfcc9362109a588a62de38fe9ced5fea0d4dd582b762f85"
+  "commit": "a3fbb8e",
+  "sha256_of_inputs": "cef0407a7848a0361c0dfa80b251b83ab64ccc0c0eedecc7638e89ad482336e3"
  },
  "his": {
   "commit": "069ea0b"
@@ -2163,6 +2163,31 @@
     "spec marks it reference model; emulator only with the fixtures",
     "the installer part only on the reference model started with --f1 open; the factory state only where vendor.install is offered, else after the FACTORY_RESET only; the FACTORY_RESET parts only from address mode DHCP"
    ]
+  },
+  {
+   "id": "T-A1-100",
+   "origin": "spec",
+   "part": "A-B",
+   "title": "A running `SET_CONFIG` that sets the C-1 address mode to DHCP (emulator): from a static address with a DHCP server, the request is answered, the session does not end for the mode change, the management channel is never closed for more than 2 s at a time, and the DHCP messages carry `ciaddr` 0.0.0.0, the BROADCAST flag and the static address as IP source; a lease with another address ends the session as an address change (A1.11a), one with the same address and netmask does not. From a static address with no server: after at most 6 s of attempts a link-local address is chosen and probed, discovery and management closed for at most 10 s, and DHCP retries go on. From a link-local address (static mode, after a conflict): no probe, no session end until a lease. In DHCP mode already, DHCP set again starts no exchange (A1.11; 0082).",
+   "reqs": [
+    "A1",
+    "A1.11a",
+    "A1.11"
+   ],
+   "scope": "v1.0",
+   "target": "emulator",
+   "also": [],
+   "needs": [
+    "dhcp.server",
+    "power.cycle",
+    "net.endpoint"
+   ],
+   "pending": [],
+   "tx_part": false,
+   "notes": [
+    "static addresses in dhcp.start's default subnet (192.168.73.50, .51; the lease .10); the borrows and 'closed for at most 10 s' from sock.log, the probe and the 6 s from eth.log, the message fields from dhcp.log; the link-local start in static mode by a conflict on a static address whose previous configuration is taken too (arp.peer, ip.conflict); each fixture not offered is a part, no pass"
+   ],
+   "timeout_s": 900
   },
   {
    "id": "T-A1-88",
