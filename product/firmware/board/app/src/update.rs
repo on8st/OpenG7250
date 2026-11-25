@@ -206,4 +206,8 @@ impl Updater for Port<'_> {
     fn in_progress(&self) -> bool {
         self.u.stager.in_progress() || self.u.run.trial
     }
+
+    fn begun(&self) -> bool {
+        self.u.stager.in_progress()
+    }
 }

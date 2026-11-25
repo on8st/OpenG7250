@@ -413,6 +413,13 @@ impl<W: Words> Server<W> {
                 if !payload.is_empty() {
                     return (Status::Malformed, 0);
                 }
+                // No update state (no UPDATE_BEGIN accepted since the start, also in a trial
+                // image): 0 with restart needed 0; nothing changes, no 10-minute restart (A1.8;
+                // 0074).
+                if !ctx.update.begun() {
+                    p[0] = 0;
+                    return (Status::Ok, 1);
+                }
                 // A second abort: 0, no effect, not logged again (0063 addendum).
                 if ctx.update.abort(now) {
                     self.log.push(now, format_args!("update aborted by {a}.{b}.{c}.{d}:{}", src.1));

@@ -91,6 +91,9 @@ impl Updater for Model {
     fn in_progress(&self) -> bool {
         self.began || self.trial
     }
+    fn begun(&self) -> bool {
+        self.began
+    }
 }
 
 const OWN: [u8; 4] = [192, 168, 1, 20];
@@ -771,6 +774,30 @@ fn update_write_failure_is_55_and_logged_and_begin_in_trial_is_58() {
     assert!(text.contains("write of block 0 to slot B failed"), "{text}");
     // Abort says a restart is needed.
     let (st, p) = authed(&mut w, &mut s, HOST, 140, Command::UpdateAbort, &[], 14000);
+    assert_eq!((st, p), (Status::Ok, vec![1]));
+}
+
+#[test]
+fn update_abort_with_no_update_state_needs_no_restart_t_a1_80() {
+    // A1.8 (0074): UPDATE_ABORT with no UPDATE_BEGIN accepted since the start gets 0 with
+    // restart needed 0, also in a trial image before confirmation, and changes nothing.
+    for trial in [false, true] {
+        let mut s = Server::new();
+        let mut w = World::new();
+        w.secret = Some([7; 32]);
+        w.up.trial = trial;
+        let (st, p) = authed(&mut w, &mut s, HOST, 10, Command::UpdateAbort, &[], 1000);
+        assert_eq!((st, p), (Status::Ok, vec![0]), "trial {trial}");
+        assert!(!w.up.began && w.up.received == 0, "nothing changed");
+        let (_, log) = authed(&mut w, &mut s, HOST, 20, Command::ReadLog, &[0, 0, 0, 0], 2000);
+        assert!(!String::from_utf8_lossy(&log).contains("update aborted"), "not logged as an abort");
+    }
+    // After an UPDATE_BEGIN it says a restart is needed.
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    assert_eq!(authed(&mut w, &mut s, HOST, 30, Command::UpdateBegin, &package(1300, 2), 3000).0, Status::Ok);
+    let (st, p) = authed(&mut w, &mut s, HOST, 40, Command::UpdateAbort, &[], 4000);
     assert_eq!((st, p), (Status::Ok, vec![1]));
 }
 

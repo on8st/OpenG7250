@@ -38,6 +38,9 @@ pub trait Updater {
     /// The update state of A1.8 holds (from `UPDATE_BEGIN` until a restart), or the running image
     /// is an unconfirmed trial.
     fn in_progress(&self) -> bool;
+    /// An `UPDATE_BEGIN` was accepted since the start: there is an update state to leave
+    /// (A1.8; 0074). False in a trial image that has not begun one.
+    fn begun(&self) -> bool;
 }
 
 /// What an accepted `ROLLBACK` goes from and to, for its log line: slot (1 A, 2 B) and the
@@ -74,6 +77,9 @@ impl Updater for NoUpdate {
         Err(Status::NotSupported)
     }
     fn in_progress(&self) -> bool {
+        false
+    }
+    fn begun(&self) -> bool {
         false
     }
 }
