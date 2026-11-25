@@ -110,11 +110,13 @@ struct World {
     up: Model,
     /// The stored configuration (Table M-3 TLVs).
     config: Vec<u8>,
+    /// The radio's own address in use.
+    own: [u8; 4],
 }
 
 impl World {
     fn new() -> Self {
-        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false, armed: false, c3_lost: false, up: Model::default(), config: vec![1, 1, 0] }
+        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false, armed: false, c3_lost: false, up: Model::default(), config: vec![1, 1, 0], own: OWN }
     }
     fn call(&mut self, srv: &mut Server, src: ([u8; 4], u16), d: &[u8], now: u64) -> Option<(u32, Status, Vec<u8>)> {
         let mut n = self.n;
@@ -125,7 +127,7 @@ impl World {
         };
         let mut ctx = Ctx {
             now_ms: now,
-            own_ip: OWN,
+            own_ip: self.own,
             own_mask: MASK,
             identify: &self.id,
             config: &self.config,
@@ -681,6 +683,36 @@ fn update_verify_is_logged_good_and_failed() {
     let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
     assert!(e.iter().any(|t| t == "update verify failed: missing-blocks"), "{e:?}");
     assert!(e.iter().any(|t| t == "update verified: slot B 0.1.2"), "{e:?}");
+}
+
+#[test]
+fn an_address_change_ends_the_write_session_and_drops_the_challenges_t_a1_98() {
+    // A1.10 (0074 point 9): after a change of address or netmask (the SET_CONFIG answered
+    // first), a write with a challenge from before it gets 33, the former holder's session is
+    // gone (END_WRITE_SESSION 0, another host not refused with 35); a renewal with the same
+    // address changes nothing.
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let other = ([192, 168, 1, 9], 40000);
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::ClearLog, &[], 0).0, Status::Ok);
+    // The same address at every request (as after a renewal): the session holds.
+    assert_eq!(authed(&mut w, &mut s, other, 20, Command::ClearLog, &[], 500).0, Status::Busy);
+    let old = w.call(&mut s, other, &req(30, Command::GetChallenge, &[]), 1_000).unwrap().2;
+    let old: [u8; 16] = old.try_into().unwrap();
+    // The address changes.
+    w.own = [192, 168, 1, 30];
+    let mut b = [0u8; 1000];
+    let n = mgmt::build_request(&mut b, 40, Command::ClearLog, &[], Some((w.secret.as_ref().unwrap(), &old))).unwrap();
+    assert_eq!(w.call(&mut s, other, &b[..n], 3_000).unwrap().1, Status::AuthFailed, "a challenge from before the change (35 if it still counted)");
+    assert_eq!(authed(&mut w, &mut s, other, 50, Command::ClearLog, &[], 4_000).0, Status::Ok, "not refused with 35");
+    assert_eq!(authed(&mut w, &mut s, HOST, 60, Command::ClearLog, &[], 5_000).0, Status::Busy, "the new holder's session");
+    // The former holder's END_WRITE_SESSION after a change: 0, no session of its own left.
+    let mut s = Server::new();
+    w.own = OWN;
+    assert_eq!(authed(&mut w, &mut s, HOST, 70, Command::ClearLog, &[], 0).0, Status::Ok);
+    w.own = [192, 168, 1, 30];
+    assert_eq!(authed(&mut w, &mut s, HOST, 80, Command::EndWriteSession, &[], 1_000).0, Status::Ok);
 }
 
 #[test]

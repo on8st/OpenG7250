@@ -312,6 +312,9 @@ pub struct Server<W = [u64; logring::WORDS]> {
     /// The request being handled refreshed the write session: its idle time does not run until
     /// the reply is sent ([`Self::reply_sent`]; A1.10; 0077 point 2).
     writer_executing: bool,
+    /// The radio's address and netmask at the last request: a change of either ends the write
+    /// session and drops the challenges and stored replies (A1.10; 0074 point 9).
+    own: Option<([u8; 4], [u8; 4])>,
     /// A commanded reset is under way (A1.9 "One commanded reset at a time").
     reset_pending: bool,
     /// The challenge the current authenticated request used (`CHANGE_SECRET` mask, Table M-1).
@@ -396,6 +399,7 @@ impl<W: logring::Words> Server<W> {
             },
             writer: None,
             writer_executing: false,
+            own: None,
             reset_pending: false,
             used_challenge: [0; 16],
             effects: heapless::Vec::new(),
@@ -460,6 +464,17 @@ impl<W: logring::Words> Server<W> {
     pub fn handle(&mut self, src: Addr, d: &[u8], ctx: &mut Ctx<'_>, out: &mut [u8; mgmt::MAX_REPLY]) -> Option<usize> {
         let now = ctx.now_ms;
         self.writer_executing = false;
+        // An address or netmask change since the last request (a SET_CONFIG answered first, a
+        // DHCP lease, a link-local fall-back): the write session ends and no challenge or stored
+        // reply of the old address counts. A renewal with the same address changes nothing
+        // (A1.10; 0074 point 9).
+        let own = (ctx.own_ip, ctx.own_mask);
+        if self.own.is_some_and(|o| o != own) {
+            self.writer = None;
+            self.challenges = [None; HOSTS];
+            self.repeat = [None; HOSTS];
+        }
+        self.own = Some(own);
         let req = match mgmt::check(d) {
             Incoming::Drop => {
                 self.stats.drop_port[6] += 1;
