@@ -372,7 +372,8 @@ observer with latch inputs, pin reads, input driving, emulated time).
 `firmware-tests/bench/net_test.c` (sets the safe state, brings up the CH394,
 echoes UDP on 1024): UDP echo, the outside host, limited broadcast,
 hw.observe, hw.trace with hw.input edges, one event per change while the image
-changes the same pin (T-EMU-32), a refused pin, power.cycle with the
+changes the same pin (T-EMU-32), an ECC mark in force at once after an MCU
+reset (T-EMU-33), a refused pin, power.cycle with the
 reset event, plus a host-only test and a missing fixture that skip.
 `m1_smoke.sh` runs it as step [7].
 

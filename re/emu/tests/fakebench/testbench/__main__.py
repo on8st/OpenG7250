@@ -1170,6 +1170,7 @@ def run_test(tid, ep):
         sk.sendto(b"FX", addr(c))                      # software reset, no reply
         time.sleep(1.0)
         cmd(b"FR", again=True, wait=60.0)
+        ab = words(cmd(b"FB\x05\x0b"))               # the marked word after the reset, before any program
         ctl.op("power.cycle")
         cmd(b"FR", again=True, wait=90.0)
         # run with G7250_FLASH_READLOG_BOOTS=1-2: a third power-on, outside the window, writes no log
@@ -1194,6 +1195,10 @@ def run_test(tid, ep):
         wa = [i for i, e in enumerate(r1) if e.get("op") == "watched"]
         quiet = all(not any(r1[k].get("op") == "read" for k in range(u, w)) for u, w in zip(un, wa))
         rs = first(r1, 0, lambda e: e.get("op") == "reset")
+        rw = first(r1, rs, lambda e: e.get("op") == "watched") if rs >= 0 else -1
+        ra = first(r1, rs, lambda e: e.get("op") == "read" and e.get("address") == "0x%08X" % (S7 + 160 + 11)) if rs >= 0 else -1
+        sa = first(r1, ra + 1, lambda e: e.get("op") == "sr1") if ra >= 0 else -1
+        pg = first(r1, rs, lambda e: e.get("op") == "unwatched" and e.get("why") != "MCU reset") if rs >= 0 else -1
         return [check("the log starts with its range, and CR1 is read 1 us after the power-on (both power-ons)",
                       bool(r1) and r1[0].get("range") == "0x080E0000-0x080E0FFF"
                       and any(e.get("op") == "cr1" and e["t_us"] <= 2 for e in r1[:8])
@@ -1217,6 +1222,10 @@ def run_test(tid, ep):
                       any(e.get("op") == "cr1_write" and int(e["value"], 16) & 2 for e in r1), str([e for e in r1 if e.get("op") == "cr1_write"][:2])),
                 check("the software reset: a reset line and CR1 read after it",
                       rs >= 0 and first(r1, rs, lambda e: e.get("op") == "cr1") > rs, str(r1[rs:rs + 3] if rs >= 0 else None)),
+                check("after the software reset the watchpoints are back at once (watched, MCU reset): the byte read of marked word 5 before any program is logged with ecc_mark, then SR1 with DBECCERR",
+                      rw >= 0 and r1[rw].get("why") == "MCU reset" and ra >= 0 and (pg < 0 or ra < pg) and r1[ra].get("ecc_mark") is True
+                      and sa >= 0 and r1[sa].get("dbeccerr") is True and len(ab) >= 1 and ab[0] & DBECC,
+                      "%s %s %s %s" % (r1[rw] if rw >= 0 else None, r1[ra] if ra >= 0 else None, r1[sa] if sa >= 0 else None, ab)),
                 check("the boot window 1-2: power-on 3 runs (its console and an answer) and writes no flash-reads-3.jsonl",
                       b3 is not None and os.path.exists(os.path.join(tdir, "console-boot3.txt"))
                       and not os.path.exists(os.path.join(tdir, "flash-reads-3.jsonl")) and bool(r2),
@@ -1356,6 +1365,72 @@ def run_test(tid, ep):
         # the end: one armed and never used (the fixture log says: not armed)
         ctl.op("power.cut", during_erase=0.5, at_power_on=True)
         return out
+    if tid == "T-EMU-33":
+        # an ECC mark set before an MCU reset (software reset, SYSRESETREQ) is in force at once after
+        # it: a byte read of the marked word shows DBECCERR, with no program before the reset and with
+        # one right before it, and before any program after it
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 18))
+
+        def cmd(payload, wait=20.0, again=False):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(1.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def words(d):
+            return tuple(int.from_bytes(d[i:i + 4], "big") for i in range(2, len(d) - 3, 4)) if d else ()
+
+        def reset():
+            sk.sendto(b"FX", addr(c))                  # software reset, no reply
+            time.sleep(1.0)
+            return words(cmd(b"FR", again=True, wait=60.0))
+
+        DBECC, S7 = 1 << 26, 0x080E0000
+        cmd(b"FR", again=True, wait=60.0)
+        cmd(b"FE", wait=60.0)
+        cmd(b"FP\x03")
+        cmd(b"FP\x05")
+        cmd(b"FP\x09")
+        ec = ctl.op("flash.ecc", address=S7 + 32 * 5, type="double")
+        e9 = ctl.op("flash.ecc", address=S7 + 32 * 9, type="double")   # read by the first code of each start (FS)
+        b0 = words(cmd(b"FB\x05\x0b"))
+        ra = reset()                                   # no program before it
+        fa = words(cmd(b"FS"))
+        ba = words(cmd(b"FB\x05\x0b"))
+        da = words(cmd(b"FD\x05"))
+        cmd(b"FP\x07")                                 # a program right before the reset
+        rb = reset()
+        fb = words(cmd(b"FS"))
+        bb = words(cmd(b"FB\x05\x0b"))
+        db = words(cmd(b"FD\x05"))
+        sft = 1 << 24                                  # RCC_RSR SFTRSTF
+        dbl = lambda w: bool(w) and bool(w[0] & DBECC)
+        return [check("flash.ecc accepted, and a byte read of the marked word before any reset shows DBECCERR",
+                      ec.get("ok") and dbl(b0), "%s %s" % (ec, b0)),
+                check("software reset with no program before it: RSR shows it, then a byte read and a word read of the marked word show DBECCERR",
+                      bool(ra) and bool(ra[0] & sft) and dbl(ba) and dbl(da), "RSR %s, FB %s, FD %s" % (ra, ba, da)),
+                check("a program right before the software reset: then a byte read and a word read of the marked word show DBECCERR",
+                      bool(rb) and bool(rb[0] & sft) and dbl(bb) and dbl(db), "RSR %s, FB %s, FD %s" % (rb, bb, db)),
+                check("no read slips through at the reset: the first code of each start (a few instructions after it) reads marked word 9 and gets DBECCERR",
+                      e9.get("ok") and len(fa) == 2 and bool(fa[1] & DBECC) and len(fb) == 2 and bool(fb[1] & DBECC),
+                      "FS after the 1st reset %s, after the 2nd %s" % (fa, fb))]
     if tid == "T-EMU-32":
         # one change gives one event: PH6 driven by hw.input (the agent's socket thread) while the
         # image changes its pull (net_test FT, seen by the 50 us sampler on the emulation thread).

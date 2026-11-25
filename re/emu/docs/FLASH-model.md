@@ -79,7 +79,11 @@ characteristics" (format v1.8 build).
   flash.log entry while the flag is set. The word cut by `power.cut {after_flash_words}` is
   kept as a double ECC error (the bench's "a torn word then reads with a double error").
   ECC words, the erase duration and `ch394.silent` carry over power cycles through the new
-  emulator's start-up script. **Not modelled: the bus error a double error gives on the
+  emulator's start-up script. An MCU reset (software, the watchdog's) keeps the marks; Renode takes
+  the core's watchpoints away at it, and the layer installs them again in its reset, before the core
+  runs (the first code of the start sees the error: T-EMU-33). Until 2026-11-24 they came back only at
+  the next PG cycle: a read of a marked or torn word after a reset and before the next program showed no
+  error (the T-A1-83 and T-A1-92 caveat of the faac704, e524b8c and adb8f45 runs). **Not modelled: the bus error a double error gives on the
   read**: the data reads as stored and only the flags show it. Renode's controller
   watches the bank's writes itself while PG is set, and a watchpoint of ours at the same
   addresses left it blind (no EOP, programming unseen): the ECC watchpoints are lifted
@@ -169,7 +173,10 @@ test). Each line is JSON with `t_us`, the emulated time since that power-on, and
 - `ccr1` (with `pc`) and `cr1_write` (with `locked`): every write of FLASH_CCR1 and FLASH_CR1;
 - `unwatched` / `watched`: the read watchpoints are lifted while CR1.PG is set and put back
   1 us after PG is cleared, as the ECC ones (Renode's controller does not see the program
-  through them otherwise); reads between the two lines are not logged.
+  through them otherwise); reads between the two lines are not logged. At an MCU reset an
+  `unwatched` and a `watched` line with `why` "MCU reset" follow the `reset` line: the watchpoints
+  are installed again before the core runs (until 2026-11-24 not until the next PG cycle: no read of
+  the range after a reset was logged before the next program).
 
 Nothing of it reaches `flash.log`, the fixtures, the endpoint or the bench. It costs one
 watchpoint per aligned address and width (7680 for 4 KiB): keep the range small. Each program

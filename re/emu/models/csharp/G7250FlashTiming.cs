@@ -321,8 +321,9 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         // Renode's controller watches the bank's writes itself while PG is set; a watchpoint of
         // ours at the same addresses left it blind (no EOP). The ECC watchpoints are lifted
         // while PG is set and put back 1 us after PG is cleared. They are installed only from a
-        // timer event: installed inside a store of the core, a read of the word in the same
-        // translated block crashed the emulator (tb_phys_invalidate).
+        // timer event, before the core runs, or in an MCU reset (between the core's blocks):
+        // installed inside a store of the core, a read of the word in the same translated block
+        // crashed the emulator (tb_phys_invalidate).
         private readonly List<Tuple<ulong, BusHookDelegate>> eccHooks = new List<Tuple<ulong, BusHookDelegate>>();
         private bool eccLifted, eccRefresh;
         // spans in which a mark's watchpoints were not in (PG set until 1 us after it is cleared,
@@ -666,8 +667,28 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 if(erasing) { SetEraseResult("reset", NowUs()); }
                 SlowCore(false);
                 erasing = false; neverEnding = false; lastCr1 = LOCK; keyStep = 0; errFlags = 0; pendingEop = false; eopSeen = false;
-                ScheduleEcc();                    // a reset while PG was set: the marks count again
-                if(rlOut != null) { RlLog("\"op\": \"reset\""); rlCr1Due = true; ScheduleRead(); }
+                // An MCU reset (SYSRESETREQ, the watchdog) takes the core's bus watchpoints away; the
+                // marks stay. They are installed again here, before the core runs (the reset is
+                // carried out between the core's blocks, not inside a store), also after a reset
+                // while PG was set. Until 2026-11-24 they came back only at the next PG cycle.
+                if(eccWords.Count > 0)
+                {
+                    DropEccHooks();
+                    eccLifted = false; eccRefresh = false;
+                    foreach(var w in eccWords.Keys) InstallEcc(w);
+                    CloseSpan();
+                }
+                if(rlOut != null)
+                {
+                    RlLog("\"op\": \"reset\"");
+                    RlLog("\"op\": \"unwatched\", \"why\": \"MCU reset\"");
+                    foreach(var t in rlHooks) machine.SystemBus.RemoveWatchpointHook(t.Item1, t.Item3);
+                    rlHooks.Clear();
+                    InstallRead();
+                    rlLifted = false;
+                    RlLog("\"op\": \"watched\", \"why\": \"MCU reset\"");
+                    rlCr1Due = true; ScheduleRead();
+                }
             }
             busy.Enabled = false; Unstall();
         }

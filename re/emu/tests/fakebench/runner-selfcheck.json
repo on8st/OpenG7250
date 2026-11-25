@@ -92,6 +92,16 @@
    "timeout_s": 120
   },
   {
+   "id": "T-EMU-33",
+   "title": "an ECC mark set before an MCU reset is in force at once after it: byte and word reads show DBECCERR with and without a program right before the reset, and the first code of the start (a few instructions after it) gets the error",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 240
+  },
+  {
    "id": "T-EMU-09",
    "title": "power.cycle",
    "reqs": [
