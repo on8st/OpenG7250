@@ -553,7 +553,7 @@ def late_erase(ctx) -> bool:
     pass for the test, where the runner does not offer it (the case is then a part)."""
     t_max = dict(ctx.endpoint.get("flash_timing", {})).get("t_erase_max_us") or T_ERASE_MAX_US
     try:
-        ctx.fixture("flash.fault", op="erase", end_after_us=2 * t_max + 100_000)
+        ctx.fixture("flash.fault", op="erase", end_after_us=int(round(2 * t_max)) + 100_000)  # an integer: emu refuses any other
         return True
     except Skip as e:
         ctx.no_pass = True
