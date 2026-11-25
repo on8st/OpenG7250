@@ -490,6 +490,14 @@ def logs_since(u: Updater, n0: int) -> list[str]:
     return [e[2] for e in read_log(u.c) if e[0] > n0]
 
 
+def run_log(u: Updater, n0: int, power_cycled: bool) -> list[str]:
+    """The log texts of the run after a start: after a power cycle the whole log, since a power-on loses the
+    log and numbers its entries from 0 again (A1.7 "Kept over a reset", T-A1-91), so the entries after a
+    sequence number read before it say nothing; after any other reset the entries after n0."""
+    from .mgmt import read_log
+    return [e[2] for e in read_log(u.c)] if power_cycled else logs_since(u, n0)
+
+
 def last_log_seq(u: Updater) -> int:
     from .mgmt import read_log
     return max([e[0] for e in read_log(u.c)], default=-1)
@@ -1211,7 +1219,8 @@ def t_a1_90(ctx: Ctx):
     # the change (on the reference model, which runs no code from the slot, by a RESTART)
     corrupt(ctx, a[1])
     try:
-        if "power.cycle" in ctx.endpoint.get("fixtures", []) and "model" not in ctx.endpoint:
+        cycled = "power.cycle" in ctx.endpoint.get("fixtures", []) and "model" not in ctx.endpoint
+        if cycled:
             ctx.fixture("power.cycle")
             wait_reachable(ctx, "a power cycle after the active slot changed")
         else:
@@ -1221,7 +1230,7 @@ def t_a1_90(ctx: Ctx):
             t = u.identify()
             ctx.eq("the active slot refused: the other slot starts without a trial (tag 23, tag 10 = 2)",
                    (t.get(23, b"")[:1], t.get(10)), (bytes([a[0]]), b"\x02"))
-            texts = logs_since(u, n0)
+            texts = run_log(u, n0, cycled)
             want = [f"boot: slot {'AB'[a[1] - 1]} refused: integrity",
                     f"boot: fallback to slot {'AB'[a[0] - 1]} (active slot refused, no trial)"]
             ctx.check(f"logged one after the other: {want}", any(texts[i:i + 2] == want for i in range(len(texts))), f"{texts[-5:]}")
