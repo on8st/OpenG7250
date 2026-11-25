@@ -1081,11 +1081,16 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                                         continue;
                                     }
                                     netcfg::Apply::StartDhcp => {
-                                        // The address in use stays until a lease comes; each
-                                        // exchange borrows socket 7 at most 2 s (A1.11; 0041).
-                                        // The lease is then an address change (dhcp_step).
+                                        // No address change in itself (A1.11; 0082): the address
+                                        // in use stays, each exchange borrows socket 7 at most 2 s
+                                        // (0041). A static address for at most 6 s, then the
+                                        // link-local fall-back with its probe (dhcp_step, relink);
+                                        // a link-local one with no limit and no probe. A lease is
+                                        // an address change unless it keeps address and netmask.
+                                        let static_held = cfg.ip[..2] != [169, 254];
+                                        let ll = if static_held { claim.candidate() } else { cfg };
                                         let xid = u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]) ^ Instant::now().as_ticks() as u32;
-                                        dhcpc = Some(DhcpClient::start(mac, xid, claim.candidate(), Instant::now().as_millis()));
+                                        dhcpc = Some(DhcpClient::start(mac, xid, ll, static_held, Instant::now().as_millis()));
                                         dhcp_borrowed = false;
                                         continue;
                                     }

@@ -112,8 +112,9 @@ pub enum Apply {
     Gateway,
     /// Another address or mode: the sockets close and the configuration comes up again.
     Reconfigure,
-    /// From a static address into DHCP mode: the address in use stays until a lease comes, the
-    /// DHCP client starts and borrows socket 7 at most 2 s per exchange.
+    /// Into DHCP mode from static mode (a static address, or its link-local fall-back after a
+    /// conflict): no address change in itself; the DHCP client starts and borrows socket 7 at
+    /// most 2 s per exchange (A1.11 "Change into DHCP mode while running"; 0082).
     StartDhcp,
 }
 
@@ -148,7 +149,7 @@ mod tests {
         // Another address, netmask or mode: brought up again.
         assert_eq!(apply_plan(false, &st, &NetConfig { ip: [192, 168, 1, 21], ..st }), Apply::Reconfigure);
         assert_eq!(apply_plan(false, &st, &NetConfig { mask: [255, 255, 0, 0], ..st }), Apply::Reconfigure);
-        assert_eq!(apply_plan(false, &st, &NetConfig::FACTORY), Apply::StartDhcp, "static to DHCP: the address stays until a lease");
+        assert_eq!(apply_plan(false, &st, &NetConfig::FACTORY), Apply::StartDhcp, "static to DHCP");
         assert_eq!(apply_plan(false, &st, &NetConfig { mode: Mode::Static, ip: [0; 4], ..st }), Apply::StartDhcp, "not a usable host: DHCP");
         assert_eq!(apply_plan(true, &ll, &st), Apply::Reconfigure, "DHCP to static");
     }

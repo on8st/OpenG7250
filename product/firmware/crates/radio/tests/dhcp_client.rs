@@ -2,7 +2,7 @@
 //! DHCP client (A1.11, A1.11a; RFC 2131).
 use g7250_proto::dhcp;
 use g7250_proto::netcfg::{self, Mode, NetConfig};
-use g7250_radio::dhcp_client::{Action, BORROW_MS, BORROW_TARGET_MS, Client, Msg, RETURN_MS, State, WAIT_MS};
+use g7250_radio::dhcp_client::{Action, BORROW_MS, BORROW_TARGET_MS, Client, KEEP_STATIC_MS, Msg, RETURN_MS, State, WAIT_MS};
 
 const MAC: [u8; 6] = [2, 0, 0, 0, 0x72, 0x50];
 const SERVER: [u8; 4] = [192, 168, 1, 1];
@@ -274,24 +274,60 @@ fn next_due_is_when_poll_acts() {
 }
 
 #[test]
-fn a_change_into_dhcp_mode_keeps_the_address_until_a_lease_t_a1_86() {
-    // A1.6 C-1 from a static address into DHCP mode while running: no Use before a lease (the
-    // address in use stays), the first DISCOVER at once, each exchange within the borrow bound
-    // (A1.11; 0041), then retries with the back-off; a lease is then used.
-    let mut c = Client::start(MAC, 7, ll(), 50_000);
+fn a_change_into_dhcp_mode_from_a_static_address_t_a1_100() {
+    // A1.11 (0082): the static address is kept for at most 6 s of attempts, each exchange a
+    // borrow within the bound (0041); no lease by then: the link-local fall-back (the board
+    // probes it), and DHCP goes on trying.
+    let mut c = Client::start(MAC, 7, ll(), true, 50_000);
+    assert_eq!(c.next_due(), 50_000);
     assert!(matches!(c.poll(50_000), Action::Send { msg: Msg::Discover, .. }));
-    assert!(c.listening());
     let mut t = 50_000;
-    while c.listening() {
+    let mut borrow_start = Some(50_000);
+    let mut used = None;
+    while t < 70_000 {
         t += 10;
-        assert_eq!(c.poll(t), Action::None, "no address change without a lease");
+        let listening = c.listening();
+        match c.poll(t) {
+            Action::Use(u) => {
+                used = Some((u, t));
+                break;
+            }
+            Action::Send { msg: Msg::Discover, .. } => borrow_start = Some(t),
+            _ => {}
+        }
+        if listening && !c.listening() {
+            let b = borrow_start.take().unwrap();
+            assert!(t - b <= BORROW_TARGET_MS - RETURN_MS, "borrow {} ms", t - b);
+        }
     }
-    assert!(t - 50_000 <= BORROW_TARGET_MS - RETURN_MS, "borrow {} ms", t - 50_000);
-    assert_eq!(c.poll(t + 3_990), Action::None);
-    assert!(matches!(c.poll(t + 4_000), Action::Send { msg: Msg::Discover, .. }), "the back-off from 4 s");
+    assert_eq!(used, Some((ll(), 50_000 + KEEP_STATIC_MS)), "link-local after 6 s with no lease");
+    assert!(!c.listening(), "an exchange still running is abandoned");
+    // DHCP keeps trying after the probe.
+    assert!(matches!(c.poll(56_000 + 4_000), Action::Send { msg: Msg::Discover, .. }));
+    // A lease within the 6 s: used, and no fall-back after it.
+    let mut c = Client::start(MAC, 7, ll(), true, 0);
+    assert!(matches!(c.poll(0), Action::Send { .. }));
     let x = c.xid;
-    assert!(matches!(c.on_reply(&reply(dhcp::OFFER, x, [192, 168, 1, 77], 3600), t + 4_100), Action::Send { .. }));
-    let a = c.on_reply(&reply(dhcp::ACK, x, [192, 168, 1, 77], 3600), t + 4_200);
+    assert!(matches!(c.on_reply(&reply(dhcp::OFFER, x, [192, 168, 1, 77], 3600), 100), Action::Send { .. }));
+    let a = c.on_reply(&reply(dhcp::ACK, x, [192, 168, 1, 77], 3600), 200);
     assert_eq!(a, Action::Use(NetConfig { mode: Mode::Dhcp, ip: [192, 168, 1, 77], mask: [255, 255, 255, 0], gateway: SERVER }));
-    assert!(!c.listening());
+    assert_eq!(c.poll(KEEP_STATIC_MS + 10), Action::None);
+}
+
+#[test]
+fn a_change_into_dhcp_mode_from_a_link_local_address_keeps_it_t_a1_100() {
+    // A1.11 (0082): from a link-local address (the fall-back of a static one after a
+    // conflict): kept with no time limit and no probe; DHCP by borrows with the back-off.
+    let held = netcfg::link_local(MAC, 3);
+    let mut c = Client::start(MAC, 7, held, false, 0);
+    let mut sends = 0;
+    for t in (0..120_000).step_by(10) {
+        match c.poll(t) {
+            Action::Use(_) => panic!("no address change without a lease"),
+            Action::Send { .. } => sends += 1,
+            _ => {}
+        }
+    }
+    assert!(sends >= 3, "DHCP keeps trying ({sends})");
+    assert_eq!(c.link_local(), held);
 }

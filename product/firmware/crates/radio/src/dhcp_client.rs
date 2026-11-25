@@ -30,6 +30,9 @@ pub const WAIT_MS: u64 = BORROW_TARGET_MS - RETURN_MS;
 const BACKOFF_MS: [u64; 5] = [4_000, 8_000, 16_000, 32_000, 64_000];
 /// After a DHCPDECLINE (RFC 2131 section 3.1 item 5).
 pub const DECLINE_WAIT_MS: u64 = 10_000;
+/// A change from a static address into DHCP mode while running: how long the static address is
+/// kept with no lease, the DHCP attempts of "Bound on start-up" (A1.11; 0082).
+pub const KEEP_STATIC_MS: u64 = 6_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -89,6 +92,9 @@ pub struct Client {
     lease: Option<(NetConfig, Ip, u64, u32)>,
     /// After a renewal without answer: no new try before this time.
     retry_at: Option<u64>,
+    /// A change into DHCP mode from a static address: with no lease by this time, the client
+    /// falls back to its link-local address (0082).
+    keep_until: Option<u64>,
 }
 
 impl Client {
@@ -100,14 +106,19 @@ impl Client {
             // The power-on exchange was borrow 0: gap 0 now, and gap 1 after the next DISCOVER.
             None => (State::Init { attempt: 1, next_ms: now + BACKOFF_MS[0] }, None),
         };
-        Client { state, xid, mac, link_local, lease, retry_at: None }
+        Client { state, xid, mac, link_local, lease, retry_at: None, keep_until: None }
     }
 
-    /// A change into DHCP mode while running (A1.6 C-1): the address in use stays until a lease
-    /// comes; the first DISCOVER is due at once, and every exchange is a borrow of at most
-    /// [`WAIT_MS`] (A1.2, A1.11; 0041). `link_local` is the fall-back after a lease ends.
-    pub fn start(mac: [u8; 6], xid: u32, link_local: NetConfig, now: u64) -> Self {
-        Client { state: State::Init { attempt: 0, next_ms: now }, xid, mac, link_local, lease: None, retry_at: None }
+    /// A change into DHCP mode while running (A1.11 "Change into DHCP mode while running";
+    /// 0082): no address change in itself. The first DISCOVER is due at once, and every exchange
+    /// is a borrow of at most [`WAIT_MS`] (0041).
+    /// - From a static address (`static_held`): it is kept for at most [`KEEP_STATIC_MS`]; with
+    ///   no lease by then [`Self::poll`] gives `Use(link_local)`, the probed fall-back.
+    /// - From a link-local address: `link_local` is that address, kept with no time limit and
+    ///   no probe; the client is in the state "no lease held".
+    pub fn start(mac: [u8; 6], xid: u32, link_local: NetConfig, static_held: bool, now: u64) -> Self {
+        let keep_until = static_held.then_some(now + KEEP_STATIC_MS);
+        Client { state: State::Init { attempt: 0, next_ms: now }, xid, mac, link_local, lease: None, retry_at: None, keep_until }
     }
 
     /// The link-local address the client falls back to (A1.11).
@@ -160,6 +171,10 @@ impl Client {
     /// The next time [`Self::poll`] can act (send, give up, end the lease); the net loop sleeps
     /// until then when nothing else is due. `poll` before it does nothing.
     pub fn next_due(&self) -> u64 {
+        self.next_due_inner().min(self.keep_until.unwrap_or(u64::MAX))
+    }
+
+    fn next_due_inner(&self) -> u64 {
         match self.state {
             State::Init { next_ms, .. } => next_ms,
             State::Selecting { until_ms, .. } | State::Requesting { until_ms, .. } => until_ms,
@@ -177,6 +192,16 @@ impl Client {
     }
 
     pub fn poll(&mut self, now: u64) -> Action {
+        // A static address kept for a change into DHCP mode, with no lease in time: the
+        // link-local address, an address change with the probe; an exchange still running is
+        // abandoned, and DHCP goes on trying (0082).
+        if let Some(t) = self.keep_until {
+            if self.lease.is_none() && now >= t {
+                self.keep_until = None;
+                self.state = State::Init { attempt: 1, next_ms: now + BACKOFF_MS[0] };
+                return Action::Use(self.link_local);
+            }
+        }
         match self.state {
             State::Init { attempt, next_ms } if now >= next_ms => {
                 self.xid = self.xid.wrapping_add(1);
@@ -253,6 +278,7 @@ impl Client {
                 let cfg = NetConfig { mode: Mode::Dhcp, ip: r.yiaddr, mask, gateway: gw };
                 let lease_s = r.lease_s.unwrap_or(3600).max(60);
                 self.lease = Some((cfg, server, now, lease_s));
+                self.keep_until = None;
                 self.state = State::Bound;
                 self.retry_at = None;
                 // A renewal that keeps address and netmask changes nothing (A1.11a); the board
