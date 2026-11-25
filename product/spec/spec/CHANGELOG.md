@@ -14,6 +14,7 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   accepted in full on 2026-11-23 (reading (b), points A to I, option (i)).
 - 0079 accepted by ON8ST on 2026-11-23 (option (a)).
 - 0080 accepted by ON8ST on 2026-11-23 (with the counter `mg_auth_required`).
+- 0081 accepted by ON8ST on 2026-11-24 ("Beperk de 55"; reading (a), 2026-11-25).
 - 0073, 0074, 0075, 0076, 0077, 0078 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
@@ -109,6 +110,12 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   to 0073); power lost with every sector written may leave an unchecked stock image; from the
   first erase `IDENTIFY` reports no secret and no window, and `SET_FIRST_SECRET` gets 36.
   A1.8a item 3, A1.10, B2.3; T-A1-60, T-A1-15 extended.
+- 0081 (accepted 2026-11-24 and 2026-11-25; the emulator's hung-erase run): on the single flash
+  bank a fetch waits while the bank is erased or programmed, so the 55 within 15 s holds only for
+  flash work that ends with an error flag or within its bound; a late end, after the give-up, is
+  answered with 55 within 0.5 s of its end; flash work that never ends takes the stall path (a
+  watchdog reset, no reply, store and boot record as before, `WDT_RESET_AT_START`). No firmware
+  change. A1.4, B2.3; T-A1-85, T-A1-15, T-A1-16, T-A1-94.
 - 0080 (accepted 2026-11-23; g7250ctl's reference-model run): an authenticated command without an
   HMAC trailer, or with no secret set, gets 32 and is not executed; 33 only with a secret set (in
   the installer, the secret kept in RAM); a 32 is no authentication failure (not toward 34, no

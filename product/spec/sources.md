@@ -96,6 +96,10 @@ the source has been found but not checked.
   200 µs at x64; mass erase max 26 s at x8.
 - Read: the values were taken from the datasheet on the product side and relayed by the
   openg7250 session with ON8ST's go, 2026-11-21. The spec session has not read the PDF itself.
+- Also used (0081): the MCU has a single flash bank of 1 MiB, and an instruction fetch or read
+  from the bank waits while it is erased or programmed (DS13311 and the reference manual
+  RM0468). Relayed by the openg7250 session, 2026-11-24, from public ST documents; not read by
+  the spec session, no section cited. RM0468 gets its own entry only once read (Annex P, F3).
 
 ### [CH394] WCH CH394 manual 1 (以太网协议栈芯片 CH394 手册 1), version 1.2
 

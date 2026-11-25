@@ -110,8 +110,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0078 | Evidence of a commanded reset: a commanded-reset word in kept RAM; reads of kept RAM never stop the start; test timings; counter details and the definition of a gap | accepted (2026-11-22) |
 | 0079 | Built-in power limit at 50 MHz 0 W until P-PWR-2 (a limit above 0 gets 49); the `SET_CONFIG` reply gives the items as `GET_CONFIG` does | accepted (2026-11-23) |
 | 0080 | Status 32 for an authenticated command without an HMAC trailer or with no secret set; 33 only with a secret set (installer: the secret in RAM); a 32 is no authentication failure; counter `mg_auth_required` | accepted (2026-11-23) |
+| 0081 | Flash work that never ends: the 55 within 15 s only for flash work that ends with an error flag or within its bound; a late end gets 55 within 0.5 s of its end; never-ending work takes the stall path (watchdog reset, no reply) | accepted (2026-11-24, reading (a) 2026-11-25) |
 
-All numbers 0001–0080 are now in use.
+All numbers 0001–0081 are now in use.
 
 ## Open questions for ON8ST
 
