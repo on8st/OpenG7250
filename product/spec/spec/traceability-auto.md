@@ -83,4 +83,5 @@
 | 0079 | 0079 — Built-in power limit at 50 MHz; the `SET_CONFIG` reply | 3 | 6 | network-interface: (top); network-interface: A1 Management channel; network-interface: A3 Safety behaviour visible on the network; network-interface: Annex M — Management payloads; network-interface: B4 Capability block; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0080 | 0080 — Status 32 with no HMAC or no secret set | 4 | 4 | network-interface: (top); network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0081 | 0081 — Flash work that never ends | 3 | 4 | network-interface: (top); network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0082 | 0082 — Change into DHCP mode while running | 2 | 3 | network-interface: (top); network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 
