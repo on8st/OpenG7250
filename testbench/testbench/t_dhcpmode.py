@@ -120,14 +120,17 @@ def address_mode(ctx, s: bytes) -> bytes | None:
 
 
 def wait_for(ctx, h, pred, limit_s: float) -> bool:
-    """Poll `pred` for limit_s s of wall time (the session kept alive meanwhile)."""
-    end = time.monotonic() + limit_s
+    """Poll `pred` for limit_s s of radio time (the radio's clock; wall time at most 12 times that plus
+    60 s), the session kept alive meanwhile."""
+    from .core import RadioClock
+    clock, wall0 = RadioClock(ctx), time.monotonic()
+    t0 = clock.now()
     with kept(h):
-        while time.monotonic() < end:
+        while clock.now() - t0 < limit_s and time.monotonic() - wall0 < 12 * limit_s + 60:
             if pred():
                 return True
             time.sleep(0.5)
-    return False
+    return bool(pred())
 
 
 class Case:
@@ -172,6 +175,29 @@ class Case:
         self.h.close()
 
 
+LINK_LOCAL_BY_S = ATTEMPTS_S + CLOSED_S + 1.0  # 0082 point 3, then "Link-local address"; 1 s for the bench's polls
+
+
+def wait_link_local(ctx, h, limit_s: float) -> float:
+    """Wait until the radio is on a link-local address (net.endpoint follows it), for at most limit_s of
+    radio time (the radio's clock: the emulator may run slower than the host), the session kept alive;
+    then until it answers discovery. The radio seconds waited."""
+    from .core import RadioClock
+    from .p2 import reread_endpoint
+    clock, wall0 = RadioClock(ctx), time.monotonic()
+    t0 = clock.now()
+    with kept(h):
+        while clock.now() - t0 < limit_s and time.monotonic() - wall0 < 12 * limit_s + 60:
+            reread_endpoint(ctx)
+            if is_link_local(current_ip(ctx)):
+                break
+            time.sleep(0.5)
+    took = clock.now() - t0
+    if is_link_local(current_ip(ctx)):
+        wait_reachable(ctx, "the link-local address", 40)
+    return took
+
+
 def needs(ctx, label: str, *fx) -> bool:
     missing = [f for f in fx if not has(ctx, f)]
     if missing:
@@ -192,9 +218,11 @@ def no_server(ctx, s: bytes):
         if not c.answered():
             return
         ctx.check(f"{label}: the session does not end for the mode change", alive(c.h), "no status packets after the reply")
-        wait_reachable(ctx, f"{label}: the link-local address", 40)
+        took = wait_link_local(ctx, c.h, LINK_LOCAL_BY_S)
         ip = current_ip(ctx)
-        if not ctx.check(f"{label}: a link-local address chosen", is_link_local(ip), ip):
+        if not ctx.check(f"{label}: a link-local address chosen within {LINK_LOCAL_BY_S:g} s of radio time (the "
+                         f"{ATTEMPTS_S:g} s of attempts, then the probe of at most {CLOSED_S:g} s)", is_link_local(ip),
+                         f"{ip} after {took:.1f} s of radio time"):
             return
         disc = [m for m in c.msgs() if mtype(m) == "DISCOVER" and not m.get("t_us_approx")]
         from_static = [m for m in disc if src_ip(m) == STATIC]
