@@ -26,7 +26,7 @@ ROW = re.compile(r"^\| (T-[A-C]\d{1,2}-\d{2,3}) \| (.*) \|\s*$")  # T-A1-100 on 
 # --- requirement references -------------------------------------------------------------
 SEC = re.compile(r"(?<![\w.])([ABC]\d{1,2}(?:\.\d{1,2}[a-z]?){0,2})(?![\w])")
 TABLE = re.compile(r"Table ([ABC]\d{1,2}-\d)")
-DEC = re.compile(r"\b(00[0-3]\d)(?: (§\d+(?: item \d+)?))?")
+DEC = re.compile(r"\b(00\d\d)(?: (§\d+(?: item \d+)?))?")  # every decision, 0001 to 0099
 HISREF = re.compile(r"\bHIS-\d{2}\b")
 
 
