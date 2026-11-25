@@ -19,6 +19,7 @@ class C3Radio:
         self.tx, self.gw, self.broken = 250_000, bytes(4), broken
         self.log, self.cut, self.addr, self.appended, self.stale = [], None, STORE, 0, False
         self.pon, self.left = None, None  # a cut armed for the next power-on; what a cut write left
+        self.mute, self.muted, self.cycles = 0, False, 0  # C-1 writes left unanswered (broken "c1-mute")
 
     def fixture(self, op, **a):
         if op == "flash.log":
@@ -26,7 +27,13 @@ class C3Radio:
                 self.log = []
                 return None
             return dict(count=len(self.log), dropped=0, entries=self.log[a.get("from", 0):])
+        if op == "power.cycle":
+            self.cycles += 1
+            self.cut = None  # a plain armed cut does not survive a power cycle
+            return None
         if op == "power.cut":
+            if self.broken == "c1-mute" and a.get("during_erase") == 0.1 and not self.muted:
+                self.mute, self.muted = 5, True  # every attempt of that case ends unanswered, no erase
             if a.get("at_power_on"):
                 self.pon = a
             else:
@@ -98,6 +105,9 @@ class C3Radio:
                 if self.broken == "commit-c1-new" and gw is not None:
                     self.gw = gw
             return None
+        if self.mute:
+            self.mute -= 1
+            return None
         self.appended += 1
         if self.appended % 5 == 0 and self.erase():  # a C-1 compaction
             return None
@@ -126,9 +136,9 @@ class FakeU:
         return {25: bytes([2, 2, 4, 2, 6, 2])}
 
 
-def run(broken=None):
+def run(broken=None, cycle=False):
     r = C3Radio(broken)
-    ctx = Ctx(dict(radio=dict(ip="10.0.0.5"), fixtures=["flash.log", "power.cut"]))
+    ctx = Ctx(dict(radio=dict(ip="10.0.0.5"), fixtures=["flash.log", "power.cut"] + (["power.cycle"] if cycle else [])))
     ctx.fixture = r.fixture
 
     @contextmanager
@@ -151,6 +161,7 @@ def run(broken=None):
         for k, v in saved.items():
             setattr(t_flash, k, v)
         t_store.change_secret = saved_change
+    ctx.radio = r
     return [c["name"] for c in ctx.checks if not c["ok"]], missing, ctx
 
 
@@ -163,6 +174,22 @@ class C3Writes(unittest.TestCase):
         self.assertEqual(sum("start check's erase cut" in c["name"] and "as before" in c["name"] for c in ctx.checks), 3)
         self.assertEqual(sum("left, cut at" in c["name"] and "as before" in c["name"] for c in ctx.checks), 6)
         self.assertFalse(any("waits for" in x for x in ctx.parts))
+
+    def test_unfired_cut_dropped(self):
+        """A C-1 compaction cut that never fired is dropped by a power cycle, so it cannot cut the next
+        case's own erase (the d290206 run: the start check's CHANGE_SECRET got 33)."""
+        bad, missing, ctx = run("c1-mute", cycle=True)
+        self.assertEqual(bad, [])
+        self.assertEqual(len(missing), 1, missing)
+        self.assertIn("at 0.1", missing[0])
+        self.assertEqual(ctx.radio.cycles, 1)
+        self.assertEqual(sum("start check's erase cut" in c["name"] and "as before" in c["name"] for c in ctx.checks), 3)
+
+    def test_unfired_cut_without_power_cycle(self):
+        bad, missing, ctx = run("c1-mute")
+        self.assertEqual(bad, [])
+        self.assertTrue(any("stays armed" in p for p in ctx.parts), ctx.parts)
+        self.assertFalse(any("start check's erase cut" in c["name"] for c in ctx.checks))
 
     def test_broken_stores(self):
         for broken, seen in (("c3-appends", "one store erase"), ("commit-c1-new", "C-1 old"),

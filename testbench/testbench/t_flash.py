@@ -922,6 +922,25 @@ def log_end(u: Updater) -> int:
     return max([e[0] for e in read_log(u.c)], default=-1)
 
 
+def drop_cut(ctx, label: str) -> bool:
+    """A planned plain cut that did not fire is still armed and would cut a later case's own flash work:
+    a power cycle drops it (a plain cut does not survive one). False, with the later cut cases not run,
+    where power.cycle is not offered."""
+    if "power.cycle" in ctx.endpoint.get("fixtures", []):
+        ctx.fixture("power.cycle")
+        wait_reachable(ctx, f"{label}: the unfired cut dropped by a power cycle")
+        return True
+    ctx.__dict__["_armed"] = label
+    return False
+
+
+def still_armed(ctx, what: str) -> bool:
+    label = ctx.__dict__.get("_armed")
+    if label:
+        ctx.part(f"{what}: not run, the cut of '{label}' did not fire and stays armed (no power.cycle to drop it)")
+    return bool(label)
+
+
 def c3_writes(ctx, s: bytes, missing: list[str]):
     """T-A1-86, A1.6 "C-3 at a start" (0072): a C-3 write is one compaction (one store erase); a power
     loss at each word of a SET_CONFIG with C-3 and C-1 items: before its commit word both old, with
@@ -951,7 +970,12 @@ def c3_writes(ctx, s: bytes, missing: list[str]):
             ctx.eq(f"{label}: one store erase, a new generation (flash.log)", len(er), 1)
             n_words = sum(words(e) for e in entries if e.get("op") == "program" and in_range(e, lo, hi))
             ref = word_addresses(entries, lo, hi)
-            ctx.eq(f"{label}: both items read back new", c3_c1(u), (tx, gw))
+            back = c3_c1(u)
+            if back == (None, None):  # GET_CONFIG unanswered after A1.4's retransmissions
+                ctx.check(f"{label}: the read-back GET_CONFIG answered (A1.4: 5 retransmissions 500 ms apart; A1.11: a "
+                          "borrow of the socket lasts at most 2 s)", False, getattr(u.c, "why", ""))
+            else:
+                ctx.eq(f"{label}: both items read back new", back, (tx, gw))
     if not n_words:
         ctx.part("the cuts of a C-3 write: not run, flash.log shows no program of it")
         return
@@ -989,20 +1013,29 @@ def c3_writes(ctx, s: bytes, missing: list[str]):
             n0 = log_end(u)
             flog_start(ctx)
             ctx.fixture("power.cut", during_erase=frac)
-            res = compaction_writes(ctx, u, 0, lo, hi, write=c1_write)
-            if res is None and cut_entry(flog(ctx), "erase") is None:
-                # no erase came (a write without a reply, e.g. no challenge under load): the cut is still armed
-                compaction_writes(ctx, u, 1000, lo, hi, write=c1_write)
+            for attempt in range(5):
+                # a write without a reply or with another status ends compaction_writes before an erase
+                # came (e.g. no challenge under load): the cut is still armed, so write on
+                res = compaction_writes(ctx, u, 1000 * attempt, lo, hi, write=c1_write)
+                if res is not None or cut_entry(flog(ctx), "erase") is not None:
+                    break
         wait_reachable(ctx, label)
         with mg(ctx, s) as u:
             e = cut_entry(flog(ctx), "erase")
-            if e is None or not in_range(e, lo, hi):
-                missing.append(f"{label} (entry {e}; {ctx.__dict__.get('_compaction', '')})")
-                continue
+        if e is None or not in_range(e, lo, hi):
+            missing.append(f"{label} (entry {e}; {ctx.__dict__.get('_compaction', '')})")
+            if e is None and not drop_cut(ctx, label):
+                break
+            continue
+        with mg(ctx, s) as u:
             ctx.eq(f"{label}: the C-3 item as before", c3_c1(u)[0], tx)
             ctx.eq(f"{label}: no '{LOST_LINE}' line", lost_lines(ctx, u, n0 + 1), 0)
-    s = start_check_cuts(ctx, s, tx, missing)
-    left_sector_cuts(ctx, s, n_words, ref, gws, missing)
+    if not still_armed(ctx, "the start check's erase cuts"):
+        s = start_check_cuts(ctx, s, tx, missing)
+    if not still_armed(ctx, "the erase cuts of what a cut C-3 write left"):
+        left_sector_cuts(ctx, s, n_words, ref, gws, missing)
+    if still_armed(ctx, "the TX time and the gateway put back"):
+        return
     with mg(ctx, s) as u:
         r = set_c3_c1(u, tx0, gw0)
         ctx.eq("the TX time and the gateway put back", r["status"] if r else None, 0)
@@ -1030,9 +1063,12 @@ def start_check_cuts(ctx, s: bytes, tx: int, missing: list[str]) -> bytes:
         wait_reachable(ctx, label)
         with mg(ctx, s) as u:
             e = cut_entry(flog(ctx), "erase")
-            if e is None:
-                missing.append(f"{label} (no cut erase entry)")
-                continue
+        if e is None:
+            missing.append(f"{label} (no cut erase entry)")
+            if not drop_cut(ctx, label):
+                return s
+            continue
+        with mg(ctx, s) as u:
             ctx.eq(f"{label}: the C-3 item as before", c3_c1(u)[0], tx)
             ctx.eq(f"{label}: no '{LOST_LINE}' line", lost_lines(ctx, u, n0 + 1), 0)
     return s
@@ -1071,8 +1107,8 @@ def left_sector_cuts(ctx, s: bytes, n_words: int, ref: list[int], gws: tuple, mi
             cuts = [e for e in entries if e.get("result") == "cut"]
             if len(cuts) != 2 or cuts[0].get("op") != "program" or cuts[1].get("op") != "erase":
                 missing.append(f"{label} (cut entries {cuts[:3]})")
-                if len(cuts) < 2:
-                    return  # an at_power_on cut may still be armed: the other cases would not say what they plan
+                if len(cuts) < 2 and not drop_cut(ctx, label):  # a cut not fired is still armed
+                    return
                 continue
             placed, why = cut_placed(entries[:entries.index(cuts[1])], k, ref)
             torn = torn_address(cuts[0])
