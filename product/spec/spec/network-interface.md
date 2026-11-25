@@ -2,7 +2,7 @@
 
 - Version: 1.0, 2026-11-21, accepted by ON8ST; changes in `spec/CHANGELOG.md`
 - Status: version 1.0 (tag `spec-v1.0`). Applies decisions 0001–0066, all accepted by ON8ST
-  (`product-handover.md`); after 1.0 also 0067–0081, accepted by ON8ST on 2026-11-22 (0072, 0079 and 0080 on 2026-11-23, 0081 on 2026-11-25),
+  (`product-handover.md`); after 1.0 also 0067–0082, accepted by ON8ST on 2026-11-22 (0072, 0079 and 0080 on 2026-11-23, 0081 and 0082 on 2026-11-25),
   listed under "After 1.0" in `spec/CHANGELOG.md` (not yet a version). Complete for milestones M1–M5 except for the values that need the
   radio, which are named in Annex P with a safe placeholder each; level 2 (part C) waits for
   gate G6 (0011).
@@ -1015,8 +1015,8 @@ A1.10 **Security on a LAN** (0008, Security):
 
 A1.11 **DHCP** (0008, Socket budget; 0035). The CH394 has no DHCP client (0008; [CH394]); network
 behaviour is defined by this spec ([HIS] HIS 40; HIS-14). The DHCP exchange at power-on runs before the
-P2 sockets are opened. Later exchanges (renewal and rebinding, and the retries while no lease
-is held) borrow the management socket, which then listens on UDP port 68 (0041). While no lease
+P2 sockets are opened. Later exchanges (renewal and rebinding, the retries while no lease
+is held, and the attempts of a change into DHCP mode, 0082) borrow the management socket, which then listens on UDP port 68 (0041). While no lease
 is held (no server, or the lease ended), the G7250 MUST use an IPv4 link-local address chosen
 as in [RFC3927] and keep trying DHCP, with retries spaced from 4 s doubling up to at most every
 64 s (RFC 2131 section 4.1 retransmission back-off); a lease, when it comes, is an address
@@ -1034,8 +1034,8 @@ change under A1.11a (0035).
   free (0008, 0017), so:
   - the probe and announce run on socket 0 in MACRAW, at start-up before the P2 and
     management sockets open, and again whenever a link-local address is chosen while running
-    (after the end of a lease, a DHCPNAK or a conflict, each an address change of A1.11a that
-    ends the session). During such a probe, at most 10 s, discovery (port 1024, socket 0) and
+    (after the end of a lease, a DHCPNAK, a conflict, or a change into DHCP mode with no lease
+    within 6 s (0082), each an address change of A1.11a that ends the session). During such a probe, at most 10 s, discovery (port 1024, socket 0) and
     the other sockets are closed;
   - the DHCP attempts and the probe run one after the other, as the start-up bound assumes;
   - **if socket 0 cannot be opened in MACRAW** (a chip or driver fault) after three tries 10 ms
@@ -1052,8 +1052,9 @@ change under A1.11a (0035).
     MAX_CONFLICTS, RATE_LIMIT_INTERVAL). Every conflict is logged.
 - **DHCP messages while link-local** (0052). The CH394's source IP address is chip-wide
   ([CH394]), and the P2 sockets keep using the link-local address during a borrow, so the
-  G7250 sends its DHCPDISCOVER and DHCPREQUEST with the link-local address as IP source while
-  it holds one. [RFC3927] section 2.11 requires the DHCP client to keep trying while a
+  G7250 sends its DHCPDISCOVER and DHCPREQUEST with the address it holds as IP source: the
+  link-local address, or the static address during the attempts of a change into DHCP mode
+  (0082). [RFC3927] section 2.11 requires the DHCP client to keep trying while a
   link-local address is configured, and section 1.9 that the host not alter its use of DHCP
   because of that address; [RFC2131] section 4.1 asks for source 0.0.0.0 "prior to that client
   obtaining its IP address". Sending 0.0.0.0 would mean clearing the chip-wide address and
@@ -1073,6 +1074,19 @@ change under A1.11a (0035).
   between two borrows the channel is always free for at least the retry interval (4 s or
   more). A request that arrives during a borrow gets no answer and is not
   counted as an error; the host's retransmission covers it.
+- **Change into DHCP mode while running** (0082). A `SET_CONFIG` that sets the C-1 address mode
+  to DHCP is no address change in itself: after the reply the radio keeps the address it holds,
+  and the mode change does not end the session. From a link-local address (the fall-back of a
+  static address after a conflict, above) the radio keeps that address and is at once in the
+  state "no lease held" of this section: DHCP runs by borrows, and a lease is an address change
+  of A1.11a; no probe is made. From a static address the radio keeps it while it tries DHCP by
+  borrows, for at most 6 s, the DHCP attempts of "Bound on start-up", with the channel free
+  between borrows ("Bound on a borrow"). A lease within that time is an address change of
+  A1.11a, unless it gives the same address and netmask, which changes nothing, as a renewal that
+  keeps them. With no lease the radio chooses a link-local address, an address change of A1.11a
+  with the probe of "Link-local address" (at most 10 s), and then keeps trying DHCP as this
+  section says; the static address is never kept beyond those 6 s with no lease. In DHCP mode
+  already, a `SET_CONFIG` that sets DHCP again changes nothing and starts no exchange.
 
 A1.11a **Address change by DHCP** (0022 §54). Each of these events during a level-1 session or
 while level 2 is active is a change of the radio's own address, handled as a C-1 change (A1.6):
@@ -4379,6 +4393,7 @@ Unless a test says otherwise, a test in which KEY or CWX keys runs with break-in
 | T-A1-97 | A log longer than one page: `READ_LOG` sets flag bit 1 on every page but the last and clears it on the last; an empty page has it clear; after a new entry, asking from the last sequence number + 1 returns it; every other reply has bit 1 clear (A1.7; 0074). |
 | T-A1-98 | After a `SET_CONFIG` that changes the address (answered first), a write from the former holder to the new address with the old challenge gets 33, one with a new challenge is accepted and opens a new session, and a write from another host is not refused with 35; a DHCP renewal with the same address leaves the write session, challenges and stored replies as they were (A1.10; 0074). |
 | T-A1-99 | With no secret set (factory state, and after a `FACTORY_RESET`), every command marked "yes" in the Auth column gets 32 with and without an HMAC trailer and is not executed; ten such requests within 10 s get 32 each, never 34, and a `SET_FIRST_SECRET` in the window after them gets 0; the retransmission of a `FACTORY_RESET` that arrives after its reset gets 32; `mg_auth_required` counts each 32. With a secret set, a write without an HMAC trailer gets 32 and one with a wrong HMAC 33; a 32 leaves the host's challenge usable. In the installer after the first sector erase (tag 11 = 0), an `UPDATE_BLOCK` with a wrong HMAC gets 33 and one with the secret kept in RAM 0 (reference model; A1.4, A1.9, A1.10, Table M-6; 0080). |
+| T-A1-100 | A running `SET_CONFIG` that sets the C-1 address mode to DHCP (emulator): from a static address with a DHCP server, the request is answered, the session does not end for the mode change, the management channel is never closed for more than 2 s at a time, and the DHCP messages carry `ciaddr` 0.0.0.0, the BROADCAST flag and the static address as IP source; a lease with another address ends the session as an address change (A1.11a), one with the same address and netmask does not. From a static address with no server: after at most 6 s of attempts a link-local address is chosen and probed, discovery and management closed for at most 10 s, and DHCP retries go on. From a link-local address (static mode, after a conflict): no probe, no session end until a lease. In DHCP mode already, DHCP set again starts no exchange (A1.11; 0082). |
 | T-A1-88 | Packages for the other slot whose SHA-256 matches the header but whose image is not runnable: no image record, a record for other hardware or for the boot stage, linked for the running slot, a failing integrity check, an entry point outside the slot, and a record whose version or length differs from the header, one of them an intact image with 32 bytes appended (header length and hash adjusted), which the log names `header`, not `integrity`. Each gets 55 at `UPDATE_VERIFY` with the failed check in the log, then 55 at `UPDATE_ACTIVATE`; the running image and the boot record are unchanged and `IDENTIFY` tag 9 reports 0 for the staging slot; sending every block again with new request ids, in order, replaces the received data and the next verify succeeds; an `UPDATE_VERIFY` with the last block not sent (a block left out in the middle would make the next one 54, out of order) gets 55 with `missing-blocks` in the log, not `hash`, and sending that last block then lets the verify succeed (0067 addendum); with the store made full, an `UPDATE_BLOCK` gets 64, the log shows `store: room made (update)`, `UPDATE_STATUS` shows the transfer still receiving with the same blocks received, and the block sent again with a new request id is taken, while a repeat with the same id gets 64 again; a verify with the store full succeeds (0067 addendum, full store); a block sent again alone is accepted and written, and `UPDATE_STATUS` shows any blocks the radio counts as not received again (reference model or emulator; A1.8 "Image check", "`UPDATE_VERIFY`"; 0067). |
 | T-A1-89 | `IDENTIFY` tag 9 for the other slot: 1 after a good verify; 0 from the first erase of `UPDATE_BEGIN`, after `UPDATE_ABORT` and after a failed verify, also after a restart; 2 when one byte of a confirmed other image is changed and the radio restarts; `ROLLBACK` with the other slot at 0 or 2 gets 55 and changes nothing; after a trial that failed to confirm itself, tag 9 for that slot stays 1 and `ROLLBACK` to it is accepted and starts it as a trial (reference model or emulator; A1.8 "Integrity in `IDENTIFY`"; 0067). |
 | T-A1-90 | One byte of the staged image changed after a good verify and `UPDATE_ACTIVATE`: the boot stage does not start the trial slot, starts the previous image, logs `boot: slot B refused: integrity` (slot named by its letter) and the rollback, and tag 10 reports 2; one byte of the confirmed active image changed with a good other slot: the other slot starts without a trial and the log shows `boot: slot A refused: integrity` then `boot: fallback to slot B (active slot refused, no trial)` (0068 addendum); both slots changed: the boot stage holds the safe state and the radio does not answer (emulator; A1.8 "Boot-stage refusals"; 0067). |

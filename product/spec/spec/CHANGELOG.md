@@ -15,6 +15,7 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0079 accepted by ON8ST on 2026-11-23 (option (a)).
 - 0080 accepted by ON8ST on 2026-11-23 (with the counter `mg_auth_required`).
 - 0081 accepted by ON8ST on 2026-11-24 ("Beperk de 55"; reading (a), 2026-11-25).
+- 0082 accepted by ON8ST on 2026-11-25 (the proposal as written).
 - 0073, 0074, 0075, 0076, 0077, 0078 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
@@ -110,6 +111,12 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   to 0073); power lost with every sector written may leave an unchecked stock image; from the
   first erase `IDENTIFY` reports no secret and no window, and `SET_FIRST_SECRET` gets 36.
   A1.8a item 3, A1.10, B2.3; T-A1-60, T-A1-15 extended.
+- 0082 (accepted 2026-11-25; a firmware question): a running `SET_CONFIG` into DHCP mode is no
+  address change in itself. From link-local the radio keeps the address and DHCP runs by
+  borrows; from a static address it keeps it for at most 6 s of DHCP attempts by borrows (source
+  the static address, `ciaddr` 0, BROADCAST), then a lease or a link-local address with the
+  probe, each an address change; a lease with the same address and netmask changes nothing;
+  DHCP set again in DHCP mode changes nothing. A1.11; T-A1-100 new.
 - 0081 (accepted 2026-11-24 and 2026-11-25; the emulator's hung-erase run): on the single flash
   bank a fetch waits while the bank is erased or programmed, so the 55 within 15 s holds only for
   flash work that ends with an error flag or within its bound; a late end, after the give-up, is
