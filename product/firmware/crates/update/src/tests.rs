@@ -1018,8 +1018,39 @@ fn a_verify_whose_mark_cannot_be_written_discards_the_transfer_0043() {
     }
     s.borrow_mut().budget = Some(0);
     assert_eq!(g.verify_marked(Some(&mut st), &mut io, &run, 2), Err(Refusal::VerifyFailed));
-    assert_eq!((g.phase(), g.verify_failure()), (Phase::Discarded, None));
+    // A write failure: discarded, a new UPDATE_BEGIN accepted (A1.8 "Write failure").
+    assert_eq!((g.phase(), g.verify_failure()), (Phase::Failed, None));
     drop(st);
     s.borrow_mut().power_on();
     assert_eq!(tag9(&mut s.borrow_mut(), Slot::B), 0);
+}
+
+#[test]
+fn after_a_write_failure_a_new_begin_is_accepted_t_a1_85() {
+    // A1.8 "Write failure" (0043): the transfer is discarded (UPDATE_STATUS idle), the update
+    // state remains until a restart and its 10-minute rule runs from the last command answered
+    // 0 (the 55 does not restart it); unlike after UPDATE_ABORT, a new UPDATE_BEGIN is accepted.
+    let run = running(Slot::A, V1);
+    let img = image(Slot::B, V2, 2000, 7);
+    let (s, _) = installed(false);
+    let s = core::cell::RefCell::new(s);
+    let mut io = Shared(&s);
+    let mut g = Stager::new();
+    g.begin(&offer(&img, V2), &run, 1_000).unwrap();
+    let none: Option<&mut Store<Shared>> = None;
+    assert_eq!(g.block_marked(none, &mut io, &run, 0, true, block_of(&img, 0), 2_000), Err(Refusal::VerifyFailed));
+    assert_eq!(g.status().0, 0, "no transfer in progress");
+    assert!(g.in_progress(), "the update state remains");
+    assert!(!g.abandoned(1_000 + stage::ABANDON_MS - 1) && g.abandoned(1_000 + stage::ABANDON_MS), "10 min from the BEGIN answered 0");
+    assert_eq!(g.begin(&offer(&img, V2), &run, 3_000), Ok(offer(&img, V2).length.div_ceil(stage::BLOCK)), "a new BEGIN");
+    // After UPDATE_ABORT, by contrast: 58.
+    g.abort(4_000);
+    assert_eq!(g.begin(&offer(&img, V2), &run, 5_000), Err(Refusal::UpdateInProgress));
+    // A write failure after an abort's discard cannot happen (no transfer), and one after the
+    // new BEGIN is again followed by an accepted BEGIN.
+    let mut g = Stager::new();
+    g.begin(&offer(&img, V2), &run, 0).unwrap();
+    let none: Option<&mut Store<Shared>> = None;
+    assert!(g.block_marked(none, &mut io, &run, 0, true, block_of(&img, 0), 1).is_err());
+    assert!(g.begin(&offer(&img, V2), &run, 2).is_ok());
 }

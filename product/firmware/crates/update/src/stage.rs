@@ -102,9 +102,13 @@ pub enum Phase {
     Idle,
     Receiving,
     Verified,
-    /// Aborted, abandoned, or a flash write failed: the staging area is discarded; the update
-    /// state lasts until a restart (A1.8).
+    /// Aborted or abandoned: the staging area is discarded; the update state lasts until a
+    /// restart, and UPDATE_BEGIN gets 58 (A1.8 "After UPDATE_ABORT").
     Discarded,
+    /// A write of the staging slot failed: the transfer is discarded and the update state lasts
+    /// until a restart, as after UPDATE_ABORT, but a new UPDATE_BEGIN is accepted (A1.8 "Write
+    /// failure"; 0043).
+    Failed,
     /// The boot record names the new image as the trial; a commanded reset follows.
     Activated,
 }
@@ -155,7 +159,7 @@ impl Stager {
         let s = match self.phase {
             Phase::Receiving => 1,
             Phase::Verified | Phase::Activated => 2,
-            Phase::Idle | Phase::Discarded => 0,
+            Phase::Idle | Phase::Discarded | Phase::Failed => 0,
         };
         (s, self.received(), self.count)
     }
@@ -186,7 +190,7 @@ impl Stager {
     /// When the update is abandoned if no update command comes first, `None` without one in
     /// progress: the caller wakes then, so that the limit acts within 100 ms (0073 point 2).
     pub fn abandon_due(&self) -> Option<u64> {
-        matches!(self.phase, Phase::Receiving | Phase::Verified | Phase::Discarded).then_some(self.last_ms + ABANDON_MS)
+        matches!(self.phase, Phase::Receiving | Phase::Verified | Phase::Discarded | Phase::Failed).then_some(self.last_ms + ABANDON_MS)
     }
 
     /// `UPDATE_BEGIN`. Nothing is written here (U-2). Returns the block count. The same package
@@ -274,7 +278,7 @@ impl Stager {
                 return Err(Refusal::RoomMade);
             }
             _ => {
-                self.phase = Phase::Discarded;
+                self.phase = Phase::Failed;
                 return Err(Refusal::VerifyFailed);
             }
         }
@@ -299,7 +303,7 @@ impl Stager {
             match cleared {
                 Some(Ok(())) => self.marked = false,
                 _ => {
-                    self.phase = Phase::Discarded;
+                    self.phase = Phase::Failed;
                     return Err(Refusal::VerifyFailed);
                 }
             }
@@ -331,7 +335,7 @@ impl Stager {
     pub(crate) fn block<F: FlashIo>(&mut self, io: &mut F, run: &Running, n: u32, crc_ok: bool, data: &[u8], now: u64) -> Result<u32, Refusal> {
         self.accepts(n, crc_ok, data.len() as u32)?;
         if self.put_block(io, run, n, data).is_err() {
-            self.phase = Phase::Discarded;
+            self.phase = Phase::Failed;
             return Err(Refusal::VerifyFailed);
         }
         // An accepted block cancels a good verify (0067).
