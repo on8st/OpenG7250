@@ -1920,7 +1920,7 @@
    "pending": [],
    "tx_part": false,
    "notes": [
-    "0072: the commit word of a C-3 write is taken as the last word it programs; the cases that need a store where C-3 was never written are a part (not run yet), and a sector left by a cut compaction then cut in its erase is a part (the start after the first cut erases it)"
+    "0072: the commit word of a C-3 write is taken as the last word it programs; the cases that need a store where C-3 was never written are a part (not run yet); a sector left by a write cut before its commit word, then cut in its erase, uses power.cut {during_erase, at_power_on: true}"
    ],
    "timeout_s": 2400
   },
