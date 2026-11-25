@@ -34,5 +34,12 @@ class Judge77(unittest.TestCase):
         self.assertTrue(any("live store sector" in b for b in bad), bad)
 
 
+class AbortImage(unittest.TestCase):
+    def test_within_the_slot(self):
+        for n in (1, 2, 4):
+            self.assertLess(t_flash.abort_image_len(n), n * S)
+        self.assertGreater(t_flash.abort_image_len(2), S)  # into the second sector
+
+
 if __name__ == "__main__":
     unittest.main()

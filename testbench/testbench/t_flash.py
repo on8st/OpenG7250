@@ -1227,6 +1227,12 @@ def judge_77(ctx, label: str, entries: list[dict], staging: tuple[int, int], sto
     ctx.check(f"{label}: no erase of the live store sector (the one with the newest store program)", not live_erased, f"{live_erased[:4]}")
 
 
+def abort_image_len(slot_sectors: int) -> int:
+    """The image of T-A1-77's aborted update: into a second sector of the staging slot where it has
+    two, and always within the slot (a length over it gets 61 at UPDATE_BEGIN)."""
+    return SECTOR + 100 if slot_sectors >= 2 else SECTOR // 2
+
+
 @test("T-A1-77")
 def t_a1_77(ctx: Ctx):
     """A1.8 "Slot size and the store" (0061): flash.log during a complete update (to the confirmed trial
@@ -1254,7 +1260,7 @@ def t_a1_77(ctx: Ctx):
         run, other, ver, lay = facts(ctx, u)
         staging = sectors_of(lay[other - 1])
         flog_start(ctx)
-        img = image(2 * SECTOR + 100, seed=771)
+        img = image(abort_image_len(lay[other - 1][1]), seed=771)
         r = u.begin(pkg(img, newer(ver), other))
         if ctx.eq("a second update begun", r["status"] if r else None, 0):
             u.blocks(img, 512)
