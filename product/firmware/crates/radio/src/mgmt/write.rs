@@ -418,9 +418,10 @@ impl<W: Words> Server<W> {
                     return (Status::Malformed, 0);
                 }
                 // No update state (no UPDATE_BEGIN accepted since the start, also in a trial
-                // image): 0 with restart needed 0; nothing changes, no 10-minute restart (A1.8;
-                // 0074).
+                // image): 0 with restart needed 0; nothing changes, no 10-minute restart; it is
+                // logged (A1.8 "No transfer in progress"; 0074 point 1).
                 if !ctx.update.begun() {
+                    self.log.push(now, format_args!("update abort by {a}.{b}.{c}.{d}:{}: no update state", src.1));
                     p[0] = 0;
                     return (Status::Ok, 1);
                 }

@@ -850,7 +850,8 @@ fn update_write_failure_is_55_and_logged_and_begin_in_trial_is_58() {
 #[test]
 fn update_abort_with_no_update_state_needs_no_restart_t_a1_80() {
     // A1.8 (0074): UPDATE_ABORT with no UPDATE_BEGIN accepted since the start gets 0 with
-    // restart needed 0, also in a trial image before confirmation, and changes nothing.
+    // restart needed 0, also in a trial image before confirmation, changes nothing and is
+    // logged.
     for trial in [false, true] {
         let mut s = Server::new();
         let mut w = World::new();
@@ -860,7 +861,9 @@ fn update_abort_with_no_update_state_needs_no_restart_t_a1_80() {
         assert_eq!((st, p), (Status::Ok, vec![0]), "trial {trial}");
         assert!(!w.up.began && w.up.received == 0, "nothing changed");
         let (_, log) = authed(&mut w, &mut s, HOST, 20, Command::ReadLog, &[0, 0, 0, 0], 2000);
-        assert!(!String::from_utf8_lossy(&log).contains("update aborted"), "not logged as an abort");
+        let log = String::from_utf8_lossy(&log);
+        assert!(log.contains("update abort by 192.168.1.5:50000: no update state"), "logged: {log}");
+        assert!(!log.contains("update aborted"), "not as the abort of an update");
     }
     // After an UPDATE_BEGIN it says a restart is needed.
     let mut s = Server::new();
