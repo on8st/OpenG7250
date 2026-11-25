@@ -103,6 +103,13 @@ impl Client {
         Client { state, xid, mac, link_local, lease, retry_at: None }
     }
 
+    /// A change into DHCP mode while running (A1.6 C-1): the address in use stays until a lease
+    /// comes; the first DISCOVER is due at once, and every exchange is a borrow of at most
+    /// [`WAIT_MS`] (A1.2, A1.11; 0041). `link_local` is the fall-back after a lease ends.
+    pub fn start(mac: [u8; 6], xid: u32, link_local: NetConfig, now: u64) -> Self {
+        Client { state: State::Init { attempt: 0, next_ms: now }, xid, mac, link_local, lease: None, retry_at: None }
+    }
+
     /// The link-local address the client falls back to (A1.11).
     pub fn link_local(&self) -> NetConfig {
         self.link_local

@@ -272,3 +272,26 @@ fn next_due_is_when_poll_acts() {
     // A silent server and a short lease: renewal at T1, rebinding at T2, the pauses, the end.
     run_both(bound(120), 200_000, 0);
 }
+
+#[test]
+fn a_change_into_dhcp_mode_keeps_the_address_until_a_lease_t_a1_86() {
+    // A1.6 C-1 from a static address into DHCP mode while running: no Use before a lease (the
+    // address in use stays), the first DISCOVER at once, each exchange within the borrow bound
+    // (A1.11; 0041), then retries with the back-off; a lease is then used.
+    let mut c = Client::start(MAC, 7, ll(), 50_000);
+    assert!(matches!(c.poll(50_000), Action::Send { msg: Msg::Discover, .. }));
+    assert!(c.listening());
+    let mut t = 50_000;
+    while c.listening() {
+        t += 10;
+        assert_eq!(c.poll(t), Action::None, "no address change without a lease");
+    }
+    assert!(t - 50_000 <= BORROW_TARGET_MS - RETURN_MS, "borrow {} ms", t - 50_000);
+    assert_eq!(c.poll(t + 3_990), Action::None);
+    assert!(matches!(c.poll(t + 4_000), Action::Send { msg: Msg::Discover, .. }), "the back-off from 4 s");
+    let x = c.xid;
+    assert!(matches!(c.on_reply(&reply(dhcp::OFFER, x, [192, 168, 1, 77], 3600), t + 4_100), Action::Send { .. }));
+    let a = c.on_reply(&reply(dhcp::ACK, x, [192, 168, 1, 77], 3600), t + 4_200);
+    assert_eq!(a, Action::Use(NetConfig { mode: Mode::Dhcp, ip: [192, 168, 1, 77], mask: [255, 255, 255, 0], gateway: SERVER }));
+    assert!(!c.listening());
+}

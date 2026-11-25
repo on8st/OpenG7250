@@ -112,6 +112,9 @@ pub enum Apply {
     Gateway,
     /// Another address or mode: the sockets close and the configuration comes up again.
     Reconfigure,
+    /// From a static address into DHCP mode: the address in use stays until a lease comes, the
+    /// DHCP client starts and borrows socket 7 at most 2 s per exchange.
+    StartDhcp,
 }
 
 /// The way to apply `want` over `current`. `dhcp_running`: the address in use is DHCP's, or
@@ -124,7 +127,7 @@ pub fn apply_plan(dhcp_running: bool, current: &NetConfig, want: &NetConfig) -> 
         }
         return Apply::Reconfigure;
     }
-    if dhcp_running { Apply::Keep } else { Apply::Reconfigure }
+    if dhcp_running { Apply::Keep } else { Apply::StartDhcp }
 }
 
 #[cfg(test)]
@@ -145,7 +148,8 @@ mod tests {
         // Another address, netmask or mode: brought up again.
         assert_eq!(apply_plan(false, &st, &NetConfig { ip: [192, 168, 1, 21], ..st }), Apply::Reconfigure);
         assert_eq!(apply_plan(false, &st, &NetConfig { mask: [255, 255, 0, 0], ..st }), Apply::Reconfigure);
-        assert_eq!(apply_plan(false, &st, &NetConfig::FACTORY), Apply::Reconfigure, "static to DHCP");
+        assert_eq!(apply_plan(false, &st, &NetConfig::FACTORY), Apply::StartDhcp, "static to DHCP: the address stays until a lease");
+        assert_eq!(apply_plan(false, &st, &NetConfig { mode: Mode::Static, ip: [0; 4], ..st }), Apply::StartDhcp, "not a usable host: DHCP");
         assert_eq!(apply_plan(true, &ll, &st), Apply::Reconfigure, "DHCP to static");
     }
 

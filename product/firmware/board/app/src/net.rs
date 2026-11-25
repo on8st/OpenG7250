@@ -1080,6 +1080,15 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                                         print_cfg(&cfg, Source::Static);
                                         continue;
                                     }
+                                    netcfg::Apply::StartDhcp => {
+                                        // The address in use stays until a lease comes; each
+                                        // exchange borrows socket 7 at most 2 s (A1.11; 0041).
+                                        // The lease is then an address change (dhcp_step).
+                                        let xid = u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]) ^ Instant::now().as_ticks() as u32;
+                                        dhcpc = Some(DhcpClient::start(mac, xid, claim.candidate(), Instant::now().as_millis()));
+                                        dhcp_borrowed = false;
+                                        continue;
+                                    }
                                     netcfg::Apply::Reconfigure => {}
                                 }
                                 let now = Instant::now().as_millis();
