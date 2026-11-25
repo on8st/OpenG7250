@@ -953,6 +953,12 @@ namespace Antmicro.Renode.Peripherals.SPI
         private int faultExc = -1;
         private ulong faultAtUs, faultUntilUs, faultInjUs, faultInjPc, faultInjXpsr, faultSamples;
         private string faultEntry;               // JSON of the first vector entry after the injection
+        private string faultInjMasks = "";       // FAULTMASK, BASEPRI, PRIMASK and the running priority at the injection
+        public const uint FaultStubSize = 0x1000;
+        // a UDF that does not trap (a fault the core cannot take: LOCKUP on the chip) runs on to the
+        // branch-to-self after it: the core stays in the stub, the state becomes "lockup"
+        public const ulong LockupCheckUs = 1000;
+        public const ulong LockupPc = 0xEFFFFFFE;
         private readonly List<ulong> faultHooks = new List<ulong>();
         private int xpsrIndex = -1;
 
@@ -986,6 +992,38 @@ namespace Antmicro.Renode.Peripherals.SPI
             return CpuRegister(cpu, xpsrIndex);
         }
 
+        private int RegIndex(Antmicro.Renode.Peripherals.CPU.ICPU cpu, string name)
+        {
+            var regs = cpu.GetType().GetMethod("GetRegisters");
+            if(regs == null) return -1;
+            foreach(var r in (System.Collections.IEnumerable)regs.Invoke(cpu, null))
+            {
+                var al = r.GetType().GetProperty("Aliases");
+                var names = al == null ? null : al.GetValue(r) as string[];
+                if(names != null && Array.Exists(names, n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase)))
+                    return Convert.ToInt32(r.GetType().GetProperty("Index").GetValue(r), CultureInfo.InvariantCulture);
+            }
+            return -1;
+        }
+
+        private string RegJson(Antmicro.Renode.Peripherals.CPU.ICPU cpu, string name)
+        {
+            int i = RegIndex(cpu, name);
+            if(i < 0) return "null";
+            try { return CpuRegister(cpu, i).ToString(CultureInfo.InvariantCulture); } catch(Exception) { return "null"; }
+        }
+
+        // the priority of the running exception (IPSR): NMI -2, HardFault -1, system handlers SHPR,
+        // interrupts NVIC_IPR (the raw byte); thread mode null
+        private string RunningPriority(ulong ipsr)
+        {
+            if(ipsr == 0) return "null";
+            if(ipsr == 2) return "-2";
+            if(ipsr == 3) return "-1";
+            if(ipsr < 16) return machine.SystemBus.ReadByte(0xE000ED18 + (ipsr - 4)).ToString(CultureInfo.InvariantCulture);
+            return machine.SystemBus.ReadByte(0xE000E400 + (ipsr - 16)).ToString(CultureInfo.InvariantCulture);
+        }
+
         private string FaultCommand(string[] w)
         {
             if(w.Length >= 2 && w[1] == "read") return "ok " + FaultRecord();
@@ -1007,23 +1045,28 @@ namespace Antmicro.Renode.Peripherals.SPI
             {
                 try { lock(faultSync)
                 {
-                    machine.SystemBus.WriteWord(FaultStub, 0xDE00);          // UDF #0
-                    machine.SystemBus.WriteWord(FaultStub + 2, 0xDE00);
+                    // the whole stub: UDF #0, a branch-to-self (B .) right after the first, UDF everywhere else
+                    var stub = new byte[FaultStubSize];
+                    for(int o = 0; o < stub.Length; o += 2) { stub[o] = 0x00; stub[o + 1] = 0xDE; }
+                    stub[2] = 0xFE; stub[3] = 0xE7;
+                    machine.SystemBus.WriteBytes(stub, FaultStub);
                     ulong now = NowUs();
                     if(at < now) at = now;
                     RemoveFaultHooks();
                     faultMode = mode; faultExc = exc; faultAtUs = at; faultUntilUs = at + within;
-                    faultInjUs = faultInjPc = faultInjXpsr = faultSamples = 0; faultEntry = null;
+                    faultInjUs = faultInjPc = faultInjXpsr = faultSamples = 0; faultEntry = null; faultInjMasks = ""; faultLockupPc = 0;
                     faultState = "armed";
                     // a new timer per arm, its limit the delay (a raised Limit of a descending LimitTimer
                     // is refused against its old value)
-                    if(faultTimer != null) { faultTimer.Enabled = false; faultTimer.LimitReached -= OnFaultTime; }
-                    ulong delta = at > now ? at - now : 1;
-                    faultTimer = new LimitTimer(machine.ClockSource, 1000000, this, "cpufault", delta,
-                                                direction: Direction.Descending, enabled: false,
-                                                workMode: WorkMode.Periodic, eventEnabled: true);
-                    faultTimer.LimitReached += OnFaultTime;
-                    faultTimer.Enabled = true;
+                    NewFaultTimer(at > now ? at - now : 1);
+                    if(lockupTimer == null)
+                    {
+                        lockupTimer = new LimitTimer(machine.ClockSource, 1000000, this, "cpufault-lockup", LockupCheckUs,
+                                                     direction: Direction.Descending, enabled: false,
+                                                     workMode: WorkMode.OneShot, eventEnabled: true);
+                        lockupTimer.LimitReached += OnLockupCheck;
+                    }
+                    lockupTimer.Enabled = false;
                     res = "ok " + at;
                 } }
                 catch(Exception e) { res = "err " + e.Message; }      // never out of the time source's thread
@@ -1032,6 +1075,47 @@ namespace Antmicro.Renode.Peripherals.SPI
             done.Wait(30000);
             return res ?? "err not armed (no synced state within 30 s)";
         }
+
+        // a new timer each time, its limit the delay (a raised Limit of a descending LimitTimer is refused
+        // against its old value); under faultSync
+        private void NewFaultTimer(ulong delta)
+        {
+            if(faultTimer != null) { faultTimer.Enabled = false; faultTimer.LimitReached -= OnFaultTime; }
+            faultTimer = new LimitTimer(machine.ClockSource, 1000000, this, "cpufault", delta,
+                                        direction: Direction.Descending, enabled: false,
+                                        workMode: WorkMode.Periodic, eventEnabled: true);
+            faultTimer.LimitReached += OnFaultTime;
+            faultTimer.Enabled = true;
+        }
+
+        private LimitTimer lockupTimer;
+        // LockupCheckUs after the injection with no vector entry: a core still in the stub is a lockup
+        private void OnLockupCheck()
+        {
+            string ev = null;
+            try
+            {
+                lock(faultSync)
+                {
+                    lockupTimer.Enabled = false;
+                    if(faultState != "injected") return;
+                    ulong pc0 = (ulong)Core().PC;
+                    faultLockupPc = pc0;
+                    this.Log(LogLevel.Info, "cpu.fault: no vector entry {0} us after the injection; PC 0x{1:X8}", LockupCheckUs, pc0);
+                    // in the stub (the UDF ran on to the branch-to-self) or at 0xEFFFFFFE, the address the
+                    // architecture gives a locked-up core (Armv7-M: LOCKUP), which Renode uses as well
+                    if((pc0 >= FaultStub && pc0 < FaultStub + FaultStubSize) || pc0 == LockupPc)
+                    {
+                        RemoveFaultHooks();
+                        faultState = "lockup";
+                        ev = string.Format(CultureInfo.InvariantCulture, "\"kind\": \"fault\", \"result\": \"lockup\", \"pc\": \"0x{0:X8}\"", pc0);
+                    }
+                }
+            }
+            catch(Exception e) { lock(faultSync) faultState = "error: " + e.Message.Replace("\"", "'"); }
+            if(ev != null) lock(sync) { if(tracing) Send("ev " + Event(ev)); }
+        }
+        private ulong faultLockupPc;
 
         private void OnFaultTime()
         {
@@ -1060,9 +1144,13 @@ namespace Antmicro.Renode.Peripherals.SPI
                 {
                     faultTimer.Enabled = false;
                     faultInjUs = now; faultInjPc = (ulong)cpu.PC; faultInjXpsr = x;
+                    faultInjMasks = string.Format(CultureInfo.InvariantCulture, ", \"faultmask\": {0}, \"basepri\": {1}, \"primask\": {2}, \"priority\": {3}",
+                                                  RegJson(cpu, "FAULTMASK"), RegJson(cpu, "BASEPRI"), RegJson(cpu, "PRIMASK"), RunningPriority(ipsr));
                     ArmFaultHooks(cpu);
                     cpu.PC = FaultStub;
                     faultState = "injected";
+                    lockupTimer.Value = LockupCheckUs;
+                    lockupTimer.Enabled = true;
                     ev = string.Format(CultureInfo.InvariantCulture, "\"kind\": \"fault\", \"result\": \"injected\", \"pc\": \"0x{0:X8}\", \"ipsr\": {1}", faultInjPc, ipsr);
                 }
             }
@@ -1127,9 +1215,10 @@ namespace Antmicro.Renode.Peripherals.SPI
                 var sb = new StringBuilder();
                 sb.AppendFormat(CultureInfo.InvariantCulture, "{{\"state\": \"{0}\", \"mode\": \"{1}\", \"exception\": {2}, \"at_us\": {3}, \"until_us\": {4}, \"samples\": {5}",
                                 faultState, faultMode, faultExc < 0 ? "null" : faultExc.ToString(CultureInfo.InvariantCulture), faultAtUs, faultUntilUs, faultSamples);
-                if(faultInjUs != 0 || faultState == "injected" || faultState == "entered")
-                    sb.AppendFormat(CultureInfo.InvariantCulture, ", \"injected\": {{\"t_us\": {0}, \"pc\": \"0x{1:X8}\", \"ipsr\": {2}, \"stub\": \"0x{3:X8}\"}}",
-                                    faultInjUs, faultInjPc, faultInjXpsr & 0x1FF, FaultStub);
+                if(faultInjUs != 0 || faultState == "injected" || faultState == "entered" || faultState == "lockup")
+                    sb.AppendFormat(CultureInfo.InvariantCulture, ", \"injected\": {{\"t_us\": {0}, \"pc\": \"0x{1:X8}\", \"ipsr\": {2}, \"stub\": \"0x{3:X8}\"{4}}}",
+                                    faultInjUs, faultInjPc, faultInjXpsr & 0x1FF, FaultStub, faultInjMasks);
+                if(faultLockupPc != 0) sb.AppendFormat(CultureInfo.InvariantCulture, ", \"no_entry_pc\": \"0x{0:X8}\"", faultLockupPc);
                 sb.Append(", \"entry\": " + (faultEntry ?? "null") + "}");
                 return sb.ToString();
             }
@@ -1141,6 +1230,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             lock(faultSync)
             {
                 if(faultTimer != null) faultTimer.Enabled = false;
+                if(lockupTimer != null) lockupTimer.Enabled = false;
                 RemoveFaultHooks();
                 if(faultState == "armed" || faultState == "injected") faultState = "dropped";
             }
@@ -1227,7 +1317,8 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(w.Length >= 2 && w[1] == "timing") return "ok " + (string)t.GetMethod("TimingJson").Invoke(ft, null);
             if(w.Length >= 6 && w[1] == "fault")
             {
-                var e = (string)t.GetMethod("Fault").Invoke(ft, new object[] { w[2], long.Parse(w[3], CultureInfo.InvariantCulture), w[4] == "-" ? "" : w[4], w[5] == "1" });
+                var e = (string)t.GetMethod("Fault").Invoke(ft, new object[] { w[2], long.Parse(w[3], CultureInfo.InvariantCulture), w[4] == "-" ? "" : w[4], w[5] == "1",
+                                                                        w.Length >= 7 ? long.Parse(w[6], CultureInfo.InvariantCulture) : -1L });
                 return e == null ? "ok" : "err " + e;
             }
             if(w.Length >= 4 && w[1] == "dump") return (string)t.GetMethod("Dump").Invoke(ft, new object[] { Convert.ToInt64(w[2], 16), int.Parse(w[3], CultureInfo.InvariantCulture) });
@@ -1253,7 +1344,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(w.Length >= 3 && w[1] == "cut-words-notify") { t.GetProperty("NotifyCut").SetValue(ft, true); t.GetMethod("CutAfterWords").Invoke(ft, new object[] { long.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok"; }
             if(w.Length >= 3 && w[1] == "cut-erase-notify") { t.GetProperty("NotifyCut").SetValue(ft, true); t.GetMethod("CutDuringErase").Invoke(ft, new object[] { double.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok"; }
             if(w.Length >= 3 && w[1] == "cut-address-notify") { t.GetProperty("NotifyCut").SetValue(ft, true); t.GetMethod("CutAtAddress").Invoke(ft, new object[] { Convert.ToInt64(w[2], 16) }); return "ok"; }
-            return "err usage: ft info | cut-words K | cut-erase F | log FROM | timing | erase-us US | fault OP AFTER FLAG NEVER | ecc ADDR TYPE | corrupt ADDR XOR [restore]";
+            return "err usage: ft info | cut-words K | cut-erase F | log FROM | timing | erase-us US | fault OP AFTER FLAG NEVER [END_US] | ecc ADDR TYPE | corrupt ADDR XOR [restore]";
         }
 
         private string WatchdogReset()

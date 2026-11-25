@@ -273,15 +273,23 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         };
         private uint errFlags;
         private bool pendingEop;
-        private string faultOp; private long faultAfter; private string faultFlag; private bool faultNeverEnd;
+        private string faultOp; private long faultAfter; private string faultFlag; private bool faultNeverEnd; private long faultEndAfterUs = -1;
         private uint eccFa;
-        public string Fault(string op, long after, string flag, bool neverEnd)
+        // endAfterUs: -1 none; else end_after_us (decision 0081): the erase runs that long in emulated
+        // time and then ends with no error flag, its entry "late" with duration_us
+        public string Fault(string op, long after, string flag, bool neverEnd, long endAfterUs)
         {
             if(op != "erase" && op != "program") return "op must be erase or program";
             if(neverEnd && op != "erase") return "never_end is for op erase only (a word's programming has no duration here)";
+            if(endAfterUs != -1)
+            {
+                if(op != "erase") return "end_after_us is for op erase only (a word's programming has no duration here)";
+                if(!string.IsNullOrEmpty(flag) || neverEnd) return "end_after_us goes with neither flag nor never_end";
+                if(endAfterUs < 1) return "end_after_us must be 1 or more";
+            }
             if(flag != null && flag != "" && !Flags.ContainsKey(flag)) return "unknown flag " + flag + " (RM0468 SR1 names)";
-            if(string.IsNullOrEmpty(flag) && !neverEnd) return "a flag or never_end is needed";
-            lock(sync) { faultOp = op; faultAfter = Math.Max(0, after); faultFlag = flag ?? ""; faultNeverEnd = neverEnd; }
+            if(string.IsNullOrEmpty(flag) && !neverEnd && endAfterUs == -1) return "a flag, never_end or end_after_us is needed";
+            lock(sync) { faultOp = op; faultAfter = Math.Max(0, after); faultFlag = flag ?? ""; faultNeverEnd = neverEnd; faultEndAfterUs = endAfterUs; }
             return null;
         }
         private bool TakeFault(string op)
@@ -607,7 +615,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 + (bank ? "" : ", \"sector\": " + Sector(eraseAddr) + ", \"address\": \"0x" + eraseAddr.ToString("X8") + "\", \"len\": " + eraseSize)
                 + ", \"t_end_us\": " + tEnd + ", \"result\": \"" + result + "\"" + eraseResultExtra + ", \"fpga_bus\": \"" + eraseFpga + "\""
                 + ", \"wall_s\": " + (DateTime.UtcNow - eraseWall0).TotalSeconds.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture)
-                + ", \"fetch_stalls\": " + FetchesDuringErase + ", \"sr1_reads\": " + sr1InErase + ", \"instructions\": " + (Instr() - instr0)
+                + ", \"fetch_stalls\": " + FetchesDuringErase + ", \"sr1_reads\": " + sr1InErase + ", \"instructions\": " + (result == "reset" ? "null" : (Instr() - instr0).ToString())
                 + (EraseMipsDivisor > 1 ? ", \"core_mips_divisor\": " + EraseMipsDivisor : "") + "}";
         }
         private string eraseFpga = "unknown";
@@ -666,7 +674,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 lastProg = 0;
                 if(erasing) { SetEraseResult("reset", NowUs()); }
                 SlowCore(false);
-                erasing = false; neverEnding = false; lastCr1 = LOCK; keyStep = 0; errFlags = 0; pendingEop = false; eopSeen = false;
+                erasing = false; neverEnding = false; eraseLateUs = 0; lastCr1 = LOCK; keyStep = 0; errFlags = 0; pendingEop = false; eopSeen = false;
                 // An MCU reset (SYSRESETREQ, the watchdog) takes the core's bus watchpoints away; the
                 // marks stay. They are installed again here, before the core runs (the reset is
                 // carried out between the core's blocks, not inside a store), also after a reset
@@ -873,6 +881,8 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             bool fault = TakeFault("erase");
             eraseFaultFlag = fault ? faultFlag : null;
             bool never = fault && faultNeverEnd;
+            eraseLateUs = fault && faultEndAfterUs > 0 ? (ulong)faultEndAfterUs : 0;
+            if(eraseLateUs > 0) { us = eraseLateUs; eraseFaultFlag = null; }   // end_after_us: N us, then the end with no flag
             Add(EraseEntry(addr, size, us, "running", never));
             lastProg = 0;
             eraseAddr = addr; eraseSize = size; eraseUs = us;
@@ -922,6 +932,7 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         private string eraseFaultFlag;
         private bool neverEnding;
+        private ulong eraseLateUs;
 
         // the erase's end: the sector erased (0xFF), or with a fault flag left as it was
         private void FinishErase()
@@ -937,9 +948,10 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
                 Fill(eraseAddr, eraseSize);
                 ClearEcc(eraseAddr, eraseSize);
                 for(ulong i = 0; i < eraseSize; i++) shadow[(int)(eraseAddr - FlashBase + i)] = 0xFF;
-                SetEraseResult("ok", NowUs());
+                if(eraseLateUs > 0) eraseResultExtra = ", \"duration_us\": " + eraseLateUs;
+                SetEraseResult(eraseLateUs > 0 ? "late" : "ok", NowUs());
             }
-            eraseFaultFlag = null;
+            eraseFaultFlag = null; eraseLateUs = 0;
             pendingEop = true;
         }
 

@@ -1163,7 +1163,13 @@ class FixtureServer:
             fop = args.get("op")
             after = int(args.get("after") or 0)
             flag = args.get("flag") or "-"
-            r = agent.ask("ft fault %s %d %s %d" % (fop, after, flag, 1 if args.get("never_end") else 0)) if agent else None
+            end = args.get("end_after_us")
+            if end is not None and (isinstance(end, bool) or not isinstance(end, int)):
+                return {"ok": False, "error": "end_after_us must be an integer (us of emulated time)"}
+            if end is not None and end < 1:
+                return {"ok": False, "error": "end_after_us must be 1 or more"}
+            r = agent.ask("ft fault %s %d %s %d %d" % (fop, after, flag, 1 if args.get("never_end") else 0,
+                                                     -1 if end is None else end)) if agent else None
             if not r or not r.startswith("ok"):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True}

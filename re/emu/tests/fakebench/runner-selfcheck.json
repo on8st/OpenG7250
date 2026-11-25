@@ -270,6 +270,16 @@
    "timeout_s": 240
   },
   {
+   "id": "T-EMU-34",
+   "title": "flash.fault end_after_us (decision 0081): an erase that runs N us of emulated time and then ends with no error flag, flash.log result late with duration_us; the refusals; used once",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 240
+  },
+  {
    "id": "T-EMU-25",
    "title": "flash.log entries end at a reset and a pause; an erase clears ECC marks; net.endpoint whole; net.log order; CYCCNT against the timers over masked erases",
    "reqs": [

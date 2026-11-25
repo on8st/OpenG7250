@@ -461,6 +461,8 @@ def run_test(tid, ep):
                          f3.get("ok") and w is not None and n is None and len(during) == 1 and during[0].get("t_end_us", 0) is None, str((f3, w, n, during))))
         out.append(check("the watchdog reset ends it: the image runs again, RCC_RSR IWDG1RSTF and PINRSTF only", back[0] == (1 << 26 | 1 << 22), str(back)))
         out.append(check("flash.log: that erase has result reset", ends and ends[-1]["result"] == "reset", str(ends[-1:])))
+        out.append(check("flash.log: an erase a reset ends has no instruction count (null: Renode's count starts again at the reset)",
+                         ends and "instructions" in ends[-1] and ends[-1]["instructions"] is None, str(ends[-1:])))
         m2 = words(cmd(b"FM"))
         out.append(check("AXI SRAM kept over the watchdog reset", m2 == (0x4B455054, 0x4B455055), "%s then %s" % (m1, m2)))
         e4 = words(cmd(b"FE"))
@@ -1365,6 +1367,86 @@ def run_test(tid, ep):
         # the end: one armed and never used (the fixture log says: not armed)
         ctl.op("power.cut", during_erase=0.5, at_power_on=True)
         return out
+    if tid in ("T-EMU-34", "T-EMU-35"):
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + (19 if tid == "T-EMU-34" else 20)))
+
+        def cmd(payload, wait=20.0, again=False):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(1.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def words(d):
+            return tuple(int.from_bytes(d[i:i + 4], "big") for i in range(2, len(d) - 3, 4)) if d else ()
+
+        cmd(b"FR", again=True, wait=60.0)
+    if tid == "T-EMU-34":
+        # flash.fault {op erase, end_after_us N} (decision 0081): the erase runs N us of emulated time, then
+        # ends with no error flag; flash.log names it "late" with duration_us; refused with a flag, with
+        # never_end, for N < 1 and for op program; used once
+        ERRS, FF, N = 0x1FE << 16, 0xFFFFFFFF, 300000
+        bad = [ctl.op("flash.fault", op="erase", end_after_us=N, flag="PGSERR"),
+               ctl.op("flash.fault", op="erase", end_after_us=N, never_end=True),
+               ctl.op("flash.fault", op="erase", end_after_us=0),
+               ctl.op("flash.fault", op="erase", end_after_us=-5),
+               ctl.op("flash.fault", op="program", end_after_us=N),
+               ctl.op("flash.fault", op="erase", end_after_us="300000")]
+        ctl.op("flash.log", action="start")
+        cmd(b"FP\x03")                                  # a word to erase
+        f = ctl.op("flash.fault", op="erase", end_after_us=N)
+        e1 = words(cmd(b"FE", wait=60.0))
+        e2 = words(cmd(b"FE", wait=60.0))               # the fault is used once
+        ers = [x for x in (ctl.op("flash.log", action="read").get("value") or {}).get("entries", []) if x.get("op") == "erase"]
+        late = ers[-2] if len(ers) >= 2 else {}
+        nxt = ers[-1] if ers else {}
+        return [check("refused: with flag, with never_end, N 0 and -5, op program, N not an integer", all(b.get("ok") is False for b in bad), str(bad)),
+                check("accepted; the erase answers with no error flag and the sector erased", f.get("ok") and len(e1) >= 2 and not e1[0] & ERRS and e1[1] == FF,
+                      "%s %s" % (f, e1)),
+                check("flash.log: result late, duration_us N, and it ran N us of emulated time (within 100 us, as a normal erase's entry)",
+                      late.get("result") == "late" and late.get("duration_us") == N and late.get("t_end_us") is not None
+                      and abs(late["t_end_us"] - late["t_us"] - N) <= 100, str(late)),
+                check("the next erase is a normal one (the fault used once): result ok", nxt.get("result") == "ok" and len(e2) >= 2 and not e2[0] & ERRS,
+                      "%s %s" % (nxt, e2))]
+    if tid == "T-EMU-35":
+        # cpu.fault in a handler that runs with FAULTMASK set (net_test FN): a fault the core cannot take
+        # (LOCKUP on the chip). The stub is UDF everywhere with a branch-to-self after the first: whatever
+        # Renode does with the UDF there, the core stays in the stub or enters a fault vector, never runs off
+        # it. The state names it (lockup or entered); FAULTMASK, BASEPRI, PRIMASK and the running priority at
+        # the injection are recorded; a watchdog reset brings the image back and the state stays
+        a = ctl.op("cpu.fault", in_us=0, mode="handler", exception=44, within_us=3000000)
+        cmd(b"FN\x32", wait=1.0)
+        time.sleep(2.0)
+        r = ctl.op("cpu.fault", read=True).get("value") or {}
+        inj = r.get("injected") or {}
+        w = ctl.op("reset.wdt")
+        back = cmd(b"FR", again=True, wait=60.0)
+        r2 = ctl.op("cpu.fault", read=True).get("value") or {}
+        ints = all(isinstance(inj.get(k), int) for k in ("faultmask", "basepri", "primask", "priority"))
+        return [check("armed and injected in exception 44", a.get("ok") and inj.get("ipsr") == 44, "%s %s" % (a, r)),
+                check("FAULTMASK 1 at the injection; BASEPRI, PRIMASK and the running priority recorded as numbers",
+                      ints and inj.get("faultmask") == 1, str(inj)),
+                check("the state names what happened: lockup (no entry) or entered (an entry)",
+                      (r.get("state") == "lockup" and r.get("entry") is None) or (r.get("state") == "entered" and r.get("entry") is not None),
+                      "state %s entry %s" % (r.get("state"), r.get("entry"))),
+                check("no abort: after a watchdog reset the image answers again, and the state is kept",
+                      w.get("ok") and back is not None and r2.get("state") == r.get("state"), "reset %s, answer %s, state %s" % (w, back is not None, r2.get("state")))]
     if tid == "T-EMU-33":
         # an ECC mark set before an MCU reset (software reset, SYSRESETREQ) is in force at once after
         # it: a byte read of the marked word shows DBECCERR, with no program before the reset and with

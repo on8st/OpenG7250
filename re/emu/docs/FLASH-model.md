@@ -66,12 +66,17 @@ characteristics" (format v1.8 build).
   of fw-01a108d and earlier show such merged entries), `option_write` (always refused: an
   OPTSTART is not carried out), `ecc`, `corrupt`. Every erase and program carries `fpga_bus`:
   `open` when STB (PE9, his/80) is an output driven low at its start, else `idle`.
-- **flash.fault {op, after, flag, never_end}**: the next matching operation (after `after`
+- **flash.fault {op, after, flag, never_end, end_after_us}**: the next matching operation (after `after`
   more) sets the RM0468 SR1 flag (WRPERR PGSERR STRBERR INCERR RDPERR RDSERR SNECCERR
   DBECCERR CRCRDERR; CCR1 clears it). An erase with a flag leaves the sector as it was; a
   program with a flag leaves the word as it was; `never_end` (op erase only, no flag
   needed; refused for op program) keeps BSY and QW set until a reset (fetches from the
-  bank stall meanwhile); its entry is `running` with t_end_us null, then `reset`. Other
+  bank stall meanwhile); its entry is `running` with t_end_us null, then `reset` (with
+  `instructions` null: Renode's count starts again at the reset). `end_after_us N` (decision
+  0081; op erase only, with neither flag nor never_end, N >= 1): the erase runs N us of emulated
+  time instead of its own duration (BSY and QW set, fetches from the bank stall, a power.cut
+  during_erase lands at its fraction of N) and then ends with no error flag, the sector erased;
+  its entry is `late` with `duration_us` N (T-EMU-34). Other
   running erases are listed with result `running` and the predicted t_end_us. A reset
   during an erase leaves the sector as it was (a power cut erases the fraction done).
 - **flash.ecc {address, type}** and torn words: reads of that 32-byte word (sysbus read

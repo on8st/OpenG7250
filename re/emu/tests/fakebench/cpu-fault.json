@@ -16,6 +16,16 @@
    "target": "emulator",
    "scope": "v1.0",
    "timeout_s": 400
+  },
+  {
+   "id": "T-EMU-35",
+   "title": "cpu.fault in a handler with FAULTMASK set (a fault the core cannot take): the stub of UDF and a branch-to-self keeps the core in it or a fault vector, state lockup or entered, FAULTMASK, BASEPRI, PRIMASK and the priority recorded, the image back after a watchdog reset",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 240
   }
  ],
  "note": "The image is firmware-tests/bench/net_test.c: its HardFault and UsageFault handlers keep the frame and reset by SYSRESETREQ (FF reads it). The stacked PC names the emulator's stub, not the image's code."

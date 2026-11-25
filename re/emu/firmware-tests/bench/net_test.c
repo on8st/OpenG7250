@@ -77,6 +77,7 @@ static void wr16(uint16_t a, uint8_t bsb, uint16_t v) { uint8_t b[2] = { (uint8_
  *             -> SR1 after the first read, SR1 after the second
  *   FS        word 9 and SR1 as the very first code of this start read them -> word, SR1
  *   FH n      TIM2's interrupt (exception 44) pended; its handler spins about n ms -> 0
+ *   FN n      as FH, with FAULTMASK set while the handler spins -> 0
  *   FU        UsageFault enabled (SHCSR USGFAULTENA) -> SHCSR
  *   FF        the kept record of the last fault (the handler keeps it, then resets by SYSRESETREQ)
  *             -> count, CFSR, HFSR, IPSR at entry, stacked PC, stacked IPSR, EXC_RETURN, the fault's mark
@@ -164,11 +165,13 @@ __attribute__((naked)) void usagefault_handler(void)
     __asm volatile ("tst lr, #4\n ite eq\n mrseq r0, msp\n mrsne r0, psp\n mrs r1, ipsr\n mov r2, lr\n b fault_keep\n");
 }
 
-static volatile uint32_t spin_ms;
+static volatile uint32_t spin_ms, spin_fm;
 void TIM2_IRQHandler(void)
 {
     REG(0xE000E180u) = 1u << 28;          /* ICER0: once */
+    if(spin_fm) __asm volatile ("cpsid f");   // FN: FAULTMASK set while it spins (T-EMU-35)
     for(volatile uint32_t k = 0; k < spin_ms * 6400u; k++) {}
+    if(spin_fm) __asm volatile ("cpsie f");
 }
 
 static uint16_t command(uint8_t *d, uint16_t len)
@@ -274,9 +277,10 @@ static uint16_t command(uint8_t *d, uint16_t len)
         W32(0x2401E700u) = 0x4B455054u; W32(0x2401FFFCu) = 0x4B455055u;
     }
     else if(d[1] == 'X') { REG(0xE000ED0Cu) = 0x05FA0004u; for(;;) {} }
-    else if(d[1] == 'H' && len >= 3)
+    else if((d[1] == 'H' || d[1] == 'N') && len >= 3)
     {
         spin_ms = d[2];
+        spin_fm = d[1] == 'N';
         REG(0xE000E100u) = 1u << 28;      /* ISER0: TIM2 */
         REG(0xE000E200u) = 1u << 28;      /* ISPR0: pended, taken at once */
         __asm volatile ("dsb\n isb\n");

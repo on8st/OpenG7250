@@ -237,28 +237,39 @@ and does not call it yet.
   then every 10 us of emulated time until `at_us + within_us`. When it is the mode asked for (thread:
   IPSR 0; handler: IPSR not 0, or the one `exception` number given, 2 to 178; any), the PC is set to
   an undefined instruction (UDF) in the emulator's own stub memory at 0x0FFF0000 (a range the chip
-  leaves reserved; a fetch there on the chip would itself fault). The core takes the fault as for an
+  leaves reserved; a fetch there on the chip would itself fault). The whole stub (4 KiB) is UDF, with a
+  branch-to-self (B .) right after the first: a UDF that does not trap stays in the stub, it does not run
+  off its end (until 2026-11-25 the rest was zero words: T-A3-62 ran on to 0x0FFF1000 and Renode aborted
+  the machine). The core takes the fault as for an
   undefined instruction: HardFault with HFSR FORCED and CFSR UNDEFINSTR, or UsageFault when the image
   has set USGFAULTENA. The registers and the stack are the image's; the stacked PC names the stub,
   not the image's code (way (b), a patched instruction, is not built: the stacked PC is not judged).
 - `cpu.fault {read: true}` → `{state, mode, exception, at_us, until_us, samples, injected: {t_us, pc,
-  ipsr, stub}, entry: {t_us, exception, handler, cfsr, hfsr, stacked_pc, stacked_ipsr}}`; `state` is
-  `armed`, `injected`, `entered` (the first entry of the HardFault, MemManage, BusFault or UsageFault
-  vector after it), `missed` (the mode did not come within the window; nothing done) or `dropped`
-  (an MCU reset before the injection, or between the injection and the entry). A power cycle starts a
+  ipsr, stub, faultmask, basepri, primask, priority}, no_entry_pc?, entry: {t_us, exception, handler,
+  cfsr, hfsr, stacked_pc, stacked_ipsr}}`; `priority` is the running exception's (NMI -2, HardFault -1,
+  else the SHPR or NVIC_IPR byte; null in thread mode). `state` is `armed`, `injected`, `entered` (the
+  first entry of the HardFault, MemManage, BusFault or UsageFault vector after it), `lockup` (1 ms of
+  emulated time after the injection no entry came and the core is in the stub or at 0xEFFFFFFE, the
+  address the architecture gives a locked-up core; `no_entry_pc` is the PC then; the core stays there
+  until a reset, e.g. the watchdog's), `missed` (the mode did not come within the window; nothing done)
+  or `dropped` (an MCU reset before the injection, or between the injection and the entry; a lockup
+  stays `lockup` over the reset). A power cycle starts a
   new emulator, without the fixture. A new call replaces an armed one. In `hw.trace` the events
-  `{"kind": "fault", "result": "injected"|"missed", ...}` and `{"kind": "fault_entry", exception}`.
+  `{"kind": "fault", "result": "injected"|"missed"|"lockup", ...}` and `{"kind": "fault_entry", exception}`.
 - The sampling step is 10 us: a handler shorter than that can be missed for a long time, and the
   first instruction of a handler is not hit on purpose (a hook at the handler's address would do
   that; not built). The entry latency is not cycle-true. Not modelled: bus faults (also imprecise
   ones), MemManage without a real MPU violation, stacking and unstacking faults, lazy FP stacking,
-  LOCKUP (a fault inside HardFault or with FAULTMASK set; what Renode does there is not known, so no
-  test may rest on it). A fault while the core is stalled by a fetch during a masked erase lands at the
+  LOCKUP as the chip does it (a fault inside HardFault or with FAULTMASK set): Renode 1.17 puts the PC
+  at 0xEFFFFFFE with no vector entry (T-EMU-35: a fault in a handler with FAULTMASK 1); the fixture names
+  it `lockup`, but what the chip does after it (the debug state, the reset) is not modelled, so no test
+  may rest on more than "the image stops until a reset". A fault while the core is stalled by a fetch during a masked erase lands at the
   polling loop's fetch from RAM.
 - Checked by T-EMU-29 (tests/fakebench/cpu-fault.json, m1_smoke step [12]) against the bench image
   net_test.c: thread mode, the handler of exception 44, UsageFault, a missed window, a reset before the
   time, and the image's own handler seeing the same frame (IPSR, CFSR, HFSR, stacked PC and IPSR,
-  EXC_RETURN). Every call is in fixture-log.jsonl.
+  EXC_RETURN). T-EMU-35 (same list): a fault in the handler of exception 44 with FAULTMASK set (net_test
+  FN): lockup, the masks and the priority recorded, the image back after a watchdog reset. Every call is in fixture-log.jsonl.
 
 ## The emulator process
 
@@ -270,7 +281,7 @@ hang of the image.
 
 ## Format v1.8 (part 3): the flash controller fixtures
 
-`flash.log`, `flash.timing`, `flash.fault`, `flash.ecc`, `power.cut
+`flash.log`, `flash.timing`, `flash.fault` (also `{op: erase, end_after_us}`, decision 0081), `flash.ecc`, `power.cut
 {after_flash_words | during_erase | at_address}` (also `{during_erase | after_flash_words,
 at_power_on: true}`, for the next power-on), `slot.corrupt`, `ch394.silent`;
 the endpoint carries `flash_timing {erase_us, program_us, t_erase_max_us, source}`,
