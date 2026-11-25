@@ -1070,6 +1070,18 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         match e {
                             g7250_radio::mgmt::Effect::ApplyNetwork => {
                                 let want = crate::mgmt_init::network_from_config(&mgmt.config);
+                                // Only another address closes the sockets: socket 7 stays open
+                                // apart from DHCP borrows of at most 2 s (A1.2, A1.11; 0041).
+                                match netcfg::apply_plan(dhcpc.is_some(), &cfg, &want) {
+                                    netcfg::Apply::Keep => continue,
+                                    netcfg::Apply::Gateway => {
+                                        let _ = chip.set_ip(want.ip, want.mask, want.gateway);
+                                        cfg = want;
+                                        print_cfg(&cfg, Source::Static);
+                                        continue;
+                                    }
+                                    netcfg::Apply::Reconfigure => {}
+                                }
                                 let now = Instant::now().as_millis();
                                 p2.address_changed(&mut chip, now);
                                 close_all(&mut chip);

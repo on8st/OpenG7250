@@ -101,9 +101,53 @@ pub fn link_local(mac: [u8; 6], attempt: u32) -> NetConfig {
     NetConfig { mode: Mode::Static, ip: ip_of(v), mask: [255, 255, 0, 0], gateway: [0; 4] }
 }
 
+/// How a stored C-1 change is applied while running, after the reply (A1.6). Socket 7 is open
+/// whenever the network is up, apart from a DHCP borrow of at most 2 s (A1.2, A1.11; 0041), so
+/// only a change of the address in use closes the sockets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Apply {
+    /// Nothing changes on the chip: DHCP stays the address mode and its client goes on.
+    Keep,
+    /// The same static address and netmask: only the gateway is set; no socket closes.
+    Gateway,
+    /// Another address or mode: the sockets close and the configuration comes up again.
+    Reconfigure,
+}
+
+/// The way to apply `want` over `current`. `dhcp_running`: the address in use is DHCP's, or
+/// the link-local fall-back with the DHCP client running. A static `want` that is not a usable
+/// host is brought up as DHCP, as at the start.
+pub fn apply_plan(dhcp_running: bool, current: &NetConfig, want: &NetConfig) -> Apply {
+    if want.mode == Mode::Static && valid_host(want.ip, want.mask) {
+        if !dhcp_running && current.ip == want.ip && current.mask == want.mask {
+            return if current.gateway == want.gateway { Apply::Keep } else { Apply::Gateway };
+        }
+        return Apply::Reconfigure;
+    }
+    if dhcp_running { Apply::Keep } else { Apply::Reconfigure }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_c1_change_closes_the_sockets_only_for_another_address_t_a1_86() {
+        let st = NetConfig { mode: Mode::Static, ip: [192, 168, 1, 20], mask: [255, 255, 255, 0], gateway: [192, 168, 1, 1] };
+        let ll = link_local([2, 0, 0, 0, 0x72, 0x50], 0);
+        // DHCP (or its link-local fall-back) in use, the stored mode still DHCP: a gateway
+        // item, or any other C-1 item that leaves the mode, changes nothing on the chip.
+        assert_eq!(apply_plan(true, &ll, &NetConfig::FACTORY), Apply::Keep);
+        assert_eq!(apply_plan(true, &ll, &NetConfig { mode: Mode::Static, ip: [0; 4], ..NetConfig::FACTORY }), Apply::Keep, "not a usable host: DHCP");
+        // The same static address: the gateway in place, or nothing.
+        assert_eq!(apply_plan(false, &st, &NetConfig { gateway: [192, 168, 1, 254], ..st }), Apply::Gateway);
+        assert_eq!(apply_plan(false, &st, &st), Apply::Keep);
+        // Another address, netmask or mode: brought up again.
+        assert_eq!(apply_plan(false, &st, &NetConfig { ip: [192, 168, 1, 21], ..st }), Apply::Reconfigure);
+        assert_eq!(apply_plan(false, &st, &NetConfig { mask: [255, 255, 0, 0], ..st }), Apply::Reconfigure);
+        assert_eq!(apply_plan(false, &st, &NetConfig::FACTORY), Apply::Reconfigure, "static to DHCP");
+        assert_eq!(apply_plan(true, &ll, &st), Apply::Reconfigure, "DHCP to static");
+    }
 
     #[test]
     fn broadcast_and_subnet() {
