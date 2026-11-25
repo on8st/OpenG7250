@@ -162,6 +162,10 @@ impl<W: Words> Server<W> {
         for l in self.log.from(first) {
             let e = payload::LogEntry { seq: l.seq, uptime_ms: l.uptime_ms, text: l.text() };
             if at + e.encoded_len() > room {
+                // Entries after this page exist at the time of the reply: flag bit 1 ("more
+                // blocks follow"); the follower asks again from the next sequence number (A1.7;
+                // 0074 point 6).
+                self.more = true;
                 break;
             }
             at += e.encode(&mut p[at..]).unwrap_or(0);

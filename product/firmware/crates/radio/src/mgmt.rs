@@ -315,6 +315,9 @@ pub struct Server<W = [u64; logring::WORDS]> {
     /// The radio's address and netmask at the last request: a change of either ends the write
     /// session and drops the challenges and stored replies (A1.10; 0074 point 9).
     own: Option<([u8; 4], [u8; 4])>,
+    /// The `READ_LOG` page being built left entries after it: flag bit 1 in its reply (A1.7;
+    /// 0074 point 6).
+    more: bool,
     /// A commanded reset is under way (A1.9 "One commanded reset at a time").
     reset_pending: bool,
     /// The challenge the current authenticated request used (`CHANGE_SECRET` mask, Table M-1).
@@ -400,6 +403,7 @@ impl<W: logring::Words> Server<W> {
             writer: None,
             writer_executing: false,
             own: None,
+            more: false,
             reset_pending: false,
             used_challenge: [0; 16],
             effects: heapless::Vec::new(),
@@ -519,12 +523,16 @@ impl<W: logring::Words> Server<W> {
         }
         // A payload without its command's size or structure: 17 in the framing group, before
         // authentication and every state check (A1.4 "Malformed payload"; 0056).
+        self.more = false;
         let (status, n) = if mgmt::payload::well_formed(cmd, req.payload) { self.execute(src, cmd, &req, ctx, out) } else { (Status::Malformed, 0) };
         let id = req.header.request_id;
         // Build the reply in place: the payload was written at out[HEADER_LEN..].
         let mut tmp = [0u8; mgmt::MAX_REPLY - mgmt::HEADER_LEN];
         tmp[..n].copy_from_slice(&out[mgmt::HEADER_LEN..mgmt::HEADER_LEN + n]);
         let len = self.reply(out, id, cmd as u16, status, &tmp[..n])?;
+        if self.more {
+            out[7] |= mgmt::FLAG_MORE; // header flags (Table M-1)
+        }
         let i = Self::lru_slot(&self.repeat, |s| s.addr == src, |s| s.at_ms);
         let mut st = Stored { addr: src, id, command: cmd as u16, hash, at_ms: now, len: len as u16, reply: [0; mgmt::MAX_REPLY] };
         st.reply[..len].copy_from_slice(&out[..len]);

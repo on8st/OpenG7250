@@ -112,11 +112,13 @@ struct World {
     config: Vec<u8>,
     /// The radio's own address in use.
     own: [u8; 4],
+    /// Header flags of the last reply.
+    flags: u8,
 }
 
 impl World {
     fn new() -> Self {
-        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false, armed: false, c3_lost: false, up: Model::default(), config: vec![1, 1, 0], own: OWN }
+        World { id: Identify { model: b"G7250", mac: [2, 0, 0, 0, 0x72, 0x50], versions: [1, 0, 44, 1, 1], active_level: 1, ..Default::default() }, n: 0, secret: None, p2: false, armed: false, c3_lost: false, up: Model::default(), config: vec![1, 1, 0], own: OWN, flags: 0 }
     }
     fn call(&mut self, srv: &mut Server, src: ([u8; 4], u16), d: &[u8], now: u64) -> Option<(u32, Status, Vec<u8>)> {
         let mut n = self.n;
@@ -140,11 +142,14 @@ impl World {
             update: &mut self.up,
         };
         let mut out = [0u8; mgmt::MAX_REPLY];
+        let mut flags = 0;
         let r = srv.handle(src, d, &mut ctx, &mut out).map(|len| {
             let p = mgmt::parse_reply(&out[..len]).unwrap();
+            flags = p.header.flags;
             (p.header.request_id, p.status.unwrap(), p.payload.to_vec())
         });
         self.n = n;
+        self.flags = flags;
         r
     }
 }
@@ -683,6 +688,39 @@ fn update_verify_is_logged_good_and_failed() {
     let e: Vec<_> = mgmt::payload::log_entries(&log).map(|e| String::from_utf8(e.unwrap().text.to_vec()).unwrap()).collect();
     assert!(e.iter().any(|t| t == "update verify failed: missing-blocks"), "{e:?}");
     assert!(e.iter().any(|t| t == "update verified: slot B 0.1.2"), "{e:?}");
+}
+
+#[test]
+fn read_log_flag_bit_1_on_every_page_but_the_last_t_a1_97() {
+    // A1.7 (0074 point 6): bit 1 when entries after the page exist at the time of the reply;
+    // clear on the last page and on an empty one; a new entry is read from last + 1.
+    let mut s = Server::new();
+    let mut w = World::new();
+    for i in 0..60 {
+        s.log.push(i, format_args!("entry {i:02} with some text to fill the page up"));
+    }
+    let mut first = 0u32;
+    let mut pages = vec![];
+    loop {
+        let p = w.call(&mut s, HOST, &req(100 + pages.len() as u32, Command::ReadLog, &first.to_be_bytes()), 1_000).unwrap().2;
+        let seqs: Vec<u32> = mgmt::payload::log_entries(&p).map(|e| e.unwrap().seq).collect();
+        let more = w.flags & mgmt::FLAG_MORE != 0;
+        if seqs.is_empty() {
+            assert!(!more, "an empty page has bit 1 clear");
+            break;
+        }
+        pages.push(more);
+        first = seqs.last().unwrap() + 1;
+    }
+    assert!(pages.len() >= 2, "{pages:?}");
+    assert!(pages[..pages.len() - 1].iter().all(|&m| m) && !pages[pages.len() - 1], "{pages:?}");
+    s.log.push(2_000, format_args!("a new entry"));
+    let p = w.call(&mut s, HOST, &req(200, Command::ReadLog, &first.to_be_bytes()), 2_000).unwrap().2;
+    assert_eq!(mgmt::payload::log_entries(&p).count(), 1);
+    assert_eq!(w.flags & mgmt::FLAG_MORE, 0);
+    // Every other reply has it clear.
+    w.call(&mut s, HOST, &req(201, Command::Identify, &[]), 2_000).unwrap();
+    assert_eq!(w.flags & mgmt::FLAG_MORE, 0);
 }
 
 #[test]
