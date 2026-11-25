@@ -91,6 +91,8 @@ def run(fn, radio):
     t_update.restart = lambda ctx_, u: setattr(radio, "flags", 0)
     t_update.facts = lambda ctx_, u: (1, 2, (1, 0, 1), ((2, 2), (4, 2), (6, 2)))
     t_update.rx_works = lambda ctx_: True
+    saved["stream_reason10"] = t_flash.stream_reason10
+    t_flash.stream_reason10 = lambda ctx_: getattr(radio, "reason10", True)
     try:
         fn(ctx, b"s" * 32)
     finally:
@@ -118,7 +120,16 @@ class LateEnd(unittest.TestCase):
         bad, ctx = run(t_flash.late_end, Radio())
         self.assertEqual(bad, [])
         self.assertEqual(sum("within 0.5 s of the erase's end" in c["name"] for c in ctx.checks), 2)
+        # RX after the SET_CONFIG; after the update the update state (reason 10, spec 68c0ff5)
+        self.assertEqual(sum(c["name"].endswith("RX goes on") for c in ctx.checks), 1)
+        self.assertEqual(sum("a run request gets reason 10" in c["name"] for c in ctx.checks), 1)
         self.assertFalse(ctx.no_pass)
+
+    def test_update_state_not_kept_fails(self):
+        r = Radio()
+        r.reason10 = False
+        bad, _ = run(t_flash.late_end, r)
+        self.assertTrue(any("reason 10" in b for b in bad), bad)
 
     def test_slow_reply_fails(self):
         bad, _ = run(t_flash.late_end, Radio("slow-55"))

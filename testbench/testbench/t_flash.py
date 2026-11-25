@@ -571,13 +571,14 @@ def late_entry(ctx) -> dict | None:
 def late_end(ctx, s: bytes):
     """T-A1-85, 0081 point 1: an erase that ends without an error flag 100 ms after the give-up, for a
     SET_CONFIG and for an update: 55 within 15 s of the request and within 0.5 s of the erase's end,
-    the configuration or the running image as before, INTERNAL_ERROR raised, RX goes on. The reply
+    the configuration or the running image as before, INTERNAL_ERROR raised; after the SET_CONFIG RX goes on,
+    after the update the update state holds (a run request gets reason 10). The reply
     time is read on the radio's clock right after the reply: an upper bound."""
     from .t_details import c3_rewrite
     from .t_update import facts, newer, pkg, restart, rx_works
     from .update import begin_payload, block_payload
 
-    def judge(label: str, u, st, dt, t_reply):
+    def judge(label: str, u, st, dt, t_reply, update: bool = False):
         ctx.eq(f"{label}: 55", st, 55)
         ctx.check(f"{label}: the 55 within 15 s of the request (radio time)", dt is not None and dt <= REPLY_S, f"after {dt} s")
         e = late_entry(ctx)
@@ -589,7 +590,11 @@ def late_end(ctx, s: bytes):
                       t_reply is not None and t_reply - end / 1e6 <= 0.5, f"reply by {t_reply} s, erase end {end / 1e6} s")
         ff = fault_flags(ctx)
         ctx.check(f"{label}: INTERNAL_ERROR (class 2) raised", ff is not None and ff >> INTERNAL_ERROR & 1, f"FAULT_FLAGS {ff}")
-        ctx.check(f"{label}: RX goes on", rx_works(ctx), "no status packet")
+        if update:  # after the update's 55 the update state holds (B2.3, A1.8 "Write failure"; spec 68c0ff5)
+            ctx.check(f"{label}: the update state holds, a run request gets reason 10", stream_reason10(ctx),
+                      "no STREAM_STATUS with reason 10")
+        else:
+            ctx.check(f"{label}: RX goes on", rx_works(ctx), "no status packet")
 
     def timed(u, cmd, payload):
         u.c.timed = True
@@ -630,7 +635,7 @@ def late_end(ctx, s: bytes):
         if st == 0:
             ctx.part(f"{label}: not run, every step answered 0 (no erase came)")
         else:
-            judge(f"{label} ({cmd}), a write failure", u, st, dt, t_reply)
+            judge(f"{label} ({cmd}), a write failure", u, st, dt, t_reply, update=True)
             ctx.eq(f"{label}: the running image unchanged", u.identify().get(23, b"")[:1], bytes([run]))
         restart(ctx, u)
 

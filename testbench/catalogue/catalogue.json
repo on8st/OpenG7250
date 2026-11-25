@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "a3fbb8e",
-  "sha256_of_inputs": "cef0407a7848a0361c0dfa80b251b83ab64ccc0c0eedecc7638e89ad482336e3"
+  "commit": "68c0ff5",
+  "sha256_of_inputs": "89cf0ad30ef7420a17ce481d6d3f11bf8b48bace46e2784185348b510307e2b2"
  },
  "his": {
   "commit": "069ea0b"
@@ -1922,7 +1922,7 @@
    "id": "T-A1-85",
    "origin": "spec",
    "part": "A-B",
-   "title": "With a simulated erase that ends with an error flag, and an erase that ends without an error flag 100 ms after the firmware has given up at 2 × `t_erase_max`: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; each 55 comes within 15 s of the request, the late one within 0.5 s of the erase's end. With an erase that never ends, for a `SET_CONFIG` and for an update: no reply is sent, the watchdog resets the processor, the store and boot record are as before, `WDT_RESET_AT_START` is reported, and a retransmission after the restart gets 33 (emulator; B2.3 \"Flash work\"; 0065, 0069, 0081). After the update's 55, `UPDATE_STATUS` reports idle, a run request gets reason 10, a new `UPDATE_BEGIN` is accepted, and with no further update command the radio restarts 10 min after the last command answered 0 (A1.8 \"Write failure\"; 0074).",
+   "title": "With a simulated erase that ends with an error flag, and an erase that ends without an error flag 100 ms after the firmware has given up at 2 × `t_erase_max`: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2); after the `SET_CONFIG`'s 55 RX goes on, after the update's 55 the update state holds (below); each 55 comes within 15 s of the request, the late one within 0.5 s of the erase's end. With an erase that never ends, for a `SET_CONFIG` and for an update: no reply is sent, the watchdog resets the processor, the store and boot record are as before, `WDT_RESET_AT_START` is reported, and a retransmission after the restart gets 33 (emulator; B2.3 \"Flash work\"; 0065, 0069, 0081). After the update's 55, `UPDATE_STATUS` reports idle, a run request gets reason 10, a new `UPDATE_BEGIN` is accepted, and with no further update command the radio restarts 10 min after the last command answered 0 (A1.8 \"Write failure\"; 0074).",
    "reqs": [
     "A1",
     "B2.3",
