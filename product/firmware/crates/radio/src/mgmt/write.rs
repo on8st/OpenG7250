@@ -215,6 +215,7 @@ impl<W: Words> Server<W> {
                 }
             }
             self.writer = Some((src, now));
+            self.writer_executing = true;
         }
         let (a, b, c, d) = ip(src.0);
         match cmd {

@@ -681,6 +681,33 @@ fn update_verify_is_logged_good_and_failed() {
 }
 
 #[test]
+fn the_idle_time_runs_again_from_the_reply_of_the_holders_request_t_a1_15() {
+    // A1.10 (0077 point 2): from the receipt of the holder's request until its reply the idle
+    // time does not run; it runs again from the reply. A SET_CALIBRATION received at 55 s whose
+    // flash work takes 9 s: replied at 64 s, so the session holds until 124 s, not 115 s.
+    let mut s = Server::new();
+    let mut w = World::new();
+    w.secret = Some([7; 32]);
+    let other = ([192, 168, 1, 9], 40000);
+    assert_eq!(authed(&mut w, &mut s, HOST, 10, Command::ClearLog, &[], 0).0, Status::Ok);
+    s.reply_sent(HOST, 0);
+    assert_eq!(authed(&mut w, &mut s, HOST, 20, Command::SetCalibration, &[0, 0, 0, 1, 0], 55_000).0, Status::Ok);
+    s.reply_sent(HOST, 64_000);
+    assert_eq!(authed(&mut w, &mut s, other, 30, Command::ClearLog, &[], 64_100).0, Status::Busy, "straight after the reply");
+    assert_eq!(authed(&mut w, &mut s, other, 40, Command::ClearLog, &[], 123_900).0, Status::Busy, "under 60 s after the reply");
+    assert_eq!(authed(&mut w, &mut s, other, 50, Command::ClearLog, &[], 124_100).0, Status::Ok, "60 s after the reply");
+    // A read from the holder, and its reply, refresh nothing: the session lapses 60 s after the
+    // last reply of a request that refreshed it.
+    let mut s = Server::new();
+    assert_eq!(authed(&mut w, &mut s, HOST, 60, Command::ClearLog, &[], 0).0, Status::Ok);
+    s.reply_sent(HOST, 1_000);
+    assert!(w.call(&mut s, HOST, &req(70, Command::GetStats, &[]), 50_000).is_some());
+    s.reply_sent(HOST, 50_000);
+    assert_eq!(authed(&mut w, &mut s, other, 80, Command::ClearLog, &[], 60_900).0, Status::Busy);
+    assert_eq!(authed(&mut w, &mut s, other, 90, Command::ClearLog, &[], 61_100).0, Status::Ok);
+}
+
+#[test]
 fn a_retransmission_read_after_slow_flash_work_is_a_repeat() {
     // 0069 point 3 (A1.4): a request whose flash work takes 9 s; its retransmission, read only
     // after the reply (it waited in the socket buffer), is answered from the stored reply and

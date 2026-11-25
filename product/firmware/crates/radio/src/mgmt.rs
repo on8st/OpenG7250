@@ -309,6 +309,9 @@ pub struct Server<W = [u64; logring::WORDS]> {
     pub stats: Stats,
     /// Write session holder and the time of its last refresh (A1.10).
     writer: Option<(Addr, u64)>,
+    /// The request being handled refreshed the write session: its idle time does not run until
+    /// the reply is sent ([`Self::reply_sent`]; A1.10; 0077 point 2).
+    writer_executing: bool,
     /// A commanded reset is under way (A1.9 "One commanded reset at a time").
     reset_pending: bool,
     /// The challenge the current authenticated request used (`CHANGE_SECRET` mask, Table M-1).
@@ -392,6 +395,7 @@ impl<W: logring::Words> Server<W> {
                 trip_count: 0,
             },
             writer: None,
+            writer_executing: false,
             reset_pending: false,
             used_challenge: [0; 16],
             effects: heapless::Vec::new(),
@@ -455,6 +459,7 @@ impl<W: logring::Words> Server<W> {
     /// Handle one datagram from `src`; returns the reply length in `out`, or `None` for no reply.
     pub fn handle(&mut self, src: Addr, d: &[u8], ctx: &mut Ctx<'_>, out: &mut [u8; mgmt::MAX_REPLY]) -> Option<usize> {
         let now = ctx.now_ms;
+        self.writer_executing = false;
         let req = match mgmt::check(d) {
             Incoming::Drop => {
                 self.stats.drop_port[6] += 1;
@@ -517,7 +522,16 @@ impl<W: logring::Words> Server<W> {
     /// repeat window counts from the reply. Retransmissions sent during the flash work wait in
     /// the socket buffer and are read only after the reply; they are then repeats, answered
     /// from the stored reply, never executed again (0069 point 3).
+    /// For the write-session holder's own request that refreshed the session, the 60 s idle time
+    /// runs again from the reply (A1.10; 0077 point 2).
     pub fn reply_sent(&mut self, src: Addr, now_ms: u64) {
+        if core::mem::take(&mut self.writer_executing) {
+            if let Some((h, t)) = self.writer.as_mut() {
+                if *h == src {
+                    *t = (*t).max(now_ms);
+                }
+            }
+        }
         if let Some(i) = self.repeat.iter().enumerate().filter_map(|(i, s)| s.filter(|s| s.addr == src).map(|s| (i, s.at_ms))).max_by_key(|x| x.1).map(|x| x.0) {
             if let Some(s) = self.repeat[i].as_mut() {
                 s.at_ms = s.at_ms.max(now_ms);
