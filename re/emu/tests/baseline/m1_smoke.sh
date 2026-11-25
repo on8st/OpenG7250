@@ -52,6 +52,9 @@ python3 tests/baseline/erase_wait_check.py >/dev/null 2>&1 && ok erase_wait || b
 echo "[2i] the dump check: a program, then a cut erase of the same sector in one boot (no emulator)"
 python3 tests/baseline/dump_check_case.py >/dev/null 2>&1 && ok dump_check_case || bad dump_check_case
 
+echo "[2j] the bridge's host addresses fixed for the boot: a lease below .20, SUBR 0.0.0.0 (no emulator)"
+python3 tests/baseline/bridge_hosts_check.py >/dev/null 2>&1 && ok bridge_hosts || bad bridge_hosts
+
 if [ ! -x "$RN" ] && [ ! -f "$RN" ]; then
   echo "[3-4] SKIP (pinned Renode not found at tools/renode-1.17.0)"
 else
@@ -244,11 +247,11 @@ else
   echo "  skip (no arm-none-eabi-gcc or Renode)"
 fi
 
-echo "[12] cpu.fault: an undefined instruction at a chosen emulated time, thread mode, a handler, UsageFault (T-EMU-29)"
+echo "[12] cpu.fault: an undefined instruction at a chosen emulated time, thread mode, a handler, UsageFault (T-EMU-29); a handler with FAULTMASK set, lockup (T-EMU-35)"
 if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
   if G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py .private/bench/net_test.elf \
        tests/fakebench/cpu-fault.json --run-id smoke-cpu-fault >/dev/null 2>&1; then
-    ok "cpu.fault: T-EMU-29 passes (the fixture's record and the image's own handler agree)"
+    ok "cpu.fault: T-EMU-29 and T-EMU-35 pass (the record and the image's own handler agree; a fault in a handler with FAULTMASK set is a lockup)"
   else
     bad "cpu.fault (see .private/product-runs/smoke-cpu-fault/result.json)"
   fi

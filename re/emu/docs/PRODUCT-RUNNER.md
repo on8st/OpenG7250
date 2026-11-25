@@ -94,7 +94,11 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   the datagram as a broadcast on port P. A datagram from the image to the
   limited or directed broadcast address goes to the bench port it names.
 - `hosts`: two in-subnet addresses (the 20th and 21st host of the image's
-  subnet) and 10.99.0.20 outside it, on 127.0.0.1. hosts[0] owns 1024 … 7250,
+  subnet) and 10.99.0.20 outside it, on 127.0.0.1. They are fixed for the boot: worked out
+  again only when the radio moves to another subnet or onto a host's own address, not when its
+  address moves within the subnet and not while SUBR reads 0.0.0.0 (until 2026-11-25 a lease from
+  .50 to .10 moved hosts[0] from .20 to .21, and a DHCP borrow gave sources in a /24 around the
+  radio; tests/baseline/bridge_hosts_check.py, m1_smoke step [2j]). hosts[0] owns 1024 … 7250,
   so the fixed source ports 1024 and 7250 some spec tests need are bound at the
   same numbers (both checked free before booting); hosts[1] and hosts[2] have
   B + 8100 … B + 8199 and B + 8200 … B + 8299.

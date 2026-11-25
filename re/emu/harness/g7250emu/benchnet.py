@@ -187,9 +187,22 @@ class Bridge:
         return True
 
     def set_radio(self, ip, netmask="255.255.255.0"):
+        # The hosts' addresses are fixed for the boot, as the endpoint gave them: worked out again
+        # only when the radio moves to another subnet (or onto a host's own address), not while
+        # SUBR reads 0.0.0.0. Until 2026-11-25 they were worked out at every change of the radio's
+        # address with the radio's own address skipped in the count, so a lease to .10 moved host 0
+        # from .20 to .21 (T-A1-100), and a SUBR of 0 gave a /24 around the radio (169.254.109.20).
         if netmask == "0.0.0.0":
-            netmask = "255.255.255.0"     # SUBR not written yet; updated when it is
+            if self.hosts:
+                self.radio_ip = ip            # SUBR not written yet: the hosts stay as they are
+                return
+            netmask = "255.255.255.0"     # the first address: a /24 until SUBR is written
         net = ipaddress.ip_network("%s/%s" % (ip, netmask), strict=False)
+        if self.hosts and getattr(self, "host_net", None) == net and ip not in [h["ip"] for h in self.hosts]:
+            self.netmask, self.directed = netmask, str(net.broadcast_address)
+            self.radio_ip = ip
+            return
+        self.host_net = net
         hosts_in = []
         for h in net.hosts():             # the 20th and 21st host of the subnet (no full list for big nets)
             if str(h) == ip:
