@@ -3,8 +3,8 @@
  "version": 1,
  "spec": {
   "branch": "spec/draft",
-  "commit": "8d470ad",
-  "sha256_of_inputs": "206c334bd5cb725f0483347be51b42b8da17d00d80fd5730c4edb05ce6bcec86"
+  "commit": "9aa5b1b",
+  "sha256_of_inputs": "0eeebacd5ae72809acfcc9362109a588a62de38fe9ced5fea0d4dd582b762f85"
  },
  "his": {
   "commit": "069ea0b"
@@ -281,7 +281,7 @@
    "id": "T-A1-15",
    "origin": "spec",
    "part": "A-B",
-   "title": "A second host gets status 35 for writes while a write session is held; the session ends after 60 s idle; `GET_STATS`, `IDENTIFY`, `GET_CHALLENGE`, other unauthenticated requests and a request with a wrong HMAC from the holder every 30 s do not keep it open, an authenticated, verified request from the holder does (A1.10). Host A's authenticated `SET_CONFIG` with an invalid configuration gets 48; a write from host B within 60 s gets 35; after A's `END_WRITE_SESSION`, B's write is accepted. `END_WRITE_SESSION` with no session held gets 0 and a write from another host straight after it is accepted; from a non-holder it gets 35 and the holder's session stays (0074). With a `SET_CONFIG` whose compaction has its erase at `t_erase_max` and its programs at their maximum, sent by the holder 57 s after its last request, the session does not lapse before the reply, and a write from host B straight after the reply gets 35; the same with an erase that hangs until it fails (55), sent 55 s after the last request (emulator; 0077, 0078).",
+   "title": "A second host gets status 35 for writes while a write session is held; the session ends after 60 s idle; `GET_STATS`, `IDENTIFY`, `GET_CHALLENGE`, other unauthenticated requests and a request with a wrong HMAC from the holder every 30 s do not keep it open, an authenticated, verified request from the holder does (A1.10). Host A's authenticated `SET_CONFIG` with an invalid configuration gets 48; a write from host B within 60 s gets 35; after A's `END_WRITE_SESSION`, B's write is accepted. `END_WRITE_SESSION` with no session held gets 0 and a write from another host straight after it is accepted; from a non-holder it gets 35 and the holder's session stays (0074). With a `SET_CONFIG` whose compaction has its erase at `t_erase_max` and its programs at their maximum, sent by the holder 57 s after its last request, the session does not lapse before the reply, and a write from host B straight after the reply gets 35; the same with an erase that ends without an error flag 100 ms after the firmware has given up at 2 × `t_erase_max` (55), sent 55 s after the last request (emulator; 0077, 0078, 0081).",
    "reqs": [
     "A1",
     "A1.10"
@@ -305,7 +305,7 @@
    "id": "T-A1-16",
    "origin": "spec",
    "part": "A-B",
-   "title": "The first-secret window closes 300 s after network up; a restart inside the window reopens it for 300 s. With the erase of host A's `SET_FIRST_SECRET`, received 2 s before the window ends, hung until it fails (55): a `SET_FIRST_SECRET` from host B received during that work, and A's retry after the 55, both get 36 (emulator, every erase stretched to `t_erase_max`; B2.3 \"time over flash work\"; 0073).",
+   "title": "The first-secret window closes 300 s after network up; a restart inside the window reopens it for 300 s. With the erase of host A's `SET_FIRST_SECRET`, received 2 s before the window ends, ending without an error flag 100 ms after the firmware has given up at 2 × `t_erase_max` (55): a `SET_FIRST_SECRET` from host B received during that work, and A's retry after the 55, both get 36 (emulator, every erase stretched to `t_erase_max`; B2.3 \"time over flash work\"; 0073, 0081).",
    "reqs": [
     "A1",
     "B2.3"
@@ -1884,7 +1884,7 @@
    "id": "T-A1-85",
    "origin": "spec",
    "part": "A-B",
-   "title": "With a simulated erase that ends with an error flag, and one that does not end: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; if the watchdog resets the processor, the store and boot record are as before and `WDT_RESET_AT_START` is reported; the 55 reply to an erase that does not end comes within 15 s of the request (emulator; B2.3 \"Flash work\"; 0065, 0069). After the update's 55, `UPDATE_STATUS` reports idle, a run request gets reason 10, a new `UPDATE_BEGIN` is accepted, and with no further update command the radio restarts 10 min after the last command answered 0 (A1.8 \"Write failure\"; 0074).",
+   "title": "With a simulated erase that ends with an error flag, and an erase that ends without an error flag 100 ms after the firmware has given up at 2 × `t_erase_max`: a `SET_CONFIG` gets 55 and the configuration read back is the old one; an update gets 55 as a write failure; each is logged and raises `INTERNAL_ERROR` (class 2), RX goes on; each 55 comes within 15 s of the request, the late one within 0.5 s of the erase's end. With an erase that never ends, for a `SET_CONFIG` and for an update: no reply is sent, the watchdog resets the processor, the store and boot record are as before, `WDT_RESET_AT_START` is reported, and a retransmission after the restart gets 33 (emulator; B2.3 \"Flash work\"; 0065, 0069, 0081). After the update's 55, `UPDATE_STATUS` reports idle, a run request gets reason 10, a new `UPDATE_BEGIN` is accepted, and with no further update command the radio restarts 10 min after the last command answered 0 (A1.8 \"Write failure\"; 0074).",
    "reqs": [
     "A1",
     "B2.3",
@@ -2032,7 +2032,7 @@
    "id": "T-A1-94",
    "origin": "spec",
    "part": "A-B",
-   "title": "With every erase stretched to `t_erase_max` (emulator): in a trial kept unconfirmed by a class 2 fault injected at start, a `SET_CONFIG` with a stretched compaction (erase at `t_erase_max`, programs at their maximum) received 2 s before the 60 s, so that the limit falls due during its flash work, is answered, the trial's commanded reset follows within 100 ms after the reply, and the next start rolls back. During a transfer, an `UPDATE_BLOCK` whose erase hangs, received 9 min 55 s after the last update command, gets 55, and the abandonment restart follows within 100 ms after the reply (B2.3 \"time over flash work\"; A1.8; 0073, 0078).",
+   "title": "With every erase stretched to `t_erase_max` (emulator): in a trial kept unconfirmed by a class 2 fault injected at start, a `SET_CONFIG` with a stretched compaction (erase at `t_erase_max`, programs at their maximum) received 2 s before the 60 s, so that the limit falls due during its flash work, is answered, the trial's commanded reset follows within 100 ms after the reply, and the next start rolls back. During a transfer, an `UPDATE_BLOCK` whose erase ends without an error flag 100 ms after the firmware has given up at 2 × `t_erase_max`, received 9 min 55 s after the last update command, gets 55, and the abandonment restart follows within 100 ms after the reply (B2.3 \"time over flash work\"; A1.8; 0073, 0078, 0081).",
    "reqs": [
     "A1",
     "B2.3",

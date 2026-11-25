@@ -432,13 +432,13 @@ def t_a1_16(ctx: Ctx):
 
 
 def hung_at_the_end(ctx, clock, window) -> bool:
-    """0073: host A's SET_FIRST_SECRET 2 s before the window ends, its erase hung until it fails;
+    """0073: host A's SET_FIRST_SECRET 2 s before the window ends, its erase ending without a flag 100 ms after the give-up (0081);
     B's request received during that work and A's retry get 36. False: the secret got set."""
     from .t_flash import flog, running
     from .t_update import advance
     from .mgmt import send_retransmit
     if not (has(ctx, "flash.fault") and has(ctx, "flash.log")):
-        ctx.part("a SET_FIRST_SECRET hung over the end of the window not run: no flash.fault or flash.log")
+        ctx.part("a SET_FIRST_SECRET whose erase ends late over the end of the window not run: no flash.fault or flash.log")
         return True
     back = stretched(ctx)
     try:
@@ -449,10 +449,12 @@ def hung_at_the_end(ctx, clock, window) -> bool:
                 advance(ctx, left - 2.5)
             _, is_open, left = window()
             if not is_open or left > 5:
-                ctx.part(f"a SET_FIRST_SECRET hung over the end of the window: not placed ({left} s left, open {is_open})")
+                ctx.part(f"a SET_FIRST_SECRET whose erase ends late over the end of the window: not placed ({left} s left, open {is_open})")
                 return True
             flog_start(ctx)
-            ctx.fixture("flash.fault", op="erase", never_end=True)
+            from .t_flash import late_erase
+            if not late_erase(ctx):  # 0081: the erase ends without a flag 100 ms after the give-up
+                return True
             msg_a = build(CMD["SET_FIRST_SECRET"], os.urandom(32), a.next_id())
             msg_b = build(CMD["SET_FIRST_SECRET"], os.urandom(32), b.next_id())
             a.post(msg_a)
@@ -468,12 +470,12 @@ def hung_at_the_end(ctx, clock, window) -> bool:
             st = got[0]["status"] if got else None
             if st == 0:
                 keep_secret(ctx, msg_a[18:])
-                ctx.part("a SET_FIRST_SECRET hung over the end of the window: answered 0, the erase that hangs was not its own")
+                ctx.part("a SET_FIRST_SECRET whose erase ends late over the end of the window: answered 0, the late erase was not its own")
                 return False
             if not seen:
-                ctx.part(f"a SET_FIRST_SECRET hung over the end of the window: no erase running in flash.log (answered {st})")
+                ctx.part(f"a SET_FIRST_SECRET whose erase ends late over the end of the window: no erase running in flash.log (answered {st})")
                 return True
-            ctx.eq("SET_FIRST_SECRET whose erase hangs over the end of the window: 55", st, 55)
+            ctx.eq("SET_FIRST_SECRET whose erase ends late over the end of the window: 55", st, 55)
             rb = b.listen(msg_b, 1.0)
             rb = rb[0] if rb else send_retransmit(b, msg_b, 4.0, "SET_FIRST_SECRET of B")
             ctx.eq("B's SET_FIRST_SECRET received during that work: 36", rb["status"] if rb else None, 36)

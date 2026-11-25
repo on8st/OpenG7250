@@ -200,7 +200,7 @@ def idle_pause(ctx, ck, a, b, s, end, tx):
         over_60(ctx, ck, a, b, s, tx, "8 s of flash work from 57 s", 57, 0,
                 lambda: ctx.fixture("flash.delay", us=8_000_000, count=1), lambda st: True)
         ctx.eq("A's END_WRITE_SESSION: 0", end(a), 0)
-        ctx.part("the stretched compaction and the erase that hangs (emulator) not run on the model: flash.delay stands for it")
+        ctx.part("the stretched compaction and the erase that ends late (emulator) not run on the model: flash.delay stands for it")
         return
     if not (has(ctx, "flash.timing") and has(ctx, "flash.log")):
         ctx.part("the stretched compaction (0077) not run: no flash.timing or flash.log")
@@ -237,18 +237,20 @@ def idle_pause(ctx, ck, a, b, s, end, tx):
         flog_start(ctx)
 
     def hang():
+        from .t_flash import late_erase
         flog_start(ctx)
-        ctx.fixture("flash.fault", op="erase", never_end=True)
+        if not late_erase(ctx):  # 0081: an erase that ends without a flag 100 ms after the give-up
+            raise PartSkip("an erase that ends late, from 55 s: not run (flash.fault end_after_us not offered)")
 
     failed = False
     try:
         label = "a compaction at the maximum from 57 s"
         case(label, 57, 0, flog_start_only, lambda st: any(is_erase(e) and in_range(e, lo, hi) for e in flog(ctx)))
-        label = "an erase that hangs, from 55 s"
+        label = "an erase that ends late (100 ms after the give-up), from 55 s"
         if not has(ctx, "flash.fault"):
             ctx.part(f"{label}: not run: no flash.fault")
             return
-        failed = True  # the fault is armed, and the flash stays busy until a reset
+        failed = True  # the fault is armed, and INTERNAL_ERROR holds until a reset
         case(label, 55, 55, hang, lambda st: st != 0)
     finally:
         if failed:
@@ -366,7 +368,7 @@ def due_trial(ctx, s: bytes, t_max: int):
 
 
 def due_abandon(ctx, s: bytes, t_max: int):
-    """An UPDATE_BLOCK whose erase hangs (two t_erase_max until it counts as failed), sent 9 min 55 s
+    """An UPDATE_BLOCK whose erase ends without a flag 100 ms after the give-up at two t_erase_max (0081), sent 9 min 55 s
     after the last update command. The second sector's erase: the block that begins it."""
     from .t_a2 import netlog_read
     from .t_flash import stretch
@@ -400,7 +402,9 @@ def due_abandon(ctx, s: bytes, t_max: int):
             at = last[-1] + 595_000_000
             now = (ctx.fixture("hw.observe") or {}).get("t_us", 0)
             advance(ctx, (at - now) / 1e6 - 5)
-            ctx.fixture("flash.fault", op="erase", never_end=True)
+            from .t_flash import late_erase
+            if not late_erase(ctx):  # 0081: the erase ends without a flag 100 ms after the give-up
+                return
             k += 1
             data = signed(u.c, "UPDATE_BLOCK", s, block_payload(k, img[512 * k:512 * k + 512]))
             now = (ctx.fixture("hw.observe") or {}).get("t_us", 0)
@@ -409,7 +413,7 @@ def due_abandon(ctx, s: bytes, t_max: int):
                 return
             if now < at:
                 advance(ctx, (at - now) / 1e6)
-            st = send_judged(ctx, u, data, "abandonment: an UPDATE_BLOCK whose erase hangs", last[-1] + 600_000_000)
+            st = send_judged(ctx, u, data, "abandonment: an UPDATE_BLOCK whose erase ends late", last[-1] + 600_000_000)
             if st == 0:
                 ctx.part("abandonment: the block was answered 0, its request did no erase")
                 return

@@ -544,6 +544,168 @@ def after_write_failure(ctx, s: bytes):
         restart(ctx, u)
 
 
+T_ERASE_MAX_US = 4_000_000  # t_erase_max where the endpoint gives none (0081: the give-up at 8 s)
+
+
+def late_erase(ctx) -> bool:
+    """Arm the next erase to end without an error flag 100 ms after the firmware's give-up at
+    2 x t_erase_max (0081; flash.fault end_after_us: result 'late', duration_us = N). False, and no
+    pass for the test, where the runner does not offer it (the case is then a part)."""
+    t_max = dict(ctx.endpoint.get("flash_timing", {})).get("t_erase_max_us") or T_ERASE_MAX_US
+    try:
+        ctx.fixture("flash.fault", op="erase", end_after_us=2 * t_max + 100_000)
+        return True
+    except Skip as e:
+        ctx.no_pass = True
+        ctx.part(f"{LATE_END} ({e})")
+        return False
+
+
+LATE_END = "an erase that ends late (flash.fault end_after_us, 0081) not offered: those cases not run, no pass"
+
+
+def late_entry(ctx) -> dict | None:
+    return next((e for e in flog(ctx) if is_erase(e) and e.get("result") == "late"), None)
+
+
+def late_end(ctx, s: bytes):
+    """T-A1-85, 0081 point 1: an erase that ends without an error flag 100 ms after the give-up, for a
+    SET_CONFIG and for an update: 55 within 15 s of the request and within 0.5 s of the erase's end,
+    the configuration or the running image as before, INTERNAL_ERROR raised, RX goes on. The reply
+    time is read on the radio's clock right after the reply: an upper bound."""
+    from .t_details import c3_rewrite
+    from .t_update import facts, newer, pkg, restart, rx_works
+    from .update import begin_payload, block_payload
+
+    def judge(label: str, u, st, dt, t_reply):
+        ctx.eq(f"{label}: 55", st, 55)
+        ctx.check(f"{label}: the 55 within 15 s of the request (radio time)", dt is not None and dt <= REPLY_S, f"after {dt} s")
+        e = late_entry(ctx)
+        end = None if e is None else e.get("t_end_us") or (e["t_us"] + e["duration_us"] if "t_us" in e and "duration_us" in e else None)
+        if end is None:
+            ctx.part(f"{label}: within 0.5 s of the erase's end not judged: no 'late' erase entry with t_end_us in flash.log")
+        else:
+            ctx.check(f"{label}: the 55 within 0.5 s of the erase's end (radio clock, upper bound)",
+                      t_reply is not None and t_reply - end / 1e6 <= 0.5, f"reply by {t_reply} s, erase end {end / 1e6} s")
+        ff = fault_flags(ctx)
+        ctx.check(f"{label}: INTERNAL_ERROR (class 2) raised", ff is not None and ff >> INTERNAL_ERROR & 1, f"FAULT_FLAGS {ff}")
+        ctx.check(f"{label}: RX goes on", rx_works(ctx), "no status packet")
+
+    def timed(u, cmd, payload):
+        u.c.timed = True
+        try:
+            r = u.req(cmd, payload)
+            return (r["status"] if r else None), getattr(u.c, "reply_s", None), u.c.clock.now() if r else None
+        finally:
+            u.c.timed = False
+
+    with mg(ctx, s) as u:
+        old = items(u)
+        payload = c3_rewrite(old)
+        label = "a SET_CONFIG whose erase ends late (a C-3 write: one compaction)"
+        if payload is None:
+            ctx.part(f"{label}: not run, GET_CONFIG gives no TX time")
+        else:
+            flog_start(ctx)
+            if not late_erase(ctx):
+                return
+            st, dt, t_reply = timed(u, "SET_CONFIG", payload)
+            judge(label, u, st, dt, t_reply)
+            ctx.eq(f"{label}: the configuration read back is the old one", items(u), old)
+        restart(ctx, u)
+    with mg(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        img = image(2148, seed=855)
+        label = "an update whose erase ends late"
+        steps = [("UPDATE_BEGIN", begin_payload(0, pkg(img, newer(ver), other)))]
+        steps += [("UPDATE_BLOCK", block_payload(k, img[512 * k:512 * k + 512])) for k in range((len(img) + 511) // 512)]
+        flog_start(ctx)
+        if not late_erase(ctx):
+            return
+        st = dt = t_reply = None
+        for cmd, payload in steps:
+            st, dt, t_reply = timed(u, cmd, payload)
+            if st != 0:
+                break
+        if st == 0:
+            ctx.part(f"{label}: not run, every step answered 0 (no erase came)")
+        else:
+            judge(f"{label} ({cmd}), a write failure", u, st, dt, t_reply)
+            ctx.eq(f"{label}: the running image unchanged", u.identify().get(23, b"")[:1], bytes([run]))
+        restart(ctx, u)
+
+
+def hung_reply(ctx, u: Updater, cmd: str, payload: bytes, label: str):
+    """A signed request whose flash work never ends (0081 point 2): sent and retransmitted as a host does
+    for 16 s of radio time; no reply comes before the watchdog reset, so the first reply is the one to a
+    retransmission after the restart. (the reply or None, whether the request was sent)."""
+    data = u.post(cmd, payload)
+    if data is None:
+        return None, False
+    r = u.collect(data, label)
+    if r is None:  # the restart came after the 16 s: the same datagram again once it is reachable
+        wait_reachable(ctx, label)
+        r = u.collect(data, label)
+    return r, True
+
+
+def never_ends(ctx, s: bytes):
+    """T-A1-85, 0081 point 2: with an erase that never ends, for a SET_CONFIG and for an update, no reply
+    is sent, the watchdog resets the processor, the store and the boot record are as before,
+    WDT_RESET_AT_START is reported, and a retransmission after the restart gets 33."""
+    from .t_details import c3_rewrite
+    from .t_update import facts, newer, pkg, restart
+    from .update import begin_payload, block_payload
+
+    def judge(label: str, r, old_store, run: int, tag10):
+        st = r["status"] if r else None
+        ctx.check(f"{label}: no reply before the reset; a retransmission after the restart gets 33", st == 33,
+                  f"answered {st}" + ("" if r else f": {u.c.why}"))
+        wait_reachable(ctx, label)
+        ff = fault_flags(ctx)
+        ctx.check(f"{label}: the watchdog reset the processor, WDT_RESET_AT_START reported", ff is not None and
+                  ff >> WDT_RESET_AT_START & 1, f"FAULT_FLAGS {ff}")
+        t = u.identify()
+        ctx.eq(f"{label}: the boot record as before (running slot, tag 10)", (t.get(23, b"")[:1], t.get(10)), (bytes([run]), tag10))
+        ctx.eq(f"{label}: the store as before (GET_CONFIG)", items(u), old_store)
+
+    with mg(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        tag10 = u.identify().get(10)
+        old = items(u)
+        payload = c3_rewrite(old)
+        if payload is None:
+            ctx.part("a SET_CONFIG whose erase never ends: not run, GET_CONFIG gives no TX time (the C-3 write that compacts)")
+        else:
+            label = "a SET_CONFIG whose erase never ends (a C-3 write: one compaction)"
+            ctx.fixture("flash.fault", op="erase", never_end=True)
+            r, sent = hung_reply(ctx, u, "SET_CONFIG", payload, label)
+            if not sent:
+                ctx.part(f"{label}: not run, no challenge ({u.c.why})")
+            else:
+                judge(label, r, old, run, tag10)
+        restart(ctx, u)
+    with mg(ctx, s) as u:
+        run, other, ver, lay = facts(ctx, u)
+        tag10 = u.identify().get(10)
+        old = items(u)
+        img = image(2148, seed=852)
+        label = "an update whose erase never ends"
+        ctx.fixture("flash.fault", op="erase", never_end=True)
+        steps = [("UPDATE_BEGIN", begin_payload(0, pkg(img, newer(ver), other)))]
+        steps += [("UPDATE_BLOCK", block_payload(k, img[512 * k:512 * k + 512])) for k in range((len(img) + 511) // 512)]
+        r = None
+        for cmd, payload in steps:
+            r, sent = hung_reply(ctx, u, cmd, payload, f"{label} ({cmd})")
+            if not sent or (r and r["status"] != 0):
+                break
+        if r is not None and r["status"] == 0:
+            ctx.part(f"{label}: not run, every step answered 0 (no erase came)")
+        else:
+            judge(label, r, old, run, tag10)
+        restart(ctx, u)
+
+
 @test("T-A1-85", whole=True)
 def t_a1_85(ctx: Ctx):
     """B2.3 "flash work that fails" (0065)."""
@@ -571,36 +733,8 @@ def t_a1_85(ctx: Ctx):
         ctx.eq("the running image unchanged", u.identify().get(23, b"")[:1], bytes([run]))
         restart(ctx, u)
     after_write_failure(ctx, s)
-    with mg(ctx, s) as u:
-        run, other, ver, lay = facts(ctx, u)
-        old = plain_raw(u)
-        ctx.fixture("flash.fault", op="erase", never_end=True)
-        img = image(2148, seed=852)
-        u.c.timed = True
-        r = u.begin(pkg(img, newer(ver), other))
-        st, step = (r["status"] if r else None), "UPDATE_BEGIN"
-        k = 0
-        from .update import block_payload
-        while st == 0 and 512 * k < len(img):
-            step = f"UPDATE_BLOCK {k}"
-            r = u.req("UPDATE_BLOCK", block_payload(k, img[512 * k:512 * k + 512]))
-            st, k = (r["status"] if r else None), k + 1
-        dt, u.c.timed = getattr(u.c, "reply_s", None), False
-        wait_reachable(ctx, "an erase that does not end")
-        t = u.identify()
-        ff = fault_flags(ctx)
-        reset = ff is not None and ff >> WDT_RESET_AT_START & 1
-        if reset:
-            ctx.check("the watchdog reset the processor: WDT_RESET_AT_START reported", True, f"FAULT_FLAGS {ff}")
-            ctx.eq("the store as before (configuration)", plain_raw(u), old)
-            ctx.eq("the boot record as before (running slot)", t.get(23, b"")[:1], bytes([run]))
-        else:
-            ctx.eq("no watchdog reset: the update gets 55 as a write failure", st, 55)
-            ctx.check("the 55 reply within 15 s of the request (radio time; 0069)", st == 55 and dt is not None and dt <= REPLY_S,
-                      f"{u.said(step, st)} after {dt if dt is None else round(dt, 2)} s")
-            ctx.check("the erase that does not end counts as a failure (INTERNAL_ERROR)",
-                      ff is not None and ff >> INTERNAL_ERROR & 1, f"FAULT_FLAGS {ff}")
-        restart(ctx, u)
+    late_end(ctx, s)
+    never_ends(ctx, s)
     ctx.notes.append("'each is logged': the log text is not specified; judged in the log by a new entry only where the radio was not reset")
 
 

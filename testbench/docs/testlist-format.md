@@ -513,7 +513,10 @@ A test with target `emulator` is also run against the reference model. A test wi
      and end when it is over; one already running at `start` is not in the new reading.
    - `flash.fault {op: "erase"|"program", after?, flag, never_end?}`: the next matching operation
      sets that RM0468 error flag; `never_end` (op erase only; no flag needed) keeps BSY set until a
-     reset (T-A1-85).
+     reset (T-A1-85); `end_after_us: N` (announced by emu, 2026-11-25; op erase only, refused with
+     `flag` or `never_end`) runs the erase as a normal one for N us of emulated time, then ends it
+     erased with no flag, logged `result: "late"` with `duration_us` N. The bench passes
+     N = 2 x t_erase_max + 100 ms (0081: T-A1-85, T-A1-15, T-A1-16, T-A1-94); not offered: a part, no pass.
    - `power.cut {after_flash_words: n} | {during_erase: 0..1} | {at_address: a}`; a cut entry in
      `flash.log` has `result: "cut"` with `words_written` or `fraction_done` (T-A1-83, T-A1-86).
      Armed with `during_erase` before a `RESTART`, it hits the first erase after it, whichever it
