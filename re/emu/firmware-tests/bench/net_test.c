@@ -182,7 +182,7 @@ void TIM2_IRQHandler(void)
     if(spin_fm) __asm volatile ("cpsie f");
 }
 
-static uint8_t us;                        // the UDP command socket: 0, or 1 after FO
+static uint8_t us;                        // the UDP command socket: 0, or 1 after FO (0 again after FJ)
 
 static uint16_t command(uint8_t *d, uint16_t len)
 {
@@ -329,6 +329,15 @@ static uint16_t command(uint8_t *d, uint16_t len)
         wr8(0x0001, 1, 0x10);                 // CLOSE socket 0
         wr8(0x0000, 1, (uint8_t)(0x04 | (d[2] & 0xF0)));
         wr8(0x0001, 1, 0x01);                 // OPEN
+        a = rd8(0x0003, 1); b = rd8(0x0003, 5);
+    }
+    else if(d[1] == 'J')
+    {
+        // undoes FO in the same boot: socket 0 UDP 1024 again, socket 1 closed, the commands on socket 0
+        wr8(0x0001, 1, 0x10);                 // CLOSE socket 0 (MACRAW)
+        wr8(0x0000, 1, 0x02); wr16(0x0004, 1, 1024); wr8(0x0001, 1, 0x01);   // socket 0: UDP 1024
+        wr8(0x0001, 5, 0x10);                 // CLOSE socket 1
+        us = 0;
         a = rd8(0x0003, 1); b = rd8(0x0003, 5);
     }
     else if(d[1] == 'A' && len >= 3)

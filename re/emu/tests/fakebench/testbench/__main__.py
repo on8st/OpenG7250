@@ -1573,7 +1573,8 @@ def run_test(tid, ep):
         # MACRAW socket 0 (format v1.6 eth.log): net_test FO opens it (the UDP commands move to socket 1);
         # the frames it sends (FA: an ARP probe, an announcement, a frame that is not ARP) are in eth.log as
         # from_radio with their fields, in emulated time; nothing arrives (FY: RX_RSR 0); UDP goes on beside it
-        # (last in runner-selfcheck.json: FO leaves socket 0 in MACRAW and the UDP commands on socket 1)
+        # FJ at the end undoes FO in the same boot (socket 0 UDP 1024 again, socket 1 closed), so the
+        # tests after it in the list see the image as before
         st = ctl.op("eth.log", action="start")
         o = words(ask(b"FO\x00"))
         got = ask(b"echo37")
@@ -1582,6 +1583,8 @@ def run_test(tid, ep):
         time.sleep(0.5)
         ents, dr = eth_all()
         ctl.op("eth.log", action="stop")
+        j = words(ask(b"FJ"))
+        back = ask(b"echo37-back")
         tx = [e for e in ents if e.get("dir") == "from_radio"]
         a0 = (tx[0].get("arp") or {}) if len(tx) > 0 else {}
         a1 = (tx[1].get("arp") or {}) if len(tx) > 1 else {}
@@ -1600,7 +1603,9 @@ def run_test(tid, ep):
                 check("the frame that is not ARP: ethertype 0x88B5, len 60, hex of the frame, no arp",
                       t2.get("ethertype") == 0x88B5 and t2.get("len") == 60 and "arp" not in t2 and str(t2.get("hex", "")).startswith("ffffffffffff" + radio_mac.replace(":", "")),
                       str(t2)[:300]),
-                check("nothing received on MACRAW (FY: RX_RSR 0)", y[:1] == (0,), str(y))]
+                check("nothing received on MACRAW (FY: RX_RSR 0)", y[:1] == (0,), str(y)),
+                check("FJ: socket 0 UDP again (0x22), socket 1 closed (0x00); echo on 1024 from socket 0", j[:2] == (0x22, 0x00) and back == b"echo37-back",
+                      str((j, back)))]
     if tid == "T-EMU-33":
         # an ECC mark set before an MCU reset (software reset, SYSRESETREQ) is in force at once after
         # it: a byte read of the marked word shows DBECCERR, with no program before the reset and with
