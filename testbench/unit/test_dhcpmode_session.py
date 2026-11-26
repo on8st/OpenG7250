@@ -28,6 +28,7 @@ class Radio:
 
     def __init__(self, nets, broken=None, change_at=None, end_at=None, former=None):
         self.t, self.nets, self.broken, self.former = 100.0, nets, broken, former
+        self.last_hp = 0.0
         self.netlog = []  # net.log entries of the bench host's datagrams (dropped / to_radio)
         self.ip, self.old = nets[0].radio_ip, None
         self.session_ip = self.ip
@@ -53,6 +54,8 @@ class Radio:
 
     def tick(self, until):
         while self.t < until:
+            if self.running and self.t - self.last_hp > 1.0:  # the 1 s watchdog (B5.6): a same-network end
+                self.end(False)
             if self.change_at is not None and self.t >= self.change_at:
                 self.change_at, self.old, self.ip = None, self.ip, self.nets[1].radio_ip
                 self.end(True)
@@ -81,6 +84,7 @@ class Radio:
         if self.broken == "old-taken" and ip == self.old:
             return  # taken by the chip, starts nothing
         if port == PORT_HP and data[4] & 1:
+            self.last_hp = self.t
             if not self.running:
                 self.running, self.next_status, self.session_ip = True, self.t, ip
         elif port == PORT_DISC and len(data) == 60:
@@ -130,7 +134,7 @@ class Host:
         self.keepalive()
         self.send(PORT_REG, regs(pairs))
         got = []
-        for data, src, _ in self.recv_raw(0.02):
+        for data, src, _ in self.recv_raw(0.3):  # as Host.write: 0.3 s, other datagrams lost to the read
             if src == self.r.src(PORT_REG, self.r.ip) or src == self.r.src(PORT_REG, self.r.old or self.r.ip):
                 if len(data) > 4 and len(data) % 6 == 4 and len(data) < 200:
                     got += parse_regs(data)
@@ -179,8 +183,8 @@ class Ends(unittest.TestCase):
     carries nothing over."""
 
     def run_end(self, **kw):
-        c, radio, nets = case(change_at=101.0, **kw)
-        c.stream.wait(1.0)
+        c, radio, nets = case(change_at=103.0, **kw)
+        c.stream.wait(1.5)  # ended() comes once the radio answers on the new address
         c.ended(nets[1], radio.t)
         return c.ctx
 
@@ -197,9 +201,9 @@ class Ends(unittest.TestCase):
     def test_record_does_not_restart(self):
         """The old probe's fault: RUN=1 to the radio while it listens. The record sends to the old address
         only until the switch, and on a correct radio nothing comes from there."""
-        c, radio, nets = case(change_at=101.0)
+        c, radio, nets = case(change_at=103.0)
         c.stream.wait(2.0)
-        st = d.status(c.stream.snapshot(), 101.0 + 0.3)
+        st = d.status(c.stream.snapshot(), 103.0 + 0.3)
         self.assertEqual(st, [])
 
     def test_old_address_starts_a_session_fails(self):
@@ -216,8 +220,8 @@ class Ends(unittest.TestCase):
         self.assertFalse(any("is not judged" in n for n in ctx.notes))
 
     def test_shared_mapping_is_a_part(self):
-        c, radio, nets = case(apart=False, change_at=101.0)
-        c.stream.wait(1.0)
+        c, radio, nets = case(apart=False, change_at=103.0)
+        c.stream.wait(1.5)  # ended() comes once the radio answers on the new address
         c.ended(nets[1], radio.t)
         self.assertEqual(failed(c.ctx), [])
         self.assertTrue(c.ctx.no_pass)
@@ -228,8 +232,8 @@ class Former(unittest.TestCase):
     """radio.former (minor 10): the old address reached apart, its drops in net.log."""
 
     def run_end(self, **kw):
-        c, radio, nets = case(former=True, change_at=101.0, **kw)
-        c.stream.wait(1.0)
+        c, radio, nets = case(former=True, change_at=103.0, **kw)
+        c.stream.wait(1.5)  # ended() comes once the radio answers on the new address
         c.ended(nets[1], radio.t, d.former_net(c.ctx))
         return c.ctx
 
@@ -241,6 +245,21 @@ class Former(unittest.TestCase):
         for want in ("starts none", "dropped as 'not our address' (net.log)", "taken by the radio",
                      "starts a new session", "DDC0 STREAM_STATUS reason 1"):
             self.assertTrue(any(want in n for n in names), want)
+
+    def test_first_session_judged(self):
+        """fw-4e567d2 part 2: the old-only stretch is shorter than the watchdog, so the session the bench's
+        keepalives started at the new address since the move is the one judged, not a restart."""
+        ctx = self.run_end()
+        self.assertTrue(any("the first at " + NEW in n for n in ctx.notes), ctx.notes)
+
+    def test_restart_judged_is_noted(self):
+        saved = d.OLD_ONLY_S
+        d.OLD_ONLY_S = 1.5  # longer than the watchdog: the session at the new address ends, the switch restarts it
+        try:
+            ctx = self.run_end()
+        finally:
+            d.OLD_ONLY_S = saved
+        self.assertTrue(any("a restart at " + NEW in n for n in ctx.notes), ctx.notes)
 
     def test_new_early_not_judged_is_noted(self):
         """radio.connect follows the radio: the check is not made, and a note says so."""
@@ -263,8 +282,8 @@ class Former(unittest.TestCase):
         self.assertFalse(any("starts none" in n for n in bad), bad)
 
     def test_without_netlog_a_note(self):
-        c, radio, nets = case(former=True, netlog=False, change_at=101.0)
-        c.stream.wait(1.0)
+        c, radio, nets = case(former=True, netlog=False, change_at=103.0)
+        c.stream.wait(1.5)  # ended() comes once the radio answers on the new address
         c.ended(nets[1], radio.t, d.former_net(c.ctx))
         self.assertEqual(failed(c.ctx), [])
         self.assertFalse(c.ctx.no_pass)
@@ -285,6 +304,24 @@ class Former(unittest.TestCase):
 
 
 class DoesNotEnd(unittest.TestCase):
+    def test_window_spanning_a_register_read(self):
+        """fw-4e567d2 part 3: a window that spans an earlier TX read (the record paused, the datagrams lost to
+        the read) showed a 0.58 s gap that the wire did not have."""
+        c, radio, _ = case()
+        c.stream.wait(1.0)
+        self.assertTrue(c.kept("the session does not end for the mode change"))
+        c.stream.wait(1.0)
+        self.assertTrue(c.kept("the session does not end (a lease with the same address and netmask)"))
+        self.assertEqual(failed(c.ctx), [])
+        self.assertTrue(c.stream.pauses)
+
+    def test_short_window_waits(self):
+        """fw-4e567d2 part 3: a window of 10 ms holds no status packet; kept() now waits up to MIN_WINDOW_S."""
+        c, radio, _ = case()
+        t0 = radio.t
+        self.assertTrue(c.kept("the session does not end for the mode change", tx=False))
+        self.assertGreaterEqual(radio.t - t0, d.MIN_WINDOW_S - 0.11)
+
     def test_correct(self):
         c, radio, _ = case()
         c.stream.wait(2.0)
@@ -292,15 +329,15 @@ class DoesNotEnd(unittest.TestCase):
         self.assertEqual(failed(c.ctx), [])
 
     def test_wrong_end_restarted_by_run_fails(self):
-        """Ends at 101 s and is restarted at once by the record's own RUN=1 (as the old probe did): the
+        """Ends at 103 s and is restarted at once by the record's own RUN=1 (as the old probe did): the
         stream barely shows it, the reset TX settings do."""
-        c, radio, _ = case(broken="wrong-end", end_at=101.0)
+        c, radio, _ = case(broken="wrong-end", end_at=103.0)
         c.stream.wait(2.0)
         self.assertFalse(c.kept("the session does not end"))
         self.assertIn("reset", c.ctx.checks[-1]["detail"])
 
     def test_moved_meanwhile_is_a_part(self):
-        c, radio, _ = case(broken="wrong-end", end_at=101.0)
+        c, radio, _ = case(broken="wrong-end", end_at=103.0)
         c.stream.wait(2.0)
         c.kept("the session does not end", moved=lambda: True)
         self.assertTrue(c.ctx.no_pass)
@@ -311,6 +348,39 @@ class Pure(unittest.TestCase):
         self.assertEqual(d.ack_wall({"t_wall": 105.0}, 100.0, 106.0), 105.0)
         for bad in ({"t_wall": 5.0}, {"t_wall": 107.0}, {}, {"t_wall": "x"}):  # another clock, later, none
             self.assertIsNone(d.ack_wall(bad, 100.0, 106.0))
+
+    def test_pause_excused(self):
+        rec = [(t / 20, PORT_DDC, OLD) for t in range(0, 41) if not 10 <= t <= 22]  # a hole 0.5 to 1.1 s
+        self.assertEqual(len(d.kept_faults(rec, 0.0, 2.0)), 1)
+        self.assertEqual(d.kept_faults(rec, 0.0, 2.0, pauses=[(0.6, 0.9)]), [])
+        self.assertEqual(len(d.kept_faults(rec, 0.0, 2.0, pauses=[(1.5, 1.6)])), 1)  # a pause elsewhere excuses nothing
+
+    def test_judged_session(self):
+        first = [(9.0 + t / 20, PORT_DDC, NEW) for t in range(0, 60)]
+        self.assertIn("the first at", d.judged_session(first, NEW, 10.0))
+        holed = [r for r in first if not 10.0 < r[0] < 11.0]
+        self.assertIn("a restart at", d.judged_session(holed, NEW, 10.0))
+        self.assertEqual(d.judged_session([], NEW, 10.0), "none seen")
+
+    def test_lease_bound(self):
+        class S:
+            def ratio(self):
+                return 2.0
+
+        class C:
+            t_reply, t_reply_us, stream = 50.0, 24_656_600, S()
+
+            def __init__(self, msgs):
+                self._m = msgs
+
+            def msgs(self):
+                return self._m
+        ack = {"type": "ACK", "t_us": 24_673_500, "t_us_approx": True}
+        req = {"type": "REQUEST", "t_us": 24_670_000}
+        self.assertAlmostEqual(d.lease_bound(C([req, ack]), ack, 60.0), 50.0 + 0.0134 * 2.0)
+        self.assertEqual(d.lease_bound(C([req, dict(ack, t_wall=55.0)]), dict(ack, t_wall=55.0), 60.0), 55.0)
+        self.assertIsNone(d.lease_bound(C([ack]), ack, 60.0))
+        self.assertIsNone(d.lease_bound(C([dict(req, t_us_approx=True), ack]), ack, 60.0))
 
     def test_kept_faults(self):
         rec = [(t / 20, PORT_DDC, OLD) for t in range(0, 41)]
