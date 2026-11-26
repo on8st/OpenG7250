@@ -1573,9 +1573,10 @@ def run_test(tid, ep):
         # MACRAW socket 0 (format v1.6 eth.log): net_test FO opens it (the UDP commands move to socket 1);
         # the frames it sends (FA: an ARP probe, an announcement, a frame that is not ARP) are in eth.log as
         # from_radio with their fields, in emulated time; nothing arrives (FY: RX_RSR 0); UDP goes on beside it
+        # (last in runner-selfcheck.json: FO leaves socket 0 in MACRAW and the UDP commands on socket 1)
         st = ctl.op("eth.log", action="start")
         o = words(ask(b"FO\x00"))
-        echo = ask(b"echo37")
+        got = ask(b"echo37")
         f0, f1, f2 = words(ask(b"FA\x00")), words(ask(b"FA\x01")), words(ask(b"FA\x02"))
         y = words(ask(b"FY"))
         time.sleep(0.5)
@@ -1587,7 +1588,7 @@ def run_test(tid, ep):
         t2 = tx[2] if len(tx) > 2 else {}
         return [check("eth.log offered and started", "eth.log" in ep.get("fixtures", []) and st.get("ok") and isinstance((st.get("value") or {}).get("t_us"), int), str(st)),
                 check("FO: socket 0 in MACRAW (Sn_SR 0x42), socket 1 UDP (0x22)", o[:2] == (0x42, 0x22), str(o)),
-                check("UDP goes on beside it (echo on 1024, now socket 1)", echo == b"echo37", str(echo)),
+                check("UDP goes on beside it (echo on 1024, now socket 1)", got == b"echo37", str(got)),
                 check("each SEND ends with SEND_OK; lengths 42, 42, 60", [x[:2] for x in (f0, f1, f2)] == [(1, 42), (1, 42), (1, 60)], str((f0, f1, f2))),
                 check("eth.log: three from_radio frames, in order, t_us not going back, none dropped",
                       len(tx) == 3 and dr == 0 and all(isinstance(e.get("t_us"), int) for e in tx) and tx[0]["t_us"] <= tx[1]["t_us"] <= tx[2]["t_us"],
