@@ -10,7 +10,8 @@ from contextlib import contextmanager
 
 from .core import Ctx, test
 from .mgmt import config_tlv
-from .p2 import PORT_DDC, wait_reachable
+from .p2 import (ARM_MAGIC, KEYED_TIMEOUT, PORT_DDC, PORT_DDC0, PORT_DISC, PORT_HP, STREAM_STATUS, TX_ARM, TX_ARM_STATE,
+                 TX_ARM_TOKEN, TX_MODE_CLASS, TX_STATE, general, value, wait_reachable)
 from .t_linklocal import (CLOSED_S, SLACK, current_ip, eth_read, eth_start, is_link_local, judge_probe, probes,
                           session, socks)
 
@@ -92,8 +93,219 @@ def kept(h):
         t.join(1.0)
 
 
-def alive(h) -> bool:
-    return any(p == PORT_DDC for p, _, _ in h.recv_alive(0.5))
+# ---------------- the session, observed without restarting it ----------------
+# A probe that sends RUN=1 while it listens restarts an ended session itself (A2.3; B5.4 "Restart"), so it
+# cannot see an end. The session is observed instead by a continuous record of what the radio sends, with
+# each datagram's source and each bench packet's destination, and by the state a new session starts in.
+GAP_S = 0.2  # status every 50 ms in RUN (B9.4): a gap of more than four periods is a stop
+JITTER_S = 0.1  # the bench's own receive thread (host clock)
+QUIET_S = 0.5  # after the change, the last stretch in which the old address must be silent
+PRESET = (0, 1, 300)  # TX_STATE bit 4 PA disabled, TX_MODE_CLASS, KEYED_TIMEOUT set by the bench
+DEFAULTS = (1, 0, 500)  # the same after a session end (A3.6a Table A3-4, A3.6; B8-2)
+TX_NAMES = ("PA enable cleared (TX_STATE bit 4)", "TX_MODE_CLASS", "KEYED_TIMEOUT")
+
+
+class Stream:
+    """The radio's datagrams to one host, recorded continuously as (time, radio port, radio address),
+    while the host keeps its session alive (RUN=1 every 100 ms, B5.6); every datagram the host sends is
+    recorded as (time, port, the radio address meant, destination). Times on the host clock; `marks`
+    pair it with radio time. `manual` (unit tests): no thread, `wait` steps."""
+
+    def __init__(self, ctx, h, now=time.time, radio_now=None, every: float = 0.1, manual: bool = False):
+        self.ctx, self.h, self.now, self.every, self.manual = ctx, h, now, every, manual
+        self._radio_now = radio_now
+        self.got, self.sent, self.marks, self.nets = [], [], [], [h.net]
+        self.lock = threading.Lock()
+        self._t = self._stop = None
+        send = h.send
+
+        def logged(port, data, kind="unicast"):
+            with self.lock:
+                self.sent.append((self.now(), port, h.net.radio_ip, h.net.dest(port, kind)))
+            send(port, data, kind)
+        h.send = logged
+
+    def radio_now(self) -> float:
+        if self._radio_now is None:
+            from .core import RadioClock
+            self._radio_now = RadioClock(self.ctx).now
+        return self._radio_now()
+
+    def mark(self):
+        self.marks.append((self.now(), self.radio_now()))
+
+    def ratio(self) -> float:
+        """Host seconds per radio second over the record (the emulator may run slower); at least 1, so
+        a gap is never judged longer than the host saw it."""
+        if len(self.marks) < 2 or self.marks[-1][1] <= self.marks[0][1]:
+            return 1.0
+        return max(1.0, (self.marks[-1][0] - self.marks[0][0]) / (self.marks[-1][1] - self.marks[0][1]))
+
+    def know(self, net):
+        """A further address mapping, for telling sources apart (the radio's address after a change)."""
+        if all(n is not net for n in self.nets):
+            self.nets.append(net)
+
+    def retarget(self, net):
+        """Send from the same socket (the same host and port) to the radio at `net`."""
+        self.know(net)
+        self.h.net, self.h.radio = net, net.radio_ip
+
+    def radio_of(self, src):
+        """The radio address a datagram came from; None where two known mappings share the source."""
+        if not any(n.back for n in self.nets):
+            return src[0]
+        ips = {n.radio_ip for n in self.nets if tuple(src) in n.back}
+        return ips.pop() if len(ips) == 1 else None
+
+    def port_of(self, src) -> int:
+        for n in self.nets:
+            if tuple(src) in n.back:
+                return n.back[tuple(src)]
+        return src[1]
+
+    def step(self):
+        try:
+            self.h.keepalive()
+        except OSError:
+            pass
+        try:
+            got = self.h.recv_raw(self.every)
+        except (OSError, ValueError):
+            return
+        with self.lock:
+            self.got += [(t, self.port_of(src), self.radio_of(src)) for _, src, t in got]
+
+    def snapshot(self) -> list:
+        with self.lock:
+            return list(self.got)
+
+    def start(self):
+        self.mark()
+        if self.manual or self._t:
+            return
+        stop = self._stop = threading.Event()
+
+        def run():
+            while not stop.is_set():
+                self.step()
+        self._t = threading.Thread(target=run, daemon=True)
+        self._t.start()
+
+    def stop(self):
+        if self._t:
+            self._stop.set()
+            self._t.join(1.0)
+            self._t = None
+        self.mark()
+
+    @contextmanager
+    def paused(self):
+        """The record stopped while the bench reads registers on the same socket."""
+        running = self._t is not None
+        self.stop()
+        try:
+            yield
+        finally:
+            if running:
+                self.start()
+
+    def wait(self, s: float):
+        """s seconds of radio time, the record going on."""
+        if self.manual:
+            for _ in range(int(round(s / self.every))):
+                self.step()
+        else:
+            from .t_a3 import wait_radio
+            wait_radio(self.ctx, s * 1000)
+        self.mark()
+
+
+def status(rec: list, t0: float | None = None, t1: float | None = None) -> list[tuple[float, str | None]]:
+    return [(t, r) for t, p, r in rec if p == PORT_DDC and (t0 is None or t >= t0) and (t1 is None or t <= t1)]
+
+
+def gaps(ts: list[float], ratio: float = 1.0) -> list[tuple[float, float]]:
+    """(start, radio seconds) of each gap between consecutive times longer than GAP_S + JITTER_S."""
+    return [(a, round((b - a) / ratio, 3)) for a, b in zip(ts, ts[1:]) if (b - a) / ratio > GAP_S + JITTER_S]
+
+
+def kept_faults(rec: list, t0: float, t1: float, ratio: float = 1.0) -> list[str]:
+    """A session that does not end in [t0, t1]: status packets from one radio address, with no gap."""
+    st = status(rec, t0, t1)
+    if not st:
+        return [f"no status packets in {t1 - t0:.1f} s"]
+    out = []
+    srcs = sorted({str(r) for _, r in st})
+    if len(srcs) > 1:
+        out.append(f"status packets from {srcs}")
+    out += [f"a gap of {g:.2f} s of radio time {a - t0:.2f} s into the window" for a, g in gaps([t0] + [t for t, _ in st] + [t1], ratio)]
+    return out
+
+
+def end_faults(rec: list, t_change: float, t_switch: float, old_ip: str, new_ip: str, ratio: float = 1.0) -> dict:
+    """From the change (applied: the radio answers on the new address) to the switch the bench sent only to
+    the old address. `old`: status packets from the old address after the change, which A1.11a forbids
+    whether the session went on or a packet to the old address started one ("stop using the old address");
+    `gap`: the longest gap before them, radio seconds (a restart under the bench's 100 ms RUN=1 can leave
+    none longer than a status period, so it only describes); `new_early`: from the new address, where the
+    bench sent nothing."""
+    after = t_change + (GAP_S + JITTER_S) * ratio
+    olds = [t for t, r in status(rec, None, t_switch) if r == old_ip]
+    late = [t for t in olds if t >= after]
+    gap = 0.0
+    if late:
+        before = [t for t in olds if t < late[0]][-1:] or [t_change]
+        gap = round((late[0] - before[0]) / ratio, 3)
+    return {"old": late, "gap": gap, "new_early": [t for t, r in status(rec, t_change, t_switch) if r == new_ip]}
+
+
+def tx_settings(h) -> tuple:
+    """(TX_STATE bit 4, TX_MODE_CLASS, KEYED_TIMEOUT) read without changing them: TX_STATE is read-only, and a
+    rejected write is answered with the value in force (B8.4, B8.4a)."""
+    ts = value(h.write([(TX_STATE, 0)]), TX_STATE)
+    mc = value(h.write([(TX_MODE_CLASS, 0xFF)]), TX_MODE_CLASS)
+    kt = value(h.write([(KEYED_TIMEOUT, 50)]), KEYED_TIMEOUT)
+    return (None if ts is None else (ts >> 4) & 1, mc, kt)
+
+
+def tx_preset(ctx, h, label: str) -> bool:
+    """PA enable set (General byte 58 bit [0]), TX_MODE_CLASS 1, KEYED_TIMEOUT 300: values a session end
+    resets, so that a reset can be seen."""
+    h.send(PORT_DISC, general(pa=True))
+    h.keepalive()
+    h.write([(TX_MODE_CLASS, PRESET[1])])
+    h.write([(KEYED_TIMEOUT, PRESET[2])])
+    got = tx_settings(h)
+    if got != PRESET:
+        ctx.part(f"{label}: the TX settings not taken beforehand ({got}, wanted {PRESET}): their reset not judged")
+        ctx.no_pass = True
+        return False
+    return True
+
+
+def judge_new_session(ctx, label: str, h, ddc0: int):
+    """The session that the bench's RUN=1 starts after an address change carries nothing over (B5.4 "Restart"
+    item 3, as T-B5-16): DDC0 reason 1 and no DDC0 I&Q, the TX settings of Table A3-4 (A3.6a) and of A3.6 at
+    their defaults, and an arm refused with WATCHDOG_DISABLED until a General packet of the new session."""
+    from .t_tx_locked import arm_reason
+    ss = value(h.write([(STREAM_STATUS, 0)]), STREAM_STATUS)
+    ctx.eq(f"{label}: the new session: DDC0 STREAM_STATUS reason 1 (B5.4 item 3)", None if ss is None else ss & 0x7F, 1)
+    ctx.eq(f"{label}: the new session: no DDC0 I&Q (B5.4 item 3)", ddc0, 0)
+    for name, got, want in zip(TX_NAMES, tx_settings(h), DEFAULTS):
+        ctx.eq(f"{label}: the new session: {name} at its default (A3.6a, A3.6)", got, want)
+    ctx.notes.append(f"{label}: the DUC-specific settings of Table A3-4 have no register to read (Table B8-2): not judged")
+    tok = value(h.write([(TX_ARM_TOKEN, 0)]), TX_ARM_TOKEN)
+    if not ctx.check(f"{label}: the new session: TX_ARM_TOKEN read", tok is not None, "no answer to a write of 0x0200"):
+        return
+    st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
+    ctx.eq(f"{label}: the new session: an arm before its General packet refused with WATCHDOG_DISABLED (B5.4 item 2)",
+           arm_reason(st), "WATCHDOG_DISABLED")
+    h.send(PORT_DISC, general())
+    h.keepalive()
+    st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
+    ctx.check(f"{label}: the new session: after its General packet the arm no longer refused with WATCHDOG_DISABLED",
+              st is not None and arm_reason(st) != "WATCHDOG_DISABLED", f"{arm_reason(st)}")
 
 
 def set_config(ctx, s: bytes, *items) -> int | None:
@@ -136,19 +348,87 @@ def wait_for(ctx, h, pred, limit_s: float) -> bool:
 class Case:
     """One change into DHCP mode: the logs started, the request sent with the session kept alive."""
 
-    def __init__(self, ctx, s: bytes, label: str):
+    def __init__(self, ctx, s: bytes, label: str, preset_before: bool = False):
+        """`preset_before`: the TX settings set before the request (a case whose lease may come at once);
+        otherwise after the reply, since the request's flash work may end the session by its watchdog and
+        the host restarts it (B2.3 "Flash work"), which resets them (A3.6a)."""
         from .t_mgmt import dhcp_messages
         self.ctx, self.s, self.label = ctx, s, label
         self.held = current_ip(ctx)
         self.h = session(ctx)
+        self.stream = Stream(ctx, self.h)
+        self.preset = tx_preset(ctx, self.h, label) if preset_before else None
         if has(ctx, "sock.log"):
             ctx.fixture("sock.log", action="start")
         if has(ctx, "eth.log"):
             eth_start(ctx)
         self.n0 = len(dhcp_messages(ctx))
         self.t0 = radio_us(ctx)
-        with kept(self.h):
-            self.st = set_config(ctx, s, (1, b"\x00"))
+        self.stream.start()  # keeps the session alive meanwhile
+        self.st = set_config(ctx, s, (1, b"\x00"))
+        self.t_reply = self.t_from = self.stream.now()
+
+    def preset_tx(self):
+        with self.stream.paused():
+            self.preset = tx_preset(self.ctx, self.h, self.label)
+        self.t_from = self.stream.now()
+
+    def kept(self, what: str, t0: float | None = None, t1: float | None = None, tx: bool = True, moved=None) -> bool:
+        """'The session does not end' in [t0, t1] (default: since the reply or the preset, until now):
+        status packets from one address with no gap, and (tx) the TX settings not reset (A3.6a). `moved`:
+        a callable, true when the address changed meanwhile, so the settings are not judged."""
+        ctx, st = self.ctx, self.stream
+        t1 = st.now() if t1 is None else t1
+        st.mark()
+        faults = kept_faults(st.snapshot(), self.t_from if t0 is None else t0, t1, st.ratio())
+        if tx and self.preset:
+            with st.paused():
+                got = tx_settings(self.h)
+            if moved and moved():
+                ctx.part(f"{self.label}: {what}: the TX settings not judged, the address changed meanwhile")
+                ctx.no_pass = True
+            else:
+                faults += [f"{n} {g} (set {w}): reset" if g == d else f"{n} {g} (set {w})"
+                           for n, g, w, d in zip(TX_NAMES, got, PRESET, DEFAULTS) if g != w]
+        return ctx.check(f"{self.label}: {what}", not faults, "; ".join(faults))
+
+    def ended(self, new, t_change: float):
+        """An address change applied at t_change (the radio answers on the new address, `new`): the
+        session ends, a packet to the old address starts none, and the bench's RUN=1 to the new address
+        starts a new session that carries nothing over (A1.11a; A2.3; B5.4 item 3)."""
+        ctx, st, label = self.ctx, self.stream, self.label
+        old = self.h.net
+        apart = old.dest(PORT_HP) != new.dest(PORT_HP)
+        st.know(new)
+        st.wait(1.0)  # RUN=1 to the old address only
+        t_switch = st.now()
+        sent = sorted({ip for t, p, ip, _ in st.sent if t >= t_change})
+        ctx.notes.append(f"{label}: from the change on the bench sent to {sent} until {t_switch - t_change:.1f} s, "
+                         f"then to {new.radio_ip}")
+        if apart:
+            f = end_faults(st.snapshot(), t_change, t_switch, old.radio_ip, new.radio_ip, st.ratio())
+            ctx.check(f"{label}: the session ends and a P2 packet to the old address {old.radio_ip} starts none (A1.11a): "
+                      "no status packets from it after the change", not f["old"],
+                      f"{len(f['old'])} status packets from it after the change, the first {f['gap']:.2f} s of radio time "
+                      "after the one before (" + ("a session again on the old address" if f["gap"] > GAP_S + JITTER_S else
+                                                  "no gap longer than the bound: went on, or restarted at once") + ")")
+            ctx.check(f"{label}: no status packets from {new.radio_ip} before the bench sent there", not f["new_early"],
+                      f"{len(f['new_early'])} packets")
+        else:
+            ctx.part(f"{label}: the endpoint maps the old address {old.radio_ip} and the new {new.radio_ip} to the same "
+                     "local addresses: 'the status packets from the old address stop' and 'a packet to the old address "
+                     "starts no session' not judged; the end judged by the new session's state (B5.4 item 3)")
+            ctx.no_pass = True
+        st.retarget(new)
+        st.wait(1.0)
+        rec = st.snapshot()
+        restart = [t for t, r in status(rec, t_switch) if r == new.radio_ip or not apart]
+        if not ctx.check(f"{label}: the bench's RUN=1 to {new.radio_ip} starts a new session (A2.3)", bool(restart),
+                         "no status packets within 1 s"):
+            return
+        ddc0 = sum(1 for t, p, _ in rec if p == PORT_DDC0 and t >= restart[0])
+        with st.paused():
+            judge_new_session(ctx, label, self.h, ddc0)
 
     def answered(self) -> bool:
         return self.ctx.eq(f"{self.label}: SET_CONFIG of address mode DHCP answered 0", self.st, 0)
@@ -172,6 +452,7 @@ class Case:
                long_borrows(borrows, self.t0 or 0, until_us), [])
 
     def close(self):
+        self.stream.stop()
         self.h.close()
 
 
@@ -198,6 +479,20 @@ def wait_link_local(ctx, h, limit_s: float) -> float:
     return took
 
 
+def moved(ctx, ip: str) -> bool:
+    """The radio's address is no longer `ip` (net.endpoint follows it)."""
+    from .p2 import reread_endpoint
+    reread_endpoint(ctx)
+    return current_ip(ctx) != ip
+
+
+def ack_wall(ack: dict, t_reply: float, t_seen: float) -> float | None:
+    """The DHCPACK's time on the host clock: its t_wall where that lies between the reply and the moment
+    the bench saw it (the same clock), else None."""
+    t = ack.get("t_wall")
+    return t if isinstance(t, (int, float)) and t_reply - 1 <= t <= t_seen else None
+
+
 def needs(ctx, label: str, *fx) -> bool:
     missing = [f for f in fx if not has(ctx, f)]
     if missing:
@@ -217,7 +512,9 @@ def no_server(ctx, s: bytes):
     try:
         if not c.answered():
             return
-        ctx.check(f"{label}: the session does not end for the mode change", alive(c.h), "no status packets after the reply")
+        c.preset_tx()
+        c.stream.wait(1.0)
+        c.kept("the session does not end for the mode change", moved=lambda: moved(ctx, c.held))
         took = wait_link_local(ctx, c.h, LINK_LOCAL_BY_S)
         ip = current_ip(ctx)
         if not ctx.check(f"{label}: a link-local address chosen within {LINK_LOCAL_BY_S:g} s of radio time (the "
@@ -291,10 +588,9 @@ def from_link_local(ctx, s: bytes):
     try:
         if not c.answered():
             return
-        with kept(c.h):
-            from .t_a3 import wait_radio
-            wait_radio(ctx, 10_000)  # longer than the 6 s of attempts from a static address
-        ctx.check(f"{label}: no session end before a lease", alive(c.h), "no status packets 10 s after the reply")
+        c.preset_tx()
+        c.stream.wait(10.0)  # longer than the 6 s of attempts from a static address
+        c.kept("no session end before a lease (10 s)", moved=lambda: moved(ctx, ip))
         ctx.eq(f"{label}: the link-local address kept", current_ip(ctx), ip)
         p = probes([(e["t_us"] / 1e6, int(e["arp"].get("op", 0)), e["arp"].get("spa", ""), e["arp"].get("tpa", ""))
                     for e in eth_read(ctx) if e.get("dir") == "from_radio" and isinstance(e.get("arp"), dict)])
@@ -320,24 +616,36 @@ def with_server(ctx, s: bytes):
                                  ("from a static address, a server offering the same address and netmask", LEASED, False)):
         if not go_static(ctx, s, static, label):
             return
-        c = Case(ctx, s, label)
+        c = Case(ctx, s, label, preset_before=moves)  # another address may come at once
         try:
             if not c.answered():
                 return
-            ctx.check(f"{label}: the session does not end for the mode change", alive(c.h), "no status packets after the reply")
+            if not moves:
+                c.preset_tx()
             if not ctx.check(f"{label}: a lease (DHCPACK in dhcp.log)", wait_for(ctx, c.h, c.acked, 30), f"{[mtype(m) for m in c.msgs()]}"):
                 return
+            t_seen = c.stream.now()
             ack = next(m for m in c.msgs() if mtype(m) == "ACK")
+            if moves:  # up to the lease, which ends it; the TX settings cannot be read before it
+                t_ack = ack_wall(ack, c.t_reply, t_seen)
+                if t_ack is None:
+                    t_ack = c.t_reply + 0.5 + GAP_S + JITTER_S
+                    ctx.notes.append(f"{label}: the DHCPACK has no t_wall on the host clock: 'does not end for the "
+                                     "mode change' judged over 0.5 s after the reply")
+                c.kept("the session does not end for the mode change (until the lease)",
+                       t1=max(c.t_reply, t_ack - (GAP_S + JITTER_S) * c.stream.ratio()), tx=False)
+            else:
+                c.kept("the session does not end for the mode change")
             ctx.eq(f"{label}: the DHCP messages carry ciaddr 0.0.0.0, the BROADCAST flag and the static address as source",
                    bad_client_msgs([m for m in c.msgs() if m.get("t_us", 0) <= ack.get("t_us", 0) or m.get("t_us_approx")], static), [])
             if moves:
                 c.borrows(None if ack.get("t_us_approx") else ack.get("t_us"))
                 wait_reachable(ctx, f"{label}: the lease", 40)
-                ctx.eq(f"{label}: the radio moves to the leased address", current_ip(ctx), LEASED)
-                ctx.check(f"{label}: the session ends (an address change, A1.11a)", not alive(c.h), "status packets go on")
+                if ctx.eq(f"{label}: the radio moves to the leased address", current_ip(ctx), LEASED):
+                    c.ended(ctx.net, c.stream.now())
             else:
                 c.borrows()
-                ctx.check(f"{label}: the session does not end", alive(c.h), "no status packets after the lease")
+                c.kept("the session does not end (a lease with the same address and netmask)")
                 ctx.eq(f"{label}: the address kept", current_ip(ctx), LEASED)
         finally:
             c.close()

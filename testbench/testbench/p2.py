@@ -153,6 +153,18 @@ class Host:
     def drain(self, t: float = 0.05):
         self.recv(t)
 
+    def recv_raw(self, timeout: float):
+        """Datagrams (data, source address, time.time()) until timeout, unfiltered: for a record
+        that needs the sender's address, not only its port."""
+        got, end = [], time.monotonic() + timeout
+        while (left := end - time.monotonic()) > 0:
+            r, _, _ = select.select([self.s], [], [], left)
+            if not r:
+                break
+            data, src = self.s.recvfrom(4096)
+            got.append((data, src, time.time()))
+        return got
+
     # --- conveniences ---
     def discover(self, timeout: float = 0.5, kind: str = "unicast"):
         self.send(PORT_DISC, discovery(), kind)
