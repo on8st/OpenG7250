@@ -1,3 +1,6 @@
 .venv/
 __pycache__/
 .DS_Store
+
+# per-machine agent settings (local paths); each clone keeps its own
+product/spec/.claude/settings.json
