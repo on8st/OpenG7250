@@ -78,6 +78,7 @@ static void wr16(uint16_t a, uint8_t bsb, uint16_t v) { uint8_t b[2] = { (uint8_
  *   FS        word 9 and SR1 as the very first code of this start read them -> word, SR1
  *   FH n      TIM2's interrupt (exception 44) pended; its handler spins about n ms -> 0
  *   FN n      as FH, with FAULTMASK set while the handler spins -> 0
+ *   FI a b c d  the chip's source address (SIPR) set to a.b.c.d; the reply goes out from it -> 0
  *   FU        UsageFault enabled (SHCSR USGFAULTENA) -> SHCSR
  *   FF        the kept record of the last fault (the handler keeps it, then resets by SYSRESETREQ)
  *             -> count, CFSR, HFSR, IPSR at entry, stacked PC, stacked IPSR, EXC_RETURN, the fault's mark
@@ -285,6 +286,7 @@ static uint16_t command(uint8_t *d, uint16_t len)
         REG(0xE000E200u) = 1u << 28;      /* ISPR0: pended, taken at once */
         __asm volatile ("dsb\n isb\n");
     }
+    else if(d[1] == 'I' && len >= 6) wr(0x000F, 0, &d[2], 4);   // T-EMU-36: an address move
     else if(d[1] == 'U') { REG(0xE000ED24u) |= 1u << 18; a = REG(0xE000ED24u); }
     else if(d[1] == 'T' && len >= 4)
     {

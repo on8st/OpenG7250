@@ -280,6 +280,16 @@
    "timeout_s": 240
   },
   {
+   "id": "T-EMU-36",
+   "title": "an address move: radio.former (format v1.10) at B + 300 + P, delivery on the current connect map, the chip's drop of a datagram for the old address (net.log dropped, not our address); a second move",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 120
+  },
+  {
    "id": "T-EMU-25",
    "title": "flash.log entries end at a reset and a pause; an erase clears ECC marks; net.endpoint whole; net.log order; CYCCNT against the timers over masked erases",
    "reqs": [

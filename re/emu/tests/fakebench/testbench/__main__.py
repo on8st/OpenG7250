@@ -14,6 +14,7 @@ of the runner itself against firmware-tests/bench/net_test.c:
   T-EMU-10  reset.wdt: watchdog reset, the image boots again, reset event "wdt"
   T-EMU-11  link.set: no traffic while the link is down, traffic again at 100
   T-EMU-12  power.cut: the core stops at at_us, the image boots again from the kept flash
+  T-EMU-36  an address move: radio.former, delivery on the current map, the chip's drop for the old address
 """
 import argparse
 import json
@@ -1447,6 +1448,85 @@ def run_test(tid, ep):
                       "state %s entry %s" % (r.get("state"), r.get("entry"))),
                 check("no abort: after a watchdog reset the image answers again, and the state is kept",
                       w.get("ok") and back is not None and r2.get("state") == r.get("state"), "reset %s, answer %s, state %s" % (w, back is not None, r2.get("state")))]
+    if tid == "T-EMU-36":
+        # the radio moves address (net_test FI: SIPR written): radio.former names the address before the last
+        # move, with a connect map of its own (B + 300 + P, format v1.10); a datagram to the current map is
+        # delivered; one to former.connect reaches the chip for the old address and the chip drops it, as the
+        # hardware does in UDP mode (net.log: dropped, reason "not our address"); a second move names the
+        # address just before it
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 21))
+
+        def ask(payload, dest, wait=20.0, again=True):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(1.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(dest))
+                    sent = True
+                try:
+                    d, src = sk.recvfrom(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d, src
+            return None, None
+
+        def endpoint_until(ip, wait=20.0):
+            t0, e = time.time(), {}
+            while time.time() - t0 < wait:
+                e = ctl.op("net.endpoint").get("value") or {}
+                if (e.get("radio") or {}).get("ip") == ip:
+                    return e
+                time.sleep(0.2)
+            return e
+
+        r0 = ep["radio"]
+        ip0 = r0["ip"]
+        pre = ip0.rsplit(".", 1)[0]
+        ip1, ip2 = pre + ".50", pre + ".60"
+        base = (ep.get("runner") or {}).get("port_base")
+        ctl.op("net.log", action="start")
+        m1, _ = ask(b"FI" + bytes(int(x) for x in ip1.split(".")), c)
+        e1 = endpoint_until(ip1)
+        er1 = e1.get("radio") or {}
+        f1 = er1.get("former") or {}
+        fc = f1.get("connect") or {}
+        others = set((er1.get("connect") or {}).values())
+        for kind in ("limited", "directed"):
+            others |= set(((e1.get("broadcast") or {}).get("send_to") or {}).get(kind, {}).values())
+        cur = (er1.get("connect") or {}).get("1024")
+        echo_new, src_new = ask(b"hello36", cur) if cur else (None, None)
+        old, _ = ask(b"old36", fc["1024"], wait=4.0, again=False) if "1024" in fc else (b"no map", None)
+        time.sleep(1.0)
+        ents = (ctl.op("net.log", action="read").get("value") or {}).get("entries", [])
+        drops = [x for x in ents if x.get("dir") == "dropped" and x.get("reason") == "not our address"]
+        took = [x for x in ents if x.get("dir") == "to_radio" and x.get("head", "").startswith(b"old36".hex())]
+        m2, _ = ask(b"FI" + bytes(int(x) for x in ip2.split(".")), cur) if cur else (None, None)
+        e2 = endpoint_until(ip2)
+        f2 = (e2.get("radio") or {}).get("former") or {}
+        ctl.op("net.log", action="stop")
+        return [check("before any move the endpoint has no radio.former", "former" not in r0, str(r0)[:200]),
+                check("after the move (%s to %s): radio.ip is the new address, radio.former.ip the old one" % (ip0, ip1),
+                      m1 is not None and er1.get("ip") == ip1 and f1.get("ip") == ip0, "%s %s" % (m1 is not None, er1.get("former"))),
+                check("former.connect: every radio port, at B + 300 + P, none shared with connect or send_to",
+                      bool(fc) and set(fc) == set(r0["connect"]) and base is not None
+                      and all(addr(v)[1] == base + 300 + int(k) for k, v in fc.items()) and not (set(fc.values()) & others), str(fc)[:300]),
+                check("a datagram to the current connect map is delivered (echoed, from that connect address)",
+                      echo_new == b"hello36" and src_new is not None and "%s:%d" % src_new == cur, "%s %s" % (echo_new, src_new)),
+                check("a datagram to former.connect[1024] is dropped by the chip: no echo, never taken, net.log dropped "
+                      "'not our address' on socket 0, port 1024",
+                      old is None and not took and any(x.get("radio_port") == 1024 and x.get("socket") == 0 and isinstance(x.get("t_us"), int) for x in drops),
+                      "echo %s, drops %s, taken %d" % (old, json.dumps(drops)[:200], len(took))),
+                check("a second move (%s to %s): radio.former.ip is the address just before it" % (ip1, ip2),
+                      m2 is not None and (e2.get("radio") or {}).get("ip") == ip2 and f2.get("ip") == ip1, "%s %s" % (m2 is not None, f2.get("ip")))]
     if tid == "T-EMU-33":
         # an ECC mark set before an MCU reset (software reset, SYSRESETREQ) is in force at once after
         # it: a byte read of the marked word shows DBECCERR, with no program before the reset and with

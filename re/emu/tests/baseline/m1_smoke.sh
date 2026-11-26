@@ -54,6 +54,8 @@ python3 tests/baseline/dump_check_case.py >/dev/null 2>&1 && ok dump_check_case 
 
 echo "[2j] the bridge's host addresses fixed for the boot: a lease below .20, SUBR 0.0.0.0 (no emulator)"
 python3 tests/baseline/bridge_hosts_check.py >/dev/null 2>&1 && ok bridge_hosts || bad bridge_hosts
+echo "[2k] host-to-chip frames with the destination IP (type 8) and in the capture; radio.former after a move (no emulator)"
+python3 tests/baseline/bridge_frames_check.py >/dev/null 2>&1 && ok bridge_frames || bad bridge_frames
 
 if [ ! -x "$RN" ] && [ ! -f "$RN" ]; then
   echo "[3-4] SKIP (pinned Renode not found at tools/renode-1.17.0)"

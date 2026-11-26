@@ -4,14 +4,20 @@
 
 - CH394 link: the emulated Ethernet chip connects here (TCP). Frames:
   [type 1 B][len 2 B BE][payload]; type 1 radio->host: srcPort(2) dstIP(4)
-  dstPort(2) data; type 2 host->radio: srcIP(4) srcPort(2) dstPort(2) flags(1)
-  data (flags bit 0 = broadcast); type 3 radio->host: the address the image
-  programmed (SIPR(4) SUBR(4)), sent when SIPR is complete.
+  dstPort(2) data; type 8 host->radio: capture time(8) srcIP(4) dstIP(4)
+  srcPort(2) dstPort(2) flags(1) data (flags bit 0 = broadcast; the chip drops a
+  unicast whose dstIP is not its SIPR, "not our address" in net.log); types 2 and 7
+  (no dstIP, delivered by port alone) are still read by the model, the bridge no
+  longer sends them; type 3 radio->host: the address the image programmed
+  (SIPR(4) SUBR(4)), sent when SIPR is complete.
 - Address mapping: per radio port P a local UDP socket radio.connect[P]
   (127.0.0.1:40000+P); per host i a local port range hosts[i].ports on
   hosts[i].bind; broadcast.send_to limited 40100+P, directed 40200+P. A datagram
   the bench sends from local port p reaches the radio from hosts[i].ip:p (same
   port); a radio datagram to hosts[i].ip:p goes to bind:p from connect[srcPort].
+  After the radio moves address, radio.former {ip, connect} names the address
+  before the last move: a datagram to former.connect[P] (127.0.0.1:B+300+P)
+  reaches the chip with dstIP = former.ip on port P.
 - pcapng capture of every datagram (Ethernet/IPv4/UDP, both directions).
 - Agent link: the bench agent in the emulator connects here (TCP, line
   protocol, see models/csharp/G7250BenchAgent.cs).
@@ -30,12 +36,12 @@ import time
 
 SPEC_PORTS = list(range(1024, 1036)) + [7250, 7251]
 # Local port plan per run (format section 3): connect = B + P, limited send_to =
-# B + 100 + P, directed send_to = B + 200 + P, host ranges from B + 8000. The
-# base B is chosen per boot from bases whose whole span (B + 1024 .. B + 8299)
+# B + 100 + P, directed send_to = B + 200 + P, former connect = B + 300 + P
+# (format v1.10, radio.former), host ranges from B + 8000. The base B is chosen per boot from bases whose whole span (B + 1024 .. B + 8299)
 # stays clear of the ports the format doc uses as examples (41024-47451,
 # 52000-52299), and only if every port in that span can be bound.
 PORT_BASES = (20000, 30000, 10000)
-CONNECT_OFF, LIMITED_OFF, DIRECTED_OFF, HOST_OFF = 0, 100, 200, 8000
+CONNECT_OFF, LIMITED_OFF, DIRECTED_OFF, FORMER_OFF, HOST_OFF = 0, 100, 200, 300, 8000
 # The fixed source ports the spec tests need (T-B3-33: 1024, T-B8-19: 7250).
 # Format v1.4: hosts[0].fixed_ports lists them; the bench binds one only when a
 # test asks for that exact port, so they are not in hosts[0].ports. Each is
@@ -120,6 +126,8 @@ class Bridge:
         self.pcap = Pcap(pcap_path)
         self.socks = {}       # local socket -> (kind, radio port)
         self.by_port = {}     # radio port -> connect socket
+        self.former_by_port = {}  # radio port -> former connect socket (radio.former)
+        self.former_ip = None     # the radio's address before its last move; None before any move
         self.stop = False
         self.stats = {"to_radio": 0, "from_radio": 0, "unroutable": 0}
         self.dhcp = DhcpServer(self._dhcp_send, lambda: self.now_us() if self.now_us else None)
@@ -141,9 +149,9 @@ class Bridge:
         self.pcap.udp(src_ip, 67, dst_ip, dport, payload, False)
         if self.ch is None:
             return
-        frame = struct.pack("!Q", int(time.time() * 1e6)) + socket.inet_aton(src_ip) + struct.pack("!HHB", 67, dport, 1 if broadcast else 0) + payload
+        frame = struct.pack("!Q", int(time.time() * 1e6)) + socket.inet_aton(src_ip) + socket.inet_aton(dst_ip) + struct.pack("!HHB", 67, dport, 1 if broadcast else 0) + payload
         try:
-            self.ch.sendall(struct.pack("!BH", 7, len(frame)) + frame)
+            self.ch.sendall(struct.pack("!BH", 8, len(frame)) + frame)
         except OSError:
             pass
 
@@ -153,8 +161,8 @@ class Bridge:
         got = []
         try:
             for p in SPEC_PORTS:
-                for kind, off in (("connect", CONNECT_OFF), ("limited", LIMITED_OFF), ("directed", DIRECTED_OFF)):
-                    if kind != "connect" and p not in (1024, 7251):
+                for kind, off in (("connect", CONNECT_OFF), ("limited", LIMITED_OFF), ("directed", DIRECTED_OFF), ("former", FORMER_OFF)):
+                    if kind in ("limited", "directed") and p not in (1024, 7251):
                         continue
                     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     got.append((s, kind, p))
@@ -184,9 +192,14 @@ class Bridge:
             self.socks[s] = (kind, p)
             if kind == "connect":
                 self.by_port[p] = s
+            elif kind == "former":
+                self.former_by_port[p] = s
         return True
 
     def set_radio(self, ip, netmask="255.255.255.0"):
+        # a move (format v1.10): the address before it becomes radio.former, kept until the next move
+        if self.radio_ip is not None and ip != self.radio_ip:
+            self.former_ip = self.radio_ip
         # The hosts' addresses are fixed for the boot, as the endpoint gave them: worked out again
         # only when the radio moves to another subnet (or onto a host's own address), not while
         # SUBR reads 0.0.0.0. Until 2026-11-25 they were worked out at every change of the radio's
@@ -224,7 +237,7 @@ class Bridge:
         self.radio_ip = ip
 
     def endpoint(self, control_port, fixtures):
-        return {
+        ep = {
             "format": "g7250-endpoint", "version": 1, "minor": 1, "kind": "emulator",
             "radio": {"ip": self.radio_ip, "netmask": self.netmask, "mac": RADIO_MAC,
                       "connect": {str(p): "127.0.0.1:%d" % (self.base + CONNECT_OFF + p) for p in SPEC_PORTS}},
@@ -236,6 +249,10 @@ class Bridge:
             "fixtures": fixtures, "time_scale": 1.0,
             "runner": {"port_base": self.base},
         }
+        if self.former_ip is not None:
+            ep["radio"]["former"] = {"ip": self.former_ip,
+                                     "connect": {str(p): "127.0.0.1:%d" % (self.base + FORMER_OFF + p) for p in SPEC_PORTS}}
+        return ep
 
     def _host_for_port(self, p):
         for h in self.hosts:
@@ -296,6 +313,8 @@ class Bridge:
             self.stats["unroutable"] += 1
             return
         s = self.by_port.get(sport)
+        if self.former_ip is not None and self.src_ip == self.former_ip:
+            s = self.former_by_port.get(sport)   # never after the SIPR write, but the map is distinct
         if s is None:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.bind(("127.0.0.1", 0))
@@ -321,20 +340,26 @@ class Bridge:
                 if h is None or self.ch is None or self.radio_ip is None:
                     self.stats["unroutable"] += 1
                     continue
-                bcast = kind != "connect"
-                dst = self.radio_ip if not bcast else ("255.255.255.255" if kind == "limited" else self.directed)
+                bcast = kind in ("limited", "directed")
+                if kind == "former":
+                    if self.former_ip is None:
+                        self.stats["unroutable"] += 1       # no move yet: no former address
+                        continue
+                    dst = self.former_ip
+                else:
+                    dst = self.radio_ip if not bcast else ("255.255.255.255" if kind == "limited" else self.directed)
                 cap_us = int(time.time() * 1e6)       # the capture time, passed on for host_delay_us
                 self.pcap.udp(h["ip"], lport, dst, rport, data, False)
-                payload = struct.pack("!Q", cap_us) + socket.inet_aton(h["ip"]) + struct.pack("!HHB", lport, rport, 1 if bcast else 0) + data
+                payload = struct.pack("!Q", cap_us) + socket.inet_aton(h["ip"]) + socket.inet_aton(dst) + struct.pack("!HHB", lport, rport, 1 if bcast else 0) + data
                 try:
-                    self.ch.sendall(struct.pack("!BH", 7, len(payload)) + payload)
+                    self.ch.sendall(struct.pack("!BH", 8, len(payload)) + payload)
                     self.stats["to_radio"] += 1
                 except OSError:
                     self.stats["unroutable"] += 1
 
     def close(self):
         self.stop = True
-        for s in list(self.socks) + list(self.by_port.values()):
+        for s in list(self.socks) + list(self.by_port.values()) + list(self.former_by_port.values()):
             try:
                 s.close()
             except OSError:

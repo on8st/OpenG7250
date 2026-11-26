@@ -29,7 +29,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import benchnet  # noqa: E402
 
-FORMAT_MINOR = 9
+FORMAT_MINOR = 10
 # in every result and run report; also in the entry of the tests that read a word with a double error
 BUS_FAULT_NOTE = ("not modelled: the bus fault of a double ECC read, flash and retained RAM (flash: only the flags "
                   "DBECCERR and FLASH_ECC_FA1R are set and the data reads as stored; retained RAM: an ECC error is not "

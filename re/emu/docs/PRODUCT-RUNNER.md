@@ -93,6 +93,24 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   `directed[P]` = 127.0.0.1:(B + 200 + P) for 1024 and 7251: the image receives
   the datagram as a broadcast on port P. A datagram from the image to the
   limited or directed broadcast address goes to the bench port it names.
+- `radio.former` (format v1.10, 2026-11-26): after the radio moves address (the
+  image writes a SIPR other than the published one), `{"ip": <the address before
+  the last move>, "connect": {P: 127.0.0.1:(B + 300 + P)}}` for every spec port,
+  in the endpoint file and in every `net.endpoint` answer; absent before any move;
+  after a second move it names the address just before that move. A SUBR change
+  with the same SIPR is no move. A datagram the bench sends to `former.connect[P]`
+  reaches the chip with destination former.ip on port P, so the chip drops it
+  (`not our address` in net.log) unless SIPR holds that address again. A datagram
+  from former.ip would come from `former.connect[P]`; the chip always sends from
+  its current SIPR, so after the move none does. The ports B + 300 + P (B + 1324 …
+  B + 1335, B + 7550, B + 7551) lie inside the claimed span and clear of every other
+  runner port (connect B + P, send_to B + 100 + P and B + 200 + P, hosts B + 8000 …
+  B + 8299).
+- Every host-to-chip frame carries the destination IP (type 8: capture time,
+  source IP, destination IP, ports, flags, data); the capture records it as given.
+  Checked by bridge_frames_check (m1_smoke step [2k], no emulator) and T-EMU-36
+  (runner-selfcheck.json, step [7]: net_test FI moves the address; delivery on the
+  current map, the drop for the old one in net.log, a second move).
 - `hosts`: two in-subnet addresses (the 20th and 21st host of the image's
   subnet) and 10.99.0.20 outside it, on 127.0.0.1. They are fixed for the boot: worked out
   again only when the radio moves to another subnet or onto a host's own address, not when its
@@ -138,7 +156,9 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
 - `net.log {action: start|read|stop, from?}`: every UDP datagram at the radio in
   emulated time, kept by the CH394 model: `to_radio` when the datagram is placed
   in the socket's receive buffer (the image can first see it), `from_radio` when
-  the image's SEND executes. Entry: `t_us`, `dir`, `socket`, `radio_port`,
+  the image's SEND executes; `dropped` when the chip did not take it, with
+  `reason` (`link down`, `no socket`, `no buffer`, `buffer full`, and since
+  2026-11-26 `not our address`). Entry: `t_us`, `dir`, `socket`, `radio_port`,
   `peer` (ip:port as the radio sees it, the endpoint's host addresses), `len`,
   `head` (first 16 payload bytes, hex). Pages of at most 5000 entries
   (`from`, `next`, `count`); a cap of 100000 entries, beyond it `dropped`.

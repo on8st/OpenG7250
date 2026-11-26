@@ -15,6 +15,10 @@
 //   - UDP: SEND takes TX_RD..TX_WR as one datagram to Sn_DIPR:Sn_DPORT; a
 //     received datagram goes into the RX buffer with the 8-byte header (source
 //     IP, source port, length), Sn_IR.RECV; Sn_MR.BCASTB blocks broadcasts
+//   - the destination address: frames of type 8 carry the destination IP; a unicast
+//     that is not for SIPR is dropped before the sockets ("not our address" in
+//     net.log), as the hardware does in UDP mode; types 2 and 7 and net.inject
+//     carry none and are delivered by port alone
 //   - INT# (output IRQ, active low) from (SIR & SIMR) and (IR & IMR)
 //   - the network: datagrams go to and come from the test-bench runner over a
 //     local TCP link (bridgePort; 0 = no network), see docs/CH394-model.md; the
@@ -389,7 +393,9 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(p.Length < 9) return;
             int dport = (p[6] << 8) | p[7];
             bool bcast = (p[8] & 1) != 0;
-            int len = p.Length - 9;
+            bool hasDst = (p[8] & 2) != 0;                  // a frame of type 8: the destination IP after the data
+            int len = p.Length - 9 - (hasDst ? 4 : 0);
+            if(len < 0) return;
             bool ok = false;
             lock(sync)
             {
@@ -397,6 +403,19 @@ namespace Antmicro.Renode.Peripherals.SPI
                 curInjected = curInjectedNext; curInjectedNext = false;
                 string peer = Ip(p, 0) + ":" + ((p[4] << 8) | p[5]);
                 if(!linkUp) { dropped++; NetRecord("dropped", -1, dport, peer, p, 9, len, "link down"); return; }
+                if(hasDst && !bcast)
+                {
+                    // the chip takes a unicast only for its own address (SIPR), as in UDP mode on the hardware
+                    int d = p.Length - 4;
+                    if(p[d] != common[0x0F] || p[d + 1] != common[0x10] || p[d + 2] != common[0x11] || p[d + 3] != common[0x12])
+                    {
+                        int sn = -1;
+                        for(int n = 0; n < Sockets && sn < 0; n++) if(sreg[n][0x03] == 0x22 && U16(sreg[n], 0x04) == dport) sn = n;
+                        dropped++;
+                        NetRecord("dropped", sn, dport, peer, p, 9, len, "not our address");
+                        return;
+                    }
+                }
                 for(int n = 0; n < Sockets && !ok; n++)
                 {
                     var r = sreg[n];
@@ -651,6 +670,21 @@ namespace Antmicro.Renode.Peripherals.SPI
                         for(int i = 0; i < 8; i++) cap = (cap << 8) | p[i];
                         var q = new byte[p.Length - 8];
                         Array.Copy(p, 8, q, 0, q.Length);
+                        Arrive(q, cap / 1e6);
+                    }
+                    else if(head[0] == 8 && p.Length >= 8 + 13)
+                    {
+                        // type 8: capture time(8) srcIP(4) dstIP(4) srcPort(2) dstPort(2) flags(1) data;
+                        // kept inside as srcIP srcPort dstPort flags|2 data dstIP (Deliver checks the destination)
+                        ulong cap = 0;
+                        for(int i = 0; i < 8; i++) cap = (cap << 8) | p[i];
+                        int dl = p.Length - 21;
+                        var q = new byte[9 + dl + 4];
+                        Array.Copy(p, 8, q, 0, 4);
+                        Array.Copy(p, 16, q, 4, 5);
+                        q[8] |= 2;
+                        Array.Copy(p, 21, q, 9, dl);
+                        Array.Copy(p, 12, q, 9 + dl, 4);
                         Arrive(q, cap / 1e6);
                     }
                 }

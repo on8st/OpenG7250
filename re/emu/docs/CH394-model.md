@@ -28,6 +28,15 @@ firmware-specific behaviour.
   received datagram is written with the 8-byte header (source IP, source port,
   length) and sets Sn_IR.RECV; Sn_MR.BCASTB blocks broadcasts; a full buffer
   drops the datagram.
+- The destination address (2026-11-26): the bridge's frames carry the datagram's
+  destination IP (frame type 8). The chip takes a unicast only when that address
+  is its SIPR, as in UDP mode on the hardware; any other unicast is dropped before
+  the sockets, counted, and logged in net.log as `dropped` with reason
+  `not our address` (socket: the UDP socket open on that port, else -1).
+  Broadcasts (flags bit 0) are not checked against SIPR. Frames of types 2 and 7
+  (no destination) and `net.inject` datagrams are still delivered by port alone.
+  Before that date the model delivered every datagram by port alone, so a datagram
+  for the radio's former address reached the image as if for the current one.
 - INT# from (SIR & SIMR) and (IR & IMR).
 - The network is the runner's bridge (local TCP link). The address the image
   programs (SIPR, SUBR) is reported on it, so the runner learns the radio's
