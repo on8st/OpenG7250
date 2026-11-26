@@ -57,6 +57,9 @@ struct State {
     reset_status: u16,
     /// Drop the reply to the first datagram of this command.
     drop_first: Option<u16>,
+    /// The first datagram of this command does flash work that never ends: no reply, a watchdog
+    /// reset, the store as before (B2.3; 0081).
+    stall_first: Option<u16>,
     seen: Vec<Seen>,
     /// The log (one `READ_LOG` page, flag bit 1 clear).
     log: Vec<String>,
@@ -106,6 +109,16 @@ fn handle(st: &mut State, stored: &mut Stored, from: SocketAddr, d: &[u8]) -> Ve
         }
     }
     st.seen.push(Seen { from, cmd, auth_ok, raw: d.to_vec() });
+    if st.stall_first == Some(cmd) {
+        // The watchdog reset: challenges, the session and the stored replies are gone.
+        st.stall_first = None;
+        st.challenges.clear();
+        st.holder = None;
+        stored.clear();
+        st.uptime = 0;
+        st.reset_cause = 3;
+        return vec![];
+    }
     if let Some(r) = stored.get(&(from, id)) {
         return vec![r.clone()];
     }
@@ -566,6 +579,41 @@ fn an_answered_restart_followed_by_a_watchdog_reset_ends_the_wait_and_names_the_
     assert_eq!(out.status.code(), Some(g7250ctl::exit::OK as i32), "{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(text.contains("restart done") && text.contains("reset cause watchdog (tag 17), not software"), "{text}");
     assert!(t0.elapsed() < std::time::Duration::from_secs(10), "the wait ended at the restart, not at its limit");
+}
+
+#[test]
+fn a_33_to_a_retransmission_after_a_stall_names_the_restart() {
+    // Flash work that never ends (B2.3; 0081): no reply, a watchdog reset with the store as
+    // before; the retransmission meets a spent challenge and gets 33. The text says the radio
+    // may have restarted; the configuration is unchanged. A 33 to a first send has no such hint.
+    let (addr, st) = start(State { secret: Some(OLD), uptime: 50_000, stall_first: Some(0x21), ..Default::default() });
+    let change = Config { default_level: Some(2), ..Default::default() };
+    let t = writes::set_config(&mut client(), addr, &secret(OLD), &change).unwrap_err().to_string();
+    assert!(t.contains("status 33") && t.contains("may have restarted during the flash work") && t.contains("g7250ctl info"), "{t}");
+    assert_eq!(st.lock().unwrap().config.get(&(5, 0)), None, "the store as before");
+    assert_eq!(st.lock().unwrap().seen.iter().filter(|s| s.cmd == 0x21).count(), 2, "first send and one retransmission");
+    let (addr, _st) = start(State { secret: Some(NEW), ..Default::default() });
+    let t = writes::set_config(&mut client(), addr, &secret(OLD), &change).unwrap_err().to_string();
+    assert!(t.contains("status 33") && !t.contains("may have restarted"), "{t}");
+}
+
+#[test]
+fn config_set_to_dhcp_says_the_radio_may_move() {
+    // 0082: from a static address the radio keeps it for at most 6 s, then takes a lease or a
+    // link-local address; the read-back still finds it, and the text says it may move.
+    let (addr, _st) = start(State { secret: Some(OLD), ..Default::default() });
+    let dir = std::env::temp_dir().join(format!("g7250ctl-writes-dhcp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("secret");
+    std::fs::write(&file, "11".repeat(32)).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_g7250ctl"))
+        .args(["config", "set", &addr.to_string(), "--secret-file", file.to_str().unwrap(), "--dhcp"])
+        .output()
+        .unwrap();
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(g7250ctl::exit::OK as i32), "{text}");
+    assert!(text.contains("at most 6 s") && text.contains("g7250ctl discover"), "{text}");
 }
 
 #[test]

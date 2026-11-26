@@ -72,7 +72,10 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   `calibration set`/`clear` with `GET_CALIBRATION`, `set-secret` with `IDENTIFY` (secret set).
 - `config set` with a network change: the radio applies it after the reply (A1.6), so the
   read-back goes to the new static address, else to the old one (a fallback, C-4, is
-  reported); after a change to DHCP use `discover`. A change of address or netmask ends the
+  reported); after a change to DHCP use `discover`: from a static address the radio keeps it
+  for at most 6 s while it asks for a lease, then takes the lease or a link-local address, so
+  the read-back may still find it at the old address, and the tool says that it may move
+  (A1.11; 0082). A change of address or netmask ends the
   write session and discards the challenges (A1.10; 0074): then no `END_WRITE_SESSION` is
   sent, and the next write takes a new challenge, as every write does. Without a certain
   change (same address and netmask read back) the session is ended as usual; with none held
@@ -89,6 +92,11 @@ self-contained but links the system libraries (libSystem), as every macOS binary
   A1.10, 0080): the text points to `set-secret` in the first-secret window. In the installer
   the secret is kept in RAM, so a wrong secret there gets 33, as elsewhere. `stats` lists the
   counters the radio sends, `mg_auth_required` (0080) included; it keeps no list of names.
+- A 33 to a retransmitted request with flash work (other than those that end in a reset,
+  which A1.4 covers) says that the radio may have restarted during the work. Flash work that
+  never ends gets no reply and ends in a watchdog reset with the store as before (B2.3; 0081).
+  The tool then points to `info` (reset cause) and `logs`. Flash work that ends late is
+  answered with 55 when it ends; after the tool's 16 s that is a "no reply".
 - `factory-reset` asks for confirmation unless `--yes`. `restart --wait` and
   `factory-reset --wait` wait until the radio answers with a lower uptime (30 s; 47 s after a
   factory reset, 0069).

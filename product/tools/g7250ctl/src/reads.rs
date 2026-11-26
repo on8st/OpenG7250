@@ -79,6 +79,12 @@ pub struct Observed {
 }
 
 /// Tag 17 (Table M-2).
+/// Flash work whose 33 to a retransmission may come from a restart during the work (0081). The
+/// requests that end in a reset are judged by A1.4 "Requests that end in a reset" instead.
+fn restart_may_explain_33(cmd: Command) -> bool {
+    transport::may_do_flash_work(cmd) && !matches!(cmd, Command::FactoryReset | Command::UpdateActivate | Command::Rollback)
+}
+
 pub fn reset_cause_name(c: u8) -> &'static str {
     match c {
         0 => "unknown",
@@ -124,6 +130,15 @@ impl fmt::Display for Failure {
                     write!(
                         f,
                         " (no secret is set on the radio: set one with `g7250ctl set-secret` while the first-secret window is open, after the first start or a factory reset; A1.10)"
+                    )?;
+                }
+                if a.status_code == 33 && a.sends > 1 && restart_may_explain_33(*cmd) {
+                    // A retransmission is answered from the stored reply; a 33 to one means the
+                    // stored reply is gone. Flash work that never ends takes the stall path: a
+                    // watchdog reset, no reply, the store as before (B2.3; 0081).
+                    write!(
+                        f,
+                        " (to a retransmission: the radio may have restarted during the flash work, which loses the reply; flash work that never ends ends in a watchdog reset with the store as before, B2.3. Check `g7250ctl info` for the reset cause and `g7250ctl logs`)"
                     )?;
                 }
                 Ok(())

@@ -382,6 +382,12 @@ pub fn config_set(json: bool, policy: g7250ctl::transport::Policy, a: &ConfigSet
         print!("{}", render::config_human(shown));
         match &r.whereabouts {
             Whereabouts::At(at) if *at != to => println!("the radio now answers at {at}"),
+            // From a static address the radio keeps it for at most 6 s of DHCP attempts, then
+            // takes a lease or a link-local address (A1.11; 0082); in DHCP mode already, or from
+            // link-local, nothing moves until a lease.
+            Whereabouts::At(at) if change.address_mode == Some(0) => {
+                println!("DHCP: the radio still answers at {at}; from a static address it keeps it for at most 6 s while it asks for a lease, then takes the lease or a link-local address; find it with `g7250ctl discover`")
+            }
             Whereabouts::At(_) => {}
             Whereabouts::Unknown => println!("the radio no longer answers at {to}; find it with `g7250ctl discover`"),
         }
