@@ -465,6 +465,9 @@ class Case:
             if not reached_new:
                 ctx.check(f"{label}: no status packets from {new.radio_ip} before the bench sent there", not f["new_early"],
                           f"{len(f['new_early'])} packets")
+            else:
+                ctx.notes.append(f"{label}: the bench's keepalives already reached {new.radio_ip}, so 'no status packets "
+                                 f"from {new.radio_ip} before the bench sent there' is not judged")
             if netlog:
                 judge_drops(ctx, label, old.radio_ip, netlog_entries(ctx), getattr(self.h, "port", None))
             else:

@@ -210,6 +210,11 @@ class Ends(unittest.TestCase):
         for want in ("reason 1", "no DDC0 I&Q", "TX_MODE_CLASS", "KEYED_TIMEOUT", "PA enable"):
             self.assertTrue(any(want in n for n in bad), (want, bad))
 
+    def test_new_early_judged_without_note(self):
+        ctx = self.run_end()
+        self.assertTrue(any("before the bench sent there" in x["name"] for x in ctx.checks))
+        self.assertFalse(any("is not judged" in n for n in ctx.notes))
+
     def test_shared_mapping_is_a_part(self):
         c, radio, nets = case(apart=False, change_at=101.0)
         c.stream.wait(1.0)
@@ -236,6 +241,13 @@ class Former(unittest.TestCase):
         for want in ("starts none", "dropped as 'not our address' (net.log)", "taken by the radio",
                      "starts a new session", "DDC0 STREAM_STATUS reason 1"):
             self.assertTrue(any(want in n for n in names), want)
+
+    def test_new_early_not_judged_is_noted(self):
+        """radio.connect follows the radio: the check is not made, and a note says so."""
+        ctx = self.run_end()
+        self.assertFalse(any("before the bench sent there" in x["name"] for x in ctx.checks))
+        self.assertIn(f"case: the bench's keepalives already reached {NEW}, so 'no status packets from {NEW} before "
+                      "the bench sent there' is not judged", ctx.notes)
 
     def test_old_address_starts_a_session_fails(self):
         # the fake keeps one session, already running on the new address from the bench's RUN=1 to radio.connect,
