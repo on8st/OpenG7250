@@ -9,7 +9,10 @@
   unicast whose dstIP is not its SIPR, "not our address" in net.log); types 2 and 7
   (no dstIP, delivered by port alone) are still read by the model, the bridge no
   longer sends them; type 3 radio->host: the address the image programmed
-  (SIPR(4) SUBR(4)), sent when SIPR is complete.
+  (SIPR(4) SUBR(4)), sent when SIPR is complete. MACRAW socket 0 (format v1.6):
+  type 10 radio->host: SEND time(8) and the Ethernet frame the image sent; type 11
+  host->radio: capture time(8) and an Ethernet frame for it. The image's frames go
+  to the capture (and to arp.peer), never onto the host network.
 - Address mapping: per radio port P a local UDP socket radio.connect[P]
   (127.0.0.1:40000+P); per host i a local port range hosts[i].ports on
   hosts[i].bind; broadcast.send_to limited 40100+P, directed 40200+P. A datagram
@@ -86,6 +89,14 @@ class Pcap:
             s = (s & 0xFFFF) + (s >> 16)
         return ~s & 0xFFFF
 
+    def frame(self, frame):
+        """An Ethernet frame as it is (MACRAW socket 0)."""
+        t = int(time.time() * 1e6)
+        body = struct.pack("<IIIII", 0, t >> 32, t & 0xFFFFFFFF, len(frame), len(frame)) + frame
+        with self.lock:
+            self._block(0x00000006, body)
+            self.f.flush()
+
     def udp(self, src_ip, sport, dst_ip, dport, data, from_radio):
         mac_r = bytes.fromhex(RADIO_MAC.replace(":", ""))
         mac_h = bytes.fromhex("020000000001")
@@ -129,7 +140,7 @@ class Bridge:
         self.former_by_port = {}  # radio port -> former connect socket (radio.former)
         self.former_ip = None     # the radio's address before its last move; None before any move
         self.stop = False
-        self.stats = {"to_radio": 0, "from_radio": 0, "unroutable": 0}
+        self.stats = {"to_radio": 0, "from_radio": 0, "unroutable": 0, "frames_from_radio": 0, "frames_to_radio": 0}
         self.dhcp = DhcpServer(self._dhcp_send, lambda: self.now_us() if self.now_us else None)
         self.now_us = None
         self.base = None
@@ -294,9 +305,29 @@ class Bridge:
                 elif t == 6 and len(p) >= 16:
                     # the CH394's emulated SEND time in front of the frame
                     self._from_radio(p[8:], t_us=struct.unpack("!Q", p[0:8])[0])
+                elif t == 10 and len(p) >= 8 + 14:
+                    self._frame_from_radio(p[8:], struct.unpack("!Q", p[0:8])[0])
                 elif t == 3 and len(p) >= 8:
                     self.src_ip = socket.inet_ntoa(p[0:4])
                     self.set_radio(socket.inet_ntoa(p[0:4]), socket.inet_ntoa(p[4:8]))
+
+    def _frame_from_radio(self, frame, t_us):
+        """An Ethernet frame the image sent in MACRAW: to the capture only."""
+        self.stats["frames_from_radio"] += 1
+        self.pcap.frame(frame)
+
+    def send_frame(self, frame):
+        """An Ethernet frame to the chip (MACRAW socket 0), placed like a datagram."""
+        if self.ch is None:
+            return False
+        self.pcap.frame(frame)
+        payload = struct.pack("!Q", int(time.time() * 1e6)) + frame
+        try:
+            self.ch.sendall(struct.pack("!BH", 11, len(payload)) + payload)
+            self.stats["frames_to_radio"] += 1
+            return True
+        except OSError:
+            return False
 
     def _from_radio(self, p, t_us=None):
         sport, = struct.unpack("!H", p[0:2])
@@ -636,7 +667,7 @@ class FixtureServer:
                # fixture() looks up the operation name (cdfe899, T-A1-66 dhcp.stop)
                "dhcp.start", "dhcp.stop", "dhcp.offer", "dhcp.nak", "dhcp.expire", "dhcp.log", "net.endpoint",
                # format v1.6: datagram times and the keyer log, emulated time
-               "net.log", "key.log",
+               "net.log", "key.log", "eth.log",
                # format v1.7: datagrams placed at exact emulated offsets; waits in emulated time
                "net.inject", "time.wait", "sock.log",
                # format v1.8
@@ -1132,7 +1163,7 @@ class FixtureServer:
             if not r or not r.startswith("ok "):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"t_us": int(r.split()[1])}}
-        if op in ("net.log", "key.log"):
+        if op in ("net.log", "key.log", "eth.log"):
             if not agent:
                 return {"ok": False, "error": "emulator not ready"}
             action = args.get("action")
@@ -1140,6 +1171,8 @@ class FixtureServer:
                 return {"ok": False, "error": "action must be start|read|stop"}
             if op == "net.log":
                 cmd = "netlog %s %d" % (action, int(args.get("from", 0)))
+            elif op == "eth.log":
+                cmd = "ethlog %s %d" % (action, int(args.get("from", 0)))
             else:
                 cmd = "keylog %s %d %d" % (action, int(args.get("from_key", 0)), int(args.get("from_hp", 0)))
             r = agent.ask(cmd, timeout=30)

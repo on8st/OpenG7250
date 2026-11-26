@@ -240,6 +240,19 @@ namespace Antmicro.Renode.Peripherals.SPI
             return j > i ? json.Substring(i, j - i) : "0";
         }
 
+        // eth.log (format v1.6): ethlog start|read|stop|runner [from]
+        private string EthLogCommand(string[] w)
+        {
+            var ch = Ch394();
+            if(ch == null) return "err no CH394";
+            string act = w.Length > 1 ? w[1] : "";
+            int from = w.Length > 2 ? int.Parse(w[2], CultureInfo.InvariantCulture) : 0;
+            string r = act == "start" ? Call(ch, "EthLogStart") : act == "read" ? Call(ch, "EthLogRead", from)
+                     : act == "runner" ? Call(ch, "EthRunRead", from)
+                     : act == "stop" ? Call(ch, "EthLogStop", from) : null;
+            return r == null ? "err eth.log action" : "ok " + r;
+        }
+
         private string NetLogCommand(string[] w)
         {
             var ch = Ch394();
@@ -1525,6 +1538,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                         return NowUs() >= target ? "ok " + NowUs() : "err wait timed out at " + NowUs();
                     }
                     case "netlog": return NetLogCommand(w);
+                    case "ethlog": return EthLogCommand(w);
                     case "blk":
                     {
                         // diagnostics: the core's translation block size and the boot-phase timer

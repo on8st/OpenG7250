@@ -15,6 +15,7 @@ of the runner itself against firmware-tests/bench/net_test.c:
   T-EMU-11  link.set: no traffic while the link is down, traffic again at 100
   T-EMU-12  power.cut: the core stops at at_us, the image boots again from the kept flash
   T-EMU-36  an address move: radio.former, delivery on the current map, the chip's drop for the old address
+  T-EMU-37  MACRAW socket 0: the frames the image sends in eth.log (format v1.6), UDP beside it
 """
 import argparse
 import json
@@ -1527,6 +1528,78 @@ def run_test(tid, ep):
                       "echo %s, drops %s, taken %d" % (old, json.dumps(drops)[:200], len(took))),
                 check("a second move (%s to %s): radio.former.ip is the address just before it" % (ip1, ip2),
                       m2 is not None and (e2.get("radio") or {}).get("ip") == ip2 and f2.get("ip") == ip1, "%s %s" % (m2 is not None, f2.get("ip")))]
+    if tid in ("T-EMU-37", "T-EMU-38"):
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + (22 if tid == "T-EMU-37" else 23)))
+
+        def ask(payload, wait=20.0, again=True):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(1.0)
+            t0, sent = time.time(), False
+            while time.time() - t0 < wait:
+                if again or not sent:
+                    sk.sendto(payload, addr(c))
+                    sent = True
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def words(d):
+            return tuple(int.from_bytes(d[i:i + 4], "big") for i in range(2, len(d) - 3, 4)) if d else ()
+
+        def eth_all():
+            out = []
+            for _ in range(50):
+                r = ctl.op("eth.log", action="read", **{"from": len(out)}).get("value") or {}
+                out += r.get("entries", [])
+                if len(out) >= r.get("count", 0):
+                    return out, r.get("dropped", 0)
+            return out, None
+
+        ask(b"echo-first")
+        radio_mac = ep["radio"]["mac"].lower()
+        radio_ip = ep["radio"]["ip"]
+    if tid == "T-EMU-37":
+        # MACRAW socket 0 (format v1.6 eth.log): net_test FO opens it (the UDP commands move to socket 1);
+        # the frames it sends (FA: an ARP probe, an announcement, a frame that is not ARP) are in eth.log as
+        # from_radio with their fields, in emulated time; nothing arrives (FY: RX_RSR 0); UDP goes on beside it
+        st = ctl.op("eth.log", action="start")
+        o = words(ask(b"FO\x00"))
+        echo = ask(b"echo37")
+        f0, f1, f2 = words(ask(b"FA\x00")), words(ask(b"FA\x01")), words(ask(b"FA\x02"))
+        y = words(ask(b"FY"))
+        time.sleep(0.5)
+        ents, dr = eth_all()
+        ctl.op("eth.log", action="stop")
+        tx = [e for e in ents if e.get("dir") == "from_radio"]
+        a0 = (tx[0].get("arp") or {}) if len(tx) > 0 else {}
+        a1 = (tx[1].get("arp") or {}) if len(tx) > 1 else {}
+        t2 = tx[2] if len(tx) > 2 else {}
+        return [check("eth.log offered and started", "eth.log" in ep.get("fixtures", []) and st.get("ok") and isinstance((st.get("value") or {}).get("t_us"), int), str(st)),
+                check("FO: socket 0 in MACRAW (Sn_SR 0x42), socket 1 UDP (0x22)", o[:2] == (0x42, 0x22), str(o)),
+                check("UDP goes on beside it (echo on 1024, now socket 1)", echo == b"echo37", str(echo)),
+                check("each SEND ends with SEND_OK; lengths 42, 42, 60", [x[:2] for x in (f0, f1, f2)] == [(1, 42), (1, 42), (1, 60)], str((f0, f1, f2))),
+                check("eth.log: three from_radio frames, in order, t_us not going back, none dropped",
+                      len(tx) == 3 and dr == 0 and all(isinstance(e.get("t_us"), int) for e in tx) and tx[0]["t_us"] <= tx[1]["t_us"] <= tx[2]["t_us"],
+                      json.dumps(ents)[:400]),
+                check("the probe: dst broadcast, src the radio's MAC, ethertype 0x0806, ARP op 1, sha the radio's MAC, spa 0.0.0.0, tpa 169.254.1.2",
+                      len(tx) > 0 and tx[0].get("dst") == "ff:ff:ff:ff:ff:ff" and tx[0].get("src") == radio_mac and tx[0].get("ethertype") == 0x0806
+                      and a0.get("op") == 1 and a0.get("sha") == radio_mac and a0.get("spa") == "0.0.0.0" and a0.get("tpa") == "169.254.1.2", str(tx[:1])),
+                check("the announcement: ARP op 1 with spa and tpa the radio's address", a1.get("op") == 1 and a1.get("spa") == radio_ip and a1.get("tpa") == radio_ip, str(a1)),
+                check("the frame that is not ARP: ethertype 0x88B5, len 60, hex of the frame, no arp",
+                      t2.get("ethertype") == 0x88B5 and t2.get("len") == 60 and "arp" not in t2 and str(t2.get("hex", "")).startswith("ffffffffffff" + radio_mac.replace(":", "")),
+                      str(t2)[:300]),
+                check("nothing received on MACRAW (FY: RX_RSR 0)", y[:1] == (0,), str(y))]
     if tid == "T-EMU-33":
         # an ECC mark set before an MCU reset (software reset, SYSRESETREQ) is in force at once after
         # it: a byte read of the marked word shows DBECCERR, with no program before the reset and with

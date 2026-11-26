@@ -153,6 +153,17 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
 
 ## Format v1.6: net.log, key.log, link events
 
+- `eth.log {action: start|read|stop, from?}` (offered since 2026-11-26): the MACRAW
+  frames of socket 0 in emulated time, kept by the CH394 model: `from_radio` when the
+  image's SEND executes, `to_radio` when a frame is placed in the RX buffer, `dropped`
+  (with `reason`) for one the chip did not take. Entry: `t_us`, `dir`, `len`, `dst`,
+  `src`, `ethertype` (a number), `arp` {`op`, `sha`, `spa`, `tha`, `tpa`} for ARP, else
+  `hex` (at most 256 bytes). Pages and caps as net.log. Always on for the runner too:
+  each test keeps `eth-log.jsonl` (artifact `eth_log`, with `boot`). Before that date
+  socket 0 stayed closed in MACRAW, and the runner marked T-A1-69 to T-A1-73 and
+  T-A3-06 "not modelled: MACRAW"; that marking is gone. Checked by T-EMU-37
+  (runner-selfcheck.json, step [7]) and bridge_frames_check (step [2k]).
+
 - `net.log {action: start|read|stop, from?}`: every UDP datagram at the radio in
   emulated time, kept by the CH394 model: `to_radio` when the datagram is placed
   in the socket's receive buffer (the image can first see it), `from_radio` when

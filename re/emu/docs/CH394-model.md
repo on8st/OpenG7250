@@ -37,6 +37,28 @@ firmware-specific behaviour.
   (no destination) and `net.inject` datagrams are still delivered by port alone.
   Before that date the model delivered every datagram by port alone, so a datagram
   for the radio's former address reached the image as if for the current one.
+- MACRAW on socket 0 (2026-11-26, format v1.6 eth.log). OPEN with Sn_MR protocol
+  0x04 on socket 0 gives Sn_SR 0x42 (SOCK_MACRAW). SEND passes TX_RD..TX_WR as one
+  Ethernet frame to eth.log (`from_radio`) and to the bridge (frame type 10); the
+  bridge writes it to the capture and to arp.peer, never onto the host network. A
+  frame from the bridge (type 11) keeps its place among the datagrams (the same
+  arrival pacing), goes into socket 0's RX buffer behind a 2-byte length, sets
+  RECV, and is logged `to_radio`; a frame not taken is logged `dropped` with its
+  reason (link down, no socket, BCASTB, MFEN, MMB, MIP6B, no buffer, buffer full).
+  UDP sockets keep their datagrams; frames reach only MACRAW.
+  - **HYPOTHESIS for the CH394** (taken from the W5500 datasheet, as VERSIONR; for
+    the gate to check against the CH394 datasheet):
+    1. MACRAW exists on socket 0 only;
+    2. Sn_SR reads 0x42 when it is open;
+    3. the TX buffer holds the frame from the destination MAC on, without FCS, and
+       the chip adds no padding;
+    4. a received frame is stored behind a 2-byte big-endian length;
+    5. the Sn_MR bits in MACRAW: bit 7 MFEN (only the chip's own MAC, broadcast and
+       multicast), bit 6 BCASTB (no broadcast), bit 5 MMB (no multicast while MFEN
+       is set), bit 4 MIP6B (no IPv6, ethertype 0x86DD).
+  - Emulator assumptions of format v1.6, kept as they are: the RX length is the
+    frame alone (`G7250_MACRAW_LEN_HEADER=1` counts the 2 header bytes too, as the
+    W5500 datasheet does); the chip does no ARP of its own in UDP mode.
 - INT# from (SIR & SIMR) and (IR & IMR).
 - The network is the runner's bridge (local TCP link). The address the image
   programs (SIPR, SUBR) is reported on it, so the runner learns the radio's
@@ -54,7 +76,8 @@ firmware-specific behaviour.
 
 ## Not modelled
 
-TCP and MACRAW ("not modelled: CH394/Sn_MR protocol ..."), ARP and ICMP
+TCP and MACRAW on sockets 1 to 7 ("not modelled: CH394/Sn_MR protocol ..."), the
+chip's own ARP in UDP mode (an emulator assumption of format v1.6) and ICMP
 behaviour, timeouts and retransmission, fragmentation, wake-on-LAN, PPPoE,
 timing.
 

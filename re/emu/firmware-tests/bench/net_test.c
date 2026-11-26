@@ -79,6 +79,13 @@ static void wr16(uint16_t a, uint8_t bsb, uint16_t v) { uint8_t b[2] = { (uint8_
  *   FH n      TIM2's interrupt (exception 44) pended; its handler spins about n ms -> 0
  *   FN n      as FH, with FAULTMASK set while the handler spins -> 0
  *   FI a b c d  the chip's source address (SIPR) set to a.b.c.d; the reply goes out from it -> 0
+ *   FO m      socket 1 opened as UDP 1024 (the command socket from then on), then socket 0 opened in
+ *             MACRAW with Sn_MR 0x04 | (m & 0xF0) -> Sn_SR of socket 0, Sn_SR of socket 1
+ *   FA k      a MACRAW frame sent on socket 0 to the broadcast MAC: k 0 an ARP probe for 169.254.1.2,
+ *             1 an ARP announcement of SIPR, 2 a 60-byte frame of ethertype 0x88B5 -> SEND_OK, length
+ *   FY        one MACRAW frame read from socket 0 (none: zeros) -> RX_RSR before, the 2-byte length
+ *             header, ethertype << 16 | ARP op, ARP sender IP
+ *   FZ        IR (0x15), then its bit 7 (CONFLICT) cleared -> IR before, IR after
  *   FU        UsageFault enabled (SHCSR USGFAULTENA) -> SHCSR
  *   FF        the kept record of the last fault (the handler keeps it, then resets by SYSRESETREQ)
  *             -> count, CFSR, HFSR, IPSR at entry, stacked PC, stacked IPSR, EXC_RETURN, the fault's mark
@@ -175,8 +182,33 @@ void TIM2_IRQHandler(void)
     if(spin_fm) __asm volatile ("cpsie f");
 }
 
+static uint8_t us;                        // the UDP command socket: 0, or 1 after FO
+
 static uint16_t command(uint8_t *d, uint16_t len)
 {
+    if(d[1] == 'Y')
+    {
+        uint16_t rsr = rd16(0x0026, 1), hl = 0;
+        uint32_t et = 0, spa = 0;
+        if(rsr >= 2)
+        {
+            uint8_t h[2], f[48];
+            uint16_t r = rd16(0x0028, 1);
+            rd(r, 3, h, 2);
+            hl = (uint16_t)((h[0] << 8) | h[1]);
+            uint16_t fl = hl;                 // the header holds the frame alone (emulator assumption, v1.6)
+            if(fl > rsr - 2) fl = (uint16_t)(rsr - 2);
+            uint16_t k = fl < 48 ? fl : 48;
+            rd((uint16_t)(r + 2), 3, f, k);
+            wr16(0x0028, 1, (uint16_t)(r + 2 + fl));
+            wr8(0x0001, 1, 0x40);             // RECV
+            if(k >= 14) et = ((uint32_t)f[12] << 24) | ((uint32_t)f[13] << 16);
+            if(k >= 22) et |= (uint32_t)((f[20] << 8) | f[21]);
+            if(k >= 32) spa = ((uint32_t)f[28] << 24) | ((uint32_t)f[29] << 16) | ((uint32_t)f[30] << 8) | f[31];
+        }
+        put_be(&d[2], rsr); put_be(&d[6], hl); put_be(&d[10], et); put_be(&d[14], spa);
+        return 18;
+    }
     uint32_t a = 0, b = 0;
     if(d[1] == 'C' || d[1] == 'V')
     {
@@ -287,6 +319,42 @@ static uint16_t command(uint8_t *d, uint16_t len)
         __asm volatile ("dsb\n isb\n");
     }
     else if(d[1] == 'I' && len >= 6) wr(0x000F, 0, &d[2], 4);   // T-EMU-36: an address move
+    else if(d[1] == 'O' && len >= 3)
+    {
+        if(us == 0)
+        {
+            wr8(0x0000, 5, 0x02); wr16(0x0004, 5, 1024); wr8(0x0001, 5, 0x01);   // socket 1: UDP 1024
+            us = 1;
+        }
+        wr8(0x0001, 1, 0x10);                 // CLOSE socket 0
+        wr8(0x0000, 1, (uint8_t)(0x04 | (d[2] & 0xF0)));
+        wr8(0x0001, 1, 0x01);                 // OPEN
+        a = rd8(0x0003, 1); b = rd8(0x0003, 5);
+    }
+    else if(d[1] == 'A' && len >= 3)
+    {
+        uint8_t f[60], m[6], ip[4];
+        uint16_t n = 42;
+        rd(0x0009, 0, m, 6); rd(0x000F, 0, ip, 4);
+        for(int i = 0; i < 60; i++) f[i] = 0;
+        for(int i = 0; i < 6; i++) { f[i] = 0xFF; f[6 + i] = m[i]; }
+        if(d[2] == 2) { f[12] = 0x88; f[13] = 0xB5; for(int i = 14; i < 60; i++) f[i] = (uint8_t)i; n = 60; }
+        else
+        {
+            static const uint8_t h[8] = { 0x00, 0x01, 0x08, 0x00, 6, 4, 0x00, 0x01 };   // Ethernet, IPv4, request
+            f[12] = 0x08; f[13] = 0x06;
+            for(int i = 0; i < 8; i++) f[14 + i] = h[i];
+            for(int i = 0; i < 6; i++) f[22 + i] = m[i];
+            if(d[2] == 1) for(int i = 0; i < 4; i++) { f[28 + i] = ip[i]; f[38 + i] = ip[i]; }
+            else { f[38] = 169; f[39] = 254; f[40] = 1; f[41] = 2; }
+        }
+        uint16_t w = rd16(0x0024, 1);
+        wr(w, 2, f, n);
+        wr16(0x0024, 1, (uint16_t)(w + n));
+        wr8(0x0001, 1, 0x20);                 // SEND
+        a = (rd8(0x0002, 1) >> 4) & 1u; wr8(0x0002, 1, 0x10); b = n;
+    }
+    else if(d[1] == 'Z') { a = rd8(0x0015, 0); wr8(0x0015, 0, 0x80); b = rd8(0x0015, 0); }
     else if(d[1] == 'U') { REG(0xE000ED24u) |= 1u << 18; a = REG(0xE000ED24u); }
     else if(d[1] == 'T' && len >= 4)
     {
@@ -346,25 +414,27 @@ int main(void)
     uint32_t echoes = 0;
     for(;;)
     {
-        uint16_t rsr = rd16(0x0026, 1);
+        uint8_t sb = (uint8_t)(1 + 4 * us);   // the command socket's register block; TX sb + 1, RX sb + 2
+        uint16_t rsr = rd16(0x0026, sb);
         if(rsr < 8) continue;
-        uint16_t rxrd = rd16(0x0028, 1);
+        uint16_t rxrd = rd16(0x0028, sb);
         uint8_t hdr[8];
-        rd(rxrd, 3, hdr, 8);
+        rd(rxrd, (uint8_t)(sb + 2), hdr, 8);
         uint16_t len = (uint16_t)((hdr[6] << 8) | hdr[7]);
         uint8_t data[512];
         if(len > sizeof data) len = sizeof data;
-        rd((uint16_t)(rxrd + 8), 3, data, len);
-        wr16(0x0028, 1, (uint16_t)(rxrd + 8 + len));
-        wr8(0x0001, 1, 0x40);             /* RECV */
+        rd((uint16_t)(rxrd + 8), (uint8_t)(sb + 2), data, len);
+        wr16(0x0028, sb, (uint16_t)(rxrd + 8 + len));
+        wr8(0x0001, sb, 0x40);            // RECV
         if(len >= 2 && data[0] == 'F' && data[1] >= 'A' && data[1] <= 'Z') len = command(data, len);
-        wr(0x000C, 1, hdr, 4);            /* DIPR = sender */
-        wr(0x0010, 1, &hdr[4], 2);        /* DPORT = sender port */
-        uint16_t txwr = rd16(0x0024, 1);
-        wr(txwr, 2, data, len);
-        wr16(0x0024, 1, (uint16_t)(txwr + len));
-        wr8(0x0001, 1, 0x20);             /* SEND */
-        wr8(0x0002, 1, 0x10);             /* clear SEND_OK */
+        sb = (uint8_t)(1 + 4 * us);       // FO moves the command socket to 1
+        wr(0x000C, sb, hdr, 4);           // DIPR = sender
+        wr(0x0010, sb, &hdr[4], 2);       // DPORT = sender port
+        uint16_t txwr = rd16(0x0024, sb);
+        wr(txwr, (uint8_t)(sb + 1), data, len);
+        wr16(0x0024, sb, (uint16_t)(txwr + len));
+        wr8(0x0001, sb, 0x20);            // SEND
+        wr8(0x0002, sb, 0x10);            // clear SEND_OK
         echoes++;
         puts_("echo "); putdec(echoes); puts_("\r\n");
     }

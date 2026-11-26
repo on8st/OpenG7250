@@ -290,6 +290,19 @@
    "timeout_s": 120
   },
   {
+   "id": "T-EMU-37",
+   "title": "MACRAW socket 0 (format v1.6): Sn_SR 0x42, the frames the image sends in eth.log as from_radio with dst, src, ethertype, arp or hex, in emulated time; UDP on another socket beside it",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "eth.log"
+   ],
+   "timeout_s": 120
+  },
+  {
    "id": "T-EMU-25",
    "title": "flash.log entries end at a reset and a pause; an erase clears ECC marks; net.endpoint whole; net.log order; CYCCNT against the timers over masked erases",
    "reqs": [

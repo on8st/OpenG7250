@@ -40,10 +40,7 @@ BUS_FAULT_TESTS = {"T-A1-87", "T-A1-92"}
 # Not modelled with a known, limited reach: the image's own console or the log
 # shows it, and only the tests that judge that function are marked; every other
 # result stays as it is, with a run-level note (the coordinator's rule).
-MACRAW_LOG = "CH394/Sn_MR protocol 0x04"
-MACRAW_TESTS = {"T-A1-69", "T-A1-70", "T-A1-71", "T-A1-72", "T-A1-73", "T-A3-06"}   # T-A1-69: its bound counts the claim; T-A1-76 (the failure path itself) not
-MACRAW_NOTE = ("not modelled: MACRAW (CH394 socket 0 with Sn_MODE 0x04 stays closed in the emulator); "
-               "the image's link-local claim ran its failure path (address used without probe or announcement)")
+# MACRAW socket 0 is modelled since 2026-11-26 (eth.log): no marking of the link-local tests any more.
 
 
 # Datagram delivery shift (CH394 arrival pacing): reported per burst of datagrams
@@ -110,11 +107,6 @@ def judged_bursts(entry, tdir):
     return out
 
 
-def macraw_seen(log_path):
-    try:
-        return any(MACRAW_LOG in ln for ln in open(log_path, errors="replace"))
-    except OSError:
-        return False
 BOOT_WALL_TIMEOUT = 180.0     # host seconds for the image to bring up its address
 
 
@@ -224,6 +216,26 @@ class Boot:
         self.agent.conn = None
         self.bridge.ch = None
 
+    def save_ethlog(self):
+        """Append the CH394's MACRAW frame log of this emulator (always on, emulated time) to eth-log.jsonl."""
+        path = os.path.join(self.out, "eth-log.jsonl")
+        nxt = 0
+        with open(path, "a") as f:
+            for _ in range(200):
+                r = self.agent.ask("ethlog runner %d" % nxt, timeout=30, internal=True)
+                if not r or not r.startswith("ok "):
+                    break
+                v = json.loads(r[3:])
+                for e in v.get("entries", []):
+                    if not self.agent.before_cut(e):
+                        continue
+                    e["boot"] = self.boots
+                    f.write(json.dumps(e) + "\n")
+                if v.get("next", 0) >= v.get("count", 0) or v.get("next", 0) == nxt:
+                    break
+                nxt = v["next"]
+        return path
+
     def save_netlog(self):
         """Append the CH394's own datagram log of this emulator (always on: every
         datagram at the radio and every drop, emulated time) to net-log.jsonl."""
@@ -243,6 +255,10 @@ class Boot:
                 if v.get("next", 0) >= v.get("count", 0) or v.get("next", 0) == nxt:
                     break
                 nxt = v["next"]
+        try:
+            self.save_ethlog()
+        except Exception:  # noqa: BLE001
+            pass
         return path
 
     def power_cycle(self, cut=False):
@@ -462,9 +478,6 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
             pass
         nm = pr.not_modelled(bt.log) if os.path.isfile(bt.log) else []
         flash_note = None
-        macraw = macraw_seen(bt.log)
-        if macraw:
-            run_notes.add(MACRAW_NOTE)
         try:
             bt.save_netlog()
         except Exception:  # noqa: BLE001
@@ -513,6 +526,8 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
                 "network": os.path.join(rel, "network.pcapng")}
         if os.path.isfile(os.path.join(tdir, "net-log.jsonl")):
             arts["net_log"] = os.path.join(rel, "net-log.jsonl")
+        if os.path.isfile(os.path.join(tdir, "eth-log.jsonl")) and os.path.getsize(os.path.join(tdir, "eth-log.jsonl")):
+            arts["eth_log"] = os.path.join(rel, "eth-log.jsonl")
         if bt.agent.traces:
             arts["trace"] = [os.path.join(rel, os.path.basename(x)) for x in bt.agent.traces]
         e["artifacts"] = arts
@@ -536,12 +551,6 @@ def run(pr, elf, tests_path, run_id, scope="v1.0", out_path=None, boot="standin"
         if flash_note:
             e.setdefault("emulator", {}).setdefault("not_modelled", []).append(flash_note)
             e["reason"] = flash_note + ("; bench: %s" % e["reason"] if e.get("reason") else "")
-        if macraw and t["id"] in MACRAW_TESTS:
-            if e.get("status") in ("fail", "error"):
-                e["status"] = "error"
-                e["reason"] = "not modelled: MACRAW" + (" (bench: %s)" % e["reason"] if e.get("reason") else "")
-            else:
-                e.setdefault("reason", "emulator coverage: not modelled: MACRAW")
         slow = bt.fixtures.slow_since(test_t0)
         if slow:
             e.setdefault("emulator", {})["slow_fixture_calls"] = slow

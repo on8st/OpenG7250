@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The bridge's host-to-chip frames carry the destination IP (type 8), the capture records it, and after
 the radio moves address radio.former {ip, connect} names the address before the last move, with a
-connect map of its own at B + 300 + P (format v1.10). No emulator: a stand-in chip on the CH394 link.
+connect map of its own at B + 300 + P (format v1.10); MACRAW frames (types 10 and 11) go to the
+capture and to the chip as they are. No emulator: a stand-in chip on the CH394 link.
 
   python3 tests/baseline/bridge_frames_check.py
 """
@@ -139,6 +140,27 @@ try:
     check("the capture records each datagram's destination as the frame gives it",
           [(dd, x) for _, dd, _, x in caps] == [("192.168.73.10", b"to-current"), ("255.255.255.255", b"to-limited"),
                                                ("192.168.73.10", b"to-former"), ("192.168.73.50", b"to-new")], caps)
+    # MACRAW socket 0 (format v1.6): a frame the image sends (type 10) goes to the capture only; a frame
+    # the bridge sends to the chip (type 11) carries the capture time and the frame as it is
+    arp = bytes.fromhex("ffffffffffff" "020000007250" "0806" "0001080006040001" "020000007250" "00000000"
+                        "000000000000" "a9fe0102")
+    sk.settimeout(0.5)
+    p = struct.pack("!Q", 1234) + arp
+    chip.sendall(struct.pack("!BH", 10, len(p)) + p)
+    t0 = time.time()
+    while b.stats["frames_from_radio"] < 1 and time.time() - t0 < 3:
+        time.sleep(0.01)
+    try:
+        leaked = sk.recv(2048)
+    except socket.timeout:
+        leaked = None
+    time.sleep(0.2)
+    raw = open(cap, "rb").read()
+    check("a frame from MACRAW (type 10): in the capture as it is, onto no host socket",
+          b.stats["frames_from_radio"] == 1 and arp in raw and leaked is None, (b.stats["frames_from_radio"], leaked))
+    ok = b.send_frame(arp)
+    t, p = frame()
+    check("send_frame: type 11, the capture time then the frame as it is", ok and t == 11 and p[8:] == arp and len(p) == 8 + len(arp), (ok, t, p[8:20] if p else None))
 finally:
     try:
         chip.close()

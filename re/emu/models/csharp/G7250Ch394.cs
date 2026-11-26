@@ -23,9 +23,18 @@
 //   - the network: datagrams go to and come from the test-bench runner over a
 //     local TCP link (bridgePort; 0 = no network), see docs/CH394-model.md; the
 //     address the image programs (SIPR, SUBR) is reported on that link
-// Not modelled: TCP and MACRAW (logged "not modelled: CH394/Sn_MR ..."), ARP and
-// ICMP behaviour, timeouts and retransmission, IP fragmentation, wake-on-LAN,
-// PPPoE, socket-less commands, timing.
+//   - MACRAW on socket 0 (2026-11-26): OPEN with protocol 0x04 gives Sn_SR 0x42; SEND passes
+//     TX_RD..TX_WR as one Ethernet frame (no FCS) to eth.log and to the bridge (frame type 10);
+//     a frame from the bridge (type 11) goes into socket 0's RX buffer behind a 2-byte length,
+//     with RECV; BCASTB, MFEN, MMB and MIP6B of Sn_MR filter it. HYPOTHESIS for the CH394 (taken
+//     from the W5500 datasheet, as VERSIONR): MACRAW on socket 0 only; Sn_SR 0x42; the TX frame
+//     without FCS or padding; the 2-byte RX header; the meaning of the four filter bits (MFEN:
+//     only the chip's own MAC, broadcast and, unless MMB, multicast). Emulator assumptions of
+//     format v1.6, kept: the RX length is the frame alone (G7250_MACRAW_LEN_HEADER=1 adds the
+//     2 header bytes, as the W5500 counts it); the chip does no ARP of its own in UDP mode.
+// Not modelled: TCP (logged "not modelled: CH394/Sn_MR ..."), the chip's own ARP in UDP mode
+// and ICMP behaviour, timeouts and retransmission, IP fragmentation, wake-on-LAN, PPPoE,
+// socket-less commands, timing.
 using System;
 using System.Collections.Generic;
 using System.Net.Sockets;
@@ -71,6 +80,55 @@ namespace Antmicro.Renode.Peripherals.SPI
         private readonly List<string> runLog = new List<string>();
         private int runLogDropped;
         public string RunLogRead(int from) { lock(sync) return Page(runLog, from, runLogDropped, NowUs(), "entries"); }
+
+        // eth.log (format v1.6): the MACRAW frames of socket 0 in emulated time, both ways, and the
+        // frames the chip did not take ("dropped" with a reason). ethRun is always on (the runner
+        // saves it per test as eth-log.jsonl).
+        private readonly List<string> ethLog = new List<string>();
+        private bool ethLogOn;
+        private int ethLogDropped;
+        private readonly List<string> ethRun = new List<string>();
+        private int ethRunDropped;
+        private readonly bool macrawLenHeader = Environment.GetEnvironmentVariable("G7250_MACRAW_LEN_HEADER") == "1";
+        public string EthLogStart() { lock(sync) { ethLog.Clear(); ethLogDropped = 0; ethLogOn = true; return "{\"t_us\": " + NowUs() + "}"; } }
+        public string EthLogRead(int from) { lock(sync) return Page(ethLog, from, ethLogDropped, NowUs(), "entries"); }
+        public string EthLogStop(int from) { lock(sync) { ethLogOn = false; return Page(ethLog, from, ethLogDropped, NowUs(), "entries"); } }
+        public string EthRunRead(int from) { lock(sync) return Page(ethRun, from, ethRunDropped, NowUs(), "entries"); }
+
+        private static string Mac(byte[] b, int o)
+        {
+            return b[o].ToString("x2") + ":" + b[o + 1].ToString("x2") + ":" + b[o + 2].ToString("x2") + ":"
+                + b[o + 3].ToString("x2") + ":" + b[o + 4].ToString("x2") + ":" + b[o + 5].ToString("x2");
+        }
+
+        private void EthRecord(string dir, byte[] f, int off, int len, string reason = null)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("{\"t_us\": " + NowUs() + ", \"dir\": \"" + dir + "\", \"len\": " + len);
+            if(len >= 14)
+            {
+                int et = (f[off + 12] << 8) | f[off + 13];
+                sb.Append(", \"dst\": \"" + Mac(f, off) + "\", \"src\": \"" + Mac(f, off + 6) + "\", \"ethertype\": " + et);
+                if(et == 0x0806 && len >= 42)
+                    sb.Append(", \"arp\": {\"op\": " + ((f[off + 20] << 8) | f[off + 21]) + ", \"sha\": \"" + Mac(f, off + 22)
+                        + "\", \"spa\": \"" + Ip(f, off + 28) + "\", \"tha\": \"" + Mac(f, off + 32) + "\", \"tpa\": \"" + Ip(f, off + 38) + "\"}");
+                else
+                {
+                    var hx = new System.Text.StringBuilder();
+                    for(int i = 0; i < Math.Min(len, 256); i++) hx.Append(f[off + i].ToString("x2"));
+                    sb.Append(", \"hex\": \"" + hx + "\"");
+                }
+            }
+            if(reason != null) sb.Append(", \"reason\": \"" + reason + "\"");
+            if(dir != "from_radio" && curShift != 0) sb.Append(", \"shift_us\": " + curShift);
+            if(dir != "from_radio" && curWall > 0) sb.Append(", \"t_wall\": " + curWall.ToString("F6", System.Globalization.CultureInfo.InvariantCulture));
+            sb.Append("}");
+            string e = sb.ToString();
+            if(ethRun.Count >= 200000) ethRunDropped++; else ethRun.Add(e);
+            if(!ethLogOn) return;
+            if(ethLog.Count >= LogCap) { ethLogDropped++; return; }
+            ethLog.Add(e);
+        }
 
         // key.log "hp": High Priority packets received on radio port 1027
         private readonly List<string> hpLog = new List<string>();
@@ -340,6 +398,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                     P16(r, 0x22, 0); P16(r, 0x24, 0); P16(r, 0x28, 0); P16(r, 0x2A, 0);
                     LogSocket("open", n, r);
                     if(proto == 0x02) r[0x03] = 0x22;                      // SOCK_UDP
+                    else if(proto == 0x04 && n == 0) r[0x03] = 0x42;       // SOCK_MACRAW, socket 0 only (HYPOTHESIS: W5500)
                     else
                     {
                         r[0x03] = proto == 0x01 ? (byte)0x13 : (byte)0x00;
@@ -369,6 +428,19 @@ namespace Antmicro.Renode.Peripherals.SPI
             for(int i = 0; i < len; i++) data[i] = txbuf[n][((rd + i) & 0xFFFF) % size];
             P16(r, 0x22, wr);
             r[0x02] |= 0x10;                                               // SEND_OK
+            if(r[0x03] == 0x42)
+            {
+                // MACRAW: the TX bytes are one Ethernet frame (HYPOTHESIS: W5500, no FCS, no padding)
+                if(!linkUp) { dropped++; EthRecord("dropped", data, 0, len, "link down"); return; }
+                EthRecord("from_radio", data, 0, len);
+                sent++;
+                ulong tf = NowUs();
+                var rf = new byte[8 + len];
+                for(int i = 0; i < 8; i++) rf[i] = (byte)(tf >> (56 - 8 * i));
+                Array.Copy(data, 0, rf, 8, len);
+                ToBridge(10, rf);
+                return;
+            }
             if(r[0x03] != 0x22) return;
             if(!linkUp) { dropped++; return; }                        // no link: the datagram is lost
             var frame = new byte[8 + len];
@@ -391,6 +463,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         private void Deliver(byte[] p, long shiftUs, double wall)
         {
             if(p.Length < 9) return;
+            if((p[8] & 0x04) != 0) { DeliverFrame(p, shiftUs, wall); return; }
             int dport = (p[6] << 8) | p[7];
             bool bcast = (p[8] & 1) != 0;
             bool hasDst = (p[8] & 2) != 0;                  // a frame of type 8: the destination IP after the data
@@ -442,6 +515,48 @@ namespace Antmicro.Renode.Peripherals.SPI
                     ok = true;
                 }
                 if(!ok) { dropped++; NetRecord("dropped", -1, dport, peer, p, 9, len, "no socket"); }
+            }
+            UpdateIrq();
+        }
+
+        // an Ethernet frame from the bridge (type 11, kept inside behind 9 bytes with flags bit 2):
+        // into socket 0's RX buffer when it is open in MACRAW and Sn_MR lets it through
+        private void DeliverFrame(byte[] p, long shiftUs, double wall)
+        {
+            int len = p.Length - 9;
+            if(len < 14) return;
+            lock(sync)
+            {
+                curShift = shiftUs; curWall = wall;
+                curInjected = false;
+                var r = sreg[0];
+                if(!linkUp) { dropped++; EthRecord("dropped", p, 9, len, "link down"); return; }
+                if(r[0x03] != 0x42) { dropped++; EthRecord("dropped", p, 9, len, "no socket"); return; }
+                bool bcast = true, own = true;
+                for(int i = 0; i < 6; i++) { bcast &= p[9 + i] == 0xFF; own &= p[9 + i] == common[0x09 + i]; }
+                bool mcast = !bcast && (p[9] & 1) != 0;
+                int et = (p[9 + 12] << 8) | p[9 + 13];
+                byte mr = r[0x00];
+                string why = null;
+                // Sn_MR in MACRAW (HYPOTHESIS: W5500): bit 7 MFEN, 6 BCASTB, 5 MMB, 4 MIP6B
+                if(bcast && (mr & 0x40) != 0) why = "broadcast blocked (BCASTB)";
+                else if((mr & 0x80) != 0 && !bcast && !own && !mcast) why = "MAC filter (MFEN)";
+                else if((mr & 0x80) != 0 && mcast && (mr & 0x20) != 0) why = "multicast blocked (MMB)";
+                else if((mr & 0x10) != 0 && et == 0x86DD) why = "IPv6 blocked (MIP6B)";
+                if(why != null) { dropped++; EthRecord("dropped", p, 9, len, why); return; }
+                int size = BufSize(0, false);
+                if(size == 0) { dropped++; EthRecord("dropped", p, 9, len, "no buffer"); return; }
+                int used = (U16(r, 0x2A) - U16(r, 0x28)) & 0xFFFF;
+                if(size - used < 2 + len) { dropped++; EthRecord("dropped", p, 9, len, "buffer full"); return; }
+                int wr = U16(r, 0x2A);
+                int hv = macrawLenHeader ? len + 2 : len;
+                rxbuf[0][(wr & 0xFFFF) % size] = (byte)(hv >> 8);
+                rxbuf[0][((wr + 1) & 0xFFFF) % size] = (byte)hv;
+                for(int i = 0; i < len; i++) rxbuf[0][((wr + 2 + i) & 0xFFFF) % size] = p[9 + i];
+                P16(r, 0x2A, (wr + 2 + len) & 0xFFFF);
+                r[0x02] |= 0x04;                                         // RECV
+                received++;
+                EthRecord("to_radio", p, 9, len);
             }
             UpdateIrq();
         }
@@ -670,6 +785,17 @@ namespace Antmicro.Renode.Peripherals.SPI
                         for(int i = 0; i < 8; i++) cap = (cap << 8) | p[i];
                         var q = new byte[p.Length - 8];
                         Array.Copy(p, 8, q, 0, q.Length);
+                        Arrive(q, cap / 1e6);
+                    }
+                    else if(head[0] == 11 && p.Length >= 8 + 14)
+                    {
+                        // type 11: capture time(8) and an Ethernet frame for MACRAW socket 0; kept
+                        // inside behind 9 bytes with flags bit 2, so it keeps its place among the datagrams
+                        ulong cap = 0;
+                        for(int i = 0; i < 8; i++) cap = (cap << 8) | p[i];
+                        var q = new byte[9 + p.Length - 8];
+                        q[8] = 0x04;
+                        Array.Copy(p, 8, q, 9, p.Length - 8);
                         Arrive(q, cap / 1e6);
                     }
                     else if(head[0] == 8 && p.Length >= 8 + 13)
