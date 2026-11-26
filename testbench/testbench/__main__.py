@@ -20,7 +20,7 @@ from pathlib import Path
 from . import core
 from . import t_a2, t_a3, t_atu, t_auth, t_cw, t_details, t_dhcpmode, t_flash, t_installer, t_linklocal, t_log, t_mgmt, t_stale, t_store, t_unarmed, t_update, t_p2, t_tx_locked  # noqa: F401  (register tests)
 
-FORMAT_MINOR = 9  # docs/testlist-format.md; informative only: nothing is decided by it
+FORMAT_MINOR = 10  # docs/testlist-format.md; informative only: nothing is decided by it
 HERE = Path(__file__).resolve().parent
 CATALOGUE = HERE.parent / "catalogue" / "catalogue.json"
 

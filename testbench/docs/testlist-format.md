@@ -1,6 +1,6 @@
-# Test list and result format (v1.9)
+# Test list and result format (v1.10)
 
-- Status: **v1.9**, 2026-11-22. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
+- Status: **v1.10**, 2026-11-26. v1 was the proposal of openg7250-tb (2026-11-20). v1.1 folded in
   the first answers of the emulator side (openg7250-emu, relayed by openg7250): the address
   mapping of section 3, the fixture plan of section 4, and its four proposals (emulated-time
   timeouts, boot per test, artifacts, "not modelled" errors), all accepted. v1.2 folded in its
@@ -18,7 +18,9 @@
   `time.wait`, so that judged bursts are placed and waits counted in emulated time. v1.8 is the
   emulator's flash controller with its fixtures and the forces (section 7 items 6 and 7), v1.9 the
   fixtures newer than it: `flash.dump`, `flash.fill`, `log.corrupt`, `reset.flags`, and the
-  reference model's `flash.delay` and `store.full`. The `minor` of the files is informative only:
+  reference model's `flash.delay` and `store.full`. v1.10 adds the endpoint's `radio.former` and the
+  net.log drop reason `"not our address"` (emu/bench `135043c`), for the address change of A1.11a.
+  The `minor`, one value shared by all three files, is informative only:
   no reader decides anything by it; what a runner offers is in the endpoint's `fixtures`. Changes
   are marked **(v1.1)** to **(v1.7)**, later ones by their version in the text. Each version only adds fields, apart
   from that one rename of a count nobody reads. A v1.3 reader keeps working if it treats an
@@ -62,7 +64,7 @@ hand-written subset.
 ```json
 {
   "format": "g7250-testlist",
-  "version": 1, "minor": 9,
+  "version": 1, "minor": 10,
   "spec":  { "branch": "spec/draft", "commit": "0e075f2" },
   "his":   { "commit": "d07627e" },
   "catalogue": { "commit": "<tb/main commit>", "sha256": "<of catalogue.json>" },
@@ -106,7 +108,7 @@ hand-written subset.
 
 ```json
 {
-  "format": "g7250-endpoint", "version": 1, "minor": 9,
+  "format": "g7250-endpoint", "version": 1, "minor": 10,
   "kind": "emulator",
   "radio": { "ip": "192.168.73.10", "netmask": "255.255.255.0", "mac": "02:00:00:00:72:50",
              "connect": { "1024": "127.0.0.1:41024", "1025": "127.0.0.1:41025",
@@ -147,6 +149,17 @@ the test host cannot bind those addresses without root. So:
   file. So a test that compares the owner's port in `IDENTIFY` (A1.5 I-4) with its own works
   unchanged. Tests that need a fixed source port (1024, 7250: T-B3-33, T-B8-19) bind that port
   and skip if it is taken or outside the range.
+- **(v1.10)** `radio.former` (optional): `{"ip", "connect"}`, the radio's address before its last
+  move (DHCP, Set IP, C-1, link-local) and a map like `radio.connect` for it, at base + 300 + *p*
+  on the emulator. Absent before any move; after a second move it names the address just before
+  that move; given in the endpoint file of the boot after a move and in every `net.endpoint`
+  answer. `radio.connect` always reaches the current address. A datagram the bench sends to
+  `former.connect[p]` reaches the chip with destination IP `former.ip` on port *p*; the chip drops a
+  unicast not for its current address (net.log `"reason": "not our address"`), as on the
+  hardware. A datagram from `former.connect[p]` is read as coming from the old address. So the
+  bench can send to the old address apart and tell old sources from new ones (T-A1-100, A1.11a
+  "stop using the old address"). Broadcasts are not filtered; `net.inject` datagrams carry no
+  destination.
 - `broadcast.send_to` (optional): where the bench sends a datagram meant as a limited or
   directed broadcast to a radio port (discovery and Set IP on 1024, identification on 7251).
   **(v1.2, confirmed)** A datagram to `send_to[kind][port]` reaches the radio as a limited
@@ -380,7 +393,10 @@ image keys (record `tx` bit 4 = 1), these tests are `blocked` on the calibration
 `{"t_us", "count", "dropped", "entries": [...]}` from index `n` on (paged); `stop` reads, then
 stops. Each entry: `{"t_us", "dir": "to_radio"|"from_radio", "socket", "radio_port", "peer":
 "ip:port", "len", "head"}`, `head` the first 16 payload bytes in hex; a datagram the radio
-did not take is an entry `{"t_us", "dir": "dropped", "socket", "radio_port", "reason"}` (T-B5-20
+did not take is an entry `{"t_us", "dir": "dropped", "socket", "radio_port", "reason"}` (**(v1.10)** with
+`peer`, `len` and `head` too, and `socket` -1 where no UDP socket is open on that port; the reason
+`"not our address"` is the chip's drop of a unicast to an address it no longer holds, see
+`radio.former`, and is no loss: T-A1-100 expects it) (T-B5-20
 fails "no loss in the burst" on one for port 1027 inside a judged burst, 0054). `to_radio` `t_us` is when
 the datagram is placed in the socket receive buffer, `from_radio` `t_us` when the image's SEND
 executes, both on the clock of `hw.trace`. Cap and `dropped` as `key.log` (dropped fails the
@@ -408,7 +424,7 @@ a real input.
 
 ```json
 {
-  "format": "g7250-testresult", "version": 1, "minor": 9,
+  "format": "g7250-testresult", "version": 1, "minor": 10,
   "testlist": { "sha256": "…" },
   "subject":  { "kind": "emulator", "elf_sha256": "…", "fw_version": "0.1.0+12" },
   "runner":   { "name": "product_run.py", "version": "…", "emulator_commit": "…" },

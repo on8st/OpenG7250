@@ -260,6 +260,44 @@ def end_faults(rec: list, t_change: float, t_switch: float, old_ip: str, new_ip:
     return {"old": late, "gap": gap, "new_early": [t for t, r in status(rec, t_change, t_switch) if r == new_ip]}
 
 
+NOT_OURS = "not our address"  # net.log drop reason of the chip's unicast filter (minor 10)
+
+
+def former_net(ctx):
+    """The mapping of the radio's address before the last move (endpoint radio.former, minor 10), or None."""
+    from .net import Net
+    f = (ctx.endpoint.get("radio") or {}).get("former")
+    if not (isinstance(f, dict) and f.get("ip") and f.get("connect")):
+        return None
+    return Net(dict(ctx.endpoint, radio=dict(ip=f["ip"], connect=f["connect"])))
+
+
+def netlog_entries(ctx) -> list[dict]:
+    from .t_a2 import netlog_read
+    out = netlog_read(ctx)
+    try:
+        ctx.fixture("net.log", action="stop")
+    except Exception:  # noqa: BLE001  (a stop that fails loses nothing already read)
+        pass
+    return out
+
+
+def drops_of(entries: list[dict], port: int | None) -> tuple[list[dict], list[dict]]:
+    """(the bench host's datagrams the chip dropped as 'not our address', those the radio took), by net.log."""
+    mine = [e for e in entries if port is None or str(e.get("peer", "")).rsplit(":", 1)[-1] == str(port)]
+    return ([e for e in mine if e.get("dir") == "dropped" and e.get("reason") == NOT_OURS],
+            [e for e in mine if e.get("dir") == "to_radio"])
+
+
+def judge_drops(ctx, label: str, old_ip: str, entries: list[dict], port: int | None):
+    """While the bench sent only to the old address: its datagrams reach the chip and are dropped as 'not our
+    address', and none is taken (A1.11a, stop using the old address; net.log, minor 10)."""
+    dropped, taken = drops_of(entries, port)
+    ctx.check(f"{label}: the bench's packets to {old_ip} reach the chip and are dropped as '{NOT_OURS}' (net.log)",
+              bool(dropped), f"{len(dropped)} dropped; reasons seen: {sorted({str(e.get('reason')) for e in entries if e.get('dir') == 'dropped'})}")
+    ctx.eq(f"{label}: none of the bench's packets to {old_ip} taken by the radio (net.log to_radio)", len(taken), 0)
+
+
 def tx_settings(h) -> tuple:
     """(TX_STATE bit 4, TX_MODE_CLASS, KEYED_TIMEOUT) read without changing them: TX_STATE is read-only, and a
     rejected write is answered with the value in force (B8.4, B8.4a)."""
@@ -392,14 +430,26 @@ class Case:
                            for n, g, w, d in zip(TX_NAMES, got, PRESET, DEFAULTS) if g != w]
         return ctx.check(f"{self.label}: {what}", not faults, "; ".join(faults))
 
-    def ended(self, new, t_change: float):
+    def ended(self, new, t_change: float, former=None):
         """An address change applied at t_change (the radio answers on the new address, `new`): the
         session ends, a packet to the old address starts none, and the bench's RUN=1 to the new address
-        starts a new session that carries nothing over (A1.11a; A2.3; B5.4 item 3)."""
+        starts a new session that carries nothing over (A1.11a; A2.3; B5.4 item 3). `former`: the mapping
+        of the address before the move (endpoint radio.former, minor 10); without it the bench's own
+        mapping from before the move stands for the old address."""
         ctx, st, label = self.ctx, self.stream, self.label
-        old = self.h.net
+        # where the bench's own mapping already reaches the new address (radio.connect follows the radio),
+        # its RUN=1 since the move may have started a session there, rightly (A2.3)
+        reached_new = self.h.net.dest(PORT_HP) == new.dest(PORT_HP)
+        if former is not None:
+            old = former
+            st.nets = [former, new]  # from now on radio.connect reaches the new address
+            st.retarget(former)  # the same socket, to the old address
+        else:
+            old = self.h.net
+            st.know(new)
         apart = old.dest(PORT_HP) != new.dest(PORT_HP)
-        st.know(new)
+        from .t_a2 import netlog_start
+        netlog = apart and netlog_start(ctx)
         st.wait(1.0)  # RUN=1 to the old address only
         t_switch = st.now()
         sent = sorted({ip for t, p, ip, _ in st.sent if t >= t_change})
@@ -412,12 +462,19 @@ class Case:
                       f"{len(f['old'])} status packets from it after the change, the first {f['gap']:.2f} s of radio time "
                       "after the one before (" + ("a session again on the old address" if f["gap"] > GAP_S + JITTER_S else
                                                   "no gap longer than the bound: went on, or restarted at once") + ")")
-            ctx.check(f"{label}: no status packets from {new.radio_ip} before the bench sent there", not f["new_early"],
-                      f"{len(f['new_early'])} packets")
+            if not reached_new:
+                ctx.check(f"{label}: no status packets from {new.radio_ip} before the bench sent there", not f["new_early"],
+                          f"{len(f['new_early'])} packets")
+            if netlog:
+                judge_drops(ctx, label, old.radio_ip, netlog_entries(ctx), getattr(self.h, "port", None))
+            else:
+                ctx.notes.append(f"{label}: no net.log: that the packets to {old.radio_ip} reached the chip and were "
+                                 "dropped is not shown; 'starts none' rests on the absence of status packets")
         else:
             ctx.part(f"{label}: the endpoint maps the old address {old.radio_ip} and the new {new.radio_ip} to the same "
-                     "local addresses: 'the status packets from the old address stop' and 'a packet to the old address "
-                     "starts no session' not judged; the end judged by the new session's state (B5.4 item 3)")
+                     "local addresses (no radio.former): 'the status packets from the old address stop' and 'a packet "
+                     "to the old address starts no session' not judged; the end judged by the new session's state "
+                     "(B5.4 item 3)")
             ctx.no_pass = True
         st.retarget(new)
         st.wait(1.0)
@@ -642,7 +699,7 @@ def with_server(ctx, s: bytes):
                 c.borrows(None if ack.get("t_us_approx") else ack.get("t_us"))
                 wait_reachable(ctx, f"{label}: the lease", 40)
                 if ctx.eq(f"{label}: the radio moves to the leased address", current_ip(ctx), LEASED):
-                    c.ended(ctx.net, c.stream.now())
+                    c.ended(ctx.net, c.stream.now(), former_net(ctx))
             else:
                 c.borrows()
                 c.kept("the session does not end (a lease with the same address and netmask)")

@@ -26,8 +26,9 @@ class Radio:
     "carry" (the restart after an address change keeps the RX and TX settings), "wrong-end" (the session
     ends at `end_at` without an address change and is restarted by RUN=1 as by the same host)."""
 
-    def __init__(self, nets, broken=None, change_at=None, end_at=None):
-        self.t, self.nets, self.broken = 100.0, nets, broken
+    def __init__(self, nets, broken=None, change_at=None, end_at=None, former=None):
+        self.t, self.nets, self.broken, self.former = 100.0, nets, broken, former
+        self.netlog = []  # net.log entries of the bench host's datagrams (dropped / to_radio)
         self.ip, self.old = nets[0].radio_ip, None
         self.session_ip = self.ip
         self.change_at, self.end_at = change_at, end_at
@@ -36,6 +37,8 @@ class Radio:
         self.out, self.next_status, self.next_iq, self.token = [], 0.0, 0.0, 0x1234
 
     def src(self, port, ip=None):
+        if self.former is not None and self.old is not None and (ip or self.ip) == self.old:
+            return self.former.connect[port]  # after the move the old address is reached through radio.former
         n = next(n for n in self.nets if n.radio_ip == (ip or self.ip))
         return n.connect[port]
 
@@ -65,10 +68,18 @@ class Radio:
             self.t = round(self.t + 0.005, 6)
 
     def to_radio(self, dest, port, data):
-        ips = [n.radio_ip for n in self.nets if n.connect.get(port) == dest]  # a shared mapping: the current one
-        ip = self.ip if self.ip in ips else (ips[0] if ips else None)
-        if ip != self.ip and not (self.broken == "old-starts" and ip == self.old):
+        if self.former is not None and self.former.connect.get(port) == dest:
+            ip = self.former.radio_ip
+        else:  # radio.connect: shared before and after the move, it reaches the current address
+            ips = [n.radio_ip for n in self.nets if n.connect.get(port) == dest]
+            ip = self.ip if self.ip in ips else (ips[0] if ips else None)
+        e = dict(t_us=int(self.t * 1e6), socket=0, radio_port=port, peer="%s:%d" % HOST, len=len(data), head="")
+        if ip != self.ip and not (self.broken in ("old-starts", "old-taken") and ip == self.old):
+            self.netlog.append(dict(e, dir="dropped", reason=d.NOT_OURS))  # the chip's unicast filter
             return  # not this radio's address: never taken
+        self.netlog.append(dict(e, dir="to_radio"))
+        if self.broken == "old-taken" and ip == self.old:
+            return  # taken by the chip, starts nothing
         if port == PORT_HP and data[4] & 1:
             if not self.running:
                 self.running, self.next_status, self.session_ip = True, self.t, ip
@@ -101,6 +112,7 @@ class Host:
 
     def __init__(self, radio, n):
         self.r, self.net, self.radio, self.running, self.hp_kw = radio, n, n.radio_ip, True, {}
+        self.port = HOST[1]
 
     def send(self, port, data, kind="unicast"):
         self.r.to_radio(self.net.dest(port, kind), port, data)
@@ -125,11 +137,27 @@ class Host:
         return got
 
 
-def case(apart=True, **kw):
-    nets = [net(OLD, 41000), net(NEW, 42000 if apart else 41000)]
-    radio = Radio(nets, **kw)
+def case(apart=True, former=False, netlog=True, **kw):
+    """`former`: the emulator's mapping since minor 10: radio.connect shared before and after the move,
+    radio.former at base + 300 for the old address, net.log with the chip's drops."""
+    nets = [net(OLD, 41000), net(NEW, 42000 if apart and not former else 41000)]
+    fnet = net(OLD, 41300) if former else None
+    radio = Radio(nets, former=fnet, **kw)
     h = Host(radio, nets[0])
-    ctx = Ctx(dict(radio=dict(ip=OLD), fixtures=[]))
+    ep = dict(radio=dict(ip=OLD), fixtures=["net.log"] if netlog else [])
+    if former:
+        ep["radio"]["former"] = dict(ip=OLD, connect=dict(fnet.ep["radio"]["connect"]))
+    ctx = Ctx(ep)
+
+    def fixture(name, /, **a):
+        assert name == "net.log", name
+        if a.get("action") == "start":
+            radio.netlog = []
+            return None
+        if a.get("action") == "read":
+            return dict(count=len(radio.netlog), dropped=0, entries=radio.netlog[a.get("from", 0):])
+        return None
+    ctx.fixture = fixture
     c = d.Case.__new__(d.Case)
     c.ctx, c.label, c.h, c.held = ctx, "case", h, OLD
     c.stream = d.Stream(ctx, h, now=lambda: radio.t, radio_now=lambda: radio.t, manual=True)
@@ -189,6 +217,59 @@ class Ends(unittest.TestCase):
         self.assertEqual(failed(c.ctx), [])
         self.assertTrue(c.ctx.no_pass)
         self.assertTrue(any("same local addresses" in p for p in c.ctx.parts))
+
+
+class Former(unittest.TestCase):
+    """radio.former (minor 10): the old address reached apart, its drops in net.log."""
+
+    def run_end(self, **kw):
+        c, radio, nets = case(former=True, change_at=101.0, **kw)
+        c.stream.wait(1.0)
+        c.ended(nets[1], radio.t, d.former_net(c.ctx))
+        return c.ctx
+
+    def test_correct(self):
+        ctx = self.run_end()
+        self.assertEqual(failed(ctx), [])
+        self.assertFalse(ctx.no_pass)
+        names = [x["name"] for x in ctx.checks]
+        for want in ("starts none", "dropped as 'not our address' (net.log)", "taken by the radio",
+                     "starts a new session", "DDC0 STREAM_STATUS reason 1"):
+            self.assertTrue(any(want in n for n in names), want)
+
+    def test_old_address_starts_a_session_fails(self):
+        # the fake keeps one session, already running on the new address from the bench's RUN=1 to radio.connect,
+        # so the packets to the old address are taken but show no status from it: net.log shows them
+        bad = failed(self.run_end(broken="old-starts"))
+        for want in ("taken by the radio", "dropped as"):
+            self.assertTrue(any(want in n for n in bad), (want, bad))
+
+    def test_old_address_taken_fails(self):
+        """Taken by the chip although it starts nothing: net.log shows it."""
+        bad = failed(self.run_end(broken="old-taken"))
+        self.assertTrue(any("taken by the radio" in n for n in bad), bad)
+        self.assertFalse(any("starts none" in n for n in bad), bad)
+
+    def test_without_netlog_a_note(self):
+        c, radio, nets = case(former=True, netlog=False, change_at=101.0)
+        c.stream.wait(1.0)
+        c.ended(nets[1], radio.t, d.former_net(c.ctx))
+        self.assertEqual(failed(c.ctx), [])
+        self.assertFalse(c.ctx.no_pass)
+        self.assertTrue(any("no net.log" in n for n in c.ctx.notes))
+
+    def test_former_net(self):
+        ctx = Ctx(dict(radio=dict(ip=NEW, former=dict(ip=OLD, connect={"1027": "127.0.0.1:41327"})), fixtures=[]))
+        n = d.former_net(ctx)
+        self.assertEqual((n.radio_ip, n.dest(1027)), (OLD, ("127.0.0.1", 41327)))
+        for bad in ({}, {"former": None}, {"former": {"ip": OLD}}):
+            self.assertIsNone(d.former_net(Ctx(dict(radio=dict(ip=NEW, **bad), fixtures=[]))))
+
+    def test_drops_of(self):
+        e = [dict(dir="dropped", reason=d.NOT_OURS, peer="1.2.3.4:9100"), dict(dir="dropped", reason="x", peer="1.2.3.4:9100"),
+             dict(dir="to_radio", peer="1.2.3.4:9100"), dict(dir="dropped", reason=d.NOT_OURS, peer="1.2.3.4:9101")]
+        dropped, taken = d.drops_of(e, 9100)
+        self.assertEqual((len(dropped), len(taken)), (1, 1))
 
 
 class DoesNotEnd(unittest.TestCase):
