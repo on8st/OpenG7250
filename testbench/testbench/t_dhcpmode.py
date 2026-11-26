@@ -374,10 +374,13 @@ def judge_new_session(ctx, label: str, h, ddc0: int):
               st is not None and arm_reason(st) != "WATCHDOG_DISABLED", f"{arm_reason(st)}")
 
 
-def set_config(ctx, s: bytes, *items) -> int | None:
+def set_config(ctx, s: bytes, *items, on_reply=None) -> int | None:
+    """`on_reply`: called as soon as the reply is in, before the management session closes."""
     from .t_update import updating
     with updating(ctx, s, restart_at_end=False) as u:
         r = u.req("SET_CONFIG", config_tlv(*items))
+        if on_reply:
+            on_reply()
     return r["status"] if r else None
 
 
@@ -431,9 +434,14 @@ class Case:
         self.n0 = len(dhcp_messages(ctx))
         self.t0 = radio_us(ctx)
         self.stream.start()  # keeps the session alive meanwhile
-        self.st = set_config(ctx, s, (1, b"\x00"))
-        self.t_reply = self.t_from = self.stream.now()
-        self.t_reply_us = radio_us(ctx)
+        self.t_reply = self.t_reply_us = None
+
+        def stamp():  # the reply as soon as it is in; still after the radio sent it, by the way back
+            self.t_reply, self.t_reply_us = self.stream.now(), radio_us(ctx)
+        self.st = set_config(ctx, s, (1, b"\x00"), on_reply=stamp)
+        if self.t_reply is None:
+            stamp()
+        self.t_from = self.t_reply
 
     def preset_tx(self):
         with self.stream.paused():
@@ -484,11 +492,13 @@ class Case:
             st.know(new)
         apart = old.dest(PORT_HP) != new.dest(PORT_HP)
         from .t_a2 import netlog_start
+        r0 = st.radio_now()  # the last RUN=1 to the new address is just before: the watchdog counts from here
         netlog = apart and netlog_start(ctx)
         st.wait(OLD_ONLY_S)  # RUN=1 to the old address only
-        t_switch = st.now()
+        t_switch, r_only = st.now(), st.radio_now() - r0
         sent = sorted({ip for t, p, ip, _ in st.sent if t >= t_change})
-        ctx.notes.append(f"{label}: from the change on the bench sent to {sent} until {t_switch - t_change:.1f} s, "
+        ctx.notes.append(f"{label}: from the change on the bench sent to {sent} for {t_switch - t_change:.2f} s of host "
+                         f"time (the net.log start included; {r_only:.2f} s of radio time waited, {OLD_ONLY_S:g} s asked), "
                          f"then to {new.radio_ip}")
         if apart:
             f = end_faults(st.snapshot(), t_change, t_switch, old.radio_ip, new.radio_ip, st.ratio())
@@ -581,6 +591,15 @@ def moved(ctx, ip: str) -> bool:
     from .p2 import reread_endpoint
     reread_endpoint(ctx)
     return current_ip(ctx) != ip
+
+
+def lease_note(span: float | None, src: str) -> str:
+    """Why a moving case's 'does not end for the mode change' window is not judged; span in radio seconds."""
+    if span is None:
+        return "no time for the lease on either clock"
+    when = (f"the lease ({src}) came {span * 1000:.0f} ms of radio time after the reply" if span > 0 else
+            f"the lease ({src}) came before the bench's stamp of the reply, which lags the radio's by the reply's way back")
+    return f"{when}, less than the {(GAP_S + JITTER_S) * 1000:.0f} ms a gap needs to be seen"
 
 
 def lease_bound(c, ack: dict, t_seen: float) -> float | None:
@@ -742,10 +761,8 @@ def with_server(ctx, s: bytes):
                 t1 = lease_bound(c, ack, t_seen)
                 span = None if t1 is None else (t1 - c.t_reply) / c.stream.ratio()
                 if span is None or span < GAP_S + JITTER_S:
-                    ctx.notes.append(f"{label}: '{what}' not judged: " + (
-                        "no time for the lease on either clock" if span is None else
-                        f"the lease came {max(span, 0) * 1000:.0f} ms of radio time after the reply, less than the "
-                        f"{(GAP_S + JITTER_S) * 1000:.0f} ms a gap needs to be seen"))
+                    src = "the DHCPACK's t_wall" if ack_wall(ack, c.t_reply, t_seen) is not None else "the radio's REQUEST"
+                    ctx.notes.append(f"{label}: '{what}' not judged: {lease_note(span, src)}")
                 else:
                     c.kept(what, t1=t1, tx=False)
             else:

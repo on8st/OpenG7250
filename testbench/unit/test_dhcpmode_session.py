@@ -246,6 +246,12 @@ class Former(unittest.TestCase):
                      "starts a new session", "DDC0 STREAM_STATUS reason 1"):
             self.assertTrue(any(want in n for n in names), want)
 
+    def test_old_only_note_in_radio_time(self):
+        ctx = self.run_end()
+        n = next(n for n in ctx.notes if "from the change on the bench sent to" in n)
+        self.assertIn(f"{d.OLD_ONLY_S:g} s asked", n)
+        self.assertIn("s of radio time waited", n)
+
     def test_first_session_judged(self):
         """fw-4e567d2 part 2: the old-only stretch is shorter than the watchdog, so the session the bench's
         keepalives started at the new address since the move is the one judged, not a restart."""
@@ -361,6 +367,13 @@ class Pure(unittest.TestCase):
         holed = [r for r in first if not 10.0 < r[0] < 11.0]
         self.assertIn("a restart at", d.judged_session(holed, NEW, 10.0))
         self.assertEqual(d.judged_session([], NEW, 10.0), "none seen")
+
+    def test_lease_note(self):
+        self.assertIn("came 14 ms of radio time after the reply", d.lease_note(0.014, "the radio's REQUEST"))
+        n = d.lease_note(-0.02, "the radio's REQUEST")
+        self.assertIn("before the bench's stamp of the reply", n)
+        self.assertNotIn(" 0 ms", n)
+        self.assertEqual(d.lease_note(None, "x"), "no time for the lease on either clock")
 
     def test_lease_bound(self):
         class S:
