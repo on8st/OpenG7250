@@ -131,6 +131,23 @@ pub fn apply_plan(dhcp_running: bool, current: &NetConfig, want: &NetConfig) -> 
     if dhcp_running { Apply::Keep } else { Apply::StartDhcp }
 }
 
+/// The C-1 configuration of the stored items (address mode, address, netmask, gateway of Table
+/// M-3), as a start brings it up: the configuration survives a restart (A1.6). `None` when they
+/// are no valid configuration under the checks of `SET_CONFIG` (A1.6 C-4): a mode other than 0
+/// or 1, a static mode without a usable host address, or a gateway outside its subnet.
+pub fn from_items(mode: Option<u8>, ip: Option<Ip>, mask: Option<Ip>, gateway: Option<Ip>) -> Option<NetConfig> {
+    match mode {
+        None | Some(0) => Some(NetConfig::FACTORY),
+        Some(1) => {
+            let (Some(ip), Some(mask)) = (ip, mask) else { return None };
+            let gateway = gateway.unwrap_or([0; 4]);
+            let usable = valid_host(ip, mask) && (gateway == [0; 4] || in_subnet(ip, mask, gateway));
+            usable.then_some(NetConfig { mode: Mode::Static, ip, mask, gateway })
+        }
+        _ => None,
+    }
+}
+
 /// What an address conflict on the address in use leads to (A1.6 C-4; A1.11 "Conflict on a
 /// DHCP or static address"; 0049 point 4). Each is an address change of A1.11a.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,6 +202,25 @@ mod tests {
         assert_eq!(apply_plan(false, &st, &NetConfig::FACTORY), Apply::StartDhcp, "static to DHCP");
         assert_eq!(apply_plan(false, &st, &NetConfig { mode: Mode::Static, ip: [0; 4], ..st }), Apply::StartDhcp, "not a usable host: DHCP");
         assert_eq!(apply_plan(true, &ll, &st), Apply::Reconfigure, "DHCP to static");
+    }
+
+    #[test]
+    fn a_start_brings_up_the_stored_c1_items_a1_6() {
+        let (ip, mask, gw) = ([192, 168, 1, 20], [255, 255, 255, 0], [192, 168, 1, 1]);
+        assert_eq!(from_items(Some(1), Some(ip), Some(mask), Some(gw)), Some(NetConfig { mode: Mode::Static, ip, mask, gateway: gw }));
+        assert_eq!(from_items(Some(1), Some(ip), Some(mask), None), Some(NetConfig { mode: Mode::Static, ip, mask, gateway: [0; 4] }));
+        let ll = [169, 254, 77, 77];
+        assert_eq!(from_items(Some(1), Some(ll), Some([255, 255, 0, 0]), Some([0; 4])).map(|c| c.ip), Some(ll), "a static link-local address");
+        // DHCP mode, whatever address items it holds.
+        assert_eq!(from_items(Some(0), Some(ip), Some(mask), Some(gw)), Some(NetConfig::FACTORY));
+        assert_eq!(from_items(None, None, None, None), Some(NetConfig::FACTORY));
+        // Invalid items: the caller falls back to the factory configuration and logs it.
+        assert_eq!(from_items(Some(2), Some(ip), Some(mask), None), None, "unknown mode");
+        assert_eq!(from_items(Some(1), None, Some(mask), None), None, "no address");
+        assert_eq!(from_items(Some(1), Some(ip), None, None), None, "no netmask");
+        assert_eq!(from_items(Some(1), Some([192, 168, 1, 255]), Some(mask), None), None, "not a host");
+        assert_eq!(from_items(Some(1), Some(ip), Some([255, 0, 255, 0]), None), None, "bad netmask");
+        assert_eq!(from_items(Some(1), Some(ip), Some(mask), Some([10, 0, 0, 1])), None, "gateway outside the subnet");
     }
 
     #[test]

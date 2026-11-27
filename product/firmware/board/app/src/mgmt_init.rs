@@ -248,13 +248,29 @@ pub fn apply_stored(m: &mut MgmtInit, e: g7250_radio::mgmt::Effect) -> Result<Op
     }
 }
 
-/// The network configuration C-1 from the stored Table M-3 items.
+/// The network configuration C-1 from the stored Table M-3 items; the factory one when they are
+/// not valid (netcfg::from_items).
 pub fn network_from_config(cfg: &[u8]) -> g7250_proto::netcfg::NetConfig {
+    network_items(cfg).unwrap_or(g7250_proto::netcfg::NetConfig::FACTORY)
+}
+
+fn network_items(cfg: &[u8]) -> Option<g7250_proto::netcfg::NetConfig> {
+    let c = Config::decode(cfg).ok()?;
+    g7250_proto::netcfg::from_items(c.address_mode, c.address, c.netmask, c.gateway)
+}
+
+/// The C-1 configuration a start brings up (A1.6: the configuration survives a restart), and
+/// the log line that names it. The factory configuration only when the store holds no readable
+/// configuration record or its C-1 items are not valid.
+pub fn network_at_start(m: &MgmtInit) -> (g7250_proto::netcfg::NetConfig, &'static str) {
     use g7250_proto::netcfg::{Mode, NetConfig};
-    let c = Config::decode(cfg).unwrap_or_default();
-    match (c.address_mode, c.address, c.netmask) {
-        (Some(1), Some(ip), Some(mask)) => NetConfig { mode: Mode::Static, ip, mask, gateway: c.gateway.unwrap_or([0; 4]) },
-        _ => NetConfig::FACTORY,
+    if m.fell_back.0 {
+        return (NetConfig::FACTORY, "network at start: factory configuration (no stored configuration)");
+    }
+    match network_items(&m.config) {
+        Some(c) if c.mode == Mode::Static => (c, "network at start: stored configuration (static)"),
+        Some(c) => (c, "network at start: stored configuration (DHCP)"),
+        None => (NetConfig::FACTORY, "network at start: factory configuration (stored C-1 items not valid)"),
     }
 }
 

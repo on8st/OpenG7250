@@ -651,10 +651,14 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
     // The C-1 configuration in force (its mode is not that of `cfg`: a link-local fall-back holds
     // a link-local address under either mode), the one before the last change, and the stored
     // items before a SET_CONFIG change, for the fall-back of A1.6 C-4 (0049).
-    let mut configured = NetConfig::FACTORY;
+    // The start brings up the stored C-1 items (A1.6: the configuration survives a restart), the
+    // factory configuration only when the store has none or they are not valid; logged below.
+    let (start_cfg, start_note) = crate::mgmt_init::network_at_start(&mgmt);
+    println!("net: {}", start_note);
+    let mut configured = start_cfg;
     let mut prev_cfg: Option<NetConfig> = None;
     let mut prev_stored: Option<heapless::Vec<u8, { m::payload::MAX_CONFIG }>> = None;
-    let (mut cfg, src, mut dhcpc) = configure(&mut chip, mac, NetConfig::FACTORY, &mut claim).await;
+    let (mut cfg, src, mut dhcpc) = configure(&mut chip, mac, start_cfg, &mut claim).await;
     // Socket 7 lent to DHCP (port 68) for a running exchange (A1.11).
     let mut dhcp_borrowed = false;
     print_cfg(&cfg, src);
@@ -699,6 +703,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
         println!("net: {}", n);
         server.log.push(Instant::now().as_millis(), format_args!("{n}"));
     }
+    server.log.push(Instant::now().as_millis(), format_args!("{start_note}"));
     // Unreadable store words (double ECC error, 0065 point 5; T-A1-87): logged once per start,
     // with each item that then had no readable record. No fault, no reset.
     if mgmt.store_unreadable > 0 {
