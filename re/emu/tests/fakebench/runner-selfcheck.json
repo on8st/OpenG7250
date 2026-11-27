@@ -116,6 +116,16 @@
    "timeout_s": 60
   },
   {
+   "id": "T-EMU-40",
+   "title": "two power cycles back to back: the second dumps the flash the first kept (power.cycle returns once the new machine runs), the image boots",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 240
+  },
+  {
    "id": "T-EMU-10",
    "title": "reset.wdt",
    "reqs": [

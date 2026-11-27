@@ -298,6 +298,17 @@ class Boot:
             self.start()
             self.fixtures.sock_new_boot(self.boots)
             self.agent.wait_connected(BOOT_WALL_TIMEOUT)
+            # the agent connects while the start-up script still runs, before the flash is loaded and the
+            # machine started: a power cycle or cut right after this one would dump an empty flash (step
+            # [15] on 2026-11-27: boot 3 had no image). Return only once emulated time runs
+            t_run = time.time()
+            while time.time() - t_run < BOOT_WALL_TIMEOUT:
+                r = self.agent.ask("time", internal=True)
+                if r and r.startswith("time ") and int(r.split()[1]) > 0:
+                    break
+                if self.proc.poll() is not None:
+                    break
+                time.sleep(0.05)
             parts = {"before_quit_s": round(t_quit - t_begin, 3), "quit_s": round(t_start - t_quit, 3),
                      "start_s": round(time.time() - t_start, 3)}
             if tracing:

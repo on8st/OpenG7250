@@ -11,6 +11,7 @@ of the runner itself against firmware-tests/bench/net_test.c:
   T-EMU-05  hw.trace start/stop with a hw.input edge on PH6, file readable
   T-EMU-06  hw.input on a pin that is not offered is refused
   T-EMU-09  power.cycle: the image boots again, the trace carries a reset event
+  T-EMU-40  two power cycles back to back: the second dumps the flash the first kept, the image boots
   T-EMU-10  reset.wdt: watchdog reset, the image boots again, reset event "wdt"
   T-EMU-11  link.set: no traffic while the link is down, traffic again at 100
   T-EMU-12  power.cut: the core stops at at_us, the image boots again from the kept flash
@@ -82,6 +83,14 @@ def run_test(tid, ep):
         d, src = echo(ep, 1, ep["broadcast"]["send_to"]["limited"]["1024"], b"bcast")
         return [check("broadcast echo", d == b"bcast", repr(d)), check("reply from connect[1024]", src == addr(c), str(src))]
     ctl = Ctl(ep)
+    if tid == "T-EMU-40":
+        # a power cycle right after a power cycle: the first returns only once the new machine runs, so
+        # the second dumps the flash it loaded, not an empty one (before: boot 3 had no image)
+        p1 = ctl.op("power.cycle")
+        p2 = ctl.op("power.cycle")
+        d, _ = echo(ep, 0, c, b"after-two", wait=60.0)
+        return [check("both power cycles accepted", p1.get("ok") and p2.get("ok"), "%s %s" % (p1, p2)),
+                check("the image boots after them (echo on 1024)", d == b"after-two", repr(d))]
     if tid == "T-EMU-04":
         r = ctl.op("hw.observe")
         v = r.get("value", {})
