@@ -845,7 +845,10 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                             println!("net: Set IP from {} outside the subnet ignored", ip_str(d.src_ip).as_str());
                             server.stats.set_ip_ignored += 1;
                         } else if limit.allow(d.src_ip, d.src_port, now) {
-                            println!("net: Set IP {} from {} (kept in RAM until restart: no configuration store yet)", ip_str(ip).as_str(), ip_str(d.src_ip).as_str());
+                            // Logged with its source, which is not visible on the wire (B3.9; A1.7;
+                            // 0008 L-2).
+                            println!("net: Set IP {} from {}:{}", ip_str(ip).as_str(), ip_str(d.src_ip).as_str(), d.src_port);
+                            server.log.push(now, format_args!("Set IP {} from {}:{}", ip_str(ip).as_str(), ip_str(d.src_ip).as_str(), d.src_port));
                             let r = discovery::reply(&id, Status::Available);
                             let _ = chip.udp_send(SOCK_DISCOVERY, d.src_ip, d.src_port, &r);
                             let want = if ip == [0; 4] {
@@ -855,11 +858,26 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                             };
                             // A new address ends a running session (A1.6; B3.9;
                             // SESSION_CHANGED, Table A3-1 event 9) and nothing is carried over.
+                            // While armed this dropped the arm (SESSION_CHANGED), so the store
+                            // write below is no flash work while armed (B2.3; 0055).
                             p2.address_changed(&mut chip, now);
+                            // Stored as the C-1 items (B3.9; T-B3-25), with the stored items before
+                            // it kept for the fall-back of A1.6 C-4. A failed write is logged as
+                            // for SET_CONFIG; the address is applied all the same (B3.9: no
+                            // preconditions; the reply has gone).
+                            let before = mgmt.config.clone();
+                            prev_stored = match crate::mgmt_init::store_set_ip(&mut mgmt, &want) {
+                                Ok(true) => Some(before),
+                                Ok(false) => None,
+                                Err(msg) => {
+                                    println!("net: FAULT store write failed ({})", msg);
+                                    server.log.push(now, format_args!("store write failed ({msg}); old values kept"));
+                                    None
+                                }
+                            };
+                            flash_failures(&mut server);
                             close_all(&mut chip);
-                            // Set IP is kept in RAM only: nothing to restore in the store.
                             prev_cfg = Some(configured);
-                            prev_stored = None;
                             configured = want;
                             let (c, s, d) = configure(&mut chip, mac, want, &mut claim).await;
                             cfg = c;

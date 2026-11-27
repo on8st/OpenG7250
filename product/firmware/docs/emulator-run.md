@@ -35,7 +35,7 @@ Expected console after F1-01: `net: CH394 answers, version register …`, `net: 
 | T-B3-14 | byte 20 = 1 only | no DDC streams yet |
 | T-B3-18, -20, -26, -33 | yes | |
 | T-B3-31 | replies only | at most 10/s per source; the `GET_STATS` count does not exist yet |
-| T-B3-25 | partly | address applied and answered; not stored across restart (no configuration store yet); "while running/armed" not testable yet |
+| T-B3-25 | yes | address applied, answered, stored as the C-1 items and brought up again at the next start; logged with its source in the log ring |
 | T-B3-21 | yes | only port 1024 is open in F2 (plus 68 during DHCP at start) |
 | T-B3-32 | expected to fail | second half: see spec question SQ-F2-2 |
 | T-B3-07, -08, -15, -17, -19, -22, -23, -27, -28, -29 | no | need the P2 session (B5), streams or the arm |

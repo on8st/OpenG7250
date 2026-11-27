@@ -286,6 +286,24 @@ pub fn restore_network(m: &mut MgmtInit, prev: &[u8]) -> Result<(), &'static str
     apply_stored(m, g7250_radio::mgmt::Effect::SetConfig(v, false)).map(|_| ())
 }
 
+/// A Set IP's result stored as the C-1 items (B3.9; T-B3-25): a static `want` that is a usable
+/// host as static, anything else as DHCP. Returns whether the store was written (no write when
+/// the items are already stored). The caller drops the arm first (B2.3; 0055).
+pub fn store_set_ip(m: &mut MgmtInit, want: &g7250_proto::netcfg::NetConfig) -> Result<bool, &'static str> {
+    use g7250_proto::netcfg::{valid_host, Mode};
+    let cur = Config::decode(&m.config).unwrap_or_default();
+    let usable = want.mode == Mode::Static && valid_host(want.ip, want.mask);
+    let new = cur.with_set_ip(usable.then_some((want.ip, want.mask, want.gateway)));
+    if (new.address_mode, new.address, new.netmask, new.gateway) == (cur.address_mode, cur.address, cur.netmask, cur.gateway) {
+        return Ok(false);
+    }
+    let mut b = [0u8; m::payload::MAX_CONFIG];
+    let n = new.encode(&mut b).ok_or("configuration")?;
+    let mut v = heapless::Vec::new();
+    let _ = v.extend_from_slice(&b[..n]);
+    apply_stored(m, g7250_radio::mgmt::Effect::SetConfig(v, false)).map(|_| true)
+}
+
 /// The configured region C-6 from the stored Table M-3 items (factory: 0, Table A3-0).
 pub fn region_from_config(cfg: &[u8]) -> u8 {
     Config::decode(cfg).ok().and_then(|c| c.region).unwrap_or(0)

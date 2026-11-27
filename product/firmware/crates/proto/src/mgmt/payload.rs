@@ -217,6 +217,16 @@ impl Config {
         Config { address_mode: prev.address_mode, address: prev.address, netmask: prev.netmask, gateway: prev.gateway, ..*self }
     }
 
+    /// This configuration with the C-1 items a Set IP stores (B3.9; T-B3-25): `None` (address
+    /// 0.0.0.0, or an address that is no usable host) selects DHCP and keeps the address items;
+    /// `Some` is the static address, netmask and gateway brought up. Every other item is kept.
+    pub fn with_set_ip(&self, static_items: Option<([u8; 4], [u8; 4], [u8; 4])>) -> Config {
+        match static_items {
+            None => Config { address_mode: Some(0), ..*self },
+            Some((ip, mask, gw)) => Config { address_mode: Some(1), address: Some(ip), netmask: Some(mask), gateway: Some(gw), ..*self },
+        }
+    }
+
     /// The stored record as a start uses it: `None` (then the factory values apply) if there is
     /// none or it does not decode.
     pub fn stored(p: Option<&[u8]>) -> Option<Config> {
@@ -639,6 +649,30 @@ pub fn calibration_entries(mut p: &[u8]) -> impl Iterator<Item = Result<(&[u8], 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_set_ip_is_stored_and_comes_back_at_the_next_start_t_b3_25() {
+        use crate::netcfg::{after_set_ip, from_items, valid_host, Mode, NetConfig};
+        let mut stored = Config::factory();
+        stored.max_tx_time_ms = Some(60_000);
+        let back_at_start = |c: &Config| {
+            let mut b = [0u8; MAX_CONFIG];
+            let n = c.encode(&mut b).unwrap();
+            let d = Config::decode(&b[..n]).unwrap();
+            assert_eq!(d.max_tx_time_ms, Some(60_000), "the other items stay");
+            from_items(d.address_mode, d.address, d.netmask, d.gateway)
+        };
+        // From DHCP on a lease: a static address, brought up and stored as the C-1 items.
+        let lease = NetConfig { mode: Mode::Dhcp, ip: [192, 168, 1, 20], mask: [255, 255, 255, 0], gateway: [192, 168, 1, 1] };
+        let want = after_set_ip(&lease, [192, 168, 1, 50]);
+        assert!(valid_host(want.ip, want.mask));
+        let c = stored.with_set_ip(Some((want.ip, want.mask, want.gateway)));
+        assert_eq!(back_at_start(&c), Some(want));
+        // 0.0.0.0 selects DHCP: address mode 0, the address items kept.
+        let d = c.with_set_ip(None);
+        assert_eq!((d.address_mode, d.address), (Some(0), Some([192, 168, 1, 50])));
+        assert_eq!(back_at_start(&d), Some(NetConfig::FACTORY));
+    }
 
     #[test]
     fn the_c4_fall_back_restores_the_c1_items_only_t_a1_73() {
