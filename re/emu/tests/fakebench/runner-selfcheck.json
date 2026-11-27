@@ -313,6 +313,16 @@
    "timeout_s": 120
   },
   {
+   "id": "T-EMU-39",
+   "title": "power.cut, flash.fault and cpu.fault {clear: true} (stand-in bench only until tb agrees): no fault armed from an earlier test; each clear drops what is armed and says so; refused when not true or not alone",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "timeout_s": 180
+  },
+  {
    "id": "T-EMU-25",
    "title": "flash.log entries end at a reset and a pause; an erase clears ECC marks; net.endpoint whole; net.log order; CYCCNT against the timers over masked erases",
    "reqs": [

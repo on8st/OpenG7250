@@ -16,6 +16,7 @@ REPO="$PWD"
 RN="$REPO/tools/renode-1.17.0/Renode.app/Contents/MacOS/renode"
 OUT="$REPO/.private/m1"; mkdir -p "$OUT"
 fail=0
+export G7250_FIXTURE_CLEAR=1     # power.cut, flash.fault, cpu.fault {clear: true}: the stand-in bench only until tb agrees
 ok()   { printf '  ok   %s\n' "$1"; }
 bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
 
@@ -283,6 +284,19 @@ if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
     ok "at_power_on: T-EMU-31 passes, the fixture log has each cut's outcome and boot, the dumps agree"
   else
     bad "at_power_on (see .private/product-runs/smoke-cut-pon/result.json, cut_pon_check.py)"
+  fi
+else
+  echo "  skip (no arm-none-eabi-gcc or Renode)"
+fi
+
+echo "[15] one fault stays one fault: T-EMU-22 raised inside its ch394.silent stretch, T-EMU-23 raised with an erase fault armed; their undos run; T-EMU-39 finds no fault armed"
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 && [ -x "$RN" ]; then
+  G7250_FAKEBENCH_RAISE=T-EMU-22:silent,T-EMU-23:erase-fault G7250_NO_FIXED_PORTS=1 G7250_TESTBENCH="$REPO/tests/fakebench" python3 harness/g7250emu/product_run.py \
+       .private/bench/net_test.elf tests/fakebench/undo-raise.json --run-id smoke-undo >/dev/null 2>&1
+  if python3 tests/fakebench/undo_raise_check.py .private/product-runs/smoke-undo/result.json >/dev/null; then
+    ok "undo: T-EMU-22 and T-EMU-23 one error each, their silent boot and armed fault undone, T-EMU-39 passes"
+  else
+    bad "undo (see .private/product-runs/smoke-undo/result.json, undo_raise_check.py)"
   fi
 else
   echo "  skip (no arm-none-eabi-gcc or Renode)"

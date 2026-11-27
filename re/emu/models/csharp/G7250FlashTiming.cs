@@ -292,6 +292,12 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
             lock(sync) { faultOp = op; faultAfter = Math.Max(0, after); faultFlag = flag ?? ""; faultNeverEnd = neverEnd; faultEndAfterUs = endAfterUs; }
             return null;
         }
+        // flash.fault {clear: true}: drops a fault not yet taken; true when one was armed. An erase a
+        // never_end fault has already taken is not ended by it (a reset ends it)
+        public bool FaultClear()
+        {
+            lock(sync) { bool was = faultOp != null; faultOp = null; return was; }
+        }
         private bool TakeFault(string op)
         {
             if(faultOp != op) return false;

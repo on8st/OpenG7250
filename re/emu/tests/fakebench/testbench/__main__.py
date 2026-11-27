@@ -17,6 +17,7 @@ of the runner itself against firmware-tests/bench/net_test.c:
   T-EMU-12  power.cut: the core stops at at_us, the image boots again from the kept flash
   T-EMU-36  an address move: radio.former, delivery on the current map, the chip's drop for the old address
   T-EMU-37  MACRAW socket 0: the frames the image sends in eth.log (format v1.6), UDP beside it
+  T-EMU-39  power.cut, flash.fault and cpu.fault {clear: true}: nothing armed from an earlier test
 """
 import argparse
 import json
@@ -44,7 +45,10 @@ class Ctl:
     def op(self, name, **args):
         self.f.write(json.dumps({"op": name, "args": args}) + "\n")
         self.f.flush()
-        return json.loads(self.f.readline())
+        rep = json.loads(self.f.readline())
+        if name in ARMS and rep.get("ok") and not args.get("clear") and not args.get("read"):
+            undo_push("%s clear" % name, lambda: self.op(name, clear=True), first=True)
+        return rep
 
 
 def echo(ep, host, dest, payload, wait=20.0):
@@ -69,6 +73,26 @@ def check(name, ok, detail=""):
 
 EP_PATH = ""
 NOTES = []      # lines for the result's reason, also of a test that passes
+# What a test changed in the boot and undoes at its normal end (ch394.silent, MACRAW, link.set,
+# slot.corrupt, flash.timing): each registers its undo right after the change. The undos run, last
+# first, only when the test raises, so the next test in the list starts in an ordinary boot and one
+# fault stays one fault; on a normal end the list is dropped (the test undid it itself).
+UNDO = []
+# an arm of power.cut, flash.fault or cpu.fault registers its clear (first among the undos, so a cut
+# armed for the next power-on is gone before an undo that power-cycles)
+ARMS = ("power.cut", "flash.fault", "cpu.fault")
+
+
+def undo_push(name, fn, first=False):
+    if any(u[1] == name for u in UNDO):
+        return
+    UNDO.append((first, name, fn))
+
+
+def fault_point(tid, where):
+    """A raise on purpose for the runner self-check: G7250_FAKEBENCH_RAISE=<test id>:<point>."""
+    if "%s:%s" % (tid, where) in os.environ.get("G7250_FAKEBENCH_RAISE", "").split(","):
+        raise RuntimeError("raised on purpose at %s, %s (G7250_FAKEBENCH_RAISE)" % (tid, where))
 
 
 def run_test(tid, ep):
@@ -138,6 +162,7 @@ def run_test(tid, ep):
     if tid == "T-EMU-11":
         d0, _ = echo(ep, 0, c, b"before", wait=20.0)
         r0 = ctl.op("link.set", speed=0)
+        undo_push("link.set speed 100", lambda: ctl.op("link.set", speed=100))
         d1, _ = echo(ep, 0, c, b"link-down", wait=3.0)
         r1 = ctl.op("link.set", speed=100)
         d2, _ = echo(ep, 0, c, b"link-up", wait=20.0)
@@ -360,10 +385,14 @@ def run_test(tid, ep):
         sc = ctl.op("slot.corrupt", slot=2, offset=0x1000)
         sr = ctl.op("slot.corrupt", slot=2, restore=True)
         sc1 = ctl.op("slot.corrupt", slot=2, offset=0x1000, xor=0x80)
+        undo_push("slot.corrupt slot 2 restored", lambda: ctl.op("slot.corrupt", slot=2, restore=True))
         fl = ctl.op("flash.log", action="read")
         ents = (fl.get("value") or {}).get("entries", [])
         si = ctl.op("ch394.silent", boots=1)
+        undo_push("ch394.silent: boots 0, then a power cycle to an answering boot",
+                  lambda: (ctl.op("ch394.silent", boots=0), ctl.op("power.cycle")))
         pc = ctl.op("power.cycle")
+        fault_point("T-EMU-22", "silent")
         d1, _ = echo(ep, 0, c, b"silent?", wait=8.0)
         pc2 = ctl.op("power.cycle")
         d2, _ = echo(ep, 0, c, b"after-silent", wait=60.0)
@@ -389,6 +418,7 @@ def run_test(tid, ep):
         # format v1.8: flash.fault on real flash work (net_test "F" commands), a watchdog reset that
         # ends a never-ending erase, RCC_RSR, power.cut replaced by a later one, AXI SRAM kept over
         # resets and pseudo-random (not zero, not kept) at power-on
+        undo_push("flash.timing erase_us null", lambda: ctl.op("flash.timing", erase_us=None))
         h = ep["hosts"][0]
         sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sk.bind((h["bind"], h["ports"][0] + 8))
@@ -438,6 +468,7 @@ def run_test(tid, ep):
                          f1.get("ok") and not (p1[0] or 0) & ERRS and p1[1] == 0xA5000100 and (p2[0] or 0) & PGSERR and p2[1] == FF
                          and not (p3[0] or 0) & ERRS and p3[1] == 0xA5000300, str((p1, p2, p3))))
         f2 = ctl.op("flash.fault", op="erase", flag="PGSERR")
+        fault_point("T-EMU-23", "erase-fault")     # armed, not yet taken
         e2 = words(cmd(b"FE"))
         e3 = words(cmd(b"FP\x04"))
         out.append(check("flash.fault erase: PGSERR, the sector keeps its content; the flag is cleared by CCR1",
@@ -526,6 +557,7 @@ def run_test(tid, ep):
         # flash.log entries end at a reset and at a pause; an erase clears ECC marks (also over a
         # power cycle); net.endpoint gives the whole endpoint; net.log keeps the order of the
         # sends; a masked erase: CYCCNT, TIM5 and TIM12 agree
+        undo_push("flash.timing erase_us null", lambda: ctl.op("flash.timing", erase_us=None))
         h = ep["hosts"][0]
         sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sk.bind((h["bind"], h["ports"][0] + 9))
@@ -675,6 +707,7 @@ def run_test(tid, ep):
         # ECC marks: a program, then a read of a marked word at once; a mark added while the
         # watchpoints are lifted; the first read after a power cut is covered. (These sequences pass
         # on the layer of 5960f2a too: the crash reproducer is ecc-crash.json, m1_smoke [10].)
+        undo_push("flash.timing erase_us null", lambda: ctl.op("flash.timing", erase_us=None))
         h = ep["hosts"][0]
         sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sk.bind((h["bind"], h["ports"][0] + 10))
@@ -760,6 +793,7 @@ def run_test(tid, ep):
         return out
     if tid == "T-EMU-27":
         # format v1.9: flash.dump, flash.fill, reset.flags, log.corrupt; a cut armed over a reset
+        undo_push("flash.timing erase_us null", lambda: ctl.op("flash.timing", erase_us=None))
         h = ep["hosts"][0]
         sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sk.bind((h["bind"], h["ports"][0] + 11))
@@ -913,6 +947,7 @@ def run_test(tid, ep):
     if tid == "T-EMU-28":
         # the state at a cut is the state at that instant, also when the runner is slow after it
         # (run with G7250_TEST_CUT_DELAY_S; without it the checks say little)
+        undo_push("flash.timing erase_us null", lambda: ctl.op("flash.timing", erase_us=None))
         h = ep["hosts"][0]
         sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sk.bind((h["bind"], h["ports"][0] + 13))
@@ -1604,7 +1639,9 @@ def run_test(tid, ep):
         # FJ at the end undoes FO in the same boot (socket 0 UDP 1024 again, socket 1 closed), so the
         # tests after it in the list see the image as before
         st = ctl.op("eth.log", action="start")
+        undo_push("eth.log stopped", lambda: ctl.op("eth.log", action="stop"))
         o = words(ask(b"FO\x00"))
+        undo_push("FJ: socket 0 UDP 1024 again, socket 1 closed", lambda: ask(b"FJ"))
         got = ask(b"echo37")
         f0, f1, f2 = words(ask(b"FA\x00")), words(ask(b"FA\x01")), words(ask(b"FA\x02"))
         y = words(ask(b"FY"))
@@ -1634,6 +1671,61 @@ def run_test(tid, ep):
                 check("nothing received on MACRAW (FY: RX_RSR 0)", y[:1] == (0,), str(y)),
                 check("FJ: socket 0 UDP again (0x22), socket 1 closed (0x00); echo on 1024 from socket 0", j[:2] == (0x22, 0x00) and back == b"echo37-back",
                       str((j, back)))]
+    if tid == "T-EMU-39":
+        # no fault armed from an earlier test (m1_smoke [15]: after T-EMU-23 raised with an erase fault
+        # armed); then the three clears: power.cut, flash.fault and cpu.fault {clear: true}
+        h = ep["hosts"][0]
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sk.bind((h["bind"], h["ports"][0] + 24))
+
+        def cmd(payload, wait=60.0):
+            sk.setblocking(False)
+            try:
+                while True:
+                    sk.recv(2048)
+            except OSError:
+                pass
+            sk.settimeout(1.0)
+            t0 = time.time()
+            while time.time() - t0 < wait:
+                sk.sendto(payload, addr(c))
+                try:
+                    d = sk.recv(2048)
+                except socket.timeout:
+                    continue
+                if d[:2] == payload[:2]:
+                    return d
+            return None
+
+        def words(d):
+            return (int.from_bytes(d[2:6], "big"), int.from_bytes(d[6:10], "big")) if d and len(d) >= 10 else (None, None)
+        ERRS, FF = 0x1FE << 16, 0xFFFFFFFF
+        ctl.op("flash.timing", erase_us=200000)
+        undo_push("flash.timing erase_us null", lambda: ctl.op("flash.timing", erase_us=None))
+        cf0 = (ctl.op("cpu.fault", read=True).get("value") or {}).get("state")
+        e1 = words(cmd(b"FE"))
+        p1 = words(cmd(b"FP\x05"))
+        # the clears
+        k1 = ctl.op("power.cut", at_us=600000000)
+        kc = ctl.op("power.cut", clear=True)
+        f1 = ctl.op("flash.fault", op="erase", flag="PGSERR")
+        fc = ctl.op("flash.fault", clear=True)
+        fc2 = ctl.op("flash.fault", clear=True)
+        e2 = words(cmd(b"FE"))
+        a1 = ctl.op("cpu.fault", in_us=10 ** 9, mode="thread")
+        ac = ctl.op("cpu.fault", clear=True)
+        cf1 = (ctl.op("cpu.fault", read=True).get("value") or {}).get("state")
+        bad = [ctl.op("power.cut", clear=False), ctl.op("flash.fault", clear=True, op="erase")]
+        ctl.op("flash.timing", erase_us=None)
+        del UNDO[:]                                  # all cleared here
+        return [check("no cpu.fault armed from an earlier test", cf0 != "armed", str(cf0)),
+                check("no flash.fault armed from an earlier test: an erase with no error flag, word erased", e1[0] is not None and not e1[0] & ERRS and e1[1] == FF, str(e1)),
+                check("and a program with no error flag", p1[0] is not None and not p1[0] & ERRS and p1[1] == 0xA5000500, str(p1)),
+                check("power.cut clear: the armed cut cleared, named in the answer", k1.get("ok") and kc.get("ok") and (kc.get("value") or {}).get("cleared") == [{"at_us": 600000000}], str(kc)),
+                check("flash.fault clear: cleared true, a second clear false", f1.get("ok") and (fc.get("value") or {}).get("cleared") is True and (fc2.get("value") or {}).get("cleared") is False, "%s %s" % (fc, fc2)),
+                check("the erase after the clear: no error flag", e2[0] is not None and not e2[0] & ERRS and e2[1] == FF, str(e2)),
+                check("cpu.fault clear: state before armed, after none", a1.get("ok") and (ac.get("value") or {}).get("state_before") == "armed" and cf1 == "none", "%s %s" % (ac, cf1)),
+                check("refused: clear false, clear with other arguments", all(b.get("ok") is False for b in bad), str(bad))]
     if tid == "T-EMU-33":
         # an ECC mark set before an MCU reset (software reset, SYSRESETREQ) is in force at once after
         # it: a byte read of the marked word shows DBECCERR, with no program before the reset and with
@@ -1767,6 +1859,7 @@ def main():
     for tid in a.test:
         t0 = time.time()
         del NOTES[:]
+        del UNDO[:]
         try:
             checks = run_test(tid, ep)
             if checks is None:
@@ -1775,6 +1868,13 @@ def main():
                 e = {"id": tid, "status": "pass" if all(c["ok"] for c in checks) else "fail", "checks": checks}
         except Exception as ex:  # noqa: BLE001
             e = {"id": tid, "status": "error", "reason": "%s: %s" % (type(ex).__name__, ex)}
+            for _, name, fn in [u for u in reversed(UNDO) if u[0]] + [u for u in reversed(UNDO) if not u[0]]:
+                try:
+                    fn()
+                    NOTES.append("undone after the error: " + name)
+                except Exception as ux:  # noqa: BLE001
+                    NOTES.append("undo failed: %s (%s: %s)" % (name, type(ux).__name__, ux))
+        del UNDO[:]
         if NOTES:
             e["reason"] = "; ".join(NOTES + ([e["reason"]] if e.get("reason") else []))
         e["duration_s"] = round(time.time() - t0, 3)

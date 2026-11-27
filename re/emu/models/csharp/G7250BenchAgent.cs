@@ -1047,8 +1047,11 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(w.Length >= 2 && w[1] == "read") return "ok " + FaultRecord();
             if(w.Length >= 2 && w[1] == "clear")
             {
-                lock(faultSync) { if(faultTimer != null) faultTimer.Enabled = false; RemoveFaultHooks(); faultState = "none"; }
-                return "ok";
+                // cpu.fault {clear: true}: the state before it in the answer; after an injection it does not
+                // undo the fault, it only stops a later sample
+                string was;
+                lock(faultSync) { was = faultState; if(faultTimer != null) faultTimer.Enabled = false; RemoveFaultHooks(); faultState = "none"; }
+                return "ok " + was;
             }
             if((w.Length != 6 && w.Length != 7) || w[1] != "arm") return "err usage: fault arm <at_us> <any|thread|handler> <exception|-1> <within_us> [faultmask1] | read | clear";
             bool needFm = w.Length == 7;
@@ -1341,6 +1344,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             if(w.Length >= 3 && w[1] == "log") return "ok " + (string)t.GetMethod("FlashLogRead").Invoke(ft, new object[] { int.Parse(w[2], CultureInfo.InvariantCulture) });
             if(w.Length >= 3 && w[1] == "erase-us") { t.GetMethod("SetEraseUs").Invoke(ft, new object[] { long.Parse(w[2], CultureInfo.InvariantCulture) }); return "ok " + (string)t.GetMethod("TimingJson").Invoke(ft, null); }
             if(w.Length >= 2 && w[1] == "timing") return "ok " + (string)t.GetMethod("TimingJson").Invoke(ft, null);
+            if(w.Length >= 2 && w[1] == "fault-clear") return "ok " + ((bool)t.GetMethod("FaultClear").Invoke(ft, null) ? "1" : "0");
             if(w.Length >= 6 && w[1] == "fault")
             {
                 var e = (string)t.GetMethod("Fault").Invoke(ft, new object[] { w[2], long.Parse(w[3], CultureInfo.InvariantCulture), w[4] == "-" ? "" : w[4], w[5] == "1",

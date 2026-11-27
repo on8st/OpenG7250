@@ -339,7 +339,25 @@ What each does in the model: docs/FLASH-model.md "Format v1.8".
   gives no answer: MISO reads 0xFF (HYPOTHESIS: the level of an absent chip is not in the
   HIS), writes and arriving datagrams are ignored.
 - A new `power.cut` (any form) replaces one still armed.
-- Self-tests T-EMU-22, T-EMU-23.
+- `power.cut {clear: true}`, `flash.fault {clear: true}`, `cpu.fault {clear: true}` (2026-11-26): drop
+  what is armed and has not fired, with no power cycle. **The stand-in bench only until tb agrees to
+  the format addition:** the runner answers them only with `G7250_FIXTURE_CLEAR=1` (m1_smoke sets it),
+  else "not offered". `clear` must be `true` and alone.
+  - `power.cut`: the cut armed in this boot (at_us, after_flash_words, at_address, during_erase, also
+    one placed in an erase that runs now) and an `at_power_on` cut for the next power-on; answer
+    `{cleared: [the args of each]}`; each such entry in fixture-log.jsonl gets `fired` false and
+    `outcome` "cleared by power.cut clear (boot N)".
+  - `flash.fault`: answer `{cleared: true|false}` (whether one was armed). **Limit:** an erase that a
+    `never_end` fault has already taken is not ended by a clear; a reset ends it, as before.
+  - `cpu.fault`: answer `{state_before}`. **Limit:** a clear after the injection does not undo the
+    fault (the image is in its handler or locked up); it only stops a later sample. The stub memory
+    at 0x0FFF0000 stays mapped.
+  - The clear calls are in fixture-log.jsonl as `{"op": "clear", "of": <fixture>}`, never as a
+    `power.cut` entry.
+  - The stand-in bench (tests/fakebench) registers the clear as the undo of every arm; the undos of a
+    test run only when it raises, so the next test in the list starts with nothing armed.
+- Self-tests T-EMU-22, T-EMU-23, T-EMU-39; m1_smoke [15] (a raise in T-EMU-22's silent stretch and
+  in T-EMU-23 with an erase fault armed; T-EMU-39 after them finds nothing armed).
 
 ## RAM and reset causes
 

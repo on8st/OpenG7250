@@ -54,6 +54,10 @@ CONNECT_OFF, LIMITED_OFF, DIRECTED_OFF, FORMER_OFF, HOST_OFF = 0, 100, 200, 300,
 # reference model never binds 1024-7251 (v1.4).
 HOST0_FIXED = (1024, 7250)
 NO_FIXED = os.environ.get("G7250_NO_FIXED_PORTS") == "1"
+# power.cut, flash.fault and cpu.fault {clear: true}: for the stand-in bench only until tb agrees to the
+# format addition (m1_smoke sets it); without it a clear is refused as not offered
+FIXTURE_CLEAR = os.environ.get("G7250_FIXTURE_CLEAR") == "1"
+CLEAR_OPS = ("power.cut", "flash.fault", "cpu.fault")
 RADIO_MAC = "02:00:00:00:72:50"
 
 
@@ -780,6 +784,11 @@ class FixtureServer:
         """flash.ecc, flash.fill, log.corrupt, cpu.fault and power.cut calls and their answers
         (fixture-log.jsonl). A power.cut entry gets its outcome later: fired, the boot it fired in
         and the flash.log entry it ended (cut_outcome)."""
+        if op in CLEAR_OPS and "clear" in args:
+            # logged as its own op, so the readers of power.cut entries (cut_pon_check, flash_dump_check)
+            # never count a clear as a cut
+            self.fx_records.append({"op": "clear", "of": op, "boot": self.boot_no, "t_wall": time.time(), "answer": rep})
+            return
         if op == "power.cut":
             v = getattr(self.local, "cut_rec", None) or {"op": op, "boot": self.boot_no, "t_wall": time.time(), "args": args}
             self.local.cut_rec = None
@@ -1230,6 +1239,35 @@ class FixtureServer:
             return {"ok": True, "value": {"erase_us": eu, "program_us": 0, "source": self.FLASH_TIMING["source"]
                                           if eu is None else "set by the bench (flash.timing); the datasheet maximum is %d us"
                                           % self.FLASH_TIMING["t_erase_max_us"]}}
+        if op in CLEAR_OPS and "clear" in args:
+            if not FIXTURE_CLEAR:
+                return {"ok": False, "error": "not offered: %s clear (the stand-in bench only, G7250_FIXTURE_CLEAR=1)" % op}
+            if args["clear"] is not True or len(args) != 1:
+                return {"ok": False, "error": "clear must be true and alone"}
+            if not agent:
+                return {"ok": False, "error": "emulator not ready"}
+            if op == "power.cut":
+                r = agent.ask("cutclear")
+                if not r or not r.startswith("ok"):
+                    return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+                cleared = []
+                for attr in ("cut_rec", "cut_next_rec"):     # armed in this boot, and at_power_on for the next
+                    rec = getattr(self, attr)
+                    if rec is not None:
+                        rec["fired"] = False
+                        rec["outcome"] = "cleared by power.cut clear (boot %d)" % self.boot_no
+                        cleared.append(rec.get("args"))
+                        setattr(self, attr, None)
+                return {"ok": True, "value": {"cleared": cleared}}
+            if op == "flash.fault":
+                r = agent.ask("ft fault-clear")
+                if not r or not r.startswith("ok "):
+                    return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+                return {"ok": True, "value": {"cleared": r[3:].strip() == "1"}}
+            r = agent.ask("fault clear")
+            if not r or not r.startswith("ok"):
+                return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+            return {"ok": True, "value": {"state_before": r[3:].strip() or None}}
         if op == "flash.fault":
             fop = args.get("op")
             after = int(args.get("after") or 0)
@@ -1382,7 +1420,7 @@ class FixtureServer:
             if not r or not r.startswith("ok "):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"boots": n}}
-        if op == "power.cut":
+        if op == "power.cut" and "clear" not in args:
             rec = {"op": op, "boot": self.boot_no, "t_wall": time.time(), "args": args}
             self.local.cut_rec = rec
         if op == "power.cut" and "at_power_on" in args:
