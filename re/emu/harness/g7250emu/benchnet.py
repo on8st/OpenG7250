@@ -506,17 +506,19 @@ class DhcpServer:
         return o
 
     def _record(self, direction, kind, **kw):
+        # Called in the bridge's reader thread: it never asks the agent. Until 2026-11-27 it read the
+        # emulated time from the agent for every message, so during a long agent request (time.wait,
+        # time.advance) the reader waited for the agent's lock and held every radio datagram behind a
+        # DHCP message until the request ended (T-A1-100: 8.4 s, then a burst).
         e = {"t_wall": round(time.time(), 3), "dir": direction, "type": kind}
-        try:
-            e["t_us"] = self.now_us()
-        except Exception:  # noqa: BLE001
-            e["t_us"] = None
         exact = kw.pop("t_us_exact", None)
+        near = kw.pop("t_us_near", None)
         e.update(kw)
         if exact is not None:
             e["t_us"] = exact               # the radio's message: its emulated SEND time in the CH394
         else:
-            e["t_us_approx"] = True         # read from the emulator when the bridge handled it
+            e["t_us"] = near                # a reply: the SEND time of the message it answers (the
+            e["t_us_approx"] = True         # chip takes it later; net.log has its arrival)
         if "broadcast_flag" in e:
             e["broadcast"] = e["broadcast_flag"]        # the key format v1.4 reads (dhcp.log, T-A1-74)
         self.log.append(e)
@@ -533,6 +535,7 @@ class DhcpServer:
         bflag = (data[10] & 0x80) != 0
         self._record("from_radio", names.get(mtype, str(mtype)), src=src_ip, dst=dst_ip, ciaddr=ciaddr,
                      opt50=req, opt54=sid, broadcast_flag=bflag, running=self.running, t_us_exact=t_us)
+        self.t_req = t_us                                # the replies below carry it, approximate
         if not self.running:
             return
         if mtype == 1:                                   # DISCOVER
@@ -588,7 +591,8 @@ class DhcpServer:
         dst = "255.255.255.255" if bcast else ciaddr
         name = {2: "OFFER", 5: "ACK", 6: "NAK"}[mtype]
         self._record("to_radio", name, src=self.server, dst=dst, yiaddr=yiaddr, lease_s=self.lease_s if mtype != 6 else None,
-                     broadcast_flag=(req[10] & 0x80) != 0)          # the flags field the reply carries (copied from the request)
+                     broadcast_flag=(req[10] & 0x80) != 0,          # the flags field the reply carries (copied from the request)
+                     t_us_near=getattr(self, "t_req", None))
         self.send(self.server, dst, 68, bytes(pkt), bcast)
 
 

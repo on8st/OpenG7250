@@ -59,6 +59,8 @@ echo "[2k] host-to-chip frames with the destination IP (type 8) and in the captu
 python3 tests/baseline/bridge_frames_check.py >/dev/null 2>&1 && ok bridge_frames || bad bridge_frames
 echo "[2l] arp.peer in the bridge: probe answers, ordinary requests, defend, announce, type 12 for ip.conflict auto (no emulator)"
 python3 tests/baseline/arp_peer_check.py >/dev/null 2>&1 && ok arp_peer || bad arp_peer
+echo "[2m] the bridge's reader thread never waits for the agent: a datagram behind a DHCP message passes at once, dhcp.log times (no emulator)"
+python3 tests/baseline/dhcp_reader_check.py >/dev/null 2>&1 && ok dhcp_reader || bad dhcp_reader
 
 if [ ! -x "$RN" ] && [ ! -f "$RN" ]; then
   echo "[3-4] SKIP (pinned Renode not found at tools/renode-1.17.0)"

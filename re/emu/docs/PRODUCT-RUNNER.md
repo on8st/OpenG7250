@@ -122,6 +122,15 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   B + 8100 … B + 8199 and B + 8200 … B + 8299.
 - Every datagram in both directions is written to `network.pcapng`
   (Ethernet/IPv4/UDP, wall-clock time stamps).
+- The bridge's reader thread (every frame from the chip) never asks the agent. dhcp.log: a message
+  from the radio carries the CH394's exact SEND time (`t_us`); a reply of the server carries the
+  SEND time of the message it answers, marked `"t_us_approx": true` (net.log has its arrival).
+  Until 2026-11-27 the server read the emulated time from the agent for every message in that
+  thread, so during a long agent request (`time.wait`, `time.advance`) every radio datagram behind
+  a DHCP message was held until the request ended, then passed on in a burst (T-A1-100 on
+  fw-4e567d2: 8.4 s). Checked by tests/baseline/dhcp_reader_check.py (m1_smoke step [2m], no
+  emulator). Before that date a host-time gap in what the bench received from the radio, around a
+  DHCP message during such a request, is the bridge's, not the image's.
 
 ## Boot event and exact pin changes (spec 0045)
 
