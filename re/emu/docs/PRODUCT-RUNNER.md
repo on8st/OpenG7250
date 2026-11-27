@@ -164,6 +164,32 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
   T-A3-06 "not modelled: MACRAW"; that marking is gone. Checked by T-EMU-37
   (runner-selfcheck.json, step [7]) and bridge_frames_check (step [2k]).
 
+- `arp.peer` (offered since 2026-11-27): simulated hosts on the radio's link, kept by the
+  bridge across power cycles. They see the ARP frames the image sends on MACRAW socket 0
+  and answer through the chip (frame type 11), placed like datagrams.
+  - `{action: "set", ip, mac?, answer_probe?: false, defend?: false}` adds or replaces
+    the peer at `ip`. The default MAC is 02:00:00:00:99:<last byte of ip>. A peer answers
+    an ordinary ARP request for its address with a reply to the sender. With
+    `answer_probe`, it answers a probe of its address (sender IP 0.0.0.0) with a reply
+    to the prober's MAC, target 0.0.0.0. With `defend`, it announces its address
+    (broadcast, sender and target the address) when the radio announces or uses it.
+  - `{action: "announce", ip, count?: 1, mac?}`: `count` gratuitous ARP announcements
+    of `ip`, the first at once, then 2 s of radio time apart (the RFC 3927
+    ANNOUNCE_INTERVAL; an emulator choice, the format leaves the gap open). Answer
+    `{t_us, count}`.
+  - `{action: "clear", ip?}` drops that peer, or all. Answer `{peers}`.
+- `ip.conflict` (offered since 2026-11-27): the CH394's IR bit 7 (CONFLICT).
+  - `{action: "raise"}` sets it now (answer `{t_us}`).
+  - `{action: "auto", on}`: while on, the peers' frames go as type 12, and the chip sets
+    CONFLICT when such an ARP frame arrives with its sender IP the chip's own non-zero
+    SIPR, with the link up (an emulator assumption of format v1.6).
+  - The image clears the bit by writing 1 to it, as for the other IR bits.
+- Checked by T-EMU-38 (runner-selfcheck.json, step [7]): MACRAW with MFEN, a probe
+  unanswered and then answered, announce with count 2 at 2 s of radio time, defend with
+  auto (CONFLICT on arrival), raise, BCASTB dropping a peer's broadcast, clear, the
+  refusals, and FJ at the end. Also by arp_peer_check (step [2l], no emulator), which
+  covers the peers' answers in the bridge and type 12.
+
 - `net.log {action: start|read|stop, from?}`: every UDP datagram at the radio in
   emulated time, kept by the CH394 model: `to_radio` when the datagram is placed
   in the socket's receive buffer (the image can first see it), `from_radio` when

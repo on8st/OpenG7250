@@ -59,6 +59,12 @@ firmware-specific behaviour.
   - Emulator assumptions of format v1.6, kept as they are: the RX length is the
     frame alone (`G7250_MACRAW_LEN_HEADER=1` counts the 2 header bytes too, as the
     W5500 datasheet does); the chip does no ARP of its own in UDP mode.
+- IP conflict (2026-11-27, format v1.6 ip.conflict). IR bit 7 (CONFLICT) is set by
+  the bench's `ip.conflict raise`. While `ip.conflict auto` is on, the bridge sends
+  the arp.peer frames as type 12, and one of them sets CONFLICT on arrival when it is
+  ARP, its sender IP is the chip's own non-zero SIPR, and the link is up. Writing 1
+  to the bit clears it. This is an emulator assumption of format v1.6; when the chip
+  itself raises CONFLICT is for the gate to check against the CH394 datasheet.
 - INT# from (SIR & SIMR) and (IR & IMR).
 - The network is the runner's bridge (local TCP link). The address the image
   programs (SIPR, SUBR) is reported on it, so the runner learns the radio's

@@ -57,6 +57,8 @@ echo "[2j] the bridge's host addresses fixed for the boot: a lease below .20, SU
 python3 tests/baseline/bridge_hosts_check.py >/dev/null 2>&1 && ok bridge_hosts || bad bridge_hosts
 echo "[2k] host-to-chip frames with the destination IP (type 8) and in the capture; radio.former after a move; MACRAW frames (types 10, 11) (no emulator)"
 python3 tests/baseline/bridge_frames_check.py >/dev/null 2>&1 && ok bridge_frames || bad bridge_frames
+echo "[2l] arp.peer in the bridge: probe answers, ordinary requests, defend, announce, type 12 for ip.conflict auto (no emulator)"
+python3 tests/baseline/arp_peer_check.py >/dev/null 2>&1 && ok arp_peer || bad arp_peer
 
 if [ ! -x "$RN" ] && [ ! -f "$RN" ]; then
   echo "[3-4] SKIP (pinned Renode not found at tools/renode-1.17.0)"

@@ -11,8 +11,10 @@
   longer sends them; type 3 radio->host: the address the image programmed
   (SIPR(4) SUBR(4)), sent when SIPR is complete. MACRAW socket 0 (format v1.6):
   type 10 radio->host: SEND time(8) and the Ethernet frame the image sent; type 11
-  host->radio: capture time(8) and an Ethernet frame for it. The image's frames go
-  to the capture (and to arp.peer), never onto the host network.
+  host->radio: capture time(8) and an Ethernet frame for it; type 12 as 11, from
+  arp.peer while ip.conflict auto is on (the chip raises CONFLICT when the frame's
+  ARP sender IP is its SIPR). The image's frames go to the capture and to arp.peer,
+  never onto the host network.
 - Address mapping: per radio port P a local UDP socket radio.connect[P]
   (127.0.0.1:40000+P); per host i a local port range hosts[i].ports on
   hosts[i].bind; broadcast.send_to limited 40100+P, directed 40200+P. A datagram
@@ -143,6 +145,9 @@ class Bridge:
         self.by_port = {}     # radio port -> connect socket
         self.former_by_port = {}  # radio port -> former connect socket (radio.former)
         self.former_ip = None     # the radio's address before its last move; None before any move
+        # arp.peer (format v1.6): simulated hosts on the link, kept across power cycles
+        self.peers = {}           # ip -> {"mac": bytes, "answer_probe": bool, "defend": bool}
+        self.conflict_auto = False
         self.stop = False
         self.stats = {"to_radio": 0, "from_radio": 0, "unroutable": 0, "frames_from_radio": 0, "frames_to_radio": 0}
         self.dhcp = DhcpServer(self._dhcp_send, lambda: self.now_us() if self.now_us else None)
@@ -316,18 +321,67 @@ class Bridge:
                     self.set_radio(socket.inet_ntoa(p[0:4]), socket.inet_ntoa(p[4:8]))
 
     def _frame_from_radio(self, frame, t_us):
-        """An Ethernet frame the image sent in MACRAW: to the capture only."""
+        """An Ethernet frame the image sent in MACRAW: to the capture, and to arp.peer."""
         self.stats["frames_from_radio"] += 1
         self.pcap.frame(frame)
+        if len(frame) < 42 or frame[12:14] != b"\x08\x06":
+            return
+        op = struct.unpack("!H", frame[20:22])[0]
+        sha, spa, tpa = frame[22:28], socket.inet_ntoa(frame[28:32]), socket.inet_ntoa(frame[38:42])
+        for ip, pr in list(self.peers.items()):
+            if op == 1 and tpa == ip:
+                if spa == "0.0.0.0":
+                    if pr["answer_probe"]:
+                        self.send_frame(self.arp_frame(2, sha, pr["mac"], ip, sha, spa))   # a probe of its address
+                elif spa == ip:
+                    if pr["defend"]:
+                        self.send_frame(self.arp_frame(1, b"\xff" * 6, pr["mac"], ip, b"\0" * 6, ip))   # the radio announces it
+                else:
+                    self.send_frame(self.arp_frame(2, sha, pr["mac"], ip, sha, spa))   # an ordinary request
+            elif spa == ip and pr["defend"]:
+                self.send_frame(self.arp_frame(1, b"\xff" * 6, pr["mac"], ip, b"\0" * 6, ip))   # the radio uses it
+
+    @staticmethod
+    def arp_frame(op, dst, sha, spa, tha, tpa):
+        """An Ethernet II ARP frame (IPv4 over Ethernet), no padding."""
+        return (dst + sha + b"\x08\x06" + struct.pack("!HHBBH", 1, 0x0800, 6, 4, op) + sha + socket.inet_aton(spa)
+                + tha + socket.inet_aton(tpa))
+
+    @staticmethod
+    def peer_mac(ip, mac=None):
+        if mac:
+            b = bytes(int(x, 16) for x in mac.split(":"))
+            if len(b) != 6:
+                raise ValueError("mac must be six bytes, aa:bb:cc:dd:ee:ff")
+            return b
+        return bytes([0x02, 0, 0, 0, 0x99, int(ip.split(".")[3])])   # the peer's default MAC
+
+    def peer_announce(self, ip, mac, count):
+        """count gratuitous ARP announcements of ip, 2 s of radio time apart (RFC 3927 ANNOUNCE_INTERVAL;
+        the gap is an emulator choice, the format leaves it open); the first at once."""
+        def run():
+            for k in range(count):
+                if k:
+                    t0 = self.now_us() if self.now_us else None
+                    w0 = time.time()
+                    while not self.stop:
+                        now = self.now_us() if self.now_us else None
+                        if (now is not None and t0 is not None and now - t0 >= 2000000) or time.time() - w0 > 120 \
+                                or (t0 is None and time.time() - w0 >= 2.0):
+                            break
+                        time.sleep(0.01)
+                self.send_frame(self.arp_frame(1, b"\xff" * 6, mac, ip, b"\0" * 6, ip))
+        threading.Thread(target=run, daemon=True).start()
 
     def send_frame(self, frame):
-        """An Ethernet frame to the chip (MACRAW socket 0), placed like a datagram."""
+        """An Ethernet frame to the chip (MACRAW socket 0), placed like a datagram; type 12 while
+        ip.conflict auto is on."""
         if self.ch is None:
             return False
         self.pcap.frame(frame)
         payload = struct.pack("!Q", int(time.time() * 1e6)) + frame
         try:
-            self.ch.sendall(struct.pack("!BH", 11, len(payload)) + payload)
+            self.ch.sendall(struct.pack("!BH", 12 if self.conflict_auto else 11, len(payload)) + payload)
             self.stats["frames_to_radio"] += 1
             return True
         except OSError:
@@ -671,7 +725,7 @@ class FixtureServer:
                # fixture() looks up the operation name (cdfe899, T-A1-66 dhcp.stop)
                "dhcp.start", "dhcp.stop", "dhcp.offer", "dhcp.nak", "dhcp.expire", "dhcp.log", "net.endpoint",
                # format v1.6: datagram times and the keyer log, emulated time
-               "net.log", "key.log", "eth.log",
+               "net.log", "key.log", "eth.log", "arp.peer", "ip.conflict",
                # format v1.7: datagrams placed at exact emulated offsets; waits in emulated time
                "net.inject", "time.wait", "sock.log",
                # format v1.8
@@ -1172,6 +1226,59 @@ class FixtureServer:
             if not r or not r.startswith("ok "):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"t_us": int(r.split()[1])}}
+        if op == "arp.peer":
+            br = self.bridge_getter() if self.bridge_getter else None
+            if br is None:
+                return {"ok": False, "error": "no bridge"}
+            action = args.get("action")
+            if action not in ("set", "announce", "clear"):
+                return {"ok": False, "error": "action must be set|announce|clear"}
+            try:
+                if action == "clear":
+                    ip = args.get("ip")
+                    if ip is None:
+                        br.peers.clear()
+                    else:
+                        br.peers.pop(str(ipaddress.IPv4Address(ip)), None)
+                    return {"ok": True, "value": {"peers": sorted(br.peers)}}
+                ip = str(ipaddress.IPv4Address(args["ip"]))
+                if action == "set":
+                    ap, df = args.get("answer_probe", False), args.get("defend", False)
+                    if not isinstance(ap, bool) or not isinstance(df, bool):
+                        return {"ok": False, "error": "answer_probe and defend must be true or false"}
+                    br.peers[ip] = {"mac": br.peer_mac(ip, args.get("mac")), "answer_probe": ap, "defend": df}
+                    return {"ok": True, "value": {"peers": sorted(br.peers)}}
+                if action == "announce":
+                    n = args.get("count", 1)
+                    if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+                        return {"ok": False, "error": "count must be an integer of 1 or more"}
+                    mac = br.peers[ip]["mac"] if ip in br.peers and not args.get("mac") else br.peer_mac(ip, args.get("mac"))
+                    if br.ch is None:
+                        return {"ok": False, "error": "emulator not ready"}
+                    br.peer_announce(ip, mac, n)
+                    return {"ok": True, "value": {"t_us": agent.now_us() if agent else None, "count": n}}
+            except (KeyError, ValueError, TypeError) as e:
+                return {"ok": False, "error": "bad arguments: %s" % e}
+            return {"ok": False, "error": "action must be set|announce|clear"}
+        if op == "ip.conflict":
+            action = args.get("action")
+            if action == "auto":
+                on = args.get("on")
+                if not isinstance(on, bool):
+                    return {"ok": False, "error": "on must be true or false"}
+                br = self.bridge_getter() if self.bridge_getter else None
+                if br is None:
+                    return {"ok": False, "error": "no bridge"}
+                br.conflict_auto = on
+                return {"ok": True, "value": {"auto": on}}
+            if action == "raise":
+                if not agent:
+                    return {"ok": False, "error": "emulator not ready"}
+                r = agent.ask("ipconflict", timeout=30)
+                if not r or not r.startswith("ok "):
+                    return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+                return {"ok": True, "value": json.loads(r[3:])}
+            return {"ok": False, "error": "action must be raise|auto"}
         if op in ("net.log", "key.log", "eth.log"):
             if not agent:
                 return {"ok": False, "error": "emulator not ready"}

@@ -313,6 +313,21 @@
    "timeout_s": 120
   },
   {
+   "id": "T-EMU-38",
+   "title": "arp.peer and ip.conflict (format v1.6): a probe answered or not, announce with count, defend, ip.conflict auto and raise (IR bit 7), BCASTB and MFEN on MACRAW socket 0, clear, the refusals; FJ at the end",
+   "reqs": [
+    "runner"
+   ],
+   "target": "emulator",
+   "scope": "v1.0",
+   "needs": [
+    "eth.log",
+    "arp.peer",
+    "ip.conflict"
+   ],
+   "timeout_s": 240
+  },
+  {
    "id": "T-EMU-39",
    "title": "power.cut, flash.fault and cpu.fault {clear: true} (stand-in bench only until tb agrees): no fault armed from an earlier test; each clear drops what is armed and says so; refused when not true or not alone",
    "reqs": [

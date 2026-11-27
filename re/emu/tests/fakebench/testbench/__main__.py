@@ -18,6 +18,7 @@ of the runner itself against firmware-tests/bench/net_test.c:
   T-EMU-36  an address move: radio.former, delivery on the current map, the chip's drop for the old address
   T-EMU-37  MACRAW socket 0: the frames the image sends in eth.log (format v1.6), UDP beside it
   T-EMU-39  power.cut, flash.fault and cpu.fault {clear: true}: nothing armed from an earlier test
+  T-EMU-38  arp.peer and ip.conflict (format v1.6): answers, announce, defend, CONFLICT, the MAC filter
 """
 import argparse
 import json
@@ -1726,6 +1727,92 @@ def run_test(tid, ep):
                 check("the erase after the clear: no error flag", e2[0] is not None and not e2[0] & ERRS and e2[1] == FF, str(e2)),
                 check("cpu.fault clear: state before armed, after none", a1.get("ok") and (ac.get("value") or {}).get("state_before") == "armed" and cf1 == "none", "%s %s" % (ac, cf1)),
                 check("refused: clear false, clear with other arguments", all(b.get("ok") is False for b in bad), str(bad))]
+    if tid == "T-EMU-38":
+        # arp.peer and ip.conflict (format v1.6), MACRAW socket 0 with MFEN (FO 0x80): a probe unanswered,
+        # then answered (a unicast reply to the radio's MAC, through the filter); announce with count 2,
+        # 2 s of radio time apart; defend with ip.conflict auto (a peer on the radio's own address answers
+        # its announcement, CONFLICT set on arrival); ip.conflict raise; BCASTB drops a broadcast; clear;
+        # FJ at the end undoes FO in the same boot, as in T-EMU-37
+        PEER = "169.254.1.2"
+
+        def frame_in(wait=8.0):
+            t0 = time.time()
+            while time.time() - t0 < wait:
+                y = words(ask(b"FY"))
+                if y and y[0] > 0:
+                    return y
+                time.sleep(0.2)
+            return ()
+
+        st = ctl.op("eth.log", action="start")
+        undo_push("eth.log stopped", lambda: ctl.op("eth.log", action="stop"))
+        o = words(ask(b"FO\x80"))
+        undo_push("FJ: socket 0 UDP 1024 again, socket 1 closed", lambda: ask(b"FJ"))
+        undo_push("arp.peer clear, ip.conflict auto off",
+                  lambda: (ctl.op("arp.peer", action="clear"), ctl.op("ip.conflict", action="auto", on=False)))
+        s0 = ctl.op("arp.peer", action="set", ip=PEER, answer_probe=False, defend=False)
+        ask(b"FA\x00")
+        y0 = frame_in(2.0)
+        s1 = ctl.op("arp.peer", action="set", ip=PEER, answer_probe=True, defend=False)
+        ask(b"FA\x00")
+        y1 = frame_in()
+        an = ctl.op("arp.peer", action="announce", ip=PEER, count=2)
+        y2a, y2b = frame_in(15.0), frame_in(15.0)
+        au = ctl.op("ip.conflict", action="auto", on=True)
+        s2 = ctl.op("arp.peer", action="set", ip=radio_ip, answer_probe=False, defend=True)
+        ask(b"FA\x01")
+        y3 = frame_in()
+        z1 = words(ask(b"FZ"))
+        ctl.op("ip.conflict", action="auto", on=False)
+        ctl.op("arp.peer", action="clear", ip=radio_ip)
+        rz = ctl.op("ip.conflict", action="raise")
+        z2 = words(ask(b"FZ"))
+        z0 = words(ask(b"FZ"))
+        ob = words(ask(b"FO\xc0"))
+        ctl.op("arp.peer", action="announce", ip=PEER, count=1)
+        y4 = frame_in(3.0)
+        cl = ctl.op("arp.peer", action="clear")
+        ask(b"FO\x80")
+        ask(b"FA\x00")
+        y5 = frame_in(2.0)
+        bad = [ctl.op("arp.peer", action="set", ip="300.1.1.1"), ctl.op("arp.peer", action="set", ip=PEER, answer_probe="yes"),
+               ctl.op("arp.peer", action="announce", ip=PEER, count=0), ctl.op("arp.peer", action="nod"),
+               ctl.op("ip.conflict", action="auto", on="1"), ctl.op("ip.conflict", action="later")]
+        time.sleep(0.5)
+        ents, dr = eth_all()
+        ctl.op("eth.log", action="stop")
+        j = words(ask(b"FJ"))
+        back = ask(b"echo38-back")
+        rx = [e for e in ents if e.get("dir") == "to_radio" and isinstance(e.get("arp"), dict)]
+        rep = [e for e in rx if e["arp"].get("op") == 2]
+        ann = [e for e in rx if e["arp"].get("op") == 1 and e["arp"].get("spa") == PEER]
+        drops = [e for e in ents if e.get("dir") == "dropped"]
+        pmac = "02:00:00:00:99:02"
+        ARP_OP = lambda y, op: len(y) >= 4 and y[2] == (0x0806 << 16 | op)
+        return [check("arp.peer and ip.conflict offered; MACRAW with MFEN open (0x42)",
+                      all(f in ep.get("fixtures", []) for f in ("arp.peer", "ip.conflict", "eth.log")) and o[:1] == (0x42,) and s0.get("ok") and s1.get("ok"),
+                      "%s %s %s" % (o, s0, s1)),
+                check("a probe of the peer's address with answer_probe false: no answer", y0 == (), str(y0)),
+                check("with answer_probe true: an ARP reply (op 2, sender the peer's address), 42 bytes, through MFEN (unicast to the radio's MAC)",
+                      ARP_OP(y1, 2) and y1[1] == 42 and y1[3] == 0xA9FE0102, str(y1)),
+                check("eth.log: the reply to_radio, dst the radio's MAC, sha the peer's default MAC, spa the peer, tpa 0.0.0.0",
+                      len(rep) >= 1 and rep[0].get("dst") == radio_mac and rep[0]["arp"].get("sha") == pmac and rep[0]["arp"].get("spa") == PEER
+                      and rep[0]["arp"].get("tpa") == "0.0.0.0", json.dumps(rep[:1])),
+                check("announce count 2: two gratuitous ARPs of the peer, 2 s of radio time apart (within 0.1 s)",
+                      an.get("ok") and ARP_OP(y2a, 1) and ARP_OP(y2b, 1) and y2a[3] == y2b[3] == 0xA9FE0102 and len(ann) >= 2
+                      and abs(ann[1]["t_us"] - ann[0]["t_us"] - 2000000) <= 100000, "%s %s %s" % (an, [e["t_us"] for e in ann], (y2a, y2b))),
+                check("defend: the radio announces its address, a peer on that address announces it back (sender the radio's address)",
+                      au.get("ok") and s2.get("ok") and ARP_OP(y3, 1) and y3[3] == int.from_bytes(bytes(int(x) for x in radio_ip.split(".")), "big"), str(y3)),
+                check("ip.conflict auto: that frame set IR bit 7 (CONFLICT) on arrival; FZ clears it", z1[:2] == (0x80, 0), str(z1)),
+                check("ip.conflict raise: IR bit 7 set now; cleared by FZ, and not set again", rz.get("ok") and z2[:2] == (0x80, 0) and z0[:1] == (0,), "%s %s %s" % (rz, z2, z0)),
+                check("BCASTB (FO 0xC0): the peer's broadcast is dropped, 'broadcast blocked (BCASTB)' in eth.log",
+                      ob[:1] == (0x42,) and y4 == () and any(e.get("reason") == "broadcast blocked (BCASTB)" for e in drops), "%s %s" % (y4, [e.get("reason") for e in drops])),
+                check("clear: no peer answers the probe any more", cl.get("ok") and y5 == (), "%s %s" % (cl, y5)),
+                check("refused: a bad address, answer_probe not a boolean, count 0, an unknown action, auto on not a boolean, an unknown action",
+                      all(b.get("ok") is False for b in bad), str([b.get("error") for b in bad])),
+                check("eth.log: none dropped by its cap", dr == 0, str(dr)),
+                check("FJ: socket 0 UDP again (0x22), socket 1 closed (0x00); echo on 1024 from socket 0", j[:2] == (0x22, 0x00) and back == b"echo38-back",
+                      str((j, back)))]
     if tid == "T-EMU-33":
         # an ECC mark set before an MCU reset (software reset, SYSRESETREQ) is in force at once after
         # it: a byte read of the marked word shows DBECCERR, with no program before the reset and with

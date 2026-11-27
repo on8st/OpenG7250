@@ -1556,6 +1556,11 @@ namespace Antmicro.Renode.Peripherals.SPI
                     }
                     case "netlog": return NetLogCommand(w);
                     case "ethlog": return EthLogCommand(w);
+                    case "ipconflict":
+                    {
+                        var r = Call(Ch394(), "ConflictRaise");
+                        return r == null ? "err no CH394" : "ok " + r;
+                    }
                     case "blk":
                     {
                         // diagnostics: the core's translation block size and the boot-phase timer

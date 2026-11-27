@@ -32,6 +32,8 @@
 //     only the chip's own MAC, broadcast and, unless MMB, multicast). Emulator assumptions of
 //     format v1.6, kept: the RX length is the frame alone (G7250_MACRAW_LEN_HEADER=1 adds the
 //     2 header bytes, as the W5500 counts it); the chip does no ARP of its own in UDP mode.
+//   - ip.conflict (format v1.6): raise sets IR bit 7 (CONFLICT) now; frames of type 12 (arp.peer
+//     with auto on) set it on arrival when their ARP sender IP is the chip's non-zero SIPR
 // Not modelled: TCP (logged "not modelled: CH394/Sn_MR ..."), the chip's own ARP in UDP mode
 // and ICMP behaviour, timeouts and retransmission, IP fragmentation, wake-on-LAN, PPPoE,
 // socket-less commands, timing.
@@ -525,6 +527,20 @@ namespace Antmicro.Renode.Peripherals.SPI
         {
             int len = p.Length - 9;
             if(len < 14) return;
+            // ip.conflict auto (format v1.6, an emulator assumption): an ARP frame from arp.peer whose
+            // sender IP is the chip's own non-zero SIPR sets IR bit 7 (CONFLICT) when it arrives
+            bool raised = false;
+            if((p[8] & 0x08) != 0 && len >= 42 && p[9 + 12] == 0x08 && p[9 + 13] == 0x06)
+                lock(sync)
+                {
+                    bool zero = (common[0x0F] | common[0x10] | common[0x11] | common[0x12]) == 0;
+                    if(linkUp && !zero && p[9 + 28] == common[0x0F] && p[9 + 29] == common[0x10] && p[9 + 30] == common[0x11] && p[9 + 31] == common[0x12])
+                    {
+                        common[0x15] |= 0x80;
+                        raised = true;
+                    }
+                }
+            if(raised) { this.Log(LogLevel.Info, "CH394: IP conflict (auto): an ARP frame with the chip's own address"); UpdateIrq(); }
             lock(sync)
             {
                 curShift = shiftUs; curWall = wall;
@@ -559,6 +575,15 @@ namespace Antmicro.Renode.Peripherals.SPI
                 EthRecord("to_radio", p, 9, len);
             }
             UpdateIrq();
+        }
+
+        // ip.conflict raise (format v1.6): IR bit 7 (CONFLICT) set now
+        public string ConflictRaise()
+        {
+            lock(sync) common[0x15] |= 0x80;
+            UpdateIrq();
+            this.Log(LogLevel.Info, "CH394: IP conflict raised by the bench");
+            return "{\"t_us\": " + NowUs() + "}";
         }
 
         private void UpdateIrq()
@@ -787,14 +812,14 @@ namespace Antmicro.Renode.Peripherals.SPI
                         Array.Copy(p, 8, q, 0, q.Length);
                         Arrive(q, cap / 1e6);
                     }
-                    else if(head[0] == 11 && p.Length >= 8 + 14)
+                    else if((head[0] == 11 || head[0] == 12) && p.Length >= 8 + 14)
                     {
                         // type 11: capture time(8) and an Ethernet frame for MACRAW socket 0; kept
                         // inside behind 9 bytes with flags bit 2, so it keeps its place among the datagrams
                         ulong cap = 0;
                         for(int i = 0; i < 8; i++) cap = (cap << 8) | p[i];
                         var q = new byte[9 + p.Length - 8];
-                        q[8] = 0x04;
+                        q[8] = (byte)(head[0] == 12 ? 0x0C : 0x04);    // 12: ip.conflict auto (flags bit 3)
                         Array.Copy(p, 8, q, 9, p.Length - 8);
                         Arrive(q, cap / 1e6);
                     }
