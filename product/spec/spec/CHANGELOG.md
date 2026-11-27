@@ -16,6 +16,7 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
 - 0080 accepted by ON8ST on 2026-11-23 (with the counter `mg_auth_required`).
 - 0081 accepted by ON8ST on 2026-11-24 ("Beperk de 55"; reading (a), 2026-11-25).
 - 0082 accepted by ON8ST on 2026-11-25 (the proposal as written).
+- 0083 accepted by ON8ST on 2026-11-27 (proposal (a)).
 - 0073, 0074, 0075, 0076, 0077, 0078 accepted by ON8ST on 2026-11-22.
 
 - 0067 (accepted 2026-11-22; testbench finding SF-31): what an image of this firmware must be. A1.8
@@ -111,6 +112,10 @@ All dates 2026-11-19 unless stated. Decision numbers refer to `decisions/`.
   to 0073); power lost with every sector written may leave an unchecked stock image; from the
   first erase `IDENTIFY` reports no secret and no window, and `SET_FIRST_SECRET` gets 36.
   A1.8a item 3, A1.10, B2.3; T-A1-60, T-A1-15 extended.
+- 0083 (accepted 2026-11-27; a test-bench question): after a DHCPDECLINE the first DHCPDISCOVER
+  goes no earlier than 10 s ([RFC2131] 3.1 item 5) and no later than 12 s after it, or within
+  2 s of the end of the link-local probe if that is later; then the back-off of A1.11. A1.11
+  "Conflict on a DHCP or static address"; T-A1-73 extended.
 - 0082 (accepted 2026-11-25; a firmware question): a running `SET_CONFIG` into DHCP mode is no
   address change in itself. From link-local the radio keeps the address and DHCP runs by
   borrows; from a static address it keeps it for at most 6 s of DHCP attempts by borrows (source

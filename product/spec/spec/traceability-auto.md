@@ -84,4 +84,5 @@
 | 0080 | 0080 — Status 32 with no HMAC or no secret set | 4 | 4 | network-interface: (top); network-interface: A1 Management channel; network-interface: Annex M — Management payloads; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0081 | 0081 — Flash work that never ends | 3 | 4 | network-interface: (top); network-interface: A1 Management channel; network-interface: B2 Transport; network-interface: Management channel, ownership, safety (A1–A3) |  |
 | 0082 | 0082 — Change into DHCP mode while running | 2 | 3 | network-interface: (top); network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
+| 0083 | 0083 — DHCP again after a decline | 2 | 3 | network-interface: (top); network-interface: A1 Management channel; network-interface: Management channel, ownership, safety (A1–A3) |  |
 

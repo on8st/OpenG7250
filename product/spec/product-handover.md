@@ -112,8 +112,9 @@ on 2026-11-19, as recorded in `decisions/`.
 | 0080 | Status 32 for an authenticated command without an HMAC trailer or with no secret set; 33 only with a secret set (installer: the secret in RAM); a 32 is no authentication failure; counter `mg_auth_required` | accepted (2026-11-23) |
 | 0081 | Flash work that never ends: the 55 within 15 s only for flash work that ends with an error flag or within its bound; a late end gets 55 within 0.5 s of its end; never-ending work takes the stall path (watchdog reset, no reply) | accepted (2026-11-24, reading (a) 2026-11-25) |
 | 0082 | Change into DHCP mode while running: no address change in itself; from link-local the address is kept, from static for at most 6 s of DHCP attempts by borrows, then a lease or a probed link-local address | accepted (2026-11-25) |
+| 0083 | DHCP again after a DHCPDECLINE: the first DHCPDISCOVER no earlier than 10 s and no later than 12 s after it, or within 2 s of the end of the probe if later | accepted (2026-11-27) |
 
-All numbers 0001–0082 are now in use.
+All numbers 0001–0083 are now in use.
 
 ## Open questions for ON8ST
 

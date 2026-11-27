@@ -225,7 +225,7 @@ General standards cited in the decisions and the spec. Public; cited by number, 
 | [RFC1812] | RFC 1812, Requirements for IP Version 4 Routers | limited broadcast is not forwarded by routers (0022 §70; spec B3.9) |
 | [ITU-M1677] | ITU-R Recommendation M.1677-1, International Morse code (2009) | element and space ratios: dash 3 dots, 1 unit between elements, 3 between characters (0046; spec B10.5a); the unit 1200 / *S* ms follows from the 50-unit word PARIS used for words per minute (common practice, stated in 0046) |
 | [RFC3927] | RFC 3927, Dynamic Configuration of IPv4 Link-Local Addresses | fallback address while no DHCP lease is held (0035; spec A1.6 C-1, A1.11) |
-| [RFC2131] | RFC 2131, Dynamic Host Configuration Protocol | address changes and lease loss during a session (0022 §54; spec A1.11a); retransmission back-off of the DHCP retries (0041; spec A1.11) |
+| [RFC2131] | RFC 2131, Dynamic Host Configuration Protocol | address changes and lease loss during a session (0022 §54; spec A1.11a); retransmission back-off of the DHCP retries (0041; spec A1.11); section 3.1 item 5, the 10 s minimum before DHCP again after a DHCPDECLINE (0083; spec A1.11) |
 | [RFC1982] | RFC 1982, Serial Number Arithmetic | ordering of High Priority sequence numbers (0022 §35; spec B11.6a) |
 
 ## Discussion with ON8ST

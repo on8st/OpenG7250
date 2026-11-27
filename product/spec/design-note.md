@@ -277,8 +277,8 @@ upstream through the RFC (0038).
 - **Sources still to read.** The TCI 2.1 PDF and its terms of use (before part C), the
   Radioddity product page, the HDSDR network tutorial and the Temporarily Offline video
   (`sources.md`).
-- **Decisions.** 0001–0082 are accepted (0033–0035 and 0037–0066 on 2026-11-21,
-  0067–0071 and 0073–0078 on 2026-11-22 and 0072, 0079 and 0080 on 2026-11-23 and 0081 and 0082 on 2026-11-25, after version 1.0: image check, log kept over a reset,
+- **Decisions.** 0001–0083 are accepted (0033–0035 and 0037–0066 on 2026-11-21,
+  0067–0071 and 0073–0078 on 2026-11-22 and 0072, 0079 and 0080 on 2026-11-23 and 0081 and 0082 on 2026-11-25 and 0083 on 2026-11-27, after version 1.0: image check, log kept over a reset,
   reply time with flash work, g7250ctl conformance, package file, C-3 limits that may be lost, time over flash work, management details from the g7250ctl runs,
-  unexpected stop, radio drill F3, streaming installer write session, evidence of a commanded reset, the 50 MHz limit, status 32 with no secret, flash work that never ends, change into DHCP mode) (`product-handover.md`). What remains for the product are the values of Annex P, which
+  unexpected stop, radio drill F3, streaming installer write session, evidence of a commanded reset, the 50 MHz limit, status 32 with no secret, flash work that never ends, change into DHCP mode, DHCP again after a decline) (`product-handover.md`). What remains for the product are the values of Annex P, which
   need the radio.
