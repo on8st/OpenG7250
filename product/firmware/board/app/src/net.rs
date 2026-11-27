@@ -648,8 +648,12 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
 
     // The RFC 3927 claim lives as long as the radio: its conflict count drives the rate limit.
     let mut claim = ipv4ll::Claim::new(mac, Instant::now().as_millis());
-    // The configuration before the last change, for the fall-back of A1.6 C-4 (0049).
+    // The C-1 configuration in force (its mode is not that of `cfg`: a link-local fall-back holds
+    // a link-local address under either mode), the one before the last change, and the stored
+    // items before a SET_CONFIG change, for the fall-back of A1.6 C-4 (0049).
+    let mut configured = NetConfig::FACTORY;
     let mut prev_cfg: Option<NetConfig> = None;
+    let mut prev_stored: Option<heapless::Vec<u8, { m::payload::MAX_CONFIG }>> = None;
     let (mut cfg, src, mut dhcpc) = configure(&mut chip, mac, NetConfig::FACTORY, &mut claim).await;
     // Socket 7 lent to DHCP (port 68) for a running exchange (A1.11).
     let mut dhcp_borrowed = false;
@@ -848,7 +852,10 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                             // SESSION_CHANGED, Table A3-1 event 9) and nothing is carried over.
                             p2.address_changed(&mut chip, now);
                             close_all(&mut chip);
-                            prev_cfg = Some(cfg);
+                            // Set IP is kept in RAM only: nothing to restore in the store.
+                            prev_cfg = Some(configured);
+                            prev_stored = None;
+                            configured = want;
                             let (c, s, d) = configure(&mut chip, mac, want, &mut claim).await;
                             cfg = c;
                             dhcpc = d;
@@ -1023,6 +1030,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                     // Store writes before the reply (A1.6: stored with a check value before it
                     // counts); network changes and resets after it (A1.6, A1.9).
                     let mut after: heapless::Vec<g7250_radio::mgmt::Effect, 4> = heapless::Vec::new();
+                    // The stored items before a network change, for the fall-back of A1.6 C-4.
+                    let before = effects.iter().any(|e| matches!(e, g7250_radio::mgmt::Effect::ApplyNetwork)).then(|| mgmt.config.clone());
                     for e in effects {
                         // No flash work while TX is armed or keyed (B2.3 "Flash work"; 0055): a
                         // SET_CONFIG while armed, and a commanded reset (A1.9), unkey and drop the
@@ -1072,7 +1081,9 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                                 let want = crate::mgmt_init::network_from_config(&mgmt.config);
                                 // Only another address closes the sockets: socket 7 stays open
                                 // apart from DHCP borrows of at most 2 s (A1.2, A1.11; 0041).
-                                match netcfg::apply_plan(dhcpc.is_some(), &cfg, &want) {
+                                let plan = netcfg::apply_plan(dhcpc.is_some(), &cfg, &want);
+                                let old = core::mem::replace(&mut configured, want);
+                                match plan {
                                     netcfg::Apply::Keep => continue,
                                     netcfg::Apply::Gateway => {
                                         let _ = chip.set_ip(want.ip, want.mask, want.gateway);
@@ -1099,7 +1110,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                                 let now = Instant::now().as_millis();
                                 p2.address_changed(&mut chip, now);
                                 close_all(&mut chip);
-                                prev_cfg = Some(cfg);
+                                prev_cfg = Some(old);
+                                prev_stored = before.clone();
                                 let (c, s, dc) = configure(&mut chip, mac, want, &mut claim).await;
                                 cfg = c;
                                 dhcpc = dc;
@@ -1143,8 +1155,8 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                         println!("net: address conflict on {}", ip_str(cfg.ip).as_str());
                         server.log.push(now, format_args!("address conflict on {}", ip_str(cfg.ip).as_str()));
                         let leased = dhcpc.as_ref().is_some_and(|d| d.lease().is_some_and(|l| l.0.ip == cfg.ip));
-                        let link_local = cfg.ip[..2] == [169, 254];
-                        if leased {
+                        let plan = netcfg::on_conflict(leased, &cfg, &configured, prev_cfg);
+                        if plan == netcfg::OnConflict::Decline {
                             // DHCPDECLINE, link-local, DHCP again (RFC 2131 3.1 item 5).
                             if let Some(d) = dhcpc.as_mut() {
                                 let xid = d.xid;
@@ -1155,13 +1167,26 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                                 }
                             }
                             claim.restart(now);
-                        } else if link_local {
+                        } else if plan == netcfg::OnConflict::LinkLocalAgain {
                             claim.conflict(now);
-                        } else if let Some(p) = prev_cfg.take().filter(|p| p.ip != cfg.ip && p.ip[..2] != [169, 254]) {
-                            // A static address: the previous configuration (A1.6 C-4).
+                        } else if let netcfg::OnConflict::Previous(p) = plan {
+                            // A static address: the previous configuration (A1.6 C-4), in mode
+                            // and items, in RAM and in the store (GET_CONFIG). A previous DHCP
+                            // mode comes up as at the start: DHCP, else the link-local fall-back.
                             println!("net: static address in conflict; back to the previous configuration");
                             server.log.push(now, format_args!("static address in conflict: previous configuration restored"));
                             p2.address_changed(&mut chip, now);
+                            // The arm is dropped above: the store write is no flash work while
+                            // armed (B2.3; 0055).
+                            if let Some(v) = prev_stored.take() {
+                                if let Err(msg) = crate::mgmt_init::restore_network(&mut mgmt, &v) {
+                                    println!("net: FAULT store write failed ({})", msg);
+                                    server.log.push(now, format_args!("store write failed ({msg}); old values kept"));
+                                }
+                                flash_failures(&mut server);
+                            }
+                            prev_cfg = None;
+                            configured = p;
                             close_all(&mut chip);
                             let (c, s, dc) = configure(&mut chip, mac, p, &mut claim).await;
                             cfg = c;
@@ -1175,6 +1200,7 @@ pub async fn run(pins: NetPins<'static>, id: Identity, mut mgmt: crate::mgmt_ini
                             continue;
                         } else {
                             // A static address with no previous configuration: link-local.
+                            prev_cfg = None;
                             claim.restart(now);
                         }
                         if !relink(&mut chip, &mut claim, &mut p2, &mut dhcpc, &mut cfg, &mut dhcp_borrowed).await {

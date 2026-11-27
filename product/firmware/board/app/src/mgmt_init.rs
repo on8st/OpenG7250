@@ -258,6 +258,18 @@ pub fn network_from_config(cfg: &[u8]) -> g7250_proto::netcfg::NetConfig {
     }
 }
 
+/// The fall-back of A1.6 C-4 after an address conflict on a static address: the C-1 items of
+/// `prev` (the configuration before the change) back in the store, every other item kept.
+pub fn restore_network(m: &mut MgmtInit, prev: &[u8]) -> Result<(), &'static str> {
+    let cur = Config::decode(&m.config).unwrap_or_default();
+    let back = cur.with_network_of(&Config::decode(prev).unwrap_or_default());
+    let mut b = [0u8; m::payload::MAX_CONFIG];
+    let n = back.encode(&mut b).ok_or("configuration")?;
+    let mut v = heapless::Vec::new();
+    let _ = v.extend_from_slice(&b[..n]);
+    apply_stored(m, g7250_radio::mgmt::Effect::SetConfig(v, false)).map(|_| ())
+}
+
 /// The configured region C-6 from the stored Table M-3 items (factory: 0, Table A3-0).
 pub fn region_from_config(cfg: &[u8]) -> u8 {
     Config::decode(cfg).ok().and_then(|c| c.region).unwrap_or(0)

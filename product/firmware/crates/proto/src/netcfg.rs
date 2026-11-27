@@ -131,6 +131,39 @@ pub fn apply_plan(dhcp_running: bool, current: &NetConfig, want: &NetConfig) -> 
     if dhcp_running { Apply::Keep } else { Apply::StartDhcp }
 }
 
+/// What an address conflict on the address in use leads to (A1.6 C-4; A1.11 "Conflict on a
+/// DHCP or static address"; 0049 point 4). Each is an address change of A1.11a.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnConflict {
+    /// A leased address: DHCPDECLINE, link-local, DHCP again.
+    Decline,
+    /// A link-local address in use (no static address configured on it): the next candidate.
+    LinkLocalAgain,
+    /// A static address: back to this previous configuration, in mode and items (C-4).
+    Previous(NetConfig),
+    /// A static address with no usable previous configuration: link-local.
+    LinkLocal,
+}
+
+/// `in_use` is the address on the chip, `configured` the C-1 configuration it came from (a
+/// link-local fall-back holds a link-local address under either mode), `prev` the
+/// configuration before the last change. A previous configuration in DHCP mode is always
+/// usable; a static one only when it is a usable host other than the address in conflict.
+pub fn on_conflict(leased: bool, in_use: &NetConfig, configured: &NetConfig, prev: Option<NetConfig>) -> OnConflict {
+    if leased {
+        return OnConflict::Decline;
+    }
+    let static_in_use = configured.mode == Mode::Static && configured.ip == in_use.ip;
+    if !static_in_use {
+        return if in_use.ip[..2] == [169, 254] { OnConflict::LinkLocalAgain } else { OnConflict::LinkLocal };
+    }
+    match prev {
+        Some(p) if p.mode == Mode::Dhcp => OnConflict::Previous(p),
+        Some(p) if valid_host(p.ip, p.mask) && p.ip != in_use.ip => OnConflict::Previous(p),
+        _ => OnConflict::LinkLocal,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +185,27 @@ mod tests {
         assert_eq!(apply_plan(false, &st, &NetConfig::FACTORY), Apply::StartDhcp, "static to DHCP");
         assert_eq!(apply_plan(false, &st, &NetConfig { mode: Mode::Static, ip: [0; 4], ..st }), Apply::StartDhcp, "not a usable host: DHCP");
         assert_eq!(apply_plan(true, &ll, &st), Apply::Reconfigure, "DHCP to static");
+    }
+
+    #[test]
+    fn a_conflict_on_a_static_address_goes_back_to_the_previous_mode_t_a1_73() {
+        let ll = link_local([2, 0, 0, 0, 0x72, 0x50], 0);
+        // T-A1-73 part 2: DHCP mode on its link-local fall-back, then static 169.254.77.77.
+        let st = NetConfig { mode: Mode::Static, ip: [169, 254, 77, 77], mask: [255, 255, 0, 0], gateway: [0; 4] };
+        assert_eq!(on_conflict(false, &st, &st, Some(NetConfig::FACTORY)), OnConflict::Previous(NetConfig::FACTORY));
+        // The same while a lease was held before.
+        let lease = NetConfig { mode: Mode::Dhcp, ip: [192, 168, 1, 20], mask: [255, 255, 255, 0], gateway: [192, 168, 1, 1] };
+        assert_eq!(on_conflict(false, &st, &st, Some(lease)), OnConflict::Previous(lease));
+        // Static before static: the previous one, unless it is the address in conflict.
+        let a = NetConfig { mode: Mode::Static, ip: [192, 168, 1, 30], mask: [255, 255, 255, 0], gateway: [0; 4] };
+        let b = NetConfig { ip: [192, 168, 1, 31], ..a };
+        assert_eq!(on_conflict(false, &b, &b, Some(a)), OnConflict::Previous(a));
+        assert_eq!(on_conflict(false, &b, &b, Some(b)), OnConflict::LinkLocal);
+        assert_eq!(on_conflict(false, &b, &b, None), OnConflict::LinkLocal);
+        // Not a static address in use: a lease, or a link-local address under either mode.
+        assert_eq!(on_conflict(true, &lease, &NetConfig::FACTORY, Some(a)), OnConflict::Decline);
+        assert_eq!(on_conflict(false, &ll, &NetConfig::FACTORY, Some(a)), OnConflict::LinkLocalAgain);
+        assert_eq!(on_conflict(false, &ll, &b, Some(a)), OnConflict::LinkLocalAgain, "static mode on its link-local fall-back");
     }
 
     #[test]

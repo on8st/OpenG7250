@@ -211,6 +211,12 @@ impl Config {
         }
     }
 
+    /// This configuration with the C-1 items (address mode, address, netmask, gateway) of
+    /// `prev`, every other item kept: the fall-back of A1.6 C-4 after an address conflict.
+    pub fn with_network_of(&self, prev: &Config) -> Config {
+        Config { address_mode: prev.address_mode, address: prev.address, netmask: prev.netmask, gateway: prev.gateway, ..*self }
+    }
+
     /// The stored record as a start uses it: `None` (then the factory values apply) if there is
     /// none or it does not decode.
     pub fn stored(p: Option<&[u8]>) -> Option<Config> {
@@ -633,6 +639,20 @@ pub fn calibration_entries(mut p: &[u8]) -> impl Iterator<Item = Result<(&[u8], 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_c4_fall_back_restores_the_c1_items_only_t_a1_73() {
+        let prev = Config::factory();
+        let mut now = Config { address_mode: Some(1), address: Some([169, 254, 77, 77]), netmask: Some([255, 255, 0, 0]), gateway: Some([0; 4]), ..Config::factory() };
+        now.max_tx_time_ms = Some(60_000);
+        now.band_limit[3] = Some(500);
+        let back = now.with_network_of(&prev);
+        assert_eq!((back.address_mode, back.address, back.netmask, back.gateway), (Some(0), Some([0; 4]), Some([0; 4]), Some([0; 4])));
+        assert_eq!((back.max_tx_time_ms, back.band_limit[3]), (Some(60_000), Some(500)), "the other items stay");
+        let mut b = [0u8; MAX_CONFIG];
+        let n = back.encode(&mut b).unwrap();
+        assert_eq!(Config::decode(&b[..n]).unwrap(), back);
+    }
 
     #[test]
     fn identify_roundtrip_and_tags() {
