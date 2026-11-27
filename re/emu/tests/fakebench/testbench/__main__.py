@@ -1651,6 +1651,21 @@ def run_test(tid, ep):
         ctl.op("eth.log", action="stop")
         j = words(ask(b"FJ"))
         back = ask(b"echo37-back")
+        # eth.log across a power cycle (2026-11-27): started in one boot, a probe there, the power cycle,
+        # a probe in the new boot, read there: both, with their boots (before, the log ended with its emulator)
+        st2 = ctl.op("eth.log", action="start")
+        ask(b"FO\x00")
+        ask(b"FA\x00")
+        pc = ctl.op("power.cycle")
+        again = ask(b"echo37-cycle")
+        ask(b"FO\x00")
+        ask(b"FA\x00")
+        time.sleep(0.5)
+        ents2, dr2 = eth_all()
+        ctl.op("eth.log", action="stop")
+        j2 = words(ask(b"FJ"))
+        pr2 = [e for e in ents2 if e.get("dir") == "from_radio" and (e.get("arp") or {}).get("spa") == "0.0.0.0"]
+        b2 = [e.get("boot") for e in pr2]
         tx = [e for e in ents if e.get("dir") == "from_radio"]
         a0 = (tx[0].get("arp") or {}) if len(tx) > 0 else {}
         a1 = (tx[1].get("arp") or {}) if len(tx) > 1 else {}
@@ -1671,7 +1686,10 @@ def run_test(tid, ep):
                       str(t2)[:300]),
                 check("nothing received on MACRAW (FY: RX_RSR 0)", y[:1] == (0,), str(y)),
                 check("FJ: socket 0 UDP again (0x22), socket 1 closed (0x00); echo on 1024 from socket 0", j[:2] == (0x22, 0x00) and back == b"echo37-back",
-                      str((j, back)))]
+                      str((j, back))),
+                check("eth.log across a power cycle: started before it, read after it, the probe of each boot with its boot number (one apart), none dropped",
+                      st2.get("ok") and pc.get("ok") and again == b"echo37-cycle" and len(pr2) == 2 and isinstance(b2[0], int) and b2[1] == b2[0] + 1
+                      and dr2 == 0 and j2[:2] == (0x22, 0x00), "%s %s %s boots %s dropped %s" % (pc.get("ok"), again, len(pr2), b2, dr2))]
     if tid == "T-EMU-39":
         # no fault armed from an earlier test (m1_smoke [15]: after T-EMU-23 raised with an erase fault
         # armed); then the three clears: power.cut, flash.fault and cpu.fault {clear: true}
@@ -1766,6 +1784,7 @@ def run_test(tid, ep):
         ctl.op("ip.conflict", action="auto", on=False)
         ctl.op("arp.peer", action="clear", ip=radio_ip)
         rz = ctl.op("ip.conflict", action="raise")
+        rz2 = ctl.op("ip.conflict", action="raise")       # the bit still set: this one adds nothing
         z2 = words(ask(b"FZ"))
         z0 = words(ask(b"FZ"))
         ob = words(ask(b"FO\xc0"))
@@ -1805,6 +1824,11 @@ def run_test(tid, ep):
                       au.get("ok") and s2.get("ok") and ARP_OP(y3, 1) and y3[3] == int.from_bytes(bytes(int(x) for x in radio_ip.split(".")), "big"), str(y3)),
                 check("ip.conflict auto: that frame set IR bit 7 (CONFLICT) on arrival; FZ clears it", z1[:2] == (0x80, 0), str(z1)),
                 check("ip.conflict raise: IR bit 7 set now; cleared by FZ, and not set again", rz.get("ok") and z2[:2] == (0x80, 0) and z0[:1] == (0,), "%s %s %s" % (rz, z2, z0)),
+                check("ip.conflict raise answers t_us and already_set: false, then true for a second raise before FZ",
+                      isinstance((rz.get("value") or {}).get("t_us"), int) and (rz.get("value") or {}).get("already_set") is False
+                      and (rz2.get("value") or {}).get("already_set") is True, "%s %s" % (rz, rz2)),
+                check("eth.log: the frame that set the bit by auto carries conflict 'set'",
+                      any(e.get("conflict") == "set" and e["arp"].get("spa") == radio_ip for e in rx), json.dumps([e for e in rx if "conflict" in e])[:300]),
                 check("BCASTB (FO 0xC0): the peer's broadcast is dropped, 'broadcast blocked (BCASTB)' in eth.log",
                       ob[:1] == (0x42,) and y4 == () and any(e.get("reason") == "broadcast blocked (BCASTB)" for e in drops), "%s %s" % (y4, [e.get("reason") for e in drops])),
                 check("clear: no peer answers the probe any more", cl.get("ok") and y5 == (), "%s %s" % (cl, y5)),

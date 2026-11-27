@@ -60,6 +60,7 @@ NO_FIXED = os.environ.get("G7250_NO_FIXED_PORTS") == "1"
 # format addition (m1_smoke sets it); without it a clear is refused as not offered
 FIXTURE_CLEAR = os.environ.get("G7250_FIXTURE_CLEAR") == "1"
 CLEAR_OPS = ("power.cut", "flash.fault", "cpu.fault")
+ETH_LOG_CAP = 100000    # eth.log entries kept (the CH394's LogCap); more are counted as dropped
 RADIO_MAC = "02:00:00:00:72:50"
 
 
@@ -766,6 +767,13 @@ class FixtureServer:
         self.sock_on = False
         self.sock_entries = []
         self.sock_next = 0
+        # eth.log across power cycles (2026-11-27): kept here from the chip's always-on frame log,
+        # as sock.log is; before that date it lived in each emulator and a power cycle ended it
+        self.eth_on = False
+        self.eth_entries = []
+        self.eth_next = 0
+        self.eth_dropped = 0
+        self.eth_run_dropped = 0              # the chip's own count in this emulator, already added
         # flash.log across power cycles; what a new emulator must carry over
         self.fl_entries = []
         self.slow_calls = []                  # fixture calls over SLOW_CALL_S
@@ -839,7 +847,8 @@ class FixtureServer:
         return out
 
     def record(self, op, args, rep):
-        """flash.ecc, flash.fill, log.corrupt, cpu.fault and power.cut calls and their answers
+        """flash.ecc, flash.fill, log.corrupt, cpu.fault, ip.conflict (raise: t_us and already_set) and
+        power.cut calls and their answers
         (fixture-log.jsonl). A power.cut entry gets its outcome later: fired, the boot it fired in
         and the flash.log entry it ended (cut_outcome)."""
         if op in CLEAR_OPS and "clear" in args:
@@ -853,7 +862,7 @@ class FixtureServer:
             v["answer"] = rep
             self.fx_records.append(v)
             return
-        if op in ("flash.ecc", "flash.fill", "log.corrupt", "cpu.fault"):
+        if op in ("flash.ecc", "flash.fill", "log.corrupt", "cpu.fault", "ip.conflict"):
             v = {"op": op, "boot": self.boot_no, "t_wall": time.time(), "args": args, "answer": rep}
             if op == "flash.fill":
                 v["after"] = self.fill_after         # number of flash.log entries before it
@@ -882,6 +891,32 @@ class FixtureServer:
             if v.get("next", 0) <= self.sock_next:
                 return
             self.sock_next = v["next"]
+
+    def eth_pull(self):
+        """Append the chip's new MACRAW frame entries (eth.log) with their boot; called on reads and
+        by the runner before a power cycle (eth.log reads across power cycles, as sock.log)."""
+        agent = self.agent_getter()
+        if not self.eth_on or not agent:
+            return
+        for _ in range(200):
+            r = agent.ask("ethlog runner %d" % self.eth_next, timeout=30, internal=True)
+            if not r or not r.startswith("ok "):
+                return
+            v = json.loads(r[3:])
+            if v.get("dropped", 0) > self.eth_run_dropped:     # the chip's own log full (200000)
+                self.eth_dropped += v["dropped"] - self.eth_run_dropped
+                self.eth_run_dropped = v["dropped"]
+            for e in v.get("entries", []):
+                if not agent.before_cut(e):
+                    continue
+                if len(self.eth_entries) >= ETH_LOG_CAP:
+                    self.eth_dropped += 1
+                    continue
+                e["boot"] = self.boot_no
+                self.eth_entries.append(e)
+            if v.get("next", 0) <= self.eth_next:
+                return
+            self.eth_next = v["next"]
 
     def flash_pull(self):
         """Append the flash layer's new flash.log entries; also before a power cycle. A torn
@@ -1005,6 +1040,8 @@ class FixtureServer:
         self.fl_open = None
         self.boot_no = boot
         self.sock_next = 0                    # the new emulator's log starts empty
+        self.eth_next = 0                     # so does its frame log
+        self.eth_run_dropped = 0
         self.con_next = 0
 
     def console_pull(self):
@@ -1283,7 +1320,28 @@ class FixtureServer:
                     return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
                 return {"ok": True, "value": json.loads(r[3:])}
             return {"ok": False, "error": "action must be raise|auto"}
-        if op in ("net.log", "key.log", "eth.log"):
+        if op == "eth.log":
+            if not agent:
+                return {"ok": False, "error": "emulator not ready"}
+            action = args.get("action")
+            if action not in ("start", "read", "stop"):
+                return {"ok": False, "error": "action must be start|read|stop"}
+            if action == "start":
+                r = agent.ask("ethlog runner 1000000000", timeout=30, internal=True)
+                if not r or not r.startswith("ok "):
+                    return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
+                v = json.loads(r[3:])
+                self.eth_on, self.eth_entries, self.eth_dropped = True, [], 0
+                self.eth_next, self.eth_run_dropped = v.get("count", 0), v.get("dropped", 0)   # record from now
+                return {"ok": True, "value": {"t_us": v.get("t_us")}}
+            self.eth_pull()
+            if action == "stop":
+                self.eth_on = False
+            frm = max(0, int(args.get("from", 0)))
+            page = self.eth_entries[frm:frm + 5000]
+            return {"ok": True, "value": {"t_us": agent.now_us(), "count": len(self.eth_entries), "dropped": self.eth_dropped,
+                                          "from": frm, "next": frm + len(page), "entries": page}}
+        if op in ("net.log", "key.log"):
             if not agent:
                 return {"ok": False, "error": "emulator not ready"}
             action = args.get("action")
@@ -1291,8 +1349,6 @@ class FixtureServer:
                 return {"ok": False, "error": "action must be start|read|stop"}
             if op == "net.log":
                 cmd = "netlog %s %d" % (action, int(args.get("from", 0)))
-            elif op == "eth.log":
-                cmd = "ethlog %s %d" % (action, int(args.get("from", 0)))
             else:
                 cmd = "keylog %s %d %d" % (action, int(args.get("from_key", 0)), int(args.get("from_hp", 0)))
             r = agent.ask(cmd, timeout=30)

@@ -162,13 +162,33 @@ runner over a local TCP link (`harness/g7250emu/benchnet.py`, `Bridge`):
 
 ## Format v1.6: net.log, key.log, link events
 
+Which logs survive a power cycle (2026-11-27), within one test's emulator series (a `power.cycle`
+or `power.cut` starts a new emulator):
+- kept across it, entries with `boot`: console.log, flash.log, sock.log, eth.log (since
+  2026-11-27), dhcp.log (the bridge's server), hw.trace (restarted in the new emulator, the same
+  file), and the fixture log;
+- ended by it: net.log and key.log. They live in the emulator's CH394; a read after the power
+  cycle sees the new emulator's log, which is off until started again. The runner's own net-log.jsonl
+  and eth-log.jsonl per test hold every boot.
+
+- `ip.conflict` raises in the fixture log (2026-11-27): every `ip.conflict` call is recorded; a raise
+  answers `{"t_us", "already_set"}`, `already_set` true when IR bit 7 was still set from an earlier
+  conflict the image had not cleared, so that raise added nothing. A frame that sets the bit by
+  `auto` carries `"conflict": "set"` (or `"already set"`) in eth.log. Checked by T-EMU-38 and
+  tests/baseline/conflict_record_check.py (m1_smoke step [7]).
+
 - `eth.log {action: start|read|stop, from?}` (offered since 2026-11-26): the MACRAW
   frames of socket 0 in emulated time, kept by the CH394 model: `from_radio` when the
   image's SEND executes, `to_radio` when a frame is placed in the RX buffer, `dropped`
   (with `reason`) for one the chip did not take. Entry: `t_us`, `dir`, `len`, `dst`,
   `src`, `ethertype` (a number), `arp` {`op`, `sha`, `spa`, `tha`, `tpa`} for ARP, else
-  `hex` (at most 256 bytes). Pages and caps as net.log. Always on for the runner too:
-  each test keeps `eth-log.jsonl` (artifact `eth_log`, with `boot`). Before that date
+  `hex` (at most 256 bytes). Pages and caps as net.log. Since 2026-11-27 the server keeps it
+  across power cycles, as sock.log: it records from the chip's always-on frame log from the
+  start on, pulls it at reads and before a power cycle, and every entry carries `boot`; the cap
+  (100000 entries) counts over all boots. Before that date the log lived in each emulator, so one
+  started before a power cycle read nothing after it (T-A1-70 and T-A1-71 on fw-4e567d2: "not
+  judged: eth.log holds no ARP frame"). Checked by T-EMU-37's last check. Always on for the runner too:
+  each test keeps `eth-log.jsonl` (artifact `eth_log`, with `boot`). Before 2026-11-26
   socket 0 stayed closed in MACRAW, and the runner marked T-A1-69 to T-A1-73 and
   T-A3-06 "not modelled: MACRAW"; that marking is gone. Checked by T-EMU-37
   (runner-selfcheck.json, step [7]) and bridge_frames_check (step [2k]).

@@ -122,6 +122,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 }
             }
             if(reason != null) sb.Append(", \"reason\": \"" + reason + "\"");
+            if(dir != "from_radio" && curConflict != null) sb.Append(", \"conflict\": \"" + curConflict + "\"");
             if(dir != "from_radio" && curShift != 0) sb.Append(", \"shift_us\": " + curShift);
             if(dir != "from_radio" && curWall > 0) sb.Append(", \"t_wall\": " + curWall.ToString("F6", System.Globalization.CultureInfo.InvariantCulture));
             sb.Append("}");
@@ -142,6 +143,7 @@ namespace Antmicro.Renode.Peripherals.SPI
         private static string Ip(byte[] b, int o) { return b[o] + "." + b[o + 1] + "." + b[o + 2] + "." + b[o + 3]; }
 
         private long curShift;      // the delivery shift of the datagram being delivered (0 = on its spacing)
+        private string curConflict; // ip.conflict auto: "set" or "already set" for the frame being delivered
         private static double WallNow() { return (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds; }
         private double curWall;     // its host wall-clock arrival, epoch seconds (matches the bench's burst windows)
 
@@ -530,12 +532,14 @@ namespace Antmicro.Renode.Peripherals.SPI
             // ip.conflict auto (format v1.6, an emulator assumption): an ARP frame from arp.peer whose
             // sender IP is the chip's own non-zero SIPR sets IR bit 7 (CONFLICT) when it arrives
             bool raised = false;
+            string conflict = null;     // eth.log: "set", or "already set" when IR bit 7 was set before
             if((p[8] & 0x08) != 0 && len >= 42 && p[9 + 12] == 0x08 && p[9 + 13] == 0x06)
                 lock(sync)
                 {
                     bool zero = (common[0x0F] | common[0x10] | common[0x11] | common[0x12]) == 0;
                     if(linkUp && !zero && p[9 + 28] == common[0x0F] && p[9 + 29] == common[0x10] && p[9 + 30] == common[0x11] && p[9 + 31] == common[0x12])
                     {
+                        conflict = (common[0x15] & 0x80) != 0 ? "already set" : "set";
                         common[0x15] |= 0x80;
                         raised = true;
                     }
@@ -544,6 +548,7 @@ namespace Antmicro.Renode.Peripherals.SPI
             lock(sync)
             {
                 curShift = shiftUs; curWall = wall;
+                curConflict = conflict;
                 curInjected = false;
                 var r = sreg[0];
                 if(!linkUp) { dropped++; EthRecord("dropped", p, 9, len, "link down"); return; }
@@ -580,10 +585,12 @@ namespace Antmicro.Renode.Peripherals.SPI
         // ip.conflict raise (format v1.6): IR bit 7 (CONFLICT) set now
         public string ConflictRaise()
         {
-            lock(sync) common[0x15] |= 0x80;
+            bool was;
+            lock(sync) { was = (common[0x15] & 0x80) != 0; common[0x15] |= 0x80; }
             UpdateIrq();
             this.Log(LogLevel.Info, "CH394: IP conflict raised by the bench");
-            return "{\"t_us\": " + NowUs() + "}";
+            // already_set: the image had not cleared the bit of an earlier conflict, so this one adds nothing
+            return "{\"t_us\": " + NowUs() + ", \"already_set\": " + (was ? "true" : "false") + "}";
         }
 
         private void UpdateIrq()

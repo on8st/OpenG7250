@@ -301,16 +301,17 @@
   },
   {
    "id": "T-EMU-37",
-   "title": "MACRAW socket 0 (format v1.6): Sn_SR 0x42, the frames the image sends in eth.log as from_radio with dst, src, ethertype, arp or hex, in emulated time; UDP on another socket beside it; FJ at the end: socket 0 UDP again and socket 1 closed, the image as before for the tests after it in the same boot",
+   "title": "MACRAW socket 0 (format v1.6): Sn_SR 0x42, the frames the image sends in eth.log as from_radio with dst, src, ethertype, arp or hex, in emulated time; UDP on another socket beside it; FJ at the end: socket 0 UDP again and socket 1 closed, the image as before for the tests after it in the same boot; then eth.log across a power cycle (started in one boot, read in the next, entries with their boot)",
    "reqs": [
     "runner"
    ],
    "target": "emulator",
    "scope": "v1.0",
    "needs": [
-    "eth.log"
+    "eth.log",
+    "power.cycle"
    ],
-   "timeout_s": 120
+   "timeout_s": 240
   },
   {
    "id": "T-EMU-38",

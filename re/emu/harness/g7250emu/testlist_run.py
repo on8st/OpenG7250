@@ -283,6 +283,7 @@ class Boot:
             self.save_netlog()
             try:
                 self.fixtures.sock_pull()
+                self.fixtures.eth_pull()
                 self.fixtures.console_pull()
                 self.fixtures.before_power_cycle(cut)
             except Exception:  # noqa: BLE001
