@@ -26,8 +26,9 @@ class Radio:
     "carry" (the restart after an address change keeps the RX and TX settings), "wrong-end" (the session
     ends at `end_at` without an address change and is restarted by RUN=1 as by the same host)."""
 
-    def __init__(self, nets, broken=None, change_at=None, end_at=None, former=None):
+    def __init__(self, nets, broken=None, change_at=None, end_at=None, former=None, general_delay=0.0):
         self.t, self.nets, self.broken, self.former = 100.0, nets, broken, former
+        self.general_delay, self.pending = general_delay, []  # a General taken that long after its arrival
         self.last_hp = 0.0
         self.netlog = []  # net.log entries of the bench host's datagrams (dropped / to_radio)
         self.ip, self.old = nets[0].radio_ip, None
@@ -54,6 +55,9 @@ class Radio:
 
     def tick(self, until):
         while self.t < until:
+            for g in [g for g in self.pending if g[0] <= self.t]:
+                self.pending.remove(g)
+                self.general(g[1])
             if self.running and self.t - self.last_hp > 1.0:  # the 1 s watchdog (B5.6): a same-network end
                 self.end(False)
             if self.change_at is not None and self.t >= self.change_at:
@@ -69,6 +73,10 @@ class Radio:
                 self.out.append((b"\0" * 1444, self.src(PORT_DDC0, self.session_ip), self.t))
                 self.next_iq = self.t + 0.01
             self.t = round(self.t + 0.005, 6)
+
+    def general(self, data):
+        self.pa = bool(data[58] & 1)
+        self.wd_general = bool(data[38] & 1) and self.broken != "no-general"
 
     def to_radio(self, dest, port, data):
         if self.former is not None and self.former.connect.get(port) == dest:
@@ -88,7 +96,10 @@ class Radio:
             if not self.running:
                 self.running, self.next_status, self.session_ip = True, self.t, ip
         elif port == PORT_DISC and len(data) == 60:
-            self.pa, self.wd_general = bool(data[58] & 1), bool(data[38] & 1)
+            if self.general_delay:
+                self.pending.append((self.t + self.general_delay, data))
+            else:
+                self.general(data)
         elif port == PORT_REG:
             ans = []
             for a, v in parse_regs(data):
@@ -169,7 +180,7 @@ def case(apart=True, former=False, netlog=True, **kw):
     radio.ddc0 = True
     c.stream.start()
     c.stream.wait(0.5)
-    c.preset = d.tx_preset(ctx, h, c.label)
+    c.preset = d.tx_preset(ctx, h, c.label, wait=c.stream.wait)
     c.t_reply = c.t_from = radio.t
     return c, radio, nets
 
@@ -226,6 +237,48 @@ class Ends(unittest.TestCase):
         self.assertEqual(failed(c.ctx), [])
         self.assertTrue(c.ctx.no_pass)
         self.assertTrue(any("same local addresses" in p for p in c.ctx.parts))
+
+
+class GeneralTaken(unittest.TestCase):
+    """emu 265c769 diagnosis: [P2] orders nothing between ports, so the General (1024) may be taken after an arm
+    (7250) sent at once after it. The arm is retried in radio time, never judged on one arm at that instant."""
+
+    def run_end(self, **kw):
+        c, radio, nets = case(change_at=103.0, **kw)
+        c.stream.wait(1.5)
+        c.ended(nets[1], radio.t)
+        return c.ctx
+
+    def test_general_taken_late_passes(self):
+        ctx = self.run_end(general_delay=0.25)  # later than one write's 0.3 s read: one arm at once would fail
+        self.assertEqual(failed(ctx), [])
+        self.assertFalse(any("not taken beforehand" in p for p in ctx.parts))  # the TX preset waits as well
+        done = [x for x in ctx.checks if "no longer refused" in x["name"]]
+        self.assertTrue(done and done[0]["ok"])
+
+    def test_general_never_taken_fails(self):
+        bad = failed(self.run_end(broken="no-general"))
+        self.assertTrue(any("no longer refused" in n for n in bad), bad)
+
+    def test_arm_after_general_stops_at_the_first_answer(self):
+        class H:
+            def __init__(self):
+                self.n = 0
+
+            def keepalive(self):
+                pass
+
+            def write(self, pairs):
+                a = pairs[0][0]
+                if a == TX_ARM_TOKEN:
+                    return [(TX_ARM_TOKEN, 7)]
+                self.n += 1
+                return [(TX_ARM_STATE, (3 if self.n < 3 else 9) << 8)]
+        waited = []
+        out = d.arm_after_general(H(), waited.append)
+        self.assertEqual(len(out), 3)
+        self.assertEqual(out[:2], ["WATCHDOG_DISABLED"] * 2)
+        self.assertEqual(waited, [d.ARM_EVERY_S] * 3)
 
 
 class Former(unittest.TestCase):

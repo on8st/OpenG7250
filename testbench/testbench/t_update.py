@@ -685,6 +685,17 @@ def rollback_logged(ctx, u: Updater, slot: int):
     ctx.check(f"the rollback is logged: '{want}' after the start entry", bool(k) and want in texts[k[-1]:], f"{texts[-5:]}")
 
 
+TRIAL_JUDGED_BELOW_S = 9.5  # s of uptime: under the 10 s of network up (0044), with 0.5 s for the IDENTIFY
+
+
+def trial_step(up: float | None) -> float | None:
+    """'Still a trial': the seconds to advance before judging it (0 at once; up to 8 s where the radio was reached
+    early), or None where it cannot be judged (uptime unknown or not under TRIAL_JUDGED_BELOW_S)."""
+    if up is None or up >= TRIAL_JUDGED_BELOW_S:
+        return None
+    return 8 - up if up < 7.5 else 0.0
+
+
 @test("T-A1-68", "T-A1-09")
 def t_a1_68(ctx: Ctx):
     """0044: a trial image that meets the criterion confirms itself after 10 s without a host; one
@@ -698,12 +709,15 @@ def t_a1_68(ctx: Ctx):
         with updating(ctx, s, restart_at_end=False) as u:
             # 10 s with the network up (0044): the network came up at the latest when the radio
             # was reached, so it is confirmed 11 s from here; under 10 s of uptime it cannot be
+            # any uptime under 10 s is before 10 s of network up: still a trial; 0.5 s kept for the IDENTIFY
             up = uptime_s(u)
-            if up is not None and up < 7.5:
-                advance(ctx, 8 - up)
+            step = trial_step(up)
+            if step is not None:
+                if step:
+                    advance(ctx, step)
                 t, up = u.identify(), uptime_s(u)
-                if up is not None and up < 9.5:
-                    ctx.eq(f"{up:.1f} s after start: still a trial (tag 10 = 1)", t.get(10), b"\x01")
+            if step is not None and up is not None and up < TRIAL_JUDGED_BELOW_S:
+                ctx.eq(f"{up:.1f} s after start: still a trial (tag 10 = 1)", t.get(10), b"\x01")
             else:
                 ctx.notes.append(f"reached {up} s after the trial's start: 'still a trial before 10 s' not judged")
             advance(ctx, 11)

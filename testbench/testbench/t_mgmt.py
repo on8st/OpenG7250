@@ -455,6 +455,8 @@ def t_a1_66(ctx):
     around a retry is answered (A1.2, A1.11; 0041)."""
     ctx.need("dhcp.server")
     ctx.need("power.cycle")
+    from .t_linklocal import dhcp_mode_stored
+    dhcp_mode_stored(ctx, "a power cycle with no DHCP server")
     ctx.fixture("dhcp.stop")
     socklog = "sock.log" in ctx.endpoint.get("fixtures", [])
     if socklog:
@@ -589,6 +591,8 @@ def reachable_both(ctx, limit_s: float) -> float | None:
 
 
 def startup(ctx, label: str, limit_s: float):
+    from .t_linklocal import dhcp_mode_stored
+    dhcp_mode_stored(ctx, label)
     ctx.fixture("power.cycle")
     t_cycle = time.monotonic()
     emu0 = None
@@ -643,6 +647,8 @@ def t_a1_74(ctx):
     ctx.need("dhcp.server")
     ctx.need("power.cycle")
     from .p2 import wait_reachable
+    from .t_linklocal import dhcp_mode_stored
+    dhcp_mode_stored(ctx, "power-on with no DHCP server")
     ctx.fixture("dhcp.stop")
     ctx.fixture("power.cycle")
     wait_reachable(ctx, "power-on with no DHCP server", START_LINKLOCAL_S + 5)
@@ -860,6 +866,8 @@ def t_a1_76(ctx):
     from .p2 import Host, reread_endpoint, wait_reachable
     ctx.need("dhcp.server")
     ctx.need("power.cycle")
+    from .t_linklocal import dhcp_mode_stored
+    dhcp_mode_stored(ctx, "power-on with MACRAW failing")
     ctx.fixture("dhcp.stop")
     if "macraw.fail" in ctx.endpoint.get("fixtures", []):
         ctx.fixture("macraw.fail", on=True)

@@ -199,34 +199,83 @@ def t_a2_10(ctx):
         b.stop()
 
 
+NOTICE_WINDOW_S = 1.0  # radio s of DUC I&Q from A (within the 5 s of the repeated notice)
+
+
+def notice_times(entries: list[dict], port: int, after_us: int) -> list[int]:
+    """Emulated send times (us) of the TX_ARM_STATE packets from radio port 7250 to host port `port` from
+    after_us on (net.log)."""
+    t = []
+    for e in entries:
+        head = bytes.fromhex(e.get("head", ""))
+        if e.get("dir") == "from_radio" and e.get("radio_port") == PORT_REG and str(e.get("peer", "")).endswith(f":{port}") \
+                and len(head) >= 6 and struct.unpack_from(">H", head, 4)[0] == TX_ARM_STATE and e["t_us"] >= after_us:
+            t.append(e["t_us"])
+    return t
+
+
+def first_from(entries: list[dict], port: int, radio_port: int) -> int | None:
+    """The emulated arrival (us) of the first datagram from host port `port` to `radio_port` (net.log)."""
+    t = [e["t_us"] for e in entries if e.get("dir") == "to_radio" and e.get("radio_port") == radio_port
+         and str(e.get("peer", "")).endswith(f":{port}")]
+    return min(t) if t else None
+
+
 @test("T-A2-11")
 def t_a2_11(ctx):
+    """The repeated TAKEOVER notice (B8.4): judged in radio time, its times from net.log where offered (the host's
+    receive times bunch under load), else on the host clock where it is the radio's."""
     with Host(ctx.net) as a, Host(ctx.net) as b:
-        netlog_start(ctx)
+        logged = netlog_start(ctx)
         begin(a)
         b.keepalive()
         a.recv(0.1)  # the three copies
-        # A sends DUC I&Q every 30 ms for 1 s; B keeps its session
-        t0, got, last_b = time.monotonic(), [], 0.0
-        while time.monotonic() - t0 < 1.0:
+        # A sends DUC I&Q every 30 ms for NOTICE_WINDOW_S of radio time; B keeps its session
+        t0, wall0 = emu_now(ctx), time.monotonic()
+        got, last_b, last_clock, el = [], 0.0, 0.0, 0.0
+        while el < NOTICE_WINDOW_S and time.monotonic() - wall0 < 12 * NOTICE_S + 60:
             a.send(PORT_DUCIQ, duc_iq())
             if time.monotonic() - last_b > 0.2:
                 b.keepalive()
                 last_b = time.monotonic()
             got += a.recv(0.03)
+            if time.monotonic() - last_clock > 0.1:
+                now = emu_now(ctx) if t0 is not None else None
+                el = (now - t0) if now is not None else time.monotonic() - wall0
+                last_clock = time.monotonic()
+        if logged:
+            entries = netlog_read(ctx)
+            start = first_from(entries, a.port, PORT_DUCIQ)
+            ts = [x / 1e6 for x in notice_times(entries, a.port, start)] if start is not None else []
+            basis = "net.log send times"
+        else:
+            ts, basis = [t for t, _, _ in notices(got)], "host receive times"
+        gaps = [ts[i + 1] - ts[i] for i in range(len(ts) - 1)]
+        ctx.check("DUC I&Q from A within 5 s: the TAKEOVER notice repeated", len(ts) >= 5,
+                  f"{len(ts)} notices in {el:.2f} s of radio time ({basis})")
+        if logged or same_clock(ctx):
+            ctx.check("at most one notice per 100 ms", all(g >= NOTICE_MIN_S - 0.01 for g in gaps),
+                      f"smallest gap {min(gaps) * 1000:.0f} ms ({basis})" if gaps else "fewer than 2 notices")
+        else:
+            ctx.part("'at most one notice per 100 ms': not judged, no net.log and the host clock is not the radio's")
+            ctx.no_pass = True
         n = notices(got)
-        gaps = [n[i + 1][0] - n[i][0] for i in range(len(n) - 1)]
-        ctx.check("DUC I&Q from A within 5 s: the TAKEOVER notice repeated", len(n) >= 5, f"{len(n)} notices in 1 s")
-        ctx.check("at most one notice per 100 ms", all(g >= NOTICE_MIN_S - 0.01 for g in gaps),
-                  f"smallest gap {min(gaps) * 1000:.0f} ms" if gaps else "fewer than 2 notices")
         if n:
             st = value(n[0][2], TX_ARM_STATE)
             ctx.eq("the notice is the final TX_ARM_STATE (TAKEOVER)", (st >> 16) & 0xFF, DROP_TAKEOVER)
         # a register packet from A also gets the notice (and its NOT_OWNER answer); first let
-        # 100 ms pass since the last notice
-        a.recv(0.15)
+        # 100 ms of radio time pass since the last notice
+        t1, wall1 = emu_now(ctx), time.monotonic()
+        wait_radio_time(ctx, b, t1, wall1, 0.15)
         a.send(PORT_REG, b"\0\0\0\0" + struct.pack(">HI", TX_ARM_TOKEN, 0))
-        got = a.recv(0.3)
+        got, t2, wall2 = [], emu_now(ctx), time.monotonic()
+        while True:
+            got += a.recv(0.05)
+            now = emu_now(ctx) if t2 is not None else None
+            el = (now - t2) if now is not None else time.monotonic() - wall2
+            if el >= 0.3 or time.monotonic() - wall2 > 12 * 0.3 + 60:
+                break
+            b.keepalive()
         ctx.check("a register packet from A within 5 s: a notice", bool(notices(got)), f"{len(got)} packets")
         # a C&C packet from A takes the radio back: B gets three notices that continue B's
         # session counter; the NOT_OWNER answers to A while B was owner did not advance it (0051)

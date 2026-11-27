@@ -335,14 +335,21 @@ def tx_settings(h) -> tuple:
     return (None if ts is None else (ts >> 4) & 1, mc, kt)
 
 
-def tx_preset(ctx, h, label: str) -> bool:
+def tx_preset(ctx, h, label: str, wait=None) -> bool:
     """PA enable set (General byte 58 bit [0]), TX_MODE_CLASS 1, KEYED_TIMEOUT 300: values a session end
-    resets, so that a reset can be seen."""
+    resets, so that a reset can be seen. The General (port 1024) may be taken after the reads (port 7250, [P2]
+    orders nothing between ports): read again ARM_EVERY_S of radio time apart for up to ARM_WINDOW_S."""
+    wait = wait or (lambda s: _wait_radio(ctx, s))
     h.send(PORT_DISC, general(pa=True))
     h.keepalive()
     h.write([(TX_MODE_CLASS, PRESET[1])])
     h.write([(KEYED_TIMEOUT, PRESET[2])])
     got = tx_settings(h)
+    for _ in range(int(round(ARM_WINDOW_S / ARM_EVERY_S))):
+        if got == PRESET:
+            break
+        wait(ARM_EVERY_S)
+        got = tx_settings(h)
     if got != PRESET:
         ctx.part(f"{label}: the TX settings not taken beforehand ({got}, wanted {PRESET}): their reset not judged")
         ctx.no_pass = True
@@ -350,7 +357,7 @@ def tx_preset(ctx, h, label: str) -> bool:
     return True
 
 
-def judge_new_session(ctx, label: str, h, ddc0: int):
+def judge_new_session(ctx, label: str, h, ddc0: int, wait=None):
     """The session that the bench's RUN=1 starts after an address change carries nothing over (B5.4 "Restart"
     item 3, as T-B5-16): DDC0 reason 1 and no DDC0 I&Q, the TX settings of Table A3-4 (A3.6a) and of A3.6 at
     their defaults, and an arm refused with WATCHDOG_DISABLED until a General packet of the new session."""
@@ -368,10 +375,36 @@ def judge_new_session(ctx, label: str, h, ddc0: int):
     ctx.eq(f"{label}: the new session: an arm before its General packet refused with WATCHDOG_DISABLED (B5.4 item 2)",
            arm_reason(st), "WATCHDOG_DISABLED")
     h.send(PORT_DISC, general())
-    h.keepalive()
-    st = value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
-    ctx.check(f"{label}: the new session: after its General packet the arm no longer refused with WATCHDOG_DISABLED",
-              st is not None and arm_reason(st) != "WATCHDOG_DISABLED", f"{arm_reason(st)}")
+    reasons = arm_after_general(h, wait or (lambda s: _wait_radio(ctx, s)))
+    ctx.check(f"{label}: the new session: after its General packet the arm no longer refused with WATCHDOG_DISABLED "
+              f"(arms {ARM_EVERY_S * 1000:.0f} ms of radio time apart, for up to {ARM_WINDOW_S:g} s)",
+              bool(reasons) and reasons[-1] not in (None, "WATCHDOG_DISABLED"), f"arm answers {reasons}")
+
+
+ARM_EVERY_S, ARM_WINDOW_S = 0.1, 1.0  # radio s: [P2] orders nothing between ports, so the General (port 1024) may be
+#                                       taken after an arm (port 7250) sent at once after it
+
+
+def _wait_radio(ctx, s: float):
+    from .t_a3 import wait_radio
+    wait_radio(ctx, s * 1000)
+
+
+def arm_after_general(h, wait, every: float = ARM_EVERY_S, window: float = ARM_WINDOW_S) -> list:
+    """After the General packet: an arm (with the token read anew) every `every` s of radio time until one is not
+    refused with WATCHDOG_DISABLED, for up to `window` s; the arm answers' reasons, in order. Never one arm sent
+    at the same instant as the General."""
+    from .t_tx_locked import arm_reason
+    out = []
+    for _ in range(int(round(window / every))):
+        wait(every)
+        h.keepalive()
+        tok = value(h.write([(TX_ARM_TOKEN, 0)]), TX_ARM_TOKEN)
+        st = None if tok is None else value(h.write([(TX_ARM, tok ^ ARM_MAGIC)]), TX_ARM_STATE)
+        out.append(arm_reason(st))
+        if out[-1] not in (None, "WATCHDOG_DISABLED"):
+            break
+    return out
 
 
 def set_config(ctx, s: bytes, *items, on_reply=None) -> int | None:
@@ -443,9 +476,27 @@ class Case:
             stamp()
         self.t_from = self.t_reply
 
+    @classmethod
+    def observing(cls, ctx, label: str) -> "Case":
+        """No request: the session recorded for an address change of another cause (a conflict, T-A1-72)."""
+        c = cls.__new__(cls)
+        c.ctx, c.s, c.label, c.st, c.n0 = ctx, b"", label, None, 0
+        c.held = current_ip(ctx)
+        c.h = session(ctx)
+        c.stream = Stream(ctx, c.h)
+        c.preset, c.t0 = None, radio_us(ctx)
+        c.stream.start()
+        c.t_reply = c.t_reply_us = None
+        c.t_from = c.stream.now()
+        return c
+
+    def close(self):
+        self.stream.stop()
+        self.h.close()
+
     def preset_tx(self):
         with self.stream.paused():
-            self.preset = tx_preset(self.ctx, self.h, self.label)
+            self.preset = tx_preset(self.ctx, self.h, self.label, wait=self.stream.wait if self.stream.manual else None)
         self.t_from = self.stream.now()
 
     def kept(self, what: str, t0: float | None = None, t1: float | None = None, tx: bool = True, moved=None) -> bool:
@@ -535,7 +586,7 @@ class Case:
         if apart:
             ctx.notes.append(f"{label}: the session judged against B5.4 item 3: " + judged_session(rec, new.radio_ip, t_change, st.ratio(), st.pauses))
         with st.paused():
-            judge_new_session(ctx, label, self.h, ddc0)
+            judge_new_session(ctx, label, self.h, ddc0, wait=st.wait if st.manual else None)
 
     def answered(self) -> bool:
         return self.ctx.eq(f"{self.label}: SET_CONFIG of address mode DHCP answered 0", self.st, 0)
@@ -804,7 +855,9 @@ def t_a1_100(ctx: Ctx):
     """A1.11 "Change into DHCP mode while running" (0082), emulator."""
     for f in NEEDS:
         ctx.need(f)
+    from .t_linklocal import dhcp_mode_stored
     from .t_mgmt import secret_of
+    dhcp_mode_stored(ctx, "a power cycle with no DHCP server")
     ctx.fixture("dhcp.stop")
     ctx.fixture("power.cycle")
     wait_reachable(ctx, "a power cycle with no DHCP server", 40)
@@ -821,3 +874,7 @@ def t_a1_100(ctx: Ctx):
             ctx.fixture("dhcp.stop")
             ctx.fixture("power.cycle")  # back to DHCP mode on a link-local address, as the test began
             wait_reachable(ctx, "the end of T-A1-100", 40)
+            if address_mode(ctx, s) != b"\x00":  # the set above failed: a static mode stored is in force at every start
+                set_config(ctx, s, (1, b"\x00"))
+                ctx.fixture("power.cycle")
+                wait_reachable(ctx, "the end of T-A1-100, DHCP mode set again", 40)

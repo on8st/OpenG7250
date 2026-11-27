@@ -646,6 +646,7 @@ def t_a1_98(ctx: Ctx):
         if not r or r["status"] != 0:
             return
     moved("the address change")
+    put_back = False
     try:
         with rebound(ctx, pa) as a, rebound(ctx, pb) as b:
             if (a.port, b.port) != (pa, pb):
@@ -662,8 +663,10 @@ def t_a1_98(ctx: Ctx):
             ctx.eq("and that opened a new session: B's write 35", wr(b), 35)
             want = [b4(ip)]
             r = a.authed("SET_CONFIG", s, config_tlv(*old_net))
-            ctx.eq("the network items put back: 0", r["status"] if r else None, 0)
+            put_back = ctx.eq("the network items put back: 0", r["status"] if r else None, 0)
     finally:
+        if not put_back:  # a static address left stored is in force at every later start (A1.6)
+            net_back(ctx, s, old_net, ck)
         if not model:
             time.sleep(0.3)
             wait_reachable(ctx, "the address put back")
@@ -685,6 +688,23 @@ def rebound(ctx, port: int) -> Mgmt:
     return c
 
 
+def net_back(ctx, s: bytes, items: list, ck):
+    """The network items of C-1 written back after an error, once more after the 60 s of a write session another
+    host may hold (A1.10)."""
+    from .t_dhcpmode import set_config
+    for attempt in range(2):
+        try:
+            st = set_config(ctx, s, *items)
+        except Skip:
+            st = None
+        if st == 0:
+            return
+        if st == 35 and attempt == 0:
+            ck.wait(61)
+    ctx.part(f"the network items not put back after an error (status {st}): the next start may bring up the static "
+             "address of this test")
+
+
 def renewals(log: list[dict], ip: str) -> list[int]:
     """t_us of the DHCPREQUESTs the radio sends from its lease (a renewal, RFC 2131 4.3.2)."""
     return sorted(x["t_us"] for x in log if mtype(x) == "REQUEST" and str(x.get("src", "")).split(":")[0] == ip
@@ -695,6 +715,8 @@ def renewal(ctx, s: bytes):
     """Lease time 16 s (renewal after 8 s, RFC 2131 4.4.5): a session, a challenge and a stored reply from
     just before a renewal are as they were after it."""
     ctx.need("power.cycle")
+    from .t_linklocal import dhcp_mode_stored
+    dhcp_mode_stored(ctx, "a power cycle with a DHCP server (lease 16 s)")
     ctx.fixture("dhcp.start", lease_s=16)
     try:
         ctx.fixture("power.cycle")
