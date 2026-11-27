@@ -1431,8 +1431,22 @@ def run_test(tid, ep):
         # (LOCKUP on the chip). The stub is UDF everywhere with a branch-to-self after the first: whatever
         # Renode does with the UDF there, the core stays in the stub or enters a fault vector, never runs off
         # it. The state names it (lockup or entered); FAULTMASK, BASEPRI, PRIMASK and the running priority at
-        # the injection are recorded; a watchdog reset brings the image back and the state stays
-        a = ctl.op("cpu.fault", in_us=0, mode="handler", exception=44, within_us=3000000)
+        # the injection are recorded; a watchdog reset brings the image back and the state stays.
+        # The condition faultmask 1: the handler sets FAULTMASK six instructions after its entry, and without
+        # the condition the first sample in exception 44 could come before it (smoke 5 of re9b62a7-sm, 1 of
+        # 19 runs: injected at the handler's first instruction with FAULTMASK 0). First the condition holds
+        # back an injection in the same handler run without FAULTMASK (net_test FH): missed, none injected
+        h0 = ctl.op("cpu.fault", in_us=0, mode="handler", exception=44, within_us=3000000, faultmask=1)
+        cmd(b"FH\x32", wait=1.0)
+        t0 = time.time()
+        while True:
+            rh = ctl.op("cpu.fault", read=True).get("value") or {}
+            if rh.get("state") != "armed" or time.time() - t0 > 60:
+                break
+            time.sleep(0.5)
+        bad = [ctl.op("cpu.fault", in_us=0, mode="thread", faultmask=1),
+               ctl.op("cpu.fault", in_us=0, mode="handler", exception=44, faultmask=0)]
+        a = ctl.op("cpu.fault", in_us=0, mode="handler", exception=44, within_us=3000000, faultmask=1)
         cmd(b"FN\x32", wait=1.0)
         time.sleep(2.0)
         r = ctl.op("cpu.fault", read=True).get("value") or {}
@@ -1441,7 +1455,12 @@ def run_test(tid, ep):
         back = cmd(b"FR", again=True, wait=60.0)
         r2 = ctl.op("cpu.fault", read=True).get("value") or {}
         ints = all(isinstance(inj.get(k), int) for k in ("faultmask", "basepri", "primask", "priority"))
-        return [check("armed and injected in exception 44", a.get("ok") and inj.get("ipsr") == 44, "%s %s" % (a, r)),
+        return [check("the condition faultmask 1 holds back an injection while FAULTMASK is 0 (FH: exception 44 without it): missed, "
+                      "none injected, samples held back; refused with mode thread and with faultmask 0",
+                      h0.get("ok") and (h0.get("value") or {}).get("faultmask") == 1 and rh.get("state") == "missed"
+                      and rh.get("injected") is None and rh.get("faultmask") == 1 and (rh.get("held_by_faultmask") or 0) > 0
+                      and not any(x.get("ok") for x in bad), "%s %s %s" % (h0, rh, bad)),
+                check("armed and injected in exception 44", a.get("ok") and inj.get("ipsr") == 44 and r.get("faultmask") == 1, "%s %s" % (a, r)),
                 check("FAULTMASK 1 at the injection; BASEPRI, PRIMASK and the running priority recorded as numbers",
                       ints and inj.get("faultmask") == 1, str(inj)),
                 check("the state names what happened: lockup (no entry) or entered (an entry)",

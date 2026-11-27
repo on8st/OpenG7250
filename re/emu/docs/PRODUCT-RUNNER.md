@@ -266,8 +266,8 @@ test is listed as such. Checked without an emulator by tests/baseline/slow_calls
 
 The name and the shape are this emulator's proposal; the bench format lists the fixture as pending
 and does not call it yet.
-- `cpu.fault {at_us | in_us, mode?: "any"|"thread"|"handler", exception?, within_us?: 1000000}` →
-  `{at_us, mode, exception, within_us, stub}`: from `at_us` (emulated us since the boot, as `hw.trace`)
+- `cpu.fault {at_us | in_us, mode?: "any"|"thread"|"handler", exception?, within_us?: 1000000, faultmask?: 1}` →
+  `{at_us, mode, exception, within_us, stub, faultmask?}`: from `at_us` (emulated us since the boot, as `hw.trace`)
   or `in_us` from now, the core's mode is looked at in a time event, between translated blocks, and
   then every 10 us of emulated time until `at_us + within_us`. When it is the mode asked for (thread:
   IPSR 0; handler: IPSR not 0, or the one `exception` number given, 2 to 178; any), the PC is set to
@@ -279,7 +279,11 @@ and does not call it yet.
   undefined instruction: HardFault with HFSR FORCED and CFSR UNDEFINSTR, or UsageFault when the image
   has set USGFAULTENA. The registers and the stack are the image's; the stacked PC names the stub,
   not the image's code (way (b), a patched instruction, is not built: the stacked PC is not judged).
-- `cpu.fault {read: true}` → `{state, mode, exception, at_us, until_us, samples, injected: {t_us, pc,
+- The condition `faultmask: 1` (mode handler only; any other value is refused): a sample in the mode
+  asked for injects only while FAULTMASK is 1; one with FAULTMASK 0 is held back and counted, and the
+  window goes on. A test that checks FAULTMASK at the injection asks for it: without it the first sample
+  in a handler can come before the handler's own `cpsid f` (T-EMU-35 on 2026-11-27, 1 of 19 runs).
+- `cpu.fault {read: true}` → `{state, mode, exception, at_us, until_us, samples, faultmask?, held_by_faultmask?, injected: {t_us, pc,
   ipsr, stub, faultmask, basepri, primask, priority}, no_entry_pc?, entry: {t_us, exception, handler,
   cfsr, hfsr, stacked_pc, stacked_ipsr}}`; `priority` is the running exception's (NMI -2, HardFault -1,
   else the SHPR or NVIC_IPR byte; null in thread mode). `state` is `armed`, `injected`, `entered` (the
@@ -303,8 +307,9 @@ and does not call it yet.
 - Checked by T-EMU-29 (tests/fakebench/cpu-fault.json, m1_smoke step [12]) against the bench image
   net_test.c: thread mode, the handler of exception 44, UsageFault, a missed window, a reset before the
   time, and the image's own handler seeing the same frame (IPSR, CFSR, HFSR, stacked PC and IPSR,
-  EXC_RETURN). T-EMU-35 (same list): a fault in the handler of exception 44 with FAULTMASK set (net_test
-  FN): lockup, the masks and the priority recorded, the image back after a watchdog reset. Every call is in fixture-log.jsonl.
+  EXC_RETURN). T-EMU-35 (same list): the condition faultmask 1 holds back an injection in the same handler
+  without FAULTMASK (net_test FH: missed, samples held back, refusals), then a fault in the handler of
+  exception 44 with FAULTMASK set (net_test FN, with the condition): lockup, the masks and the priority recorded, the image back after a watchdog reset. Every call is in fixture-log.jsonl.
 
 ## The emulator process
 

@@ -1339,7 +1339,8 @@ class FixtureServer:
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
             return {"ok": True, "value": {"seq": seq}}
         if op == "cpu.fault":
-            # {at_us | in_us, mode?: any|thread|handler, exception?, within_us?} arms one; {read: true} gives the record
+            # {at_us | in_us, mode?: any|thread|handler, exception?, within_us?, faultmask?: 1} arms one;
+            # {read: true} gives the record
             if args.get("read"):
                 r = agent.ask("fault read") if agent else None
                 if not r or not r.startswith("ok "):
@@ -1352,6 +1353,9 @@ class FixtureServer:
                 return {"ok": False, "error": "exception: an exception number 2 to 178, only with mode handler"}
             if not isinstance(within, int) or not 0 <= within <= 60000000:
                 return {"ok": False, "error": "within_us must be an integer 0 to 60000000"}
+            fm = args.get("faultmask")
+            if "faultmask" in args and (fm != 1 or isinstance(fm, bool) or mode != "handler"):
+                return {"ok": False, "error": "faultmask: only 1, only with mode handler"}
             if ("at_us" in args) == ("in_us" in args):
                 return {"ok": False, "error": "give one of at_us (emulated us since boot) or in_us (from now)"}
             t = args.get("at_us", args.get("in_us"))
@@ -1362,11 +1366,14 @@ class FixtureServer:
                 if not r or not r.startswith("time "):
                     return {"ok": False, "error": "emulator not ready"}
                 t += int(r.split()[1])
-            r = agent.ask("fault arm %d %s %d %d" % (t, mode, -1 if exc is None else exc, within)) if agent else None
+            r = agent.ask("fault arm %d %s %d %d%s" % (t, mode, -1 if exc is None else exc, within,
+                                                       " faultmask1" if fm == 1 else "")) if agent else None
             if not r or not r.startswith("ok "):
                 return {"ok": False, "error": (r or "emulator not ready").replace("err ", "", 1)}
-            return {"ok": True, "value": {"at_us": int(r.split()[1]), "mode": mode, "exception": exc, "within_us": within,
-                                          "stub": "0x0FFF0000"}}
+            v = {"at_us": int(r.split()[1]), "mode": mode, "exception": exc, "within_us": within, "stub": "0x0FFF0000"}
+            if fm == 1:
+                v["faultmask"] = 1
+            return {"ok": True, "value": v}
         if op == "ch394.silent":
             n = args.get("boots", 1)
             if not isinstance(n, int) or n < 0:

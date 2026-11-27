@@ -965,6 +965,11 @@ namespace Antmicro.Renode.Peripherals.SPI
         private string faultMode = "any";
         private int faultExc = -1;
         private ulong faultAtUs, faultUntilUs, faultInjUs, faultInjPc, faultInjXpsr, faultSamples;
+        // condition faultmask 1 (mode handler): a sample in the mode asked for injects only while FAULTMASK
+        // is 1; faultHeld counts the samples in that mode held back by FAULTMASK 0
+        private bool faultNeedFm;
+        private int faultFmIndex = -1;           // the core's FAULTMASK register index, looked up at the arm
+        private ulong faultHeld;
         private string faultEntry;               // JSON of the first vector entry after the injection
         private string faultInjMasks = "";       // FAULTMASK, BASEPRI, PRIMASK and the running priority at the injection
         public const uint FaultStubSize = 0x1000;
@@ -1045,12 +1050,17 @@ namespace Antmicro.Renode.Peripherals.SPI
                 lock(faultSync) { if(faultTimer != null) faultTimer.Enabled = false; RemoveFaultHooks(); faultState = "none"; }
                 return "ok";
             }
-            if(w.Length != 6 || w[1] != "arm") return "err usage: fault arm <at_us> <any|thread|handler> <exception|-1> <within_us> | read | clear";
+            if((w.Length != 6 && w.Length != 7) || w[1] != "arm") return "err usage: fault arm <at_us> <any|thread|handler> <exception|-1> <within_us> [faultmask1] | read | clear";
+            bool needFm = w.Length == 7;
+            if(needFm && w[6] != "faultmask1") return "err the condition word is faultmask1";
             ulong at = ulong.Parse(w[2], CultureInfo.InvariantCulture), within = ulong.Parse(w[5], CultureInfo.InvariantCulture);
             string mode = w[3];
             int exc = int.Parse(w[4], CultureInfo.InvariantCulture);
             if(mode != "any" && mode != "thread" && mode != "handler") return "err mode must be any, thread or handler";
             if(exc != -1 && (mode != "handler" || exc < 2 || exc > 16 + 162)) return "err exception: only with mode handler, 2 to 178";
+            if(needFm && mode != "handler") return "err faultmask: only with mode handler";
+            int fmIndex = needFm ? RegIndex(Core(), "FAULTMASK") : -1;
+            if(needFm && fmIndex < 0) return "err faultmask: the core names no FAULTMASK register";
             if(PowerOff) return "err the supply is cut";
             string res = null;
             var done = new ManualResetEventSlim(false);
@@ -1067,6 +1077,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                     if(at < now) at = now;
                     RemoveFaultHooks();
                     faultMode = mode; faultExc = exc; faultAtUs = at; faultUntilUs = at + within;
+                    faultNeedFm = needFm; faultFmIndex = fmIndex; faultHeld = 0;
                     faultInjUs = faultInjPc = faultInjXpsr = faultSamples = 0; faultEntry = null; faultInjMasks = ""; faultLockupPc = 0;
                     faultState = "armed";
                     // a new timer per arm, its limit the delay (a raised Limit of a descending LimitTimer
@@ -1148,6 +1159,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 faultSamples++;
                 bool hit = faultMode == "any" || (faultMode == "thread" && ipsr == 0)
                            || (faultMode == "handler" && ipsr != 0 && (faultExc < 0 || (int)ipsr == faultExc));
+                if(hit && faultNeedFm && CpuRegister(cpu, faultFmIndex) != 1) { hit = false; faultHeld++; }
                 if(!hit)
                 {
                     if(now >= faultUntilUs) { faultTimer.Enabled = false; faultState = "missed"; ev = "\"kind\": \"fault\", \"result\": \"missed\""; }
@@ -1228,6 +1240,7 @@ namespace Antmicro.Renode.Peripherals.SPI
                 var sb = new StringBuilder();
                 sb.AppendFormat(CultureInfo.InvariantCulture, "{{\"state\": \"{0}\", \"mode\": \"{1}\", \"exception\": {2}, \"at_us\": {3}, \"until_us\": {4}, \"samples\": {5}",
                                 faultState, faultMode, faultExc < 0 ? "null" : faultExc.ToString(CultureInfo.InvariantCulture), faultAtUs, faultUntilUs, faultSamples);
+                if(faultNeedFm) sb.AppendFormat(CultureInfo.InvariantCulture, ", \"faultmask\": 1, \"held_by_faultmask\": {0}", faultHeld);
                 if(faultInjUs != 0 || faultState == "injected" || faultState == "entered" || faultState == "lockup")
                     sb.AppendFormat(CultureInfo.InvariantCulture, ", \"injected\": {{\"t_us\": {0}, \"pc\": \"0x{1:X8}\", \"ipsr\": {2}, \"stub\": \"0x{3:X8}\"{4}}}",
                                     faultInjUs, faultInjPc, faultInjXpsr & 0x1FF, FaultStub, faultInjMasks);

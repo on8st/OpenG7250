@@ -19,7 +19,7 @@
   },
   {
    "id": "T-EMU-35",
-   "title": "cpu.fault in a handler with FAULTMASK set (a fault the core cannot take): the stub of UDF and a branch-to-self keeps the core in it or a fault vector, state lockup or entered, FAULTMASK, BASEPRI, PRIMASK and the priority recorded, the image back after a watchdog reset",
+   "title": "cpu.fault condition faultmask 1: held back while FAULTMASK is 0 (FH), refused with mode thread and with faultmask 0; cpu.fault in a handler with FAULTMASK set (a fault the core cannot take): the stub of UDF and a branch-to-self keeps the core in it or a fault vector, state lockup or entered, FAULTMASK, BASEPRI, PRIMASK and the priority recorded, the image back after a watchdog reset",
    "reqs": [
     "runner"
    ],
